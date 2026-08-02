@@ -1,0 +1,1237 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>My Study Table</title>
+<link rel="stylesheet" href="css/style.css?v=20260724-r19">
+<link rel="stylesheet" href="lib/katex/katex.min.css">
+<script src="https://unpkg.com/lucide@latest"></script>
+</head>
+<body>
+
+<div class="app-bg-layer"></div>
+<video class="app-bg-video" muted loop playsinline></video>
+<div class="app-bg-video-overlay"></div>
+
+<!-- Sidebar Hover Trigger -->
+<div class="sidebar-hover-trigger" id="sidebarHoverTrigger"></div>
+
+<!-- Sidebar -->
+<div class="sidebar" id="sidebar">
+  <div class="sidebar-logo">
+    <h2><i data-lucide="book-open" class="lucide-icon" style="width:22px;height:22px;"></i> Study Table</h2>
+  </div>
+  <nav class="sidebar-nav" id="sidebarNav"></nav>
+  <button class="sidebar-edit-btn" onclick="openNavSettings()" title="编辑界面栏">
+    <i data-lucide="sliders-horizontal" class="lucide-icon" style="width:16px;height:16px;"></i>
+  </button>
+</div>
+
+<div class="app">
+  <div class="header">
+    <h1><i data-lucide="book-open" class="lucide-icon" style="width:24px;height:24px;vertical-align:middle;"></i> My Study Table</h1>
+    <p>管理你的待办事项、笔记与快捷访问</p>
+    <div class="header-actions">
+      <button class="header-btn" id="changelogBtn" onclick="openChangelogModal()" title="更新日志">
+        <i data-lucide="list" style="width:18px;height:18px;"></i>
+      </button>
+      <button class="header-btn" id="helpBtn" onclick="openHelpModal()" title="帮助">
+        <i data-lucide="help-circle" style="width:18px;height:18px;"></i>
+      </button>
+      <button class="header-btn" id="settingsBtn" onclick="openSettingsModal()" title="设置">
+        <i data-lucide="settings" style="width:18px;height:18px;"></i>
+      </button>
+      <button class="header-btn" id="themeToggle" onclick="toggleTheme()" title="切换夜间模式">
+        <i data-lucide="moon" id="themeIcon" style="width:18px;height:18px;"></i>
+      </button>
+    </div>
+  </div>
+
+  <!-- ── Todo Section ── -->
+  <div class="section active" id="section-todo">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title" id="todoSectionTitle"><i data-lucide="clipboard-list" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 待办事项</span>
+        <div style="display:flex;gap:4px;align-items:center;">
+          <button class="notes-undo-btn" id="todoUndoBtn" onclick="undoTodo()" title="撤销 (Ctrl+Z)" disabled><i data-lucide="undo" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          <button class="notes-undo-btn" id="todoRedoBtn" onclick="redoTodo()" title="重做 (Ctrl+Y/Shift+Z)" disabled><i data-lucide="redo" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          <button class="notes-undo-btn" onclick="expandAllTodos()" title="全部展开"><i data-lucide="chevrons-down" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          <button class="notes-undo-btn" onclick="collapseAllTodos()" title="全部折叠"><i data-lucide="chevrons-up" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          <button class="notes-undo-btn" id="todoHideDoneBtn" onclick="toggleTodoHideDone()" title="隐藏/显示已完成待办"><i data-lucide="eye" id="todoEyeIcon" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          <button class="notes-undo-btn" id="todoSelectBtn" onclick="toggleTodoMultiSelect()" title="选择待办"><i data-lucide="check-square" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          <div id="todoBatchActions" style="display:none;gap:4px;align-items:center;">
+            <button class="notes-undo-btn" onclick="batchDeleteTodos()" title="批量删除" style="color:var(--danger);"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button class="notes-undo-btn" onclick="batchEditTodos()" title="批量编辑"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button class="notes-undo-btn" onclick="toggleTodoMultiSelect()" title="退出选择"><i data-lucide="x" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          </div>
+          <button class="btn-toggle-input" id="btnTodoToggle" onclick="toggleTodoInput()">
+          <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>新增
+        </button>
+      </div>
+    </div>
+      <div class="input-panel" id="todoInputPanel">
+        <div class="input-row">
+          <input type="text" id="todoInput" placeholder="输入待办事项..." onkeydown="if(event.key==='Enter')addTodo()">
+          <input type="date" id="todoDueDateInput" title="完成日期（可选）" style="width:150px;flex-shrink:0;">
+          <button class="btn-add" onclick="addTodo()">
+            <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>添加
+          </button>
+        </div>
+      </div>
+      <!-- Search -->
+      <div class="search-wrap" id="searchWrap">
+        <i data-lucide="search" class="lucide-icon" style="width:16px;height:16px;flex-shrink:0;color:var(--text-secondary);"></i>
+        <input type="text" id="todoSearch" placeholder="搜索待办事项..." oninput="onTodoSearch()">
+        <button class="search-clear" id="searchClear" onclick="clearSearch()"><i data-lucide="x" class="lucide-icon" style="width:12px;height:12px;"></i></button>
+      </div>
+      <p class="search-hint" id="searchHint"></p>
+      <div id="todoBreadcrumb" style="display:none;"></div>
+      <div id="todoRootInfo" style="display:none;"></div>
+      <div id="todoProgress" style="display:none;">
+        <div class="progress-bar-wrap">
+          <div class="progress-bar-fill" id="progressFill" style="width:0%"></div>
+          <p class="progress-text" id="progressText"></p>
+        </div>
+      </div>
+      <div class="card-scroll">
+        <ul class="todo-tree" id="todoTree"></ul>
+        <div class="search-results" id="searchResults" style="display:none;"></div>
+        <div class="empty-state" id="todoEmpty">
+          <i data-lucide="inbox" class="lucide-icon" style="width:64px;height:64px;margin-bottom:12px;opacity:0.4;color:var(--text-secondary);display:block;margin-left:auto;margin-right:auto;"></i>
+          <p id="todoEmptyText">暂无待办事项，点击「新增」添加吧 ✨</p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Notes Section ── -->
+  <div class="section" id="section-notes">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="file-text" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 笔记
+          <button class="notes-header-btn" id="notesToggleSummaryBtn" onclick="toggleNotesSummaryVisible()" title="隐藏摘要">
+            <i data-lucide="align-left" class="lucide-icon" style="width:13px;height:13px;"></i>
+            <span class="notes-header-btn-text">摘要</span>
+          </button>
+          <button class="notes-header-btn" id="notesSidebarToggle" onclick="toggleNotesSidebar()" title="隐藏笔记列表">
+            <i data-lucide="panel-left-close" class="lucide-icon" style="width:14px;height:14px;"></i>
+          </button>
+        </span>
+        <span class="notes-saved" id="notesSavedLabel"></span>
+      </div>
+      <div class="notes-layout">
+        <div class="notes-sidebar-wrap">
+          <div class="notes-sidebar" id="notesSidebar">
+            <div class="notes-sidebar-header">
+              <span class="notes-sidebar-title">笔记列表</span>
+              <button class="btn-new-note" onclick="createNewNote()" title="新建笔记"><i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;color:#fff;"></i></button>
+            </div>
+            <div class="notes-list" id="notesList"></div>
+          </div>
+        </div>
+        <div class="notes-editor">
+          <div class="notes-editor-header">
+            <input type="text" class="notes-editor-title-input" id="noteTitleInput"
+                   placeholder="笔记标题..." oninput="onNoteTitleChange()">
+            <div class="notes-view-toggle">
+              <button class="notes-view-btn" id="notesPreviewBtn" onclick="switchNoteView('preview')">预览</button>
+              <button class="notes-view-btn" id="notesEditBtn" onclick="switchNoteView('edit')">编辑</button>
+              <button class="notes-view-btn" id="notesSummaryBtn" onclick="switchNoteView('summary')">摘要</button>
+            </div>
+          </div>
+          <div class="notes-tag-bar" id="notesTagBar"></div>
+          <div class="notes-format-toolbar" id="notesFormatToolbar">
+            <button class="fmt-btn" onclick="formatText('bold')" title="粗体 (Ctrl+B)"><b>B</b></button>
+            <button class="fmt-btn" onclick="formatText('italic')" title="斜体 (Ctrl+I)"><i>I</i></button>
+            <button class="fmt-btn" onclick="formatText('strikethrough')" title="删除线"><s>S</s></button>
+            <span class="fmt-sep"></span>
+            <button class="fmt-btn" onclick="formatText('heading')" title="标题"><b>H</b></button>
+            <button class="fmt-btn" onclick="formatText('code')" title="行内代码">&lt;/&gt;</button>
+            <button class="fmt-btn" onclick="formatText('latex')" title="LaTeX 公式 (∑)">∑</button>
+            <span class="fmt-sep"></span>
+            <button class="fmt-btn" onclick="formatText('link')" title="链接"><i data-lucide="link" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button class="fmt-btn" onclick="formatText('ul')" title="无序列表">•</button>
+            <button class="fmt-btn" onclick="formatText('ol')" title="有序列表">1.</button>
+            <button class="fmt-btn" onclick="formatText('quote')" title="引用">❝</button>
+            <span class="fmt-sep"></span>
+            <button class="fmt-btn" onclick="formatText('task')" title="任务列表">☐</button>
+            <button class="fmt-btn" onclick="formatText('hr')" title="分割线">—</button>
+          </div>
+          <textarea class="notes-editor-textarea" id="notesTextarea"
+                    placeholder="在这里记录你的想法、笔记、备忘……&#10;内容会自动保存 ✨"
+                    oninput="onNotesChange()"></textarea>
+          <div class="notes-editor-preview" id="notesPreview"></div>
+          <div class="notes-summary-panel" id="notesSummaryPanel" style="display:none;">
+            <div class="notes-summary-actions">
+              <button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 更新摘要</button>
+            </div>
+          </div>
+          <div class="notes-editor-footer">
+            <span id="notesWordCount">0 字</span>
+            <span id="notesLastEdited">—</span>
+            <span id="notesStatus">已保存</span>
+            <button class="notes-undo-btn" id="notesUndoBtn" onclick="undoNote()" title="撤销 (Ctrl+Z)" disabled><i data-lucide="undo" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button class="notes-undo-btn" id="notesRedoBtn" onclick="redoNote()" title="恢复 (Ctrl+Y)" disabled><i data-lucide="redo" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Quick Access Section ── -->
+  <div class="section" id="section-links">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title">快捷访问</span>
+        <button class="btn-toggle-input" id="btnLinkToggle" onclick="toggleLinkInput()">
+          <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>新增
+        </button>
+      </div>
+      <div class="input-panel" id="linkInputPanel">
+        <div class="link-inputs">
+          <div class="input-row">
+            <input type="text" id="linkNameInput" placeholder="名称..." onkeydown="if(event.key==='Enter')document.getElementById('linkUrlInput').focus()">
+          </div>
+          <div class="input-row">
+            <select id="linkTypeSelect" onchange="onLinkTypeChange()" style="width:120px;flex-shrink:0;">
+              <option value="link">🌐 网页链接</option>
+              <option value="app">📱 应用</option>
+            </select>
+            <input type="text" id="linkUrlInput" placeholder="网址 (URL) 或应用链接..." onkeydown="if(event.key==='Enter')document.getElementById('linkCatInput').focus()">
+          </div>
+          <div class="input-row">
+            <input type="text" id="linkCatInput" placeholder="分类名称（如：学习 / 工具 / 娱乐）" list="catSuggestions" style="flex:1;">
+            <datalist id="catSuggestions"></datalist>
+            <button class="btn-add" onclick="addLink()">
+              <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>添加
+            </button>
+          </div>
+        </div>
+      </div>
+      <div class="card-scroll">
+        <div class="links-panels" id="linksPanels"></div>
+        <div class="empty-state" id="linkEmpty">
+          <i data-lucide="link-2" class="lucide-icon" style="width:64px;height:64px;margin-bottom:12px;opacity:0.4;color:var(--text-secondary);display:block;margin-left:auto;margin-right:auto;"></i>
+          <p>暂无快捷入口，点击「新增」收藏吧 <i data-lucide="link" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i></p>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Today Section ── -->
+  <div class="section" id="section-today">
+    <div class="card">
+      <div class="card-scroll">
+        <!-- Goals Card (top) -->
+        <div class="today-goals-card" id="todayGoalsCard">
+          <div class="today-goals-header">
+            <span class="today-section-title"><i data-lucide="flag" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;color:#f97316;"></i> 长期目标</span>
+            <button class="today-goals-add-btn" id="todayGoalsAddBtn" onclick="showAddGoalInput()" title="添加长期目标">
+              <i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i>
+            </button>
+          </div>
+          <div class="today-goals-input-wrap" id="todayGoalsInputWrap" style="display:none;">
+            <div class="today-goals-input-row">
+              <input type="text" id="todayGoalInput" placeholder="输入长期目标..." onkeydown="if(event.key==='Enter')addGoal()">
+              <button class="today-goals-confirm" onclick="addGoal()">添加</button>
+              <button class="today-goals-cancel" onclick="cancelAddGoal()">取消</button>
+            </div>
+          </div>
+          <div class="today-goals-list" id="todayGoalsList"></div>
+        </div>
+        <!-- Check-in Card -->
+        <div class="today-checkin-card" id="todayCheckinCard">
+          <div class="today-checkin-header">
+            <span class="today-section-title"><i data-lucide="flame" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;color:#f59e0b;"></i> 每日打卡</span>
+            <span class="today-streak" id="todayStreak">连续 0 天</span>
+          </div>
+          <div class="today-checkin-calendar" id="todayCalendar"></div>
+          <button class="today-checkin-btn" id="todayCheckinBtn" onclick="requestNotificationPermission();doDailyCheckin()">
+            <i data-lucide="plus" class="lucide-icon" style="width:20px;height:20px;"></i>今日打卡
+          </button>
+          <!-- Debug Panel -->
+          <div class="debug-checkin-panel" id="debugCheckinPanel" style="display:none;">
+            <div class="debug-checkin-header">
+              <span><i data-lucide="wrench" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 调试：打卡状态编辑</span>
+            </div>
+            <div class="debug-checkin-controls">
+              <button class="debug-btn debug-btn-checkin" onclick="debugToggleCheckin()" id="debugToggleCheckinBtn">切换今日打卡状态</button>
+              <button class="debug-btn debug-btn-streak" onclick="debugEditStreak()">修改连续天数</button>
+              <button class="debug-btn debug-btn-reset" onclick="debugResetCheckin()">重置本周打卡</button>
+              <button class="debug-btn debug-btn-report" onclick="debugTriggerReport()">手动触发日报</button>
+              <button class="debug-btn debug-btn-notify" onclick="debugTestNotify()">测试通知</button>
+            </div>
+            <div class="debug-checkin-dates">
+              <label class="debug-dates-label">✏️ 手动编辑打卡日期（每行一个 YYYY-MM-DD，或逗号分隔）</label>
+              <textarea id="debugCheckinDates" rows="3" class="debug-dates-textarea" placeholder="2026-07-01&#10;2026-07-02&#10;2026-07-03"></textarea>
+              <div class="debug-dates-actions">
+                <button class="debug-btn debug-btn-save" onclick="debugSaveCheckinDates()">保存日期</button>
+                <button class="debug-btn debug-btn-addrange" onclick="debugAddDateRange()">批量添加日期范围</button>
+              </div>
+            </div>
+            <div class="debug-checkin-info" id="debugCheckinInfo"></div>
+          </div>
+        </div>
+        <!-- Focus Card -->
+        <div class="today-focus-card" id="todayFocusCard">
+          <div class="today-focus-header">
+            <span class="today-section-title"><i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 今日聚焦</span>
+            <span class="today-focus-count" id="todayFocusCount">0/3</span>
+          </div>
+          <div class="today-focus-list" id="todayFocusList"></div>
+          <button class="today-focus-add-btn" id="todayFocusAddBtn" onclick="showTodoPicker()" title="从待办中选择今日目标">
+            <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>从待办选择
+          </button>
+          <!-- Todo Picker Panel -->
+          <div class="today-todo-picker" id="todayTodoPicker" style="display:none;">
+            <div class="todo-picker-header">
+              <span><i data-lucide="clipboard-list" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择待办事项</span>
+              <button class="todo-picker-close" onclick="closeTodoPicker()"><i data-lucide="x" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            </div>
+            <div class="todo-picker-search">
+              <input type="text" id="todoPickerSearch" placeholder="搜索待办..." oninput="renderTodoPickerList()">
+            </div>
+            <div class="todo-picker-list" id="todoPickerList"></div>
+          </div>
+        </div>
+        <!-- Review Card -->
+        <div class="today-review-card" id="todayReviewCard">
+          <div class="today-review-header">
+            <span class="today-section-title"><i data-lucide="refresh-cw" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;color:#8b5cf6;"></i> 待复习笔记</span>
+            <span class="today-review-count" id="todayReviewCount">0 篇</span>
+          </div>
+          <div class="today-review-list" id="todayReviewList"></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Calendar Section ── -->
+  <div class="section" id="section-calendar">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="calendar-days" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 日历视图</span>
+        <div class="calendar-nav">
+          <button class="calendar-nav-btn" onclick="calendarPrevMonth()" title="上月">‹</button>
+          <span class="calendar-title" id="calendarTitle">2026年 7月</span>
+          <button class="calendar-nav-btn" onclick="calendarNextMonth()" title="下月">›</button>
+          <button class="calendar-today-btn" onclick="calendarGoToday()" title="回到今天">今天</button>
+        </div>
+      </div>
+      <div class="card-scroll">
+        <div class="calendar-grid" id="calendarGrid"></div>
+        <div class="calendar-legend">
+          <span class="calendar-legend-item"><span class="calendar-legend-dot" style="background:#f59e0b"></span>截止</span>
+          <span class="calendar-legend-item"><span class="calendar-legend-dot" style="background:#10b981"></span>完成</span>
+          <span class="calendar-legend-item"><span class="calendar-legend-dot" style="background:#8b5cf6"></span>计时</span>
+          <span class="calendar-legend-item"><span class="calendar-legend-dot" style="background:var(--primary)"></span>复习</span>
+        </div>
+        <div class="calendar-todo-list" id="calendarTodoList"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── AI Assistant Section ── -->
+  <div class="section" id="section-ai">
+    <div class="card" style="padding: 0; overflow: hidden; border-radius: var(--radius);">
+      <div class="ai-chat-layout" id="aiChatLayout"></div>
+    </div>
+  </div>
+
+  <!-- ── Timer Section ── -->
+  <div class="section" id="section-timer">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="timer" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 计时器</span>
+      </div>
+      <div class="card-scroll" id="timerContainer">
+        <!-- rendered by renderTimer() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Music Section ── -->
+  <div class="section" id="section-music">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="music" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 音乐播放器</span>
+      </div>
+      <div class="card-scroll" id="musicContainer">
+        <!-- rendered by renderMusic() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Habits Section ── -->
+  <div class="section" id="section-habits">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 习惯追踪</span>
+        <div class="section-header-actions">
+          <button class="btn-toggle-input" id="habitAddBtn" onclick="showHabitInput()">+ 新增习惯</button>
+        </div>
+      </div>
+      <div class="input-panel" id="habitInputPanel">
+        <div class="input-row">
+          <input type="text" id="habitNameInput" placeholder="习惯名称，如：每天阅读 30 分钟" onkeydown="if(event.key==='Enter')addHabit()" maxlength="50">
+          <button class="btn-add" onclick="addHabit()">添加</button>
+        </div>
+      </div>
+      <div class="card-scroll" id="habitsContainer">
+        <div class="empty-state" id="habitsEmpty">
+          <i data-lucide="target" class="lucide-icon" style="width:36px;height:36px;opacity:0.4;display:block;margin:0 auto 12px;"></i>
+          <p style="font-size:14px;margin:0;">还没有习惯，点击上方按钮开始追踪</p>
+          <p style="font-size:12px;color:var(--text-secondary);margin:6px 0 0;">每天打卡，培养好习惯 🌱</p>
+        </div>
+        <div class="habits-grid" id="habitsGrid" style="display:none;"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Trash Section ── -->
+  <div class="section" id="section-trash">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="trash-2" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 回收站</span>
+        <button class="btn-toggle-input" onclick="emptyTrash()" style="color:var(--danger);">清空回收站</button>
+      </div>
+      <div class="card-scroll" id="trashContainer">
+        <!-- rendered by renderTrash() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Archive Section ── -->
+  <div class="section" id="section-archive">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="archive" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 归档</span>
+      </div>
+      <div class="card-scroll" id="archiveContainer">
+        <!-- rendered by renderArchive() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── Stats Section ── -->
+  <div class="section" id="section-stats"></div>
+
+</div>
+
+<!-- Edit Modal -->
+<div class="modal-overlay" id="editModal" onclick="closeEditModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title" id="editModalTitle"><i data-lucide="pencil" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 编辑</span>
+      <button class="modal-close" onclick="closeEditModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body" id="editModalBody"></div>
+  </div>
+</div>
+
+<!-- Calendar Event Modal -->
+<div class="modal-overlay" id="calEventModal" onclick="closeCalEventModal()">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:440px;">
+    <div class="modal-header">
+      <span class="modal-title" id="calEventModalTitle">添加事件</span>
+      <button class="modal-close" onclick="closeCalEventModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body">
+      <div class="cal-event-date-label">日期：<span id="calEventDateLabel"></span></div>
+      <input type="text" id="calEventTitle" class="cal-event-input" placeholder="事件标题" maxlength="100" onkeydown="if(event.key==='Enter')submitCalEvent()">
+      <input type="time" id="calEventTime" class="cal-event-input" style="width:140px" placeholder="时间（可选）">
+      <div class="cal-event-color-row">
+        <span class="cal-event-color-label">颜色：</span>
+        <div id="calEventColorPicker"></div>
+      </div>
+      <textarea id="calEventNote" class="cal-event-input" placeholder="备注（可选）" rows="2" maxlength="300"></textarea>
+      <div class="cal-event-actions">
+        <button class="cal-event-save-btn" onclick="submitCalEvent()">保存</button>
+        <button class="cal-event-delete-btn" id="calEventDeleteBtn" onclick="deleteCalEventFromModal()" style="display:none;">删除事件</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Changelog Modal -->
+<div class="modal-overlay" id="changelogModal" onclick="closeChangelogModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title"><i data-lucide="list" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 更新日志</span>
+      <button class="modal-close" onclick="closeChangelogModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body" id="changelogModalBody"></div>
+  </div>
+</div>
+
+<!-- Update Modal -->
+<div class="modal-overlay" id="updateModal" onclick="closeUpdateModal(event)">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:420px;">
+    <div class="modal-header">
+      <span class="modal-title"><i data-lucide="refresh-cw" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 软件更新</span>
+      <button class="modal-close" onclick="closeUpdateModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body" id="updateModalBody"></div>
+  </div>
+</div>
+
+<!-- Help Modal -->
+<div class="modal-overlay" id="helpModal" onclick="closeHelpModal(event)">
+  <div class="modal" onclick="event.stopPropagation()" style="max-width:620px;max-height:80vh;">
+    <div class="modal-header">
+      <span class="modal-title"><i data-lucide="help-circle" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 帮助</span>
+      <div class="settings-tabs" id="helpTabs" tabindex="-1" style="margin-left:20px;margin-bottom:0;">
+        <span class="settings-tab active" data-tab="helpTodo" onclick="switchHelpTab('helpTodo')"><i data-lucide="clipboard-list" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 待办</span>
+        <span class="settings-tab" data-tab="helpToday" onclick="switchHelpTab('helpToday')"><i data-lucide="calendar-check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 今天</span>
+        <span class="settings-tab" data-tab="helpNotes" onclick="switchHelpTab('helpNotes')"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 笔记</span>
+        <span class="settings-tab" data-tab="helpLinks" onclick="switchHelpTab('helpLinks')"><i data-lucide="link" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 快捷访问</span>
+        <span class="settings-tab" data-tab="helpAi" onclick="switchHelpTab('helpAi')"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI助手</span>
+        <span class="settings-tab" data-tab="helpMusic" onclick="switchHelpTab('helpMusic')"><i data-lucide="music" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 音乐</span>
+        <span class="settings-tab" data-tab="helpSettings" onclick="switchHelpTab('helpSettings')"><i data-lucide="settings" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 设置</span>
+        <span class="settings-tab" data-tab="helpShortcuts" onclick="switchHelpTab('helpShortcuts')"><i data-lucide="keyboard" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 快捷键</span>
+      </div>
+      <button class="modal-close" onclick="closeHelpModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body" id="helpModalBody" style="gap:16px;"></div>
+  </div>
+</div>
+
+<!-- Settings Modal -->
+<div class="modal-overlay" id="settingsModal" onclick="closeSettingsModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title"><i data-lucide="settings" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 设置</span>
+      <button class="modal-close" onclick="closeSettingsModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="settings-tabs">
+      <button class="settings-tab active" onclick="switchSettingsTab('api')" id="settingsTabApi"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI 设置</button>
+      <button class="settings-tab" onclick="switchSettingsTab('memory')" id="settingsTabMemory"><i data-lucide="brain" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 记忆</button>
+      <button class="settings-tab" onclick="switchSettingsTab('data')" id="settingsTabData"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 数据</button>
+      <button class="settings-tab" onclick="switchSettingsTab('notes')" id="settingsTabNotes"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 笔记</button>
+      <button class="settings-tab" onclick="switchSettingsTab('automation')" id="settingsTabAutomation"><i data-lucide="alarm-clock" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 自动化</button>
+      <button class="settings-tab" onclick="switchSettingsTab('appearance')" id="settingsTabAppearance"><i data-lucide="palette" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 外观</button>
+      <button class="settings-tab" onclick="switchSettingsTab('reminder')" id="settingsTabReminder"><i data-lucide="bell" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 提醒</button>
+      <button class="settings-tab" onclick="switchSettingsTab('debug')" id="settingsTabDebug"><i data-lucide="wrench" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 更多设置</button>
+    </div>
+    <div class="modal-body">
+      <!-- AI Settings Panel -->
+      <div class="settings-tab-panel active" id="settingsPanelApi">
+        <div class="settings-section-title"><i data-lucide="key" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> API Key 管理</div>
+        <span class="hint" style="display:block;margin-bottom:4px;">配置多个 API Key，在聊天界面可随时切换。</span>
+
+        <!-- Key list -->
+        <div id="apiKeyList" style="margin-bottom:10px;"></div>
+
+        <!-- Add/Edit Key Form -->
+        <div id="apiKeyForm" style="display:none;padding:10px;margin-bottom:10px;background:var(--todo-bg);border-radius:8px;border:1px solid var(--border);">
+          <div class="settings-field" style="margin-bottom:6px;">
+            <label>Key 名称</label>
+            <input type="text" id="apiKeyFormName" placeholder="如：个人账号、公司项目">
+          </div>
+          <div class="settings-field" style="margin-bottom:6px;">
+            <label>API Key</label>
+            <input type="password" id="apiKeyFormKey" placeholder="sk-...">
+            <span class="hint">密钥仅保存在本地</span>
+          </div>
+          <div class="settings-field" style="margin-bottom:6px;">
+            <label>API 地址 (Base URL)</label>
+            <input type="text" id="apiKeyFormBaseUrl" placeholder="https://api.openai.com/v1">
+          </div>
+          <div class="settings-field" style="margin-bottom:6px;">
+            <label>模型名称</label>
+            <input type="text" id="apiKeyFormModel" placeholder="gpt-3.5-turbo">
+          </div>
+          <div class="api-form-collapse-header" onclick="toggleApiFormMore()">
+            <span class="api-form-collapse-icon" id="apiFormMoreIcon">▸</span>
+            <span>更多设置</span>
+          </div>
+          <div id="apiFormMoreBody" style="display:none;">
+          <div class="settings-field" style="margin-bottom:8px;">
+            <label>温度 (0-2)</label>
+            <input type="number" id="apiKeyFormTemp" value="0.7" min="0" max="2" step="0.1">
+          </div>
+          <div class="settings-field" style="margin-bottom:8px;">
+            <label>最大输出 Token</label>
+            <input type="number" id="apiKeyFormMaxTokens" value="" min="256" max="32768" step="1" placeholder="留空则自动适配">
+            <span class="hint">DeepSeek 默认 2048，Kimi 默认 8192。数值越大 AI 输出越长但消耗也越大。</span>
+          </div>
+          <div class="settings-field" style="margin-bottom:8px;">
+            <label>最大循环次数（至少 3 次）</label>
+            <input type="number" id="settingsMaxToolLoops" value="3" min="3" max="50" step="1" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;" onchange="saveSettings()">
+            <span class="hint">AI 调用工具后自动重试的最大次数，防止无限循环。数值越大 AI 可做更多步骤但消耗也越大。</span>
+          </div>
+          <div class="settings-field" style="margin-bottom:8px;">
+            <label>上下文消息条数</label>
+            <input type="number" id="apiKeyFormContextLimit" value="20" min="5" max="100" step="1">
+            <span class="hint">每次发送给 AI 的最近消息数，数值越大上下文越完整但消耗 Token 也越多（建议 5~50）</span>
+          </div>
+          <div class="settings-field" style="margin-bottom:8px;">
+            <label>标题生成上下文条数</label>
+            <input type="number" id="apiKeyFormTitleContext" value="4" min="2" max="20" step="1">
+            <span class="hint">自动生成对话标题时，参考最近多少条消息。越大标题越贴合内容（建议 2~10）</span>
+          </div>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button onclick="cancelApiKeyForm()" style="background:var(--border);color:var(--text);border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">取消</button>
+            <button onclick="submitApiKeyForm()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">保存</button>
+          </div>
+          <input type="hidden" id="apiKeyFormEditId" value="">
+        </div>
+
+        <button class="btn-save-settings" onclick="showApiKeyForm()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;margin-bottom:12px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加 Key</button>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="message-square-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 对话标题自动生成</div>
+        <div class="settings-field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="settingsAutoTitle" style="width:18px;height:18px;accent-color:var(--primary);" onchange="saveAutoTitleSetting()">
+            <i data-lucide="sparkles" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 自动生成对话标题
+          </label>
+          <span class="hint">每次 AI 回复后，自动为对话生成简短标题。关闭后对话标题保持默认名称。</span>
+        </div>
+        <div class="settings-field">
+          <label><i data-lucide="key" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 标题生成使用 AI Key</label>
+          <select id="settingsAutoTitleAiKey" onchange="saveAutoTitleSetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+            <option value="">（使用当前对话的 Key）</option>
+          </select>
+          <span class="hint">选择用于生成对话标题的 AI Key。若选择「使用当前对话的 Key」，则使用聊天中当前启用的 Key 来生成标题。</span>
+        </div>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="newspaper" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 日报设置</div>
+        <div class="settings-field">
+          <label><i data-lucide="key" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 日报使用 AI Key</label>
+          <select id="settingsDayReportAiKey" onchange="saveDayReportSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+            <option value="">（使用当前激活的 Key）</option>
+          </select>
+          <span class="hint">选择用于生成晨间/晚间日报的 AI Key。若选择「使用当前激活的 Key」，则使用聊天中当前启用的 Key 来生成日报。</span>
+        </div>
+        <div style="margin:10px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-subtitle"><i data-lucide="sun" class="lucide-icon" style="width:12px;height:12px;vertical-align:middle;"></i> 晨间日报</div>
+        <div class="settings-field">
+          <label>开启晨间日报</label>
+          <label class="switch"><input type="checkbox" id="morningReportEnabled" onchange="saveMorningReportSettings()"><span class="slider round"></span></label>
+          <span class="hint">开启后每次打卡时自动生成晨间日报，回顾昨天、规划今天。</span>
+        </div>
+        <div class="settings-field">
+          <button class="btn-save-settings" onclick="debugTriggerReport()" style="background:var(--primary);width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="sun" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动生成晨间日报</button>
+          <span class="hint">手动触发一次今日晨间日报。</span>
+        </div>
+        <div style="margin:10px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-subtitle"><i data-lucide="moon" class="lucide-icon" style="width:12px;height:12px;vertical-align:middle;"></i> 晚间日报</div>
+        <div class="settings-field">
+          <label>开启晚间日报</label>
+          <label class="switch"><input type="checkbox" id="eveningReportEnabled" onchange="saveEveningReportSettings()"><span class="slider round"></span></label>
+          <span class="hint">开启后每天指定时间自动生成晚间回顾，总结当天学习工作。</span>
+        </div>
+        <div class="settings-field" id="eveningReportTimeField">
+          <label>生成时间</label>
+          <input type="time" id="eveningReportTime" value="21:00" onchange="saveEveningReportSettings()" style="width:140px;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;">
+          <span class="hint">超过此时间后，若今天尚未生成则自动生成晚间日报。</span>
+        </div>
+        <div class="settings-field">
+          <button class="btn-save-settings" onclick="debugTriggerEveningReport()" style="background:var(--primary);width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="moon" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动生成晚间日报</button>
+          <span class="hint">强制生成一次今日晚间日报。</span>
+        </div>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 今日聚焦设置</div>
+        <div class="settings-field">
+          <label><i data-lucide="list" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 聚焦任务最大数量</label>
+          <input type="number" id="settingsMaxFocusCount" value="3" min="2" max="5" step="1" onchange="saveMaxFocusSetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+          <span class="hint">每天最多可设置的聚焦任务数（2~5 个）。此设置会同步更新 AI 提示词中的限制描述。</span>
+        </div>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="settingsDeveloperMode" style="width:18px;height:18px;accent-color:#8b5cf6;" onchange="saveSettings()">
+            <i data-lucide="code" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 告知AI协助优化应用
+          </label>
+          <span class="hint">开启后会在每次 AI 对话的系统提示词中告知模型你是程序开发者，让它关注程序的优化建议和所需接口</span>
+        </div>
+
+        <div class="settings-status" id="settingsStatus"></div>
+      </div>
+      <!-- Memory Panel -->
+      <div class="settings-tab-panel" id="settingsPanelMemory">
+        <!-- Section 1: User Profile -->
+        <div class="memory-section">
+          <div class="settings-section-title"><i data-lucide="user" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 用户画像</div>
+          <span class="hint" style="display:block;margin-bottom:8px;">AI 每日综合你的个人信息、偏好、能力与行为习惯自动生成。你也可以手动编辑。</span>
+          <div class="settings-field">
+            <textarea id="memoryProfileText" rows="5" placeholder="AI 会在此生成你的全方位画像，你也可以手动输入..." onchange="saveMemoryProfile()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;line-height:1.6;"></textarea>
+          </div>
+        </div>
+
+        <!-- Section 2: Manual Notes -->
+        <div class="memory-section">
+          <div class="settings-section-title"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动记忆</div>
+          <span class="hint" style="display:block;margin-bottom:8px;">你主动添加的事实，AI 会在对话中参考。</span>
+          <div id="memoryManualList"></div>
+          <button class="btn-save-settings" onclick="memoryAddManual()" style="background:var(--primary);padding:6px 14px;font-size:12px;width:auto;margin-top:6px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加记忆</button>
+          <!-- Inline add/edit form -->
+          <div id="memoryManualForm" style="display:none;margin-top:8px;">
+            <div class="settings-field" style="margin-bottom:6px;">
+              <label style="font-size:12px;color:var(--text-secondary);">简略信息（AI 在对话中看到的内容）</label>
+              <textarea id="memoryManualInput" rows="2" placeholder="输入你想让 AI 记住的内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+            </div>
+            <div class="settings-field">
+              <label style="font-size:12px;color:var(--text-secondary);">详细内容（可选，AI 可通过 get_memory_detail 查看）</label>
+              <textarea id="memoryManualDetail" rows="3" placeholder="补充更多细节信息..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+              <button onclick="memoryCancelManual()" style="background:var(--border);color:var(--text);border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">取消</button>
+              <button onclick="memorySaveManual()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">保存</button>
+            </div>
+            <input type="hidden" id="memoryManualEditId" value="">
+          </div>
+        </div>
+
+        <!-- Section 3: Auto Facts -->
+        <div class="memory-section">
+          <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+            <div class="settings-section-title" style="margin:0;"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 自动记忆</div>
+            <div style="display:flex;gap:8px;">
+              <select id="memoryAutoFilter" onchange="renderMemoryPanel()" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;">
+                <option value="">全部类型</option>
+                <option value="fact">📌 事实</option>
+                <option value="preference">💚 偏好与习惯</option>
+                <option value="goal">🎯 目标</option>
+                <option value="ability">🧠 能力</option>
+                <option value="behavior">📊 行为模式</option>
+                <option value="mental">💭 心理模式</option>
+              </select>
+            </div>
+          </div>
+          <span class="hint" style="display:block;margin-bottom:8px;">AI 自动从对话中提取的关键信息，按置信度排序。</span>
+          <div id="memoryAutoList"></div>
+          <!-- Inline edit form for auto facts -->
+          <div id="memoryAutoEditForm" style="display:none;margin-top:8px;">
+            <div style="margin-bottom:6px;">
+              <select id="memoryAutoEditType" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;">
+                <option value="fact">📌 事实</option>
+                <option value="preference">💚 偏好与习惯</option>
+                <option value="goal">🎯 目标</option>
+                <option value="ability">🧠 能力</option>
+                <option value="behavior">📊 行为模式</option>
+                <option value="mental">💭 心理模式</option>
+              </select>
+            </div>
+            <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">简略信息</label>
+            <textarea id="memoryAutoEditInput" rows="2" placeholder="编辑简略信息..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+            <div style="margin-top:6px;margin-bottom:4px;">
+              <label style="font-size:12px;color:var(--text-secondary);">详细内容（可选）</label>
+              <textarea id="memoryAutoEditDetail" rows="3" placeholder="编辑详细内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;margin-top:4px;"></textarea>
+            </div>
+            <div style="margin-bottom:6px;">
+              <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">置信度</label>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="range" id="memoryAutoEditConfidence" min="0" max="100" value="60" style="flex:1;accent-color:var(--primary);" oninput="document.getElementById('memoryAutoEditConfidenceVal').textContent = this.value + '%'">
+                <span id="memoryAutoEditConfidenceVal" style="font-size:12px;color:var(--text-secondary);min-width:36px;text-align:right;">60%</span>
+              </div>
+            </div>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+              <button onclick="memoryCancelAutoEdit()" style="background:var(--border);color:var(--text);border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">取消</button>
+              <button onclick="memorySaveAutoEdit()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">保存</button>
+            </div>
+            <input type="hidden" id="memoryAutoEditId" value="">
+          </div>
+          <button class="btn-save-settings" onclick="memoryClearAuto()" style="background:var(--danger);padding:6px 14px;font-size:12px;width:auto;margin-top:6px;">清空所有自动记忆</button>
+        </div>
+
+        <!-- Section 4: Conv Summaries -->
+        <div class="memory-section">
+          <div class="settings-section-title"><i data-lucide="message-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 对话摘要</div>
+          <span class="hint" style="display:block;margin-bottom:8px;">每次离开对话时自动生成，每日整合为总摘要注入 AI prompt。</span>
+          <div id="memorySummaryList"></div>
+          <!-- Inline edit form for conv summaries -->
+          <div id="memorySummaryEditForm" style="display:none;margin-top:8px;">
+            <textarea id="memorySummaryEditInput" rows="3" placeholder="编辑摘要内容..." style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+            <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
+              <button onclick="memoryCancelSummaryEdit()" style="background:var(--border);color:var(--text);border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">取消</button>
+              <button onclick="memorySaveSummaryEdit()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">保存</button>
+            </div>
+            <input type="hidden" id="memorySummaryEditId" value="">
+          </div>
+          <div id="memoryDailySummary" style="margin-top:10px;"></div>
+          <button class="btn-save-settings" onclick="memoryClearSummaries()" style="background:var(--danger);padding:6px 14px;font-size:12px;width:auto;margin-top:6px;">清空所有摘要</button>
+        </div>
+        <div class="memory-status" id="memoryStatus"></div>
+      </div>
+      <div class="settings-tab-panel" id="settingsPanelNotes">
+        <div class="settings-section-title" style="margin-bottom:10px;"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 笔记摘要设置</div>
+        <div class="settings-field">
+          <label>🤖 笔记摘要 AI Key</label>
+          <select id="settingsSummaryAiKey" onchange="saveSummaryAiKeySetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+            <option value="">（未设置）</option>
+          </select>
+          <span class="hint">选择用于生成笔记摘要的 AI Key。若不设置则不会自动生成摘要。</span>
+        </div>
+        <div class="settings-field">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="settingsAutoSummary" style="width:18px;height:18px;accent-color:var(--primary);" onchange="saveNotesSettings()">
+            🤖 自动更新摘要
+          </label>
+          <span class="hint">开启后，切换笔记/离开笔记页/窗口失焦时会自动更新摘要。关闭后仅在手动点击「更新」按钮时才会生成摘要。</span>
+        </div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title" style="margin-bottom:10px;"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 笔记复习间隔</div>
+        <div class="settings-field">
+          <label>间隔模式</label>
+          <select id="settingsReviewMode" onchange="onReviewModeChange()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+            <option value="standard">标准 — 1, 2, 4, 7, 15, 30, 60, 120 天</option>
+            <option value="relaxed">宽松 — 2, 4, 8, 15, 30, 60, 120, 240 天</option>
+            <option value="custom">自定义</option>
+          </select>
+          <span class="hint">控制每次复习后的下次复习间隔。标准模式适合高频复习，宽松模式间隔翻倍。</span>
+        </div>
+        <div class="settings-field" id="reviewCustomField" style="display:none;">
+          <label>自定义间隔（天）</label>
+          <input type="text" id="settingsReviewCustomIntervals" placeholder="例：1,3,5,10,20,40,80,160" onchange="saveReviewSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+          <span class="hint">用逗号分隔天数，至少一个值。例如「1,3,5,10,20,40,80,160」。</span>
+        </div>
+        <div class="review-preview" id="reviewPreview" style="font-size:12px;color:var(--text-muted);margin-top:4px;"></div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-field">
+          <button class="btn-save-settings" onclick="resetFoldersFromSettings()" style="background:var(--danger);">清空并重建所有笔记文件夹</button>
+          <span class="hint">这将删除所有笔记文件夹，笔记不会丢失但需要重新分类，用于修复笔记显示问题。</span>
+        </div>
+        </div>
+
+      <!-- Appearance Panel -->
+      <div class="settings-tab-panel" id="settingsPanelAppearance">
+        <div id="appearancePanelContent"></div>
+      </div>
+
+      <!-- Debug Panel -->
+      <div class="settings-tab-panel" id="settingsPanelDebug">
+        <div class="settings-debug-row">
+          <div>
+            <label style="cursor:pointer;" for="settingsDebug"><i data-lucide="wrench" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 调试模式</label>
+            <div class="hint">开启后可在「今天」页面手动编辑打卡状态，方便调试日报功能</div>
+          </div>
+          <input type="checkbox" id="settingsDebug" style="width:20px;height:20px;accent-color:#f59e0b;" onchange="onDebugToggle()">
+        </div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-field">
+          <label><i data-lucide="search" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 网络搜索引擎</label>
+          <select id="settingsWebSearchEngine" onchange="saveWebSearchSettings();updateWebSearchKeyFieldVisibility()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+            <option value="duckduckgo">DuckDuckGo（免费，无需 Key）</option>
+            <option value="brave">Brave Search</option>
+            <option value="tavily">Tavily</option>
+            <option value="exa">Exa</option>
+            <option value="searchapi">SearchAPI.io</option>
+          </select>
+          <span class="hint">选择 AI 联网搜索使用的引擎。DuckDuckGo 无需配置即可使用，其他引擎需填写下方 API Key。</span>
+        </div>
+        <div class="settings-field" id="settingsWebSearchKeyField">
+          <label>API Key</label>
+          <input type="password" id="settingsWebSearchKey" placeholder="输入所选引擎的 API Key" onchange="saveWebSearchSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+          <span class="hint" id="settingsWebSearchHint">
+            Brave: <code>https://api.search.brave.com/res/v1/web/search</code>（免费 2000 次/月）<br>
+            Tavily: <code>https://api.tavily.com</code>（免费 1000 次/月）<br>
+            Exa: <code>https://api.exa.ai/search</code>（免费 1000 次/月）<br>
+            SearchAPI: <code>https://www.searchapi.io/api/v1/search</code>（免费 100 次/月）
+          </span>
+        </div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 软件更新</div>
+        <div class="settings-field">
+          <label><i data-lucide="tag" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 当前版本</label>
+          <div id="updateCurrentVersion" style="font-size:15px;font-weight:600;color:var(--text);margin-bottom:4px;">-</div>
+          <span class="hint" id="updateStatusText"></span>
+          <div style="margin-top:10px;">
+            <button class="btn-save-settings" id="checkUpdateBtn" onclick="checkForUpdatesNow()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 检查更新</button>
+          </div>
+          <div class="settings-status" id="updateStatus"></div>
+        </div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="zap" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 应用控制</div>
+        <p class="hint" style="margin-bottom:10px;">关闭窗口后应用会最小化到系统托盘，点击下方按钮可完全退出。</p>
+        <button class="btn-save-settings" onclick="quitApp()" style="background:#ef4444;"><i data-lucide="log-out" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 退出应用</button>
+        <div class="settings-status" id="debugStatus"></div>
+      </div>
+
+      <!-- Data Panel -->
+      <div class="settings-tab-panel" id="settingsPanelData">
+        <div class="settings-section-title"><i data-lucide="save" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 自动备份</div>
+        <div class="settings-field">
+          <label>备份间隔</label>
+          <select id="settingsBackupInterval" onchange="saveBackupSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+            <option value="0">关闭</option>
+            <option value="30">每 30 分钟</option>
+            <option value="60">每 1 小时</option>
+            <option value="180">每 3 小时</option>
+            <option value="360">每 6 小时</option>
+            <option value="720">每 12 小时</option>
+            <option value="1440">每天一次</option>
+          </select>
+          <span class="hint" id="backupStatusHint">Electron 环境下备份会保存到用户数据目录的 backups 文件夹中；浏览器环境下仍使用 localStorage 存储。</span>
+        </div>
+        <div class="settings-field">
+          <label>最大备份文件数</label>
+          <input type="number" id="settingsMaxBackupFiles" value="30" min="1" max="200" onchange="saveBackupSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+          <span class="hint">超过此数量时会自动删除最早的备份文件。</span>
+        </div>
+        <div class="settings-field">
+          <span class="hint" id="backupTimeHint">上次备份：—</span>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-save-settings" onclick="performAutoBackup()" style="background:#10b981;margin-top:0;padding:6px 20px;width:auto;flex:1;"><i data-lucide="save" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 立即备份</button>
+          <button class="btn-save-settings" onclick="openBackupDirectory()" style="background:#6366f1;margin-top:0;padding:6px 20px;width:auto;flex:1;"><i data-lucide="folder-open" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 打开备份目录</button>
+        </div>
+        <span class="hint" style="display:block;">每次自动备份会在本地创建一个 .json 文件，保留最近 N 份。点击「打开备份目录」查看。</span>
+        <div style="margin:16px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 数据导入/导出</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="btn-save-settings" onclick="exportAllData()" style="background:#10b981;margin-top:0;padding:6px 20px;width:auto;flex:1;"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导出数据</button>
+          <button class="btn-save-settings" onclick="document.getElementById('importFileInput').click()" style="background:#6366f1;margin-top:0;padding:6px 20px;width:auto;flex:1;"><i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导入数据</button>
+        </div>
+        <span class="hint" style="display:block;">导出所有数据为 JSON 文件，用于迁移到其他设备。</span>
+        <input type="file" id="importFileInput" accept=".json" style="display:none;" onchange="importAllData(event)">
+        <div class="settings-status" id="migrateStatus"></div>
+        <div style="margin:16px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="tag" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 待办状态管理</div>
+        <span class="hint" style="display:block;margin-bottom:10px;">管理待办的进度状态列表，拖动排序（暂未实现拖拽），编辑名称或删除。</span>
+        <div id="settingsTodoStatuses"></div>
+        <div class="settings-status" id="todoStatusesStatus" style="margin-top:8px;"></div>
+      </div>
+
+      <!-- Automation Panel -->
+      <div class="settings-tab-panel" id="settingsPanelAutomation">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div class="settings-section-title" style="margin:0;"><i data-lucide="alarm-clock" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 定时自动化任务</div>
+          <button class="btn-save-settings" onclick="showAutomationForm()" style="background:var(--primary);padding:6px 14px;font-size:12px;width:auto;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动添加</button>
+        </div>
+        <p class="hint" style="margin-bottom:12px;">定时任务会在到达设定时间后自动在当前对话中触发 AI 执行。你也可以通过 AI 对话来创建和管理任务。</p>
+        <!-- Inline add/edit form (hidden by default) -->
+        <div id="automationForm" style="display:none;padding:12px;margin-bottom:12px;background:var(--todo-bg);border-radius:8px;border:1px solid var(--border);">
+          <div style="margin-bottom:8px;">
+            <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">触发时间（HH:MM，24小时制）</label>
+            <input id="autoFormAt" type="text" placeholder="如 09:30" maxlength="5" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+          </div>
+          <div style="margin-bottom:8px;">
+            <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">任务描述（触发时 AI 会执行）</label>
+            <textarea id="autoFormPrompt" rows="3" placeholder="描述触发后 AI 需要做什么..." style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+          </div>
+          <div style="margin-bottom:10px;">
+            <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">重复模式</label>
+            <select id="autoFormRepeat" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+              <option value="daily">每天重复</option>
+              <option value="once">仅执行一次</option>
+            </select>
+          </div>
+          <div style="display:flex;gap:8px;justify-content:flex-end;">
+            <button onclick="cancelAutomationForm()" style="background:var(--border);color:var(--text);border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;">取消</button>
+            <button onclick="submitAutomationForm()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:6px 14px;cursor:pointer;font-size:12px;">保存</button>
+          </div>
+          <input type="hidden" id="autoFormEditId" value="">
+        </div>
+        <div id="automationList" style="max-height:360px;overflow-y:auto;">
+          <div class="hint" style="text-align:center;">加载中…</div>
+        </div>
+        <div class="settings-status" id="automationStatus"></div>
+      </div>
+      <!-- Reminder Settings Panel -->
+      <div class="settings-tab-panel" id="settingsPanelReminder">
+        <div class="settings-section-title" style="margin-bottom:6px;"><i data-lucide="bell" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 系统提醒</div>
+        <span class="hint" style="display:block;margin-bottom:12px;">设置智能提醒，帮助你保持学习节奏。消息会通过系统通知发送，包含友善的鼓励话语。</span>
+
+        <!-- 1. Check-in Reminder -->
+        <div class="reminder-card">
+          <div class="reminder-card-header">
+            <div class="reminder-card-left">
+              <span class="reminder-card-title"><i data-lucide="check-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 每日打卡提醒</span>
+              <span class="reminder-card-desc">在指定时间尚未打卡时提醒</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="reminderCheckinEnabled" onchange="saveReminderSettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="reminder-card-body" id="reminderCheckinBody">
+            <div class="settings-field">
+              <label>提醒时间</label>
+              <input type="time" id="reminderCheckinTime" value="09:00" onchange="saveReminderSettings()" style="width:120px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;">
+              <span class="hint">如果到了这个时间还没有任何打卡，就会发送提醒。</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 2. Focus-after-checkin Reminder -->
+        <div class="reminder-card">
+          <div class="reminder-card-header">
+            <div class="reminder-card-left">
+              <span class="reminder-card-title"><i data-lucide="timer" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 打卡后聚焦提醒</span>
+              <span class="reminder-card-desc">打卡后一段时间未开始聚焦计时时提醒</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="reminderFocusEnabled" onchange="saveReminderSettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="reminder-card-body" id="reminderFocusBody">
+            <div class="settings-field">
+              <label>等待时间（分钟）</label>
+              <input type="number" id="reminderFocusAfterMin" value="30" min="5" max="180" onchange="saveReminderSettings()" style="width:80px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;">
+              <span class="hint">打卡完成后，如果这段时间内没有开始今天的第一次聚焦计时，就会发送提醒。</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- 3. Idle Reminder -->
+        <div class="reminder-card">
+          <div class="reminder-card-header">
+            <div class="reminder-card-left">
+              <span class="reminder-card-title"><i data-lucide="clock" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 空闲聚焦提醒</span>
+              <span class="reminder-card-desc">长时间未进行聚焦计时时提醒</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="reminderIdleEnabled" onchange="saveReminderSettings()">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <div class="reminder-card-body" id="reminderIdleBody">
+            <div class="settings-field">
+              <label>空闲阈值（分钟）</label>
+              <input type="number" id="reminderIdleAfterMin" value="60" min="15" max="480" onchange="saveReminderSettings()" style="width:80px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;">
+              <span class="hint">如果距离上次聚焦计时结束超过这个时间，就会发送提醒。</span>
+            </div>
+            <div class="settings-field">
+              <label>每天最多提醒次数</label>
+              <div style="display:flex;align-items:center;gap:8px;">
+                <input type="number" id="reminderIdleMaxCount" value="3" min="1" max="99" onchange="saveReminderSettings()" style="width:80px;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;">
+                <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap;">
+                  <input type="checkbox" id="reminderIdleUnlimited" onchange="saveReminderSettings()" style="width:auto;margin:0;">
+                  不限次数
+                </label>
+              </div>
+            </div>
+            <div class="settings-field" style="margin-top:10px;">
+              <label>
+                <input type="checkbox" id="reminderIdleExemptEnabled" onchange="saveReminderSettings()" style="width:auto;margin:0 6px 0 0;vertical-align:middle;">
+                豁免时间段
+              </label>
+              <span class="hint" style="display:block;margin:4px 0 6px;">在此时间段内不发送空闲提醒，适合午休、晚饭等休息时段。</span>
+              <div id="idleExemptList" class="exempt-list"></div>
+              <button class="reminder-add-exempt-btn" onclick="addIdleExemptRange()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加时间段</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="settings-status" id="reminderStatus"></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Conversation Settings Modal -->
+<div class="modal-overlay" id="convSettingsModal" onclick="closeConvSettingsModal(event)">
+  <div class="modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title"><i data-lucide="message-square" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 对话设置</span>
+      <button class="modal-close" onclick="closeConvSettingsModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body ai-conv-settings-body">
+      <div class="settings-field">
+        <label>对话标题</label>
+        <input type="text" id="convTitleInput" placeholder="给对话起个名字..." onchange="saveConvSettings()">
+      </div>
+      <div class="settings-field">
+        <label>系统提示词 (System Prompt)</label>
+        <textarea id="convSystemPrompt" placeholder="设定 AI 的角色和行为，例如：你是一个专业的数学老师，用通俗易懂的方式解答问题。&#10;&#10;留空则使用默认提示词。" onchange="saveConvSettings()"></textarea>
+        <span class="hint">提示词会在这段对话每次请求时作为 system message 发送</span>
+      </div>
+      <div style="margin:12px 0;border-top:1px solid var(--border);"></div>
+      <div class="settings-section-title"><i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导出对话日志</div>
+      <p class="hint" style="margin-bottom:10px;">导出当前对话的完整日志文件，包含所有 API 调用记录和上下文数据。</p>
+      <button class="btn-save-settings" onclick="exportConvLog()" style="background:#8b5cf6;"><i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导出日志</button>
+      <div class="settings-section-title" style="margin-top:12px;"><i data-lucide="info" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 调试信息</div>
+      <p class="hint" id="convDebugInfo">加载中…</p>
+      <div class="settings-status" id="convSettingsStatus"></div>
+    </div>
+  </div>
+</div>
+
+<!-- Checkin Quote Modal -->
+<div class="checkin-quote-overlay" id="checkinQuoteOverlay" onclick="closeCheckinQuote(event)">
+  <div class="checkin-quote-card" onclick="event.stopPropagation()">
+    <div class="checkin-quote-emoji" id="checkinQuoteEmoji">🔥</div>
+    <div class="checkin-quote-streak" id="checkinQuoteStreak"></div>
+    <div class="checkin-quote-text" id="checkinQuoteText"></div>
+    <button class="checkin-quote-close" onclick="closeCheckinQuote()">继续加油 💪</button>
+  </div>
+</div>
+
+<!-- Custom Confirm Dialog -->
+<div class="confirm-overlay" id="confirmOverlay">
+  <div class="confirm-dialog">
+    <div class="confirm-icon"><i data-lucide="alert-triangle" class="lucide-icon" style="width:40px;height:40px;color:var(--danger);"></i></div>
+    <div class="confirm-msg" id="confirmMsg"></div>
+    <label class="confirm-dont-ask" id="confirmDontAskLabel" style="display:none;">
+      <input type="checkbox" id="confirmDontAsk"> 不再提示
+    </label>
+    <div class="confirm-actions">
+      <button class="confirm-btn confirm-btn-cancel" id="confirmCancel">取消</button>
+      <button class="confirm-btn confirm-btn-ok" id="confirmOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Custom Prompt Dialog (for Electron compatibility) -->
+<div class="confirm-overlay" id="promptOverlay">
+  <div class="confirm-dialog">
+    <div class="confirm-icon"><i data-lucide="pencil" class="lucide-icon" style="width:40px;height:40px;color:var(--primary);"></i></div>
+    <div class="confirm-msg" id="promptMsg"></div>
+    <input type="text" id="promptInput" style="width:100%;padding:8px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:14px;box-sizing:border-box;margin-bottom:10px;">
+    <div class="confirm-actions">
+      <button class="confirm-btn confirm-btn-cancel" id="promptCancel">取消</button>
+      <button class="confirm-btn confirm-btn-ok" id="promptOk">确定</button>
+    </div>
+  </div>
+</div>
+
+<!-- Review Float Window -->
+<div class="review-float-overlay" id="reviewFloatOverlay" style="display:none;">
+  <div class="review-float" id="reviewFloat">
+    <div class="review-float-header" id="reviewFloatHeader">
+      <span class="review-float-title">
+        <i data-lucide="refresh-cw" class="lucide-icon" style="width:16px;height:16px;color:#8b5cf6;"></i>
+        <span>待复习笔记</span>
+      </span>
+      <span class="review-float-counter" id="reviewFloatCounter">0/0</span>
+      <button class="review-float-close" onclick="closeReviewFloat()" title="关闭">
+        <i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i>
+      </button>
+    </div>
+    <div class="review-float-list" id="reviewFloatList"></div>
+  </div>
+</div>
+
+<script src="lib/katex/katex.min.js"></script>
+<script src="js/liquid-glass.js?v=20260722-r23"></script>
+<script src="js/core.js?v=20260722-r10"></script>
+<script src="js/trash.js?v=20260724-r2"></script>
+<script src="js/todos.js?v=20260724-r13"></script>
+    <script src="js/notes.js?v=20260724-r11"></script>
+    <script src="js/links.js?v=20260724-r6"></script>
+    <script src="js/today.js?v=20260723-r1"></script>
+    <!-- AI 模块（按依赖顺序加载） -->
+    <script src="js/ai-utils.js"></script>
+    <script src="js/ai-conv.js"></script>
+    <script src="js/ai-attach.js"></script>
+    <script src="js/ai-render.js"></script>
+    <script src="js/ai-tools.js?v=20260721-r3"></script>
+    <script src="js/ai-search.js"></script>
+    <script src="js/ai-api.js"></script>
+    <script src="js/ai-send.js"></script>
+    <script src="js/music.js"></script>
+    <script src="js/memory.js"></script>
+    <script src="js/settings.js?v=20260731-r1"></script>
+    <script src="js/utils.js?v=20260722-r2"></script>
+    <script src="js/calendar.js?v=20260724-r7"></script>
+    <script src="js/timer.js?v=20260724-r19"></script>
+    <script src="js/habits.js?v=20260724-r1"></script>
+    <script src="js/stats.js?v=20260724-r1"></script>
+    <script src="js/updater.js?v=20260802-r1"></script>
+<script>
+// Initialize sidebar nav and switch to home tab on page load
+setTimeout(function() {
+  if (typeof renderSidebarNav === 'function') renderSidebarNav();
+  // Switch to configured home tab
+  if (typeof loadNavConfig === 'function' && typeof switchTab === 'function') {
+    const cfg = loadNavConfig();
+    if (cfg.homeTab) switchTab(cfg.homeTab);
+  }
+  if (typeof updateSidebarAiBadge === 'function') updateSidebarAiBadge();
+  // Initialize calendar event color picker
+  if (typeof CAL_EVENT_COLORS !== 'undefined') {
+    const picker = document.getElementById('calEventColorPicker');
+    if (picker) {
+      let radioHtml = '';
+      CAL_EVENT_COLORS.forEach((c, i) => {
+        radioHtml += `<label class="cal-event-color-swatch" style="background:${c.dot}" title="${c.key}">
+          <input type="radio" name="calEventColor" value="${c.key}" ${i === 4 ? 'checked' : ''}>
+        </label>`;
+      });
+      picker.innerHTML = radioHtml;
+    }
+  }
+}, 0);
+
+// Initialize Lucide icons
+if (typeof lucide !== 'undefined') {
+  lucide.createIcons();
+}
+</script>
+
+<!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
+<div class="context-menu" id="notesContextMenu">
+  <div class="context-menu-item" onclick="contextNewNote()"><i data-lucide="file-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 新建笔记</div>
+  <div class="context-menu-item" onclick="contextNewFolder()"><i data-lucide="folder-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 新建文件夹</div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item" id="ctxToggleSummary" onclick="contextToggleNotesSummary()"><i data-lucide="align-left" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="ctxToggleSummaryText">隐藏摘要</span></div>
+  <div class="context-menu-item" id="ctxToggleSidebar" onclick="contextToggleNotesSidebar()"><i data-lucide="panel-left-close" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="ctxToggleSidebarText">收起笔记列表</span></div>
+  <div class="context-menu-folder-items" id="ctxFolderItems">
+    <div class="context-menu-sep"></div>
+    <div class="context-menu-item" onclick="contextRenameFolder()"><i data-lucide="pencil-line" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重命名文件夹</div>
+    <div class="context-menu-item" onclick="contextArchiveFolder()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档文件夹</div>
+    <div class="context-menu-item danger" onclick="contextDeleteFolder()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除文件夹</div>
+  </div>
+  <div class="context-menu-note-items" id="ctxNoteItems">
+    <div class="context-menu-sep"></div>
+    <div class="context-menu-item" id="ctxToggleReview" onclick="contextToggleSkipReview()"><i data-lucide="eye-off" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="ctxToggleReviewText">跳过复习</span></div>
+    <div class="context-menu-item" onclick="contextArchiveNote()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档笔记</div>
+    <div class="context-menu-item danger" onclick="contextDeleteNote()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除笔记</div>
+  </div>
+</div>
+
+<!-- Right-click context menu for todos -->
+<div class="context-menu" id="todoContextMenu">
+  <div class="context-menu-item" onclick="undoTodo();closeTodoContextMenu();"><i data-lucide="undo" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 撤销</div>
+  <div class="context-menu-item" onclick="redoTodo();closeTodoContextMenu();"><i data-lucide="redo" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重做</div>
+  <div class="context-menu-item" onclick="expandAllTodos();closeTodoContextMenu();"><i data-lucide="chevrons-down" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 全部展开</div>
+  <div class="context-menu-item" onclick="collapseAllTodos();closeTodoContextMenu();"><i data-lucide="chevrons-up" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 全部折叠</div>
+  <div class="context-menu-item" id="todoCtxToggleDone" onclick="toggleTodoHideDone();closeTodoContextMenu();"><i data-lucide="eye-off" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 隐藏已完成</div>
+  <div class="context-menu-item" onclick="toggleTodoMultiSelect();closeTodoContextMenu();"><i data-lucide="check-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择待办</div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
+  <div class="context-menu-item" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
+  <div id="todoCtxSortItems">
+    <div class="context-menu-sep"></div>
+    <div class="context-menu-item" onclick="todoCtxSort('alpha')"><i data-lucide="arrow-up-a-z" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按标题排序</div>
+    <div class="context-menu-item" onclick="todoCtxSort('recent')"><i data-lucide="clock" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按时间排序（新→旧）</div>
+  </div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item" onclick="todoCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
+  <div class="context-menu-item danger" onclick="todoCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
+</div>
+
+<!-- Right-click context menu for categories -->
+<div class="context-menu" id="catContextMenu">
+  <div class="context-menu-item" onclick="catCtxMoveTop()"><i data-lucide="chevrons-up" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 移到首位</div>
+  <div class="context-menu-item" onclick="catCtxMoveUp()"><i data-lucide="chevron-up" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 上移</div>
+  <div class="context-menu-item" onclick="catCtxMoveDown()"><i data-lucide="chevron-down" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 下移</div>
+  <div class="context-menu-item" onclick="catCtxMoveBottom()"><i data-lucide="chevrons-down" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 移到末位</div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item" id="catCtxToggleCollapse" onclick="catCtxToggleCollapse()"><i data-lucide="chevron-right" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 折叠</div>
+</div>
+
+<!-- Right-click context menu for links -->
+<div class="context-menu" id="linkContextMenu">
+  <div class="context-menu-item" onclick="linkCtxOpen()"><i data-lucide="external-link" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 打开</div>
+  <div class="context-menu-item" onclick="linkCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
+  <div class="context-menu-item" onclick="linkCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
+  <div class="context-menu-item danger" onclick="linkCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
+</div>
+
+<!-- Right-click context menu for AI chat: save selected text as a note -->
+<div class="context-menu" id="aiChatContextMenu">
+  <div class="context-menu-item" onclick="saveAiSelectionAsNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 保存为笔记</div>
+  <div class="context-menu-item" onclick="copyAiSelection()"><i data-lucide="copy" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 复制选中文字</div>
+</div>
+
+</body>
+</html>

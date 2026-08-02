@@ -1,0 +1,67 @@
+{
+  "name": "my-study-table",
+  "version": "0.1.11",
+  "description": "My Study Table - 桌面学习助手",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron .",
+    "build": "electron-builder --win",
+    "build:portable": "electron-builder --win portable",
+    "publish": "electron-builder --win nsis --publish always",
+    "dist": "electron-builder --win nsis"
+  },
+  "build": {
+    "appId": "com.mystudytable.app",
+    "productName": "My Study Table",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "index.html",
+      "css/**/*",
+      "js/**/*",
+      "lib/**/*",
+      "*.bat"
+    ],
+    "publish": {
+      "provider": "github",
+      "owner": "jizihan2008",
+      "repo": "my-study-table",
+      "releaseType": "release"
+    },
+    "win": {
+      "target": [
+        {
+          "target": "nsis",
+          "arch": [
+            "x64"
+          ]
+        },
+        {
+          "target": "portable",
+          "arch": [
+            "x64"
+          ]
+        }
+      ],
+      "icon": null
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true,
+      "signAndEditExecutable": false
+    }
+  },
+  "devDependencies": {
+    "electron": "^33.2.0",
+    "electron-builder": "^24.9.1"
+  },
+  "dependencies": {
+    "electron-updater": "^6.3.9",
+    "katex": "^0.17.0"
+  }
+}
