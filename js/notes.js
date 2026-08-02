@@ -313,8 +313,7 @@ function renderNoteList() {
         reviewBadge = '<span class="ns-review-badge skipped" title="已跳过复习">跳过</span>';
       } else if (item.content && item.content.trim()) {
         const nextDate = calcNextReviewDate(item);
-        const today = new Date(getTodayStr());
-        const dueDays = Math.floor((nextDate - today) / 86400000);
+        const dueDays = daysBetweenDateStr(getTodayStr(), toLocalDateStr(nextDate));
         if (dueDays <= 0) {
           reviewBadge = '<span class="ns-review-badge due" title="待复习">复习</span>';
         } else if (dueDays <= 2) {
@@ -1081,6 +1080,27 @@ function getReviewStageLabels() {
   });
 }
 
+// Convert a Date (or date string) to a LOCAL date string YYYY-MM-DD.
+// Review dates must be compared/shown in the local timezone; using
+// toISOString().slice(0, 10) would yield UTC dates and shift review days
+// for timezones east/west of UTC (e.g. UTC+8 notes created before 08:00
+// got "today" instead of "tomorrow").
+function toLocalDateStr(d) {
+  const dt = (d instanceof Date) ? d : new Date(d);
+  if (isNaN(dt.getTime())) return '';
+  return dt.getFullYear() + '-' + String(dt.getMonth() + 1).padStart(2, '0') + '-' + String(dt.getDate()).padStart(2, '0');
+}
+
+// Whole-day difference (b - a) between two local YYYY-MM-DD date strings.
+function daysBetweenDateStr(a, b) {
+  if (!a || !b) return 0;
+  const pa = a.split('-').map(Number);
+  const pb = b.split('-').map(Number);
+  const ta = new Date(pa[0], pa[1] - 1, pa[2]).getTime();
+  const tb = new Date(pb[0], pb[1] - 1, pb[2]).getTime();
+  return Math.round((tb - ta) / 86400000);
+}
+
 // Ensure a note has _reviewHistory
 function ensureReviewHistory(note) {
   if (!note._reviewHistory) note._reviewHistory = [];
@@ -1090,9 +1110,13 @@ function ensureReviewHistory(note) {
 function calcNextReviewDate(note) {
   ensureReviewHistory(note);
   if (note._reviewHistory.length === 0) {
-    // Never reviewed: due after 1 day from creation (or last update)
+    // Never reviewed: due after the FIRST interval from creation (or last update).
+    // Must use getReviewIntervals()[0] (e.g. relaxed=2, custom=user-defined) —
+    // hardcoding +1 ignored the review mode and made fresh notes inconsistent
+    // with edited ones (which take the intervals branch below).
     const base = new Date(note.updatedAt || note.createdAt || Date.now());
-    base.setDate(base.getDate() + 1);
+    const intervals = getReviewIntervals();
+    base.setDate(base.getDate() + (intervals.length > 0 ? intervals[0] : 1));
     return base;
   }
   // Use the most recent review to calculate next interval
@@ -1115,8 +1139,8 @@ function getNotesDueForReview() {
     if (!note.content || !note.content.trim()) continue;
     if (note._skipReview) continue;
     const nextDate = calcNextReviewDate(note);
-    // Compare date-only (ignore time portion) so notes appear from start of day
-    const nextDateStr = nextDate.toISOString().slice(0, 10);
+    // Compare date-only in LOCAL timezone so notes appear from start of day
+    const nextDateStr = toLocalDateStr(nextDate);
     if (nextDateStr <= todayStr) {
       dueNotes.push({
         note,
@@ -1172,7 +1196,7 @@ function getAllFutureReviewDates(note) {
   // Round N+1: the next scheduled review
   const nextDate = calcNextReviewDate(note);
   result.push({
-    date: nextDate.toISOString().slice(0, 10),
+    date: toLocalDateStr(nextDate),
     round: N + 1,
     isNext: true
   });
@@ -1186,7 +1210,7 @@ function getAllFutureReviewDates(note) {
     const d = new Date(nextDate);
     d.setDate(d.getDate() + cumulative);
     result.push({
-      date: d.toISOString().slice(0, 10),
+      date: toLocalDateStr(d),
       round: N + 1 + (i - gapIdx + 1),
       isNext: false
     });

@@ -1,6 +1,6 @@
 # 🎯 My Study Table
 
-**版本**: v0.1.11  
+**版本**: v0.1.12  
 **技术栈**: 纯前端 HTML + CSS + JavaScript（Electron 可选）  
 **数据存储**: localStorage（Electron 环境额外支持文件系统备份）  
 **自动更新**: electron-updater（GitHub Releases 发布）  
@@ -530,11 +530,11 @@ npm start
 
 ### 发布新版本流程
 
-1. **更新版本号** — 修改 `package.json` 的 `version`（如 `0.1.11`），同时更新 `js/settings.js` 中 `initChangelog()` 的更新日志
+1. **更新版本号** — 修改 `package.json` 的 `version`（如 `0.1.12`），同时更新 `js/settings.js` 中 `initChangelog()` 的更新日志
 2. **配置发布源** — 编辑 `package.json` 中 `build.publish`，将 `owner` 改为你的 GitHub 用户名
 3. **生成 GitHub Token** — GitHub → Settings → Developer settings → Personal access tokens，勾选 `repo` 权限
 4. **构建并发布** — 执行 `build_app.bat` 选择 **[4] 发布构建**（或命令行运行 `npm run publish`，需先设置环境变量 `GH_TOKEN`）
-5. **确认发布** — 构建完成后访问仓库 Releases 页面，确认生成对应版本号（`v0.1.11`）的 Release，并包含 `My Study Table Setup 0.1.11.exe` 与 `latest.yml`
+5. **确认发布** — 构建完成后访问仓库 Releases 页面，确认生成对应版本号（`v0.1.12`）的 Release，并包含 `My Study Table Setup 0.1.12.exe` 与 `latest.yml`
 
 ### 常见问题
 

@@ -124,6 +124,9 @@ function renderCalendar() {
   const year = calendarCurrentDate.getFullYear();
   const month = calendarCurrentDate.getMonth();
 
+  // Build review date map for this month (notes spaced-repetition)
+  const reviewDateMap = (typeof buildReviewDateMap === 'function') ? buildReviewDateMap() : {};
+
   // Update title
   document.getElementById('calendarTitle').textContent = `${year}年 ${month + 1}月`;
 

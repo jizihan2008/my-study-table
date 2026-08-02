@@ -1,7 +1,8 @@
 {
   "name": "my-study-table",
-  "version": "0.1.11",
+  "version": "0.1.12",
   "description": "My Study Table - 桌面学习助手",
+  "author": "jizihan2008",
   "main": "main.js",
   "scripts": {
     "start": "electron .",
@@ -52,8 +53,7 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
-      "createStartMenuShortcut": true,
-      "signAndEditExecutable": false
+      "createStartMenuShortcut": true
     }
   },
   "devDependencies": {

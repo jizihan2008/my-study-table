@@ -390,9 +390,8 @@ function renderReviewCard() {
     const stageIdx = Math.min(n.reviewCount, stageLabels.length - 1);
     const stageLabel = stageLabels[stageIdx];
 
-    // Calculate how overdue
-    const today = new Date(getTodayStr());
-    const diffDays = Math.floor((today - n.nextReviewDate) / 86400000);
+    // Calculate how overdue (local date diff in whole days)
+    const diffDays = daysBetweenDateStr(toLocalDateStr(n.nextReviewDate), getTodayStr());
     const overdueLabel = diffDays > 0 ? `（逾期 ${diffDays} 天）` : '';
 
     const preview = n.summary
@@ -486,12 +485,11 @@ function renderReviewFloat() {
   }
 
   const stageLabels = getReviewStageLabels();
-  const today = new Date(getTodayStr());
 
   list.innerHTML = reviewFloatNotes.map((n, idx) => {
     const stageIdx = Math.min(n.reviewCount, stageLabels.length - 1);
     const stageLabel = stageLabels[stageIdx];
-    const diffDays = Math.floor((today - n.nextReviewDate) / 86400000);
+    const diffDays = daysBetweenDateStr(toLocalDateStr(n.nextReviewDate), getTodayStr());
     const overdueLabel = diffDays > 0 ? `逾期 ${diffDays} 天` : '';
     const preview = n.summary ? escapeHtml(n.summary) : '';
     const expanded = reviewFloatExpanded.has(idx);

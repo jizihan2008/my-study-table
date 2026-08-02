@@ -310,7 +310,7 @@ function buildToolsSystemPrompt() {
     const reviewedCount = allNotes.filter(n => n._reviewHistory && n._reviewHistory.length > 0).length;
     const overdueCount = dueNotes.filter(n => {
       const nextDate = typeof calcNextReviewDate === 'function'
-        ? calcNextReviewDate(n).toISOString().slice(0, 10) : '';
+        ? toLocalDateStr(calcNextReviewDate(n)) : '';
       return nextDate && nextDate < todayStr;
     }).length;
     prompt += `🧠 复习：${dueNotes.length} 篇待复习（${overdueCount} 篇逾期），${reviewedCount}/${allNotes.length} 篇参与间隔复习`;
@@ -318,7 +318,7 @@ function buildToolsSystemPrompt() {
       prompt += `\n   ${dueNotes.slice(0, 8).map(n => {
         const count = (n._reviewHistory || []).length;
         const nextDate = typeof calcNextReviewDate === 'function'
-          ? calcNextReviewDate(n).toISOString().slice(0, 10) : '';
+          ? toLocalDateStr(calcNextReviewDate(n)) : '';
         const overdue = nextDate && nextDate < todayStr ? ' ⚠️逾期' : '';
         return `📖 ${n.title || '未命名'}(第${count}轮${overdue})`;
       }).join('，')}`;
@@ -975,7 +975,7 @@ async function executeToolCall(action, params) {
             return n._reviewDays || 1;
           })() : (n._reviewDays || 1);
           const nextDate = typeof calcNextReviewDate === 'function'
-            ? calcNextReviewDate(n).toISOString().slice(0, 10) : '';
+            ? toLocalDateStr(calcNextReviewDate(n)) : '';
           const isOverdue = nextDate && nextDate < getTodayStr();
           const overdueTag = isOverdue ? ' ⚠️逾期' : '';
           const reviewStage = count === 0 ? '新笔记' : `第${count+1}轮（间隔${intervalDays}天）`;
