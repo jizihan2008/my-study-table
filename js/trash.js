@@ -314,25 +314,27 @@ function permanentlyDeleteFromArchive(module, id) {
   }
 }
 
-// ── 清空回收站 ──
+// ── 清空回收站（含扩展回收站） ──
 function emptyTrash(module) {
   const totalCount = Object.values(TRASH_KEYS).reduce((sum, k) => {
     try { return sum + (JSON.parse(localStorage.getItem(k)) || []).length; } catch { return sum; }
   }, 0);
-  if (totalCount === 0) return;
-  if (typeof showCustomConfirm === 'function') {
-    showCustomConfirm(`确定要永久清空回收站中的所有 ${totalCount} 项内容吗？此操作不可撤销！`).then(confirmed => {
-      if (!confirmed) return;
-      Object.keys(TRASH_KEYS).forEach(m => saveTrash(m, []));
-      const activeSection = document.querySelector('.section.active');
-      if (activeSection && activeSection.id === 'section-trash') renderTrash();
-    });
-  } else {
-    if (confirm(`确定要永久清空回收站中的所有 ${totalCount} 项内容吗？此操作不可撤销！`)) {
-      Object.keys(TRASH_KEYS).forEach(m => saveTrash(m, []));
-      const activeSection = document.querySelector('.section.active');
-      if (activeSection && activeSection.id === 'section-trash') renderTrash();
+  const confirmMsg = totalCount > 0
+    ? `确定要永久清空回收站中的所有 ${totalCount} 项内容吗？此操作不可撤销！`
+    : '确定要永久清空回收站吗？此操作不可撤销！';
+  const doEmpty = () => {
+    Object.keys(TRASH_KEYS).forEach(m => saveTrash(m, []));
+    // 一并清空扩展回收站（文件系统目录）
+    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashEmpty) {
+      window.electronAPI.extTrashEmpty().catch(() => {});
     }
+    const activeSection = document.querySelector('.section.active');
+    if (activeSection && activeSection.id === 'section-trash') renderTrash();
+  };
+  if (typeof showCustomConfirm === 'function') {
+    showCustomConfirm(confirmMsg).then(confirmed => { if (confirmed) doEmpty(); });
+  } else {
+    if (confirm(confirmMsg)) doEmpty();
   }
 }
 
@@ -441,7 +443,7 @@ function renderTrash() {
   });
   
   if (totalItems === 0) {
-    html = `<div class="empty-state">
+    html = `<div class="empty-state" id="trashEmptyState">
       <i data-lucide="trash-2" class="lucide-icon" style="width:64px;height:64px;margin-bottom:12px;opacity:0.4;color:var(--text-secondary);display:block;margin-left:auto;margin-right:auto;"></i>
       <p>回收站是空的</p>
       <p style="font-size:12px;color:var(--text-secondary);">删除的内容会暂时存放在这里</p>
@@ -449,6 +451,57 @@ function renderTrash() {
   }
   
   container.innerHTML = html;
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+
+  // 扩展回收站（文件系统扩展目录，异步 IPC 加载后并入同一视图）
+  renderTrashExtensions();
+}
+
+// 渲染「扩展」回收站区块（并入现有回收站视图）
+async function renderTrashExtensions() {
+  const container = document.getElementById('trashContainer');
+  if (!container) return;
+  let trashedExts = [];
+  try {
+    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashList) {
+      trashedExts = await window.electronAPI.extTrashList();
+    }
+  } catch (e) { /* 失败不阻塞 */ }
+
+  // 移除旧区块（避免重复）
+  const old = document.getElementById('trashExtensionsSection');
+  if (old) old.remove();
+
+  if (trashedExts.length === 0) return;
+
+  // 若当前是空态，先移除空态
+  const empty = document.getElementById('trashEmptyState');
+  if (empty) empty.remove();
+
+  const html = `<div class="trash-module-section" id="trashExtensionsSection">
+    <div class="trash-module-header">
+      <span><i data-lucide="puzzle" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 扩展</span>
+      <span class="trash-module-count">${trashedExts.length} 项</span>
+    </div>
+    <div class="trash-items">
+      ${trashedExts.map(t => {
+        const m = t.manifest || { name: t.id, version: '?', description: '' };
+        const delTime = t.deletedAt ? '删除于 ' + formatDate(new Date(t.deletedAt)) : '';
+        return `<div class="trash-item">
+          <div class="trash-item-info">
+            <span class="trash-item-type-badge ext">扩展</span>
+            <span class="trash-item-name">${escapeHtml(m.name || t.id)}</span>
+            <span class="trash-item-date">${delTime}</span>
+          </div>
+          <div class="trash-item-actions">
+            <button onclick="restoreTrashedExt('${escapeHtml(t.trashDir)}')" title="恢复" class="trash-action-btn restore"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button onclick="purgeTrashedExt('${escapeHtml(t.trashDir)}')" title="永久删除" class="trash-action-btn perm-del"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          </div>
+        </div>`;
+      }).join('')}
+    </div>
+  </div>`;
+  container.insertAdjacentHTML('beforeend', html);
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
 }
 

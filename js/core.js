@@ -172,18 +172,26 @@ function switchTab(tab) {
   document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
   const navBtn = document.getElementById('nav-' + tab);
   if (navBtn) navBtn.classList.add('active');
-  document.getElementById('section-' + tab).classList.add('active');
+  const sectionEl = document.getElementById('section-' + tab);
+  if (!sectionEl) return;
+  sectionEl.classList.add('active');
+  // 动态扩展面板：触发其自定义 render
+  if (typeof window.ExtManager !== 'undefined' && window.ExtManager.switchToExtSection) {
+    window.ExtManager.switchToExtSection(tab);
+  }
   if (tab === 'todo' && typeof refreshRepeatTodos === 'function') refreshRepeatTodos();
   if (tab === 'notes') renderNotes();
   if (tab === 'ai') renderAiChat();
   if (tab === 'today') renderToday();
-  if (tab === 'music') renderMusic();
   if (tab === 'calendar') renderCalendar();
   if (tab === 'timer') renderTimer();
   if (tab === 'habits') renderHabits();
+  if (tab === 'friends') { if (typeof renderFriends === 'function') renderFriends(); }
   if (tab === 'trash') { if (typeof renderTrash === 'function') renderTrash(); }
   if (tab === 'archive') { if (typeof renderArchive === 'function') renderArchive(); }
-  if (tab === 'stats') { if (typeof renderStats === 'function') renderStats(); }
+  // links / music / stats 由内置扩展（builtin-links / builtin-music / builtin-stats）负责渲染
+  if (tab === 'codegen') { if (typeof renderCodegen === 'function') renderCodegen(); }
+  if (tab === 'extensions') { if (typeof renderExtensionsPanel === 'function') renderExtensionsPanel(); }
   // Initialize Lucide icons for dynamically rendered content
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
 }
@@ -192,30 +200,35 @@ function switchTab(tab) {
 const ALL_NAV_ITEMS = [
   { id: 'todo',      icon: 'check-square',  label: '待办' },
   { id: 'notes',     icon: 'file-text',     label: '笔记' },
-  { id: 'links',     icon: 'layout-grid',   label: '快捷访问' },
   { id: 'today',     icon: 'calendar-check',label: '今天' },
   { id: 'calendar',  icon: 'calendar',      label: '日历' },
   { id: 'timer',     icon: 'timer',         label: '计时器' },
+  { id: 'friends',   icon: 'users',         label: '好友' },
   { id: 'habits',    icon: 'target',        label: '习惯' },
-  { id: 'music',     icon: 'music',         label: '音乐' },
-  { id: 'stats',     icon: 'bar-chart-3',   label: '统计' },
   { id: 'ai',        icon: 'bot',           label: 'AI 助手' },
+  { id: 'codegen',   icon: 'code-2',        label: 'AI 编程' },
+  { id: 'extensions',icon: 'puzzle',        label: '扩展' },
   { id: 'trash',     icon: 'trash-2',       label: '回收站' },
   { id: 'archive',   icon: 'archive',       label: '归档' }
 ];
 
 function loadNavConfig() {
+  let cfg;
   try {
     const saved = JSON.parse(localStorage.getItem('study_nav_config'));
-    if (saved && saved.order) {
-      // Ensure all current items exist (new items added to end)
-      const allIds = ALL_NAV_ITEMS.map(n => n.id);
-      const newIds = allIds.filter(id => !saved.order.includes(id));
-      saved.order = [...saved.order.filter(id => allIds.includes(id)), ...newIds];
-      return saved;
-    }
-  } catch {}
-  return { order: ALL_NAV_ITEMS.map(n => n.id), hidden: [], homeTab: 'today' };
+    cfg = (saved && saved.order) ? saved : { order: [], hidden: (saved && saved.hidden) || [], homeTab: (saved && saved.homeTab) || 'today' };
+  } catch (e) {
+    cfg = { order: [], hidden: [], homeTab: 'today' };
+  }
+  // 动态扩展导航项（内置扩展 / 插件注册）也保留在排序配置中
+  const dynIds = (typeof window.ExtManager !== 'undefined' && window.ExtManager.getDynamicNavItems)
+    ? window.ExtManager.getDynamicNavItems().map(d => d.id) : [];
+  const allIds = [...ALL_NAV_ITEMS.map(n => n.id), ...dynIds];
+  if (cfg.order.length === 0) cfg.order = allIds.slice();
+  const newIds = allIds.filter(id => !cfg.order.includes(id));
+  cfg.order = [...cfg.order.filter(id => allIds.includes(id)), ...newIds];
+  if (!Array.isArray(cfg.hidden)) cfg.hidden = [];
+  return cfg;
 }
 
 function saveNavConfig(cfg) {
@@ -226,16 +239,27 @@ function renderSidebarNav() {
   const nav = document.getElementById('sidebarNav');
   if (!nav) return;
   const cfg = loadNavConfig();
+  // 合并动态扩展侧边栏项（追加到末尾，去重）
+  let dynamicIds = [];
+  if (typeof window.ExtManager !== 'undefined' && window.ExtManager.getDynamicNavItems) {
+    dynamicIds = window.ExtManager.getDynamicNavItems();
+  }
+  const mergedOrder = [];
+  cfg.order.forEach(id => mergedOrder.push(id));
+  dynamicIds.forEach(d => { if (!mergedOrder.includes(d.id)) mergedOrder.push(d.id); });
   let visibleIdx = 0;
-  nav.innerHTML = cfg.order.map((tabId, i) => {
+  nav.innerHTML = mergedOrder.map((tabId, i) => {
     const info = ALL_NAV_ITEMS.find(n => n.id === tabId);
-    if (!info) return '';
+    const dyn = dynamicIds.find(d => d.id === tabId);
+    if (!info && !dyn) return '';
+    const icon = info ? info.icon : dyn.icon;
+    const label = info ? info.label : dyn.label;
     const isHidden = cfg.hidden.includes(tabId);
     if (isHidden) return '';
     const keyHint = visibleIdx < 9 ? `<span class="nav-key-hint">Ctrl+${visibleIdx + 1}</span>` : '';
     visibleIdx++;
     return `<button class="sidebar-nav-item" onclick="switchTab('${tabId}')" id="nav-${tabId}">
-      <i data-lucide="${info.icon}" class="lucide-icon"></i>${info.label}${keyHint}
+      <i data-lucide="${icon}" class="lucide-icon"></i>${label}${keyHint}
     </button>`;
   }).join('');
   // Mark active tab
@@ -248,12 +272,19 @@ function renderSidebarNav() {
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
 }
 
+// 全部导航项（核心 + 动态扩展项），供编辑界面栏使用
+function getNavDisplayItems() {
+  const dyn = (typeof window.ExtManager !== 'undefined' && window.ExtManager.getDynamicNavItems)
+    ? window.ExtManager.getDynamicNavItems() : [];
+  return [...ALL_NAV_ITEMS, ...dyn];
+}
+
 function openNavSettings() {
   const cfg = loadNavConfig();
   const body = document.getElementById('editModalBody');
   const title = document.getElementById('editModalTitle');
   title.innerHTML = '<i data-lucide="sliders-horizontal" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 编辑界面栏';
-  const homeOptions = ALL_NAV_ITEMS.filter(n => !cfg.hidden.includes(n.id)).map(n =>
+  const homeOptions = getNavDisplayItems().filter(n => !cfg.hidden.includes(n.id)).map(n =>
     `<option value="${n.id}" ${cfg.homeTab === n.id ? 'selected' : ''}>${n.label}</option>`
   ).join('');
   body.innerHTML = `
@@ -280,9 +311,10 @@ function onNavHomeChange() {
 function renderNavSortList(cfg) {
   const list = document.getElementById('navSortList');
   if (!list) return;
+  const displayItems = getNavDisplayItems();
   let visibleIdx = 0;
   list.innerHTML = cfg.order.map((tabId, i) => {
-    const info = ALL_NAV_ITEMS.find(n => n.id === tabId);
+    const info = displayItems.find(n => n.id === tabId);
     if (!info) return '';
     const isHidden = cfg.hidden.includes(tabId);
     const shortcut = !isHidden && visibleIdx < 9 ? `<span class="nav-sort-shortcut">Ctrl+${visibleIdx + 1}</span>` : '';
@@ -312,6 +344,8 @@ function toggleNavItemVisibility(tabId) {
   saveNavConfig(cfg);
   // Re-render the sort list so shortcut numbers update for visible-only items
   renderNavSortList(cfg);
+  // 立即刷新侧边栏，让显示/隐藏即时生效
+  renderSidebarNav();
 }
 
 function saveNavSettings() {

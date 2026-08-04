@@ -101,12 +101,11 @@ function safeInit(fn, name) {
 }
 safeInit(renderTodos, 'renderTodos');
 safeInit(refreshRepeatTodos, 'refreshRepeatTodos');
-safeInit(renderLinks, 'renderLinks');
 safeInit(renderNotes, 'renderNotes');
 safeInit(renderAiChat, 'renderAiChat');
-safeInit(onLinkTypeChange, 'onLinkTypeChange');
 safeInit(renderToday, 'renderToday');
-safeInit(renderMusic, 'renderMusic');
+// 快捷访问 / 音乐播放器 / 学习统计 已内置扩展化（builtin-links / builtin-music / builtin-stats），
+// 由扩展管理器在装载后通过 switchTab 的 render 回调渲染，不再在此初始化。
 // Trigger daily memory integration on app start
 if (typeof checkDailyIntegration === 'function') {
   setTimeout(checkDailyIntegration, 3000);

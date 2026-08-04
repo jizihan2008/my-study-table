@@ -1,8 +1,9 @@
 {
   "name": "my-study-table",
-  "version": "0.1.12",
+  "version": "0.2.1",
   "description": "My Study Table - 桌面学习助手",
   "author": "jizihan2008",
+  "license": "SEE LICENSE IN LICENSE.md",
   "main": "main.js",
   "scripts": {
     "start": "electron .",

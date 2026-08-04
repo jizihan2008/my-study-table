@@ -99,7 +99,7 @@ async function callAiApi(apiMessages, apiCfg, conv) {
   const kimisearchToolCalls = (choice?.tool_calls || []).filter(tc => tc.function?.name === '$web_search');
   if (kimisearchToolCalls.length > 0 && conv) {
     // Push the assistant message (with tool_calls) to conversation
-    conv.messages.push({ role: 'assistant', content: reply || null, tool_calls: kimisearchToolCalls, _kimiSearch: true });
+    appendMessage(conv, { role: 'assistant', content: reply || null, tool_calls: kimisearchToolCalls, _kimiSearch: true });
 
     // Build tool result messages
     const toolResults = kimisearchToolCalls.map(tc => ({
@@ -134,13 +134,13 @@ async function callAiApi(apiMessages, apiCfg, conv) {
       const followUpChoice = followUpData.choices?.[0]?.message;
       const finalReply = followUpChoice?.content || '';
       // Push tool messages and final reply to conversation
-      toolResults.forEach(tr => conv.messages.push(tr));
-      conv.messages.push({ role: 'assistant', content: finalReply, _kimiSearchResult: true });
+      toolResults.forEach(tr => appendMessage(conv, tr));
+      appendMessage(conv, { role: 'assistant', content: finalReply, _kimiSearchResult: true });
       const { cleanText: ct, toolCalls: tcs } = extractToolCalls(finalReply);
       return { cleanText: ct || finalReply || '（搜索无结果）', toolCalls: tcs, reasoning, rawReply: finalReply };
     } else {
       // Fallback: return partial result
-      conv.messages.push({ role: 'assistant', content: reply || '（搜索中断）', _kimiSearch: true });
+      appendMessage(conv, { role: 'assistant', content: reply || '（搜索中断）', _kimiSearch: true });
     }
   }
 
@@ -148,7 +148,9 @@ async function callAiApi(apiMessages, apiCfg, conv) {
   return { cleanText: cleanText || reply || '（未收到回复）', toolCalls, reasoning, rawReply: reply };
 }
 
-// Build the apiMessages array from conversation history
+// Build the apiMessages array from conversation history.
+// 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
+// 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
 function buildApiMessages(conv, extraSystemMsgs) {
   const systemPrompt = conv.systemPrompt
     ? buildToolsSystemPrompt() + '\n\n【用户自定义角色】' + conv.systemPrompt
@@ -166,26 +168,10 @@ function buildApiMessages(conv, extraSystemMsgs) {
   // Use per-key context limit (default 20)
   const apiCfg = getEffectiveApiConfig();
   const contextLimit = apiCfg.contextLimit || 20;
-  const recentMsgs = conv.messages.slice(-contextLimit);
-  // When a user msg has _candidates, skip ALL subsequent non-user messages
-  // (assistant + system) that are duplicates of the candidate chain.
-  // The skip flag is toggled OFF at the NEXT user message, so the user msg
-  // that triggered the skip is still processed (push user + push candidate).
-  let skipUntilNextUser = false;
+  const recentMsgs = (conv.messages || []).slice(-contextLimit);
+
   for (let mi = 0; mi < recentMsgs.length; mi++) {
     const m = recentMsgs[mi];
-    // Check skip BEFORE processing the message
-    if (skipUntilNextUser) {
-      if (m.role === 'user') {
-        skipUntilNextUser = false; // Stop skipping at the next user msg
-      } else {
-        continue; // Skip duplicates — already pushed via the candidate chain
-      }
-    }
-    // Set skip flag when encountering a user msg with candidates
-    if (m.role === 'user' && m._candidates && m._candidates.length > 0) {
-      skipUntilNextUser = true;
-    }
     if (m.role === 'system') {
       msgs.push({ role: 'system', content: m.content });
     } else if (m.role === 'user') {
@@ -229,34 +215,6 @@ function buildApiMessages(conv, extraSystemMsgs) {
         if (isDebugMode()) console.log('[DEBUG buildApiMessages] multimodal content:', JSON.stringify(userApiMsg.content, null, 2));
       }
       msgs.push(userApiMsg);
-      // If this user message has candidates, push the active candidate as the assistant turn
-      if (m._candidates && m._candidates.length > 0) {
-        const active = getActiveCandidate(m);
-        if (active) {
-          let activeContent = '';
-          let activeKeyName = null;
-          if (active.messages) {
-            // New format: chain of messages — use the last assistant message content
-            for (let ci = active.messages.length - 1; ci >= 0; ci--) {
-              const cm = active.messages[ci];
-              if (cm.role === 'assistant') {
-                activeContent = typeof cm.content === 'string' ? cm.content : (cm.content_text || '');
-                if (cm.keyName) activeKeyName = cm.keyName;
-                break;
-              }
-            }
-          } else if (typeof active.content === 'string') {
-            // Legacy: single assistant message
-            activeContent = active.content;
-            activeKeyName = active.keyName;
-          }
-          if (activeContent) {
-            const assistantMsg = { role: 'assistant', content: activeContent };
-            if (activeKeyName) assistantMsg.name = activeKeyName;
-            msgs.push(assistantMsg);
-          }
-        }
-      }
     } else if (m.role === 'assistant') {
       // NOTE: Do NOT include reasoning in API history. Including it can make the
       // API think the conversation is still in thinking mode, causing it to return
@@ -353,12 +311,12 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
     // has its own reasoning attached (not just the first one)
     const assistantMsg = { role: 'assistant', content: rawReply };
     if (reasoning) assistantMsg.reasoning = reasoning;
-    conv.messages.push(assistantMsg);
+    appendMessage(conv, assistantMsg);
 
     // Store tool call results as system messages with metadata for UI rendering
     const toolNames = toolCalls.map(tc => tc.action).join('、');
     const toolLabel = toolCalls.length === 1 ? toolCalls[0].action : toolNames;
-    conv.messages.push({
+    appendMessage(conv, {
       role: 'system',
       content: '【工具执行结果】\n' + resultsText,
       _toolInfo: { toolNames, toolLabel, results: toolResults }

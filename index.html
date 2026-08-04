@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Study Table</title>
-<link rel="stylesheet" href="css/style.css?v=20260724-r19">
+<link rel="stylesheet" href="css/style.css?v=20260805-r5">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -179,45 +179,7 @@
     </div>
   </div>
 
-  <!-- ── Quick Access Section ── -->
-  <div class="section" id="section-links">
-    <div class="card">
-      <div class="section-header">
-        <span class="section-title">快捷访问</span>
-        <button class="btn-toggle-input" id="btnLinkToggle" onclick="toggleLinkInput()">
-          <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>新增
-        </button>
-      </div>
-      <div class="input-panel" id="linkInputPanel">
-        <div class="link-inputs">
-          <div class="input-row">
-            <input type="text" id="linkNameInput" placeholder="名称..." onkeydown="if(event.key==='Enter')document.getElementById('linkUrlInput').focus()">
-          </div>
-          <div class="input-row">
-            <select id="linkTypeSelect" onchange="onLinkTypeChange()" style="width:120px;flex-shrink:0;">
-              <option value="link">🌐 网页链接</option>
-              <option value="app">📱 应用</option>
-            </select>
-            <input type="text" id="linkUrlInput" placeholder="网址 (URL) 或应用链接..." onkeydown="if(event.key==='Enter')document.getElementById('linkCatInput').focus()">
-          </div>
-          <div class="input-row">
-            <input type="text" id="linkCatInput" placeholder="分类名称（如：学习 / 工具 / 娱乐）" list="catSuggestions" style="flex:1;">
-            <datalist id="catSuggestions"></datalist>
-            <button class="btn-add" onclick="addLink()">
-              <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>添加
-            </button>
-          </div>
-        </div>
-      </div>
-      <div class="card-scroll">
-        <div class="links-panels" id="linksPanels"></div>
-        <div class="empty-state" id="linkEmpty">
-          <i data-lucide="link-2" class="lucide-icon" style="width:64px;height:64px;margin-bottom:12px;opacity:0.4;color:var(--text-secondary);display:block;margin-left:auto;margin-right:auto;"></i>
-          <p>暂无快捷入口，点击「新增」收藏吧 <i data-lucide="link" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i></p>
-        </div>
-      </div>
-    </div>
-  </div>
+  <!-- ── Quick Access Section（内置扩展 builtin-links 提供）── -->
 
   <!-- ── Today Section ── -->
   <div class="section" id="section-today">
@@ -339,6 +301,15 @@
     </div>
   </div>
 
+  <!-- ── Friends Section ── -->
+  <div class="section" id="section-friends">
+    <div class="card" style="padding: 0; overflow: hidden; border-radius: var(--radius);">
+      <div id="friendsApp" class="fr-app-root">
+        <!-- rendered by renderFriends() -->
+      </div>
+    </div>
+  </div>
+
   <!-- ── Timer Section ── -->
   <div class="section" id="section-timer">
     <div class="card">
@@ -351,17 +322,7 @@
     </div>
   </div>
 
-  <!-- ── Music Section ── -->
-  <div class="section" id="section-music">
-    <div class="card">
-      <div class="section-header">
-        <span class="section-title"><i data-lucide="music" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 音乐播放器</span>
-      </div>
-      <div class="card-scroll" id="musicContainer">
-        <!-- rendered by renderMusic() -->
-      </div>
-    </div>
-  </div>
+  <!-- ── Music Section（内置扩展 builtin-music 提供）── -->
 
   <!-- ── Habits Section ── -->
   <div class="section" id="section-habits">
@@ -414,8 +375,35 @@
     </div>
   </div>
 
-  <!-- ── Stats Section ── -->
-  <div class="section" id="section-stats"></div>
+  <!-- ── Stats Section（内置扩展 builtin-stats 提供）── -->
+
+  <!-- ── AI 编程助手 ── -->
+  <div class="section" id="section-codegen">
+    <div class="card" style="padding: 0; overflow: hidden; border-radius: var(--radius);">
+      <div id="codegenBody" class="cg-layout"></div>
+    </div>
+  </div>
+
+  <!-- ── 扩展管理 ── -->
+  <div class="section" id="section-extensions">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="puzzle" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 扩展管理</span>
+        <span class="hint">插件（新增功能）与源码补丁（修改现有功能）统一在此管理，可随时装载 / 卸载 / 回滚。</span>
+      </div>
+      <div class="ext-toolbar-row">
+        <button class="ext-toolbar-main-btn" onclick="openCodegenSection()"><i data-lucide="code-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 用 AI 生成扩展</button>
+        <button class="ext-toolbar-btn-sm" onclick="importExtension()"><i data-lucide="folder-input" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导入扩展</button>
+        <button class="ext-toolbar-btn-sm" onclick="openExtensionsDir()"><i data-lucide="folder-open" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 打开目录</button>
+        <button class="ext-toolbar-btn-sm" onclick="refreshExtensionsList()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 刷新</button>
+      </div>
+      <div class="card-scroll ext-card-scroll" id="extensionsScroll">
+        <div id="extensionsList" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;"></div>
+        <div class="ext-storage-hint"><i data-lucide="archive" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;"></i> 扩展文件保存在 <b>~/.my-study-table/extensions/</b>，卸载扩展不会删除扩展数据（各扩展数据以 study_ext_&lt;id&gt;_ 前缀存储）。</div>
+        <div class="settings-status" id="extensionsStatus"></div>
+      </div>
+    </div>
+  </div>
 
 </div>
 
@@ -506,6 +494,7 @@
     </div>
     <div class="settings-tabs">
       <button class="settings-tab active" onclick="switchSettingsTab('api')" id="settingsTabApi"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI 设置</button>
+      <button class="settings-tab" onclick="switchSettingsTab('friends')" id="settingsTabFriends"><i data-lucide="users" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 好友</button>
       <button class="settings-tab" onclick="switchSettingsTab('memory')" id="settingsTabMemory"><i data-lucide="brain" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 记忆</button>
       <button class="settings-tab" onclick="switchSettingsTab('data')" id="settingsTabData"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 数据</button>
       <button class="settings-tab" onclick="switchSettingsTab('notes')" id="settingsTabNotes"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 笔记</button>
@@ -582,6 +571,11 @@
         <button class="btn-save-settings" onclick="showApiKeyForm()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;margin-bottom:12px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加 Key</button>
 
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> CodeBuddy CLI（AI 编程助手引擎）</div>
+        <span class="hint" style="display:block;margin-bottom:8px;">「AI 编程」页通过本机 CodeBuddy CLI 运行 Agent 来生成扩展。首次使用需安装并登录。</span>
+        <div id="codebuddyCliConfig"></div>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="message-square-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 对话标题自动生成</div>
         <div class="settings-field">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -654,6 +648,26 @@
 
         <div class="settings-status" id="settingsStatus"></div>
       </div>
+      <!-- Friends Panel -->
+      <div class="settings-tab-panel" id="settingsPanelFriends">
+        <div class="settings-section-title"><i data-lucide="users" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 好友系统（Supabase）</div>
+        <span class="hint" style="display:block;margin-bottom:12px;">联网好友系统依赖 Supabase 云服务。首次使用请先在 Supabase 控制台执行 <b>supabase/schema.sql</b> 建表，再填入以下两项配置。</span>
+        <div class="settings-field">
+          <label>Supabase 项目地址（Project URL）</label>
+          <input type="text" id="friendsSupabaseUrl" placeholder="https://xxxx.supabase.co" onchange="saveFriendsSettings()" style="width:100%;">
+        </div>
+        <div class="settings-field">
+          <label>Anon Public Key（匿名公开密钥）</label>
+          <input type="password" id="friendsAnonKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." onchange="saveFriendsSettings()" style="width:100%;">
+        </div>
+        <div class="settings-field" style="margin-top:10px;">
+          <button class="btn-save-settings" id="friendsSaveBtn" onclick="saveFriendsSettings(true)" style="background:var(--primary);color:#fff;padding:7px 16px;font-size:12px;border-radius:6px;border:none;cursor:pointer;">
+            <i data-lucide="refresh-cw" class="lucide-icon" style="width:13px;height:13px;"></i> 保存并重新连接
+          </button>
+          <span class="hint" style="margin-left:8px;">修改后需重新进入「好友」页面生效。</span>
+        </div>
+        <div class="settings-status" id="friendsSettingsStatus" style="display:none;"></div>
+      </div>
       <!-- Memory Panel -->
       <div class="settings-tab-panel" id="settingsPanelMemory">
         <!-- Section 1: User Profile -->
@@ -694,6 +708,11 @@
           <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
             <div class="settings-section-title" style="margin:0;"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 自动记忆</div>
             <div style="display:flex;gap:8px;">
+              <select id="memoryDedupMode" onchange="saveMemoryDedupMode()" title="去重方案" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;">
+                <option value="B">去重：JS+AI兜底</option>
+                <option value="A">去重：完全AI</option>
+                <option value="C">去重：纯JS</option>
+              </select>
               <select id="memoryAutoFilter" onchange="renderMemoryPanel()" style="padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;">
                 <option value="">全部类型</option>
                 <option value="fact">📌 事实</option>
@@ -705,7 +724,13 @@
               </select>
             </div>
           </div>
-          <span class="hint" style="display:block;margin-bottom:8px;">AI 自动从对话中提取的关键信息，按置信度排序。</span>
+          <span class="hint" style="display:block;margin-bottom:8px;">AI 自动从对话中提取的关键信息，按置信度排序。相同信息会自动合并，不再新增重复条目。</span>
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+            <span style="font-size:12px;color:var(--text-secondary);">每日AI兜底阈值</span>
+            <input type="number" id="memoryDedupThreshold" min="10" max="50" value="30" onchange="saveMemoryDedupThreshold()" title="autoFacts 达到该条数时才在每日整合时触发 AI 兜底" style="width:64px;padding:4px 8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:12px;">
+            <span style="font-size:11px;color:var(--text-secondary);">条（方案A/B每日自动去重，手动触发不限）</span>
+            <button class="btn-save-settings" id="memoryDedupRunBtn" onclick="runManualDedupBtn()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;">⚡ 立即去重</button>
+          </div>
           <div id="memoryAutoList"></div>
           <!-- Inline edit form for auto facts -->
           <div id="memoryAutoEditForm" style="display:none;margin-top:8px;">
@@ -918,7 +943,7 @@
           </div>
           <div style="margin-bottom:10px;">
             <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">重复模式</label>
-            <select id="autoFormRepeat" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+            <select id="autoFormRepeat" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
               <option value="daily">每天重复</option>
               <option value="once">仅执行一次</option>
             </select>
@@ -1023,6 +1048,7 @@
 
         <div class="settings-status" id="reminderStatus"></div>
       </div>
+
     </div>
   </div>
 </div>
@@ -1110,35 +1136,67 @@
   </div>
 </div>
 
+<!-- AI 分支树浮窗（模仿复习浮窗） -->
+<div class="review-float-overlay" id="aiTreeFloatOverlay" style="display:none;">
+  <div class="ai-tree-float" id="aiTreeFloat">
+    <div class="review-float-header" id="aiTreeFloatHeader">
+      <span class="review-float-title">
+        <i data-lucide="git-branch" class="lucide-icon" style="width:16px;height:16px;color:#8b5cf6;"></i>
+        <span>分支树</span>
+      </span>
+      <button class="review-float-close" onclick="closeAiTreeFloat()" title="关闭">
+        <i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i>
+      </button>
+    </div>
+    <div class="ai-tree-float-body" id="aiTreeFloatBody"></div>
+  </div>
+</div>
+
 <script src="lib/katex/katex.min.js"></script>
 <script src="js/liquid-glass.js?v=20260722-r23"></script>
-<script src="js/core.js?v=20260722-r10"></script>
-<script src="js/trash.js?v=20260724-r2"></script>
+<script src="js/core.js?v=20260805-r11"></script>
+<script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260724-r13"></script>
     <script src="js/notes.js?v=20260724-r11"></script>
     <script src="js/links.js?v=20260724-r6"></script>
     <script src="js/today.js?v=20260723-r1"></script>
     <!-- AI 模块（按依赖顺序加载） -->
-    <script src="js/ai-utils.js"></script>
-    <script src="js/ai-conv.js"></script>
+    <script src="js/ai-utils.js?v=20260803-r1"></script>
+    <script src="js/ai-tree.js?v=20260804-r3"></script>
+    <script src="js/ai-conv.js?v=20260803-r1"></script>
     <script src="js/ai-attach.js"></script>
-    <script src="js/ai-render.js"></script>
-    <script src="js/ai-tools.js?v=20260721-r3"></script>
+    <script src="js/ai-render.js?v=20260804-r7"></script>
+    <script src="js/ai-tools.js?v=20260803-r1"></script>
     <script src="js/ai-search.js"></script>
-    <script src="js/ai-api.js"></script>
-    <script src="js/ai-send.js"></script>
+    <script src="js/ai-api.js?v=20260803-r1"></script>
+    <script src="js/ai-send.js?v=20260804-r3"></script>
     <script src="js/music.js"></script>
-    <script src="js/memory.js"></script>
-    <script src="js/settings.js?v=20260731-r1"></script>
+    <script src="js/memory.js?v=20260803-r1"></script>
+    <script src="js/appearance.js?v=20260803-r1"></script>
+    <script src="js/settings.js?v=20260805-r8"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <script src="js/calendar.js?v=20260724-r7"></script>
     <script src="js/timer.js?v=20260724-r19"></script>
     <script src="js/habits.js?v=20260724-r1"></script>
     <script src="js/stats.js?v=20260724-r1"></script>
     <script src="js/updater.js?v=20260802-r1"></script>
+    <!-- 好友系统 -->
+    <script src="lib/supabase/supabase.js"></script>
+    <script src="js/friends.js?v=20260805-r8"></script>
+    <script src="js/friends-chat.js?v=20260805-r2"></script>
+    <!-- 扩展系统 -->
+    <script src="js/ext-api.js?v=20260804-r1"></script>
+    <script src="js/patch-engine.js?v=20260804-r1"></script>
+    <script src="js/builtin-extensions.js?v=20260804-r1"></script>
+    <script src="js/ext-manager.js?v=20260804-r2"></script>
+    <script src="js/codegen.js?v=20260804-r10"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
-setTimeout(function() {
+setTimeout(async function() {
+  // 先装载已启用的扩展（插件 / 补丁）
+  if (typeof window.ExtManager !== 'undefined' && window.ExtManager.init) {
+    try { await window.ExtManager.init(); } catch (e) { console.error('扩展初始化失败:', e); }
+  }
   if (typeof renderSidebarNav === 'function') renderSidebarNav();
   // Switch to configured home tab
   if (typeof loadNavConfig === 'function' && typeof switchTab === 'function') {

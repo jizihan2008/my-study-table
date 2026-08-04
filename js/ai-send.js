@@ -135,7 +135,7 @@ async function sendAiMessage() {
   if (visionFiles.length > 0) {
     userMsg.visionFiles = visionFiles;
   }
-  conv.messages.push(userMsg);
+  appendMessage(conv, userMsg);
   safeSaveAiConvs();
 
   // Clear attachments
@@ -172,28 +172,7 @@ async function sendAiMessage() {
     const keyName = getActiveKeyDisplayName();
     const finalAssistantMsg = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
     if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
-
-    // Find the last user message index BEFORE adding the final message
-    let lastUserIdx = -1;
-    for (let i = conv.messages.length - 1; i >= 0; i--) {
-      if (conv.messages[i].role === 'user') {
-        lastUserIdx = i;
-        break;
-      }
-    }
-
-    if (lastUserIdx >= 0) {
-      // Build the chain: messages after user + the final assistant message
-      const chain = conv.messages.slice(lastUserIdx + 1).map(m => JSON.parse(JSON.stringify(m)));
-      chain.push(JSON.parse(JSON.stringify(finalAssistantMsg)));
-      const lastUser = conv.messages[lastUserIdx];
-      lastUser._candidates = [{ messages: chain }];
-      lastUser._activeCandidate = 0;
-      // Also push the final message to conv.messages so subsequent context (in later exchanges) can find it
-      conv.messages.push(finalAssistantMsg);
-    } else {
-      conv.messages.push(finalAssistantMsg);
-    }
+    appendMessage(conv, finalAssistantMsg);
     safeSaveAiConvs();
     sendAiNotification(conv, finalCleanText, keyName);
 
@@ -211,17 +190,7 @@ async function sendAiMessage() {
         const callAiParams = JSON.parse(callAiMatch[1]);
         const errMsg = await executeCallAiAndPush(callAiParams, conv);
         if (errMsg) {
-          // Attach as another candidate of the same user message
-          for (let i = conv.messages.length - 1; i >= 0; i--) {
-            if (conv.messages[i].role === 'user') {
-              const lastUser = conv.messages[i];
-              if (lastUser._candidates) {
-                lastUser._candidates.push({ role: 'assistant', content: errMsg, time: timeStr, keyName: getActiveKeyDisplayName() });
-                lastUser._activeCandidate = lastUser._candidates.length - 1;
-              }
-              break;
-            }
-          }
+          appendMessage(conv, { role: 'assistant', content: errMsg, time: timeStr, keyName: getActiveKeyDisplayName() });
           safeSaveAiConvs();
           sendAiNotification(conv, errMsg, getActiveKeyDisplayName());
         }
@@ -233,14 +202,7 @@ async function sendAiMessage() {
   } catch (err) {
     const errorMsg = '❌ 出错了：' + err.message;
     const errMsg = { role: 'assistant', content: errorMsg + '\n\n请检查 API Key 和网络连接是否正确。', time: timeStr, keyName: getActiveKeyDisplayName() };
-    for (let i = conv.messages.length - 1; i >= 0; i--) {
-      if (conv.messages[i].role === 'user') {
-        const lastUser = conv.messages[i];
-        lastUser._candidates = [errMsg];
-        lastUser._activeCandidate = 0;
-        break;
-      }
-    }
+    appendMessage(conv, errMsg);
     safeSaveAiConvs();
     sendAiNotification(conv, errorMsg, getActiveKeyDisplayName());
   }
@@ -257,156 +219,96 @@ async function sendAiMessage() {
   }
 }
 
-// ═══════════ Multi-Candidate Regenerate (DeepSeek-style) ═══════════
-// Data model:
-//   - A user message can have multiple assistant candidates attached:
-//     userMsg._candidates = [assistantObj1, assistantObj2, ...]
-//     userMsg._activeCandidate = 0 (index into _candidates)
-//   - On regenerate: append a new candidate and switch to it
-//   - On navigation: just change _activeCandidate index
-//   - On "use this" (adopt): clear other candidates, strip _candidates from user msg
-//   - In context: only the active candidate is sent to API
-
-function getActiveCandidate(userMsg) {
-  if (!userMsg || !userMsg._candidates || userMsg._candidates.length === 0) return null;
-  const idx = Math.min(userMsg._activeCandidate || 0, userMsg._candidates.length - 1);
-  return userMsg._candidates[idx];
-}
-
-function navigateCandidate(userIdx, delta) {
+// ═══════════ 树状对话：候选分支导航 ═══════════
+// 数据模型：一个 user 节点的多个 child 分支 = 多个候选回复。
+// 切换候选 = 在 user 节点的 children 间切换活跃路径（switchBranch）。
+// navigateCandidateBranch(userNodeId, delta)：在兄弟分支间循环切换。
+// 切换候选分支：在同一父节点的兄弟间循环切换。
+// - 传 assistant 节点 → 切换"同一问题重新生成"的候选（user 下的 assistant 兄弟）
+// - 传 user 节点 → 切换"编辑产生"的版本（assistant 父下的 user 兄弟）
+// （原版通用逻辑，未改底层语义）
+function navigateCandidateBranch(userNodeId, delta) {
   const conv = getActiveConv();
-  if (!conv) return;
-  const userMsg = conv.messages[userIdx];
-  if (!userMsg || !userMsg._candidates || userMsg._candidates.length === 0) return;
-  const n = userMsg._candidates.length;
-  const cur = userMsg._activeCandidate || 0;
-  const newIdx = (cur + delta + n) % n;
-  userMsg._activeCandidate = newIdx;
-
-  // Replace only the segment belonging to this user message.
-  // The segment spans from userIdx+1 to the next user message (or end of array).
-  let endIdx = conv.messages.length;
-  for (let i = userIdx + 1; i < conv.messages.length; i++) {
-    if (conv.messages[i].role === 'user') {
-      endIdx = i;
-      break;
-    }
-  }
-  const deleteCount = endIdx - userIdx - 1;
-  const activeCand = userMsg._candidates[newIdx];
-  if (activeCand && activeCand.messages) {
-    conv.messages.splice(userIdx + 1, deleteCount, ...JSON.parse(JSON.stringify(activeCand.messages)));
-  } else {
-    // If no messages in candidate, just delete the old segment
-    conv.messages.splice(userIdx + 1, deleteCount);
-  }
+  if (!conv || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
+  const siblings = siblingNodeIds(conv, userNodeId);
+  if (siblings.length === 0) return;
+  const n = siblings.length + 1; // 含自己
+  const curIdx = siblings.indexOf(userNodeId);
+  const newIdx = (curIdx + delta + n) % n;
+  const targetId = newIdx === curIdx ? userNodeId : siblings[newIdx];
+  switchBranch(conv, targetId);
   safeSaveAiConvs();
   renderAiMessages();
 }
 
-function adoptCandidate(userIdx) {
+// "采用本条"：树模式下当前活跃分支即被采用（无需额外动作），
+// 仅作向后兼容占位，确保渲染按钮 onclick 不报错。
+function adoptCandidate(userNodeId) {
   const conv = getActiveConv();
   if (!conv) return;
-  const userMsg = conv.messages[userIdx];
-  if (!userMsg || !userMsg._candidates || userMsg._candidates.length === 0) return;
-  // Replace only the segment belonging to this user message (not beyond next user msg)
-  let endIdx = conv.messages.length;
-  for (let i = userIdx + 1; i < conv.messages.length; i++) {
-    if (conv.messages[i].role === 'user') {
-      endIdx = i;
-      break;
-    }
-  }
-  const deleteCount = endIdx - userIdx - 1;
-  const activeCand = getActiveCandidate(userMsg);
-  if (activeCand && activeCand.messages) {
-    conv.messages.splice(userIdx + 1, deleteCount, ...JSON.parse(JSON.stringify(activeCand.messages)));
-  } else {
-    conv.messages.splice(userIdx + 1, deleteCount);
-  }
-  userMsg._adopted = true;
   safeSaveAiConvs();
   renderAiMessages();
 }
 
-function unadoptCandidate(userIdx) {
+// 旧函数名占位（树模式下无需"取消采用"）
+function unadoptCandidate() {
   const conv = getActiveConv();
   if (!conv) return;
-  const userMsg = conv.messages[userIdx];
-  if (!userMsg) return;
-  userMsg._adopted = false;
   safeSaveAiConvs();
   renderAiMessages();
 }
 
-async function regenerateAiMessage(targetIdx) {
+async function regenerateAiMessage(nodeId) {
   const conv = getActiveConv();
   if (!conv || isAiLoading(conv.id)) return;
+  ensureTree(conv); // 防御：确保 conv 已迁移为树
 
-  // Determine target user message. Two cases:
-  //  (a) Called from a candidate (DeepSeek-style): targetIdx is the user msg index
-  //  (b) Called from a legacy standalone assistant msg: targetIdx is the assistant msg index
-  let userIdx = -1;
-  const target = conv.messages[targetIdx];
-  if (target && target.role === 'user') {
-    userIdx = targetIdx;
-  } else if (target && target.role === 'assistant') {
-    // Find preceding user message; for legacy data, also remove this assistant and any messages after
-    for (let i = targetIdx - 1; i >= 0; i--) {
-      if (conv.messages[i].role === 'user') {
-        userIdx = i;
-        break;
+  // 树模式：在指定节点（user 或 assistant）下生成新分支。
+  // 若传入 assistant 节点，向上找到最近的 user 节点作为分叉点。
+  let userNodeId = nodeId;
+  if (conv.tree[nodeId]) {
+    const node = conv.tree[nodeId];
+    if (node.role === 'assistant') {
+      let cur = nodeId;
+      while (cur && conv.tree[cur]) {
+        const n = conv.tree[cur];
+        if (n.role === 'user') { userNodeId = cur; break; }
+        cur = n.parentId;
       }
     }
-    if (userIdx < 0) return;
-    // Remove the assistant message and any subsequent messages (system tool results, etc.)
-    conv.messages.splice(targetIdx);
-    safeSaveAiConvs();
-    renderAiMessages();
-  } else {
-    return;
   }
-  const userMsg = conv.messages[userIdx];
-  if (!userMsg || userMsg.role !== 'user') return;
+  if (!isTreeConv(conv) || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
 
-  // Remove any messages after userIdx (e.g. system tool results)
-  if (conv.messages.length > userIdx + 1) {
-    conv.messages.splice(userIdx + 1);
-    safeSaveAiConvs();
-    renderAiMessages();
-  }
+  await regenerateFromUserNode(conv, userNodeId);
+}
 
+// 核心：从指定 user 节点重新生成回复（在其下新建分支）。
+// 被 regenerateAiMessage（换一条）与 sendEditedMessage（编辑后发送）复用。
+async function regenerateFromUserNode(conv, userNodeId) {
+  if (!conv || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
   const apiCfg = getEffectiveApiConfig();
   if (!apiCfg.apiKey) return;
 
+  // 切换到该 user 节点，使 runToolCallLoop 的 appendMessage 落在其下，自动形成新分支
+  switchBranch(conv, userNodeId);
   setAiLoading(conv.id, true);
   updateAiSendButton();
 
   try {
     const { finalCleanText, finalRawReply, finalReasoning } = await runToolCallLoop(apiCfg, conv, null);
 
-    const keyName = getActiveKeyDisplayName();
-    const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-
-    // Build the final assistant message and push to conv.messages first
-    const finalAssistantMsg = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
-    if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
-    conv.messages.push(finalAssistantMsg);
-
-    // Collect the full message chain after userIdx (tool call assistants + systems + final)
-    const chain = conv.messages.slice(userIdx + 1).map(m => JSON.parse(JSON.stringify(m)));
-    const newCandidate = { messages: chain };
-
-    // Initialize or append to _candidates on the user message
-    if (!userMsg._candidates) {
-      userMsg._candidates = [newCandidate];
-      userMsg._activeCandidate = 0;
-    } else {
-      userMsg._candidates.push(newCandidate);
-      userMsg._activeCandidate = userMsg._candidates.length - 1;
+    // runToolCallLoop 已通过 appendMessage 追加中间工具消息与最终回复，
+    // 自动形成 user 节点下的新分支。若无任何追加（异常兜底），则手动创建。
+    const lastNode = conv.tree[conv.activePath[conv.activePath.length - 1]];
+    if (!lastNode || lastNode.role === 'user') {
+      const keyName = getActiveKeyDisplayName();
+      const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+      const finalAssistantMsg = { role: 'assistant', content: finalCleanText || '（未收到回复）', time: timeStr, keyName };
+      if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
+      createBranch(conv, userNodeId, finalAssistantMsg);
     }
     safeSaveAiConvs();
-    sendAiNotification(conv, finalCleanText, keyName);
+    sendAiNotification(conv, finalCleanText, getActiveKeyDisplayName());
 
     // Parse <memory> tags (only from the most recent reply)
     if (typeof parseMemoryTags === 'function') {
@@ -415,14 +317,7 @@ async function regenerateAiMessage(targetIdx) {
   } catch (err) {
     const errorMsg = '❌ 出错了：' + err.message;
     const errMsg = { role: 'assistant', content: errorMsg + '\n\n请检查 API Key 和网络连接是否正确。', time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), keyName: getActiveKeyDisplayName() };
-    const errCandidate = { messages: [errMsg] };
-    if (!userMsg._candidates) {
-      userMsg._candidates = [errCandidate];
-      userMsg._activeCandidate = 0;
-    } else {
-      userMsg._candidates.push(errCandidate);
-      userMsg._activeCandidate = userMsg._candidates.length - 1;
-    }
+    createBranch(conv, userNodeId, errMsg);
     safeSaveAiConvs();
     sendAiNotification(conv, errorMsg, getActiveKeyDisplayName());
   }
@@ -431,6 +326,39 @@ async function regenerateAiMessage(targetIdx) {
   setAiStopRequested(conv.id, false);
   renderAiMessages();
   updateAiSendButton();
+}
+
+// 编辑消息后发送：在原 user 节点父节点下创建「编辑后新 user 分支」，
+// 再像重新生成一样在其下生成 AI 回复（👤 b' → 🤖 回复B'）。
+async function sendEditedMessage(nodeId, newText) {
+  const conv = getActiveConv();
+  if (!conv || isAiLoading(conv.id)) return;
+  ensureTree(conv);
+  const text = (newText || '').trim();
+  if (!text) return;
+
+  // 找到目标 user 节点（编辑入口通常传 user 节点 id）
+  let userNodeId = nodeId;
+  if (conv.tree[nodeId]) {
+    const node = conv.tree[nodeId];
+    if (node.role === 'assistant') {
+      let cur = nodeId;
+      while (cur && conv.tree[cur]) {
+        const n = conv.tree[cur];
+        if (n.role === 'user') { userNodeId = cur; break; }
+        cur = n.parentId;
+      }
+    }
+  }
+  if (!isTreeConv(conv) || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
+
+  // 创建编辑后的新 user 分支（与原文并列），并切换过去
+  const newUserId = createBranchFromEdit(conv, userNodeId, text, { time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) });
+  if (newUserId === null) return;
+  safeSaveAiConvs();
+
+  // 在其下重新生成回复（类似重新生成）
+  await regenerateFromUserNode(conv, newUserId);
 }
 
 // ═══════════ AI Toolbar (Key select + Toggles + Quick actions) ═══════════

@@ -1,6 +1,8 @@
 # 🎯 My Study Table
 
-**版本**: v0.1.12  
+![License](https://img.shields.io/badge/License-Custom%20License-blue)
+
+**版本**: v0.2.1  
 **技术栈**: 纯前端 HTML + CSS + JavaScript（Electron 可选）  
 **数据存储**: localStorage（Electron 环境额外支持文件系统备份）  
 **自动更新**: electron-updater（GitHub Releases 发布）  
@@ -26,6 +28,7 @@ My Study Table 是一款面向学习者的多功能桌面管理工具，集成�
 13. [界面与快捷键](#13-界面与快捷键)
 14. [技术架构](#14-技术架构)
 15. [自动更新](#15-自动更新)
+16. [扩展系统与 AI 编程助手](#16-扩展系统与-ai-编程助手)
 
 ---
 
@@ -484,6 +487,12 @@ js/
 ├── ai-api.js         # AI API 通信
 ├── ai-send.js        # AI 发送逻辑
 │
+├── ext-api.js        # 受限扩展 API（extAPI 白名单）
+├── patch-engine.js   # 补丁引擎（运行时函数覆盖）
+├── builtin-extensions.js # 内置扩展（快捷访问/音乐/统计 自带插件）
+├── ext-manager.js    # 扩展管理器（装载/卸载/启用/禁用）
+├── codegen.js        # AI 编程助手（生成扩展）
+│
 css/
 ├── style.css         # 全部样式（含玻璃效果、主题、响应式）
 │
@@ -541,6 +550,147 @@ npm start
 - **发布失败：未配置 GH_TOKEN** — 在 PowerShell 中执行 `$env:GH_TOKEN="你的token"` 后重试
 - **检查更新报错** — 确认 `package.json` 的 `owner/repo` 与真实仓库一致，且新版本号高于当前安装版本
 - **想要国内下载更快** — 可将 `build.publish` 换成腾讯云 COS / 自建静态服务器（provider 改为 `generic`），更新代码无需改动
+
+---
+
+## 16. 🧩 扩展系统与 AI 编程助手
+
+扩展系统允许你在**不修改核心源码**的前提下为应用新增或修改功能，并支持用 **AI 自动生成扩展代码**。所有扩展存放在用户数据目录 `~/.my-study-table/extensions/<id>/`，可随时装载 / 卸载 / 回滚。
+
+### 两类扩展
+
+| 类型 | 作用 | 实现方式 | 风险 |
+|------|------|----------|------|
+| **plugin（安全插件）** | 新增功能：注册侧边栏项、新面板、工具栏按钮、订阅事件、独立数据区 | 通过受限 `extAPI` 白名单接口 | 低（不碰核心） |
+| **patch（源码补丁）** | 修改现有功能：覆盖任意全局函数改变行为 | `PatchEngine` 运行时函数覆盖，卸载自动恢复原函数 | 中（需审阅代码） |
+
+### AI 编程助手（CodeBuddy CLI Agent 模式）
+
+侧边栏「AI 编程」页面，输入自然语言需求，通过**本机 CodeBuddy CLI** 运行 Agent 全栈式开发扩展：
+
+```
+输入需求 → 检测 CodeBuddy CLI →（缺失则一键安装）→ 运行 Agent
+→ Agent 自主读取源码 / 写扩展文件（流式日志实时可见）
+→ 自动备份 → 重新装载 → 完成
+```
+
+- **仅 CodeBuddy CLI 执行引擎**：Agent 具备完整能力（自动读文件、改文件、多步推理），真正全栈式完成扩展开发，而非只返回一段代码文本
+- **权限边界**：Agent 工作目录 = 扩展目录（可读写）；应用源码目录只读（`--add-dir` 挂载 + 只允许 Read/Edit/Write 工具）；打包版自动导出源码快照供参考
+- **一键安装**：本机无 CLI 时，AI 编程页 / 设置页提供「一键安装」（`npm install -g @tencent-ai/codebuddy-code`，可勾选国内镜像）
+- **授权**：复用本机已登录的 CodeBuddy 凭据，或配置 CodeBuddy API Key（设置 → AI 设置 → CodeBuddy CLI）
+- **每次运行前自动备份全部扩展** — 修改可回滚；Agent 覆盖已有扩展前自动备份，可在「扩展」页恢复
+
+> 首次使用：需本机安装 Node.js ≥ 18.20，并安装 `@tencent-ai/codebuddy-code`；在终端运行一次 `codebuddy` 完成微信/QQ 登录（或配置 CodeBuddy API Key）。
+
+### 内置扩展（自带插件）
+
+应用自带三个官方内置插件，由扩展系统统一管理，可随时启用 / 禁用 / 移除（移除后可在扩展页底部一键恢复）：
+
+| 扩展 ID | 功能 | 对应核心模块 |
+|---------|------|-------------|
+| `builtin-links` | 快捷访问：收藏网页链接与应用，按分类管理 | `js/links.js` |
+| `builtin-music` | 音乐播放器：本地音乐、播放列表、悬浮球 | `js/music.js` |
+| `builtin-stats` | 学习统计：最近 N 天学习数据概览 | `js/stats.js` |
+
+内置扩展的导航项与页面由扩展系统注册（核心渲染函数仍由核心模块提供），**禁用或移除后侧边栏对应入口与页面随即消失**。
+
+### 扩展管理（侧边栏 → 扩展）
+
+- 扩展卡片列表：名称 / 类型 / 版本 / 大小 / 启用开关（内置扩展带「内置」徽章）
+- 「查看代码」「回滚」「卸载 / 移除」按钮（内置扩展移除后可在底部「已移除的内置扩展」恢复）
+- 「用 AI 生成扩展」「打开目录」「刷新」按钮
+- 可手动把扩展目录放入 `~/.my-study-table/extensions/` 后刷新加载
+
+### 扩展结构
+
+```
+~/.my-study-table/extensions/
+└── my-extension/          # 扩展 ID（唯一，小写短横线）
+    ├── manifest.json      # 元信息
+    ├── main.js            # 扩展代码（装载时执行）
+    └── backup/            # 自动备份快照（时间戳子目录）
+```
+
+**manifest.json 示例：**
+
+```json
+{
+  "id": "my-extension",
+  "name": "我的扩展",
+  "version": "0.1.0",
+  "type": "plugin",
+  "description": "扩展功能说明",
+  "author": "你的名字",
+  "enabled": true,
+  "createdAt": "2026-08-04T00:00:00.000Z"
+}
+```
+
+### extAPI 接口（插件可用的白名单能力）
+
+| 方法 | 说明 |
+|------|------|
+| `extAPI.registerNavItem({id, icon, label})` | 注册侧边栏导航项 |
+| `extAPI.registerSection({id, html, render})` | 注册独立面板（html 为面板内容，render 为切页时回调） |
+| `extAPI.addToolbarButton({icon, label, onclick})` | 注册工具栏按钮 |
+| `extAPI.on(event, handler)` | 订阅应用事件 |
+| `extAPI.emit(event, data)` | 触发事件 |
+| `extAPI.getData(key)` / `setData(key, value)` | 读写扩展私有数据（`study_ext_<id>_<key>`） |
+| `extAPI.notify(title, body)` | 发送系统通知 |
+| `extAPI.log / warn / error` | 带扩展前缀的日志 |
+| `extAPI.callCore(fnName, ...)` | 调用白名单核心只读函数（`loadData` / `getSettings` / `getEffectiveApiConfig` / `loadApiKeys`） |
+| `extAPI.openExternal(url)` | 用系统浏览器打开链接 |
+
+**生命周期钩子：** 在 main.js 中定义 `window['<扩展id>_mount'] = function(){...}`，扩展被装载时自动调用。
+
+### PatchEngine（补丁引擎）
+
+```js
+// 包装原函数（wrapper 可调用 original）
+PatchEngine.wrap('my-patch', window, 'renderToday', function(original, self, args) {
+  // 前置逻辑
+  const ret = original.apply(self, args);
+  // 后置逻辑
+  return ret;
+});
+
+// 完全替换
+PatchEngine.override('my-patch', window, 'someFunction', function() { ... });
+
+// 卸载时自动恢复，也可手动：PatchEngine.revertExt('my-patch')
+```
+
+### 插件示例（hello 插件）
+
+```js
+extAPI.registerNavItem({ id: 'hello-panel', icon: 'hand', label: '你好插件' });
+extAPI.registerSection({
+  id: 'hello-panel',
+  html: '<div class="card"><div class="section-header"><span class="section-title">👋 你好插件</span></div><div id="helloBody">这是我用扩展系统做的新面板！</div></div>'
+});
+extAPI.on('app:ready', function () {
+  extAPI.notify('你好插件', '应用已就绪，插件已装载！');
+});
+window['hello-panel_mount'] = function () { console.log('hello 插件装载完成'); };
+```
+
+### 安全说明
+
+- 扩展运行在渲染进程，受 `contextIsolation` + `nodeIntegration:false` 保护，**无法直接访问文件系统**
+- 扩展文件读写全部走主进程 IPC 白名单（仅限扩展目录内部）
+- AI 生成的代码应用前可预览，应用后可在「扩展」页中随时禁用 / 卸载 / 回滚
+
+---
+
+## 17. 📜 许可证
+
+本项目采用**自定义许可证**（详见 [LICENSE.md](LICENSE.md)），在 GitHub 上**公开展示源码**，同时明确保护作者权益：
+
+- ✅ **允许** — 查看、下载、学习、研究、教学，以及个人非商业使用
+- ❌ **禁止** — 未经作者书面许可的商业用途、再分发 / 发布、冒名 / 篡改版权声明
+
+> 本项目属于 **Source-Available（源码可见）**，**不是** MIT / GPL 等 OSI 开源许可证。
+> 如需商业授权或二次开发许可，请通过 GitHub Issues 联系作者。
 
 ---
 

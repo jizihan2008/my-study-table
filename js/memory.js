@@ -14,6 +14,15 @@ const REPEAT_BOOST = 0.3;
 const SIMILAR_BOOST = 0.15;
 const CONTRADICTION_PENALTY = 0.3;
 
+// ── Dedup scheme settings (ABC 三方案) ──
+const DEDUP_MODE_KEY = 'study_memory_dedup_mode';
+const DEDUP_THRESHOLD_KEY = 'study_memory_dedup_threshold';
+const DEFAULT_DEDUP_MODE = 'B';        // 'A' 完全API / 'B' JS+AI每日兜底 / 'C' 完全不用AI
+const DEFAULT_DEDUP_THRESHOLD = 30;    // autoFacts 达到该条数时才在每日整合触发 AI 兜底
+const MIN_DEDUP_THRESHOLD = 10;
+const MAX_DEDUP_THRESHOLD = 50;
+const DEDUP_SIM_THRESHOLD = 0.42;      // JS 启发式合并阈值（原 Jaccard 0.5 对中文短句过于严格）
+
 // ── Category definitions ──
 const MEMORY_CATEGORIES = {
   fact: { label: '事实', icon: '📌', color: '#3B82F6' },
@@ -70,9 +79,12 @@ function loadAiMemory() {
       delete parsed.profile;
     }
     if (typeof parsed.profileText !== 'string') parsed.profileText = '';
-    // Migration: autoFacts without detail field
+    // Migration: autoFacts without detail field / dedup fields
     for (const e of parsed.autoFacts) {
       if (!e.detail) e.detail = '';
+      if (!Array.isArray(e.aliases)) e.aliases = [];
+      if (typeof e.mergeCount !== 'number') e.mergeCount = 0;
+      if (typeof e._normKey !== 'string' || !e._normKey) e._normKey = normalizeText(e.text);
     }
     // Migration: manualNotes without detail field
     for (const n of parsed.manualNotes) {
@@ -94,35 +106,58 @@ function saveAiMemory(memory) {
 
 // ═══════════ Text Analysis (no AI needed) ═══════════
 
-// Simple Chinese word segmentation: extract meaningful tokens (2-char bigrams + key chars)
-function tokenize(text) {
-  text = text.toLowerCase().trim();
-  // Remove punctuation, keep Chinese chars + alphanumeric
-  const cleaned = text.replace(/[，。！？、；：""''（）【】《》\s\-\.\,\!\?\:\;\(\)\[\]\{\}\"\'\/\\@#\$%\^&\*\+\=]+/g, ' ');
-  const words = cleaned.split(/\s+/).filter(w => w.length > 0);
-  // For Chinese text, also extract bigrams
-  const tokens = new Set();
-  for (const w of words) {
-    tokens.add(w);
-    if (/[\u4e00-\u9fff]/.test(w)) {
-      // Chinese: extract bigrams
-      for (let i = 0; i < w.length - 1; i++) {
-        tokens.add(w.slice(i, i + 2));
-      }
-    }
-  }
-  return [...tokens];
+// 归一化：全角转半角 + 去标点空白 + 去语气虚词，用于精确匹配与相似度计算
+// 保留汉字/字母/数字，仅去除对语义相似度贡献低的虚词，避免"的/了"等造成误判
+const _STOP_CHAR_RE = /[，。！？、；：""''（）【】《》〈〉·—…\s\-—–_.,!?;:()\[\]{}"'\/\\@#$%^&*+=|<>~`]/g;
+const _STOP_WORD_RE = /的|了|也|还|是|在|就|都|而|并|且|或|与|和|我|你|他|她|它|这|那|对|从|到|把|被|让|给|跟|但|因为|所以|然后|觉得|感觉|比较|非常|很|太|挺|更|最|经常|总是/g;
+
+function normalizeText(text) {
+  if (!text) return '';
+  let s = String(text).toLowerCase();
+  // 全角 → 半角
+  s = s.replace(/[\uFF01-\uFF5E]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
+  s = s.replace(/\u3000/g, ' '); // 全角空格
+  // 去标点与空白
+  s = s.replace(_STOP_CHAR_RE, '');
+  // 去语气虚词
+  s = s.replace(_STOP_WORD_RE, '');
+  return s;
 }
 
-// Jaccard similarity
-function jaccardSimilarity(tokensA, tokensB) {
-  if (tokensA.length === 0 || tokensB.length === 0) return 0;
-  const setA = new Set(tokensA);
-  const setB = new Set(tokensB);
-  let intersection = 0;
-  for (const t of setA) { if (setB.has(t)) intersection++; }
-  const union = setA.size + setB.size - intersection;
-  return union === 0 ? 0 : intersection / union;
+// 字符级 bigram 集合（Dice 系数基础）
+function bigramSet(normText) {
+  const s = new Set();
+  if (!normText) return s;
+  if (normText.length === 1) { s.add(normText); return s; }
+  for (let i = 0; i < normText.length - 1; i++) s.add(normText.slice(i, i + 2));
+  return s;
+}
+
+// Dice 系数相似度（0~1），对中文短句比 Jaccard 更宽容（对分母大小不敏感）
+function diceSimilarity(textA, textB) {
+  const na = normalizeText(textA), nb = normalizeText(textB);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const setA = bigramSet(na), setB = bigramSet(nb);
+  let inter = 0;
+  for (const t of setA) { if (setB.has(t)) inter++; }
+  return (2 * inter) / (setA.size + setB.size);
+}
+
+// 综合相似度：Dice + 包含关系加成（短文本完全被长文本包含时视为高度相似）
+function textSimilarity(textA, textB) {
+  const na = normalizeText(textA), nb = normalizeText(textB);
+  if (!na || !nb) return 0;
+  if (na === nb) return 1;
+  const dice = diceSimilarity(na, nb);
+  const short = na.length <= nb.length ? na : nb;
+  const long = na.length <= nb.length ? nb : na;
+  let containment = 0;
+  if (short.length >= 2 && long.includes(short)) {
+    const ratio = short.length / long.length;
+    containment = ratio >= 0.8 ? 0.9 : ratio >= 0.6 ? 0.7 : ratio >= 0.4 ? 0.5 : 0.3;
+  }
+  return Math.max(dice, containment);
 }
 
 // Detect if text contains negation/contradiction markers
@@ -139,17 +174,30 @@ function getPolarityScore(text) {
 }
 
 // Check if two entries are semantically contradictory
+// 仅在「主体有一定相似 + 明显极性翻转」时判定为矛盾，同义改写不再误判
 function detectContradiction(existingText, newText) {
-  // Method A: Negation markers
-  const newHasNegation = hasNegationMarkers(newText);
-  const oldHasNegation = hasNegationMarkers(existingText);
-  if (newHasNegation !== oldHasNegation) return true;
+  const normOld = normalizeText(existingText);
+  const normNew = normalizeText(newText);
+  if (!normOld || !normNew) return false;
+  // 基础前提：主体必须有可比较的相似度，完全无关的两条各自保留（低门槛，仅防完全无关文本）
+  if (diceSimilarity(normOld, normNew) < 0.3) return false;
 
-  // Method B: Polarity direction
+  // Method A: 否定标记差异（去否定词后主体仍高度相似 → 是矛盾）
+  const oldNeg = hasNegationMarkers(normOld);
+  const newNeg = hasNegationMarkers(normNew);
+  if (oldNeg !== newNeg) {
+    const negRe = /不|没|不再|放弃|停止|改成|换成|取消|并非|不是|错了|不对|否认|收回|撤销/g;
+    const oldCore = normOld.replace(negRe, '');
+    const newCore = normNew.replace(negRe, '');
+    if (oldCore && newCore && textSimilarity(oldCore, newCore) >= DEDUP_SIM_THRESHOLD) return true;
+    return false;
+  }
+
+  // Method B: 极性翻转（如"喜欢 X"→"讨厌 X"）
   const oldPolarity = getPolarityScore(existingText);
   const newPolarity = getPolarityScore(newText);
-  // Big polarity shift in opposite directions suggests contradiction
-  if (Math.abs(oldPolarity - newPolarity) > 2) {
+  const polarDiff = Math.abs(oldPolarity - newPolarity);
+  if (polarDiff >= 2) {
     return (oldPolarity > 0 && newPolarity < 0) || (oldPolarity < 0 && newPolarity > 0);
   }
 
@@ -158,78 +206,128 @@ function detectContradiction(existingText, newText) {
 
 // ═══════════ Confidence Algorithm ═══════════
 
+// 创建一条自动记忆条目（统一字段，含 aliases/mergeCount/_normKey）
+function createAutoFact(type, text, detail, sourceConvId, sourceConvTitle) {
+  return {
+    id: genId(),
+    type, text, detail: (detail && detail.trim()) || '',
+    confidence: INITIAL_CONFIDENCE,
+    sourceConvId, sourceConvTitle, sourceConvIds: [sourceConvId],
+    aliases: [], mergeCount: 0, _normKey: normalizeText(text),
+    createdAt: Date.now(), updatedAt: Date.now()
+  };
+}
+
+// 合并语义：
+// - 有效重复（exact/带 id 再次确认）→ +REPEAT_BOOST（0.3）
+// - 同向相似（sim 命中）→ +SIMILAR_BOOST（0.15）
+// - 主文本更新为更长/更新版本，被替换的历史文本存入 aliases
+// - detail 增量拼接；mergeCount 记录合并次数（用于面板"已合并 N 条"徽标）
+function mergeIntoEntry(entry, type, text, sourceConvId, sourceConvTitle, detail, isExact) {
+  if (!entry) return null;
+  if (!Array.isArray(entry.aliases)) entry.aliases = [];
+  const oldText = entry.text;
+  const newText = (text && text.trim()) || oldText;
+  const normOld = normalizeText(oldText);
+  const normNew = normalizeText(newText);
+
+  if (normNew !== normOld) {
+    if (newText.length >= oldText.length) {
+      // 新版本更长 → 替换主文本，旧文本入 aliases
+      entry.text = newText;
+      if (!entry.aliases.some(a => normalizeText(a) === normOld)) entry.aliases.push(oldText);
+    } else {
+      // 新版本更短 → 主文本不变，新文本入 aliases
+      if (!entry.aliases.some(a => normalizeText(a) === normNew)) entry.aliases.push(newText);
+    }
+  }
+
+  // 合并 detail（增量拼接，避免覆盖已有细节）
+  if (detail && detail.trim()) {
+    const d = detail.trim();
+    if (!entry.detail) entry.detail = d;
+    else if (!entry.detail.includes(d)) entry.detail += '\n' + d;
+  }
+
+  entry.confidence = Math.min(1.0, entry.confidence + (isExact ? REPEAT_BOOST : SIMILAR_BOOST));
+  entry.updatedAt = Date.now();
+  entry.mergeCount = (entry.mergeCount || 0) + 1;
+  entry._normKey = normalizeText(entry.text);
+  if (!entry.sourceConvIds) entry.sourceConvIds = [entry.sourceConvId];
+  if (!entry.sourceConvIds.includes(sourceConvId)) entry.sourceConvIds.push(sourceConvId);
+  return entry;
+}
+
+// 读取当前去重方案：'A' 完全API / 'B' JS+AI每日兜底 / 'C' 完全不用AI
+function getDedupMode() {
+  try {
+    const v = localStorage.getItem(DEDUP_MODE_KEY);
+    if (v === 'A' || v === 'B' || v === 'C') return v;
+  } catch {}
+  return DEFAULT_DEDUP_MODE;
+}
+
+// 读取每日 AI 兜底触发阈值（autoFacts 条数）
+function getDedupThreshold() {
+  try {
+    const v = parseInt(localStorage.getItem(DEDUP_THRESHOLD_KEY));
+    if (!isNaN(v)) return Math.max(MIN_DEDUP_THRESHOLD, Math.min(MAX_DEDUP_THRESHOLD, v));
+  } catch {}
+  return DEFAULT_DEDUP_THRESHOLD;
+}
+
 // Insert or update an auto fact with confidence management
 // text = 简略信息（语音级别，prompt/list_memories 看到）
 // detail = 详细内容（get_memory_detail 看到）
 function upsertAutoFact(memory, type, text, sourceConvId, sourceConvTitle, detail) {
   if (!type || !text || !MEMORY_CATEGORIES[type]) return null;
 
+  const mode = getDedupMode();
   const existingEntries = memory.autoFacts;
-  const newTokens = tokenize(text);
+  const normText = normalizeText(text);
 
-  // Stage 1: Exact match check
+  // ── Stage 1: 精确匹配（normKey 或 aliases 精确命中）── 三方案通用
   const exactMatch = existingEntries.find(e =>
-    e.type === type && e.text.trim() === text.trim()
+    e.type === type && (normalizeText(e.text) === normText ||
+      (Array.isArray(e.aliases) && e.aliases.some(a => normalizeText(a) === normText)))
   );
   if (exactMatch) {
-    exactMatch.confidence = Math.min(1.0, exactMatch.confidence + REPEAT_BOOST);
-    exactMatch.updatedAt = Date.now();
-    if (detail && detail.trim()) exactMatch.detail = detail.trim();
-    if (!exactMatch.sourceConvIds) exactMatch.sourceConvIds = [exactMatch.sourceConvId];
-    if (!exactMatch.sourceConvIds.includes(sourceConvId)) exactMatch.sourceConvIds.push(sourceConvId);
-    return exactMatch;
+    return mergeIntoEntry(exactMatch, type, text, sourceConvId, sourceConvTitle, detail, true);
   }
 
-  // Stage 2: Jaccard similarity check (compare titles only)
+  // ── 方案 A（完全 API）：不做 JS 启发式相似合并，去重交给 AI 判断 ──
+  if (mode === 'A') {
+    const newEntry = createAutoFact(type, text, detail, sourceConvId, sourceConvTitle);
+    existingEntries.push(newEntry);
+    return newEntry;
+  }
+
+  // ── Stage 2: JS 启发式相似扫描（方案 B/C）──
   let bestMatch = null;
   let bestScore = 0;
   for (const e of existingEntries) {
     if (e.type !== type) continue;
-    const eTokens = tokenize(e.text);
-    const sim = jaccardSimilarity(newTokens, eTokens);
-    if (sim > 0.5 && sim > bestScore) {
-      bestScore = sim;
-      bestMatch = e;
-    }
+    const sim = textSimilarity(e.text, text);
+    if (sim > bestScore) { bestScore = sim; bestMatch = e; }
   }
 
-  if (bestMatch) {
-    // Stage 3: Semantic direction check
+  if (bestMatch && bestScore >= DEDUP_SIM_THRESHOLD) {
+    // ── Stage 3: 矛盾检测（仅在高相似 + 明显极性翻转时触发）──
     if (detectContradiction(bestMatch.text, text)) {
-      // Contradiction: penalize both
+      // 矛盾：双方置信度都降，新增一条低置信度条目作为"待定"，避免直接覆盖
       bestMatch.confidence = Math.max(LOW_CONFIDENCE_THRESHOLD - 0.05, bestMatch.confidence - CONTRADICTION_PENALTY);
       bestMatch.updatedAt = Date.now();
-      // Also add new entry with low confidence as a potential replacement
-      const newEntry = {
-        id: genId(),
-        type, text, detail: (detail && detail.trim()) || '',
-        confidence: Math.max(0.1, INITIAL_CONFIDENCE - CONTRADICTION_PENALTY),
-        sourceConvId, sourceConvTitle, sourceConvIds: [sourceConvId],
-        createdAt: Date.now(), updatedAt: Date.now()
-      };
+      const newEntry = createAutoFact(type, text, detail, sourceConvId, sourceConvTitle);
+      newEntry.confidence = Math.max(0.1, INITIAL_CONFIDENCE - CONTRADICTION_PENALTY);
       existingEntries.push(newEntry);
       return newEntry;
-    } else {
-      // Consistent: merge - update existing with higher confidence
-      bestMatch.confidence = Math.min(1.0, Math.max(bestMatch.confidence, INITIAL_CONFIDENCE) + SIMILAR_BOOST);
-      // Update text to the newer version if it adds info
-      if (text.length > bestMatch.text.length) bestMatch.text = text;
-      if (detail && detail.trim()) bestMatch.detail = detail.trim();
-      bestMatch.updatedAt = Date.now();
-      if (!bestMatch.sourceConvIds) bestMatch.sourceConvIds = [bestMatch.sourceConvId];
-      if (!bestMatch.sourceConvIds.includes(sourceConvId)) bestMatch.sourceConvIds.push(sourceConvId);
-      return bestMatch;
     }
+    // ── Stage 4: 同向合并（更新内容 + 提升置信度）──
+    return mergeIntoEntry(bestMatch, type, text, sourceConvId, sourceConvTitle, detail, false);
   }
 
-  // No match: create new entry
-  const newEntry = {
-    id: genId(),
-    type, text, detail: (detail && detail.trim()) || '',
-    confidence: INITIAL_CONFIDENCE,
-    sourceConvId, sourceConvTitle, sourceConvIds: [sourceConvId],
-    createdAt: Date.now(), updatedAt: Date.now()
-  };
+  // ── Stage 5: 无匹配，创建新条目 ──
+  const newEntry = createAutoFact(type, text, detail, sourceConvId, sourceConvTitle);
   existingEntries.push(newEntry);
   return newEntry;
 }
@@ -259,6 +357,147 @@ function cleanupLowConfidence(memory) {
     memory.autoFacts = memory.autoFacts.slice(0, MAX_AUTO_FACTS);
   }
   return before - memory.autoFacts.length;
+}
+
+// ═══════════ Dedup Engine (纯 JS 全量去重 / AI 兜底) ═══════════
+
+// 纯 JS 全量本地去重：两两扫描，用六阶段启发式合并同义重复（链式合并直到无变化）
+function runLocalDedup(memory) {
+  if (!memory || !Array.isArray(memory.autoFacts)) return 0;
+  let merged = 0;
+  let changed = true;
+  let guard = 0;
+  while (changed && guard < 5) {
+    changed = false;
+    guard++;
+    for (let i = 0; i < memory.autoFacts.length; i++) {
+      const a = memory.autoFacts[i];
+      if (!a) continue;
+      for (let j = i + 1; j < memory.autoFacts.length; j++) {
+        const b = memory.autoFacts[j];
+        if (!b || a.type !== b.type) continue;
+        const sim = textSimilarity(a.text, b.text);
+        if (sim >= DEDUP_SIM_THRESHOLD && !detectContradiction(a.text, b.text)) {
+          // 高相似（≥0.95，含精确归一化）视为有效重复；否则视为同向相似
+          const isExact = sim >= 0.95 || normalizeText(a.text) === normalizeText(b.text);
+          mergeIntoEntry(a, a.type, b.text, b.sourceConvId, b.sourceConvTitle, b.detail, isExact);
+          memory.autoFacts.splice(j, 1);
+          merged++;
+          changed = true;
+          j--;
+        }
+      }
+    }
+  }
+  return merged;
+}
+
+// 调 AI 分析全部 autoFacts，返回需合并的条目对建议（A/B 方案共用）
+async function requestAIDedupSuggestions(memory) {
+  if (!memory || !Array.isArray(memory.autoFacts) || memory.autoFacts.length < 2) return [];
+  const apiCfg = getEffectiveApiConfig_B();
+  if (!apiCfg || !apiCfg.apiKey) return [];
+
+  const listText = memory.autoFacts.map(e => {
+    const cat = MEMORY_CATEGORIES[e.type];
+    return `[${e.id}] (${e.type}) ${e.text}`;
+  }).join('\n');
+
+  const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
+  try {
+    const resp = await fetch(baseUrl + '/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + apiCfg.apiKey
+      },
+      body: JSON.stringify({
+        model: apiCfg.model,
+        messages: [
+          {
+            role: 'system',
+            content: `你是记忆去重AI。分析给定的长期记忆条目列表，找出「语义重复」的条目对——即表述不同但意思相同或高度接近、应当合并为一条的记忆。
+
+输出规则：
+- 每行输出一个JSON对象：{"keep_id":123,"merge_id":456,"text":"合并后保留的文本"}
+- keep_id 为应保留的条目ID，merge_id 为应被合并进 keep_id 的条目ID
+- text 为合并后希望保留的一句话表述（可选，缺省则保留 keep_id 原文本）
+- 仅合并同类型（type 相同）的条目
+- 如果没有任何重复，输出空数组 []
+- 只输出JSON行，不要其他文字`
+          },
+          { role: 'user', content: '条目列表：\n' + listText }
+        ],
+        temperature: 0.1,
+        max_tokens: 800,
+        stream: false
+      })
+    });
+    if (!resp.ok) return [];
+    const data = await resp.json();
+    const rawText = (data.choices?.[0]?.message?.content || '').trim();
+    const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+    const result = [];
+    for (const line of lines) {
+      try {
+        const p = JSON.parse(line);
+        if (p.keep_id && p.merge_id && p.keep_id !== p.merge_id) result.push(p);
+      } catch { /* skip malformed */ }
+    }
+    return result;
+  } catch (err) {
+    if (isDebugMode()) console.warn('[Memory] AI dedup request failed:', err.message);
+    return [];
+  }
+}
+
+// 按 AI 建议执行合并，返回实际合并条数（校验 id 存在性与非自合并）
+function mergeDuplicatedFacts(memory, mergeList) {
+  if (!memory || !Array.isArray(memory.autoFacts) || !Array.isArray(mergeList)) return 0;
+  let merged = 0;
+  for (const item of mergeList) {
+    const keep = memory.autoFacts.find(e => e.id === item.keep_id);
+    const drop = memory.autoFacts.find(e => e.id === item.merge_id);
+    if (!keep || !drop || keep.id === drop.id) continue;
+    if (keep.type !== drop.type) continue; // 保守：不同类别不合并
+    mergeIntoEntry(keep, keep.type, item.text || drop.text || keep.text, drop.sourceConvId, drop.sourceConvTitle, drop.detail, true);
+    memory.autoFacts = memory.autoFacts.filter(e => e.id !== item.merge_id);
+    merged++;
+  }
+  return merged;
+}
+
+// 手动唤醒兜底入口（记忆面板"立即去重"按钮）
+async function runManualDedup() {
+  const mode = getDedupMode();
+  const memory = loadAiMemory();
+  if (!memory.autoFacts || memory.autoFacts.length < 2) {
+    if (typeof showMemoryStatus === 'function') showMemoryStatus('✅ 当前无需去重（记忆不足 2 条）');
+    return;
+  }
+
+  if (mode === 'C') {
+    const merged = runLocalDedup(memory);
+    saveAiMemory(memory);
+    if (typeof renderMemoryPanel === 'function') renderMemoryPanel();
+    if (typeof showMemoryStatus === 'function') showMemoryStatus(`✅ 本地去重完成：合并 ${merged} 条`);
+    return;
+  }
+
+  // 方案 A / B：AI 兜底分析
+  if (typeof showMemoryStatus === 'function') showMemoryStatus('⏳ AI 去重分析中，请稍候...');
+  const suggestions = await requestAIDedupSuggestions(memory);
+  let merged = 0;
+  // 方案 B：AI 分析前先做一次纯 JS 去重，减少 AI 输入噪音
+  if (mode === 'B') {
+    merged += runLocalDedup(memory);
+  }
+  merged += mergeDuplicatedFacts(memory, suggestions);
+  saveAiMemory(memory);
+  if (typeof renderMemoryPanel === 'function') renderMemoryPanel();
+  if (typeof showMemoryStatus === 'function') {
+    showMemoryStatus(merged > 0 ? `✅ 去重完成：合并 ${merged} 条` : '✅ 未发现可合并的重复条目');
+  }
 }
 
 // ═══════════ Manual Notes Management ═══════════
@@ -381,7 +620,7 @@ function formatMemoryForPrompt() {
       for (const e of displayEntries) {
         const pct = Math.round(e.confidence * 100);
         const sourceLabel = e.sourceConvTitle ? ` ↑${e.sourceConvTitle}` : '';
-        section += `    • ${e.text} (置信度 ${pct}%)${sourceLabel}\n`;
+        section += `    • [${e.id}] ${e.text} (置信度 ${pct}%)${sourceLabel}\n`;
       }
     }
   }
@@ -392,18 +631,24 @@ function formatMemoryForPrompt() {
   }
 
   // ── Tool guidance for memory extraction ──
+  // 防重引导：三种动作（新增 / 带 id 合并 / 不提交），从源头减少重复条目
   section += `\n【记忆提取指引】\n`;
   section += `你可以通过以下工具来管理长期记忆：\n`;
   section += `- list_memories：列出记忆条目（显示简略信息）\n`;
   section += `- get_memory_detail：查看特定记忆条目的详细内容\n`;
-  section += `你也可以通过 <memory> 标签在回复中提交值得记住的关键信息。\n`;
-  section += `格式：<memory>{"type":"fact|preference|goal|ability|behavior|mental","text":"简略信息（一句话）","detail":"详细内容（可选，更多细节）"}</memory>\n`;
+  section += `长期记忆只记录「尚未收录」的增量信息。处理新信息时遵循三种动作：\n`;
+  section += `1. 全新信息 → 提交新的 <memory> 标签新增条目；\n`;
+  section += `2. 已有记忆被用户再次确认或补充 → 在 <memory> 中填写上方列表的 [id]，合并更新到该条目，不要新增重复条目；\n`;
+  section += `3. 与已有记忆完全相同或高度近似 → 不要提交。\n`;
+  section += `\n格式（id 可选，仅在合并已有条目时填写）：\n`;
+  section += `<memory>{"id":"已有条目ID(可选)","type":"fact|preference|goal|ability|behavior|mental","text":"简略信息（一句话）","detail":"详细内容（可选，更多细节）"}</memory>\n`;
   section += `六种记忆类型：\n`;
   for (const [type, cat] of Object.entries(MEMORY_CATEGORIES)) {
     section += `  - ${cat.icon} ${cat.label}：${getTypeDescription(type)}\n`;
   }
   section += `你可以在任何回复中嵌入一个或多个 <memory> 标签来提交记忆。\n`;
-  section += `如果用户提供了值得长期记住的信息，请主动使用 <memory> 标签提取。\n`;
+  section += `如果用户提供了值得长期记住的新信息，请主动使用 <memory> 标签提取；\n`;
+  section += `重复或近似的旧信息一律不要再次提交。\n`;
   section += `提示：text 字段填写简洁的一句话扼要，detail 字段（可选）填写补充细节，\n`;
   section += `prompt 和列表只显示 text，get_memory_detail 可查看完整 detail。\n`;
 
@@ -478,6 +723,18 @@ async function extractMemoryFromConv(conv) {
     }
 
     // Request 2: Extract key memory points (6 categories)
+    // 防重引导：方案 A/B 注入已有记忆清单（含 ID），要求只提取增量信息
+    const extractMode = getDedupMode();
+    let existingMemBlock = '';
+    if (extractMode !== 'C' && memory.autoFacts.length > 0) {
+      const refs = [...memory.autoFacts]
+        .sort((a, b) => b.confidence - a.confidence)
+        .slice(0, 20)
+        .map(e => `[${e.id}] (${e.type}) ${e.text}`)
+        .join('\n');
+      existingMemBlock = `\n以下是已有记忆（含ID），提取时务必对照：\n${refs}\n`;
+    }
+
     const factResp = await fetch(baseUrl + '/chat/completions', {
       method: 'POST',
       headers: {
@@ -490,7 +747,7 @@ async function extractMemoryFromConv(conv) {
           {
             role: 'system',
             content: `你是一个记忆提取助手。分析对话，提取用户值得长期记住的信息（1-3条）。每条输出一行JSON格式。
-
+${existingMemBlock}
 记忆类型：
 - fact：客观事实
 - preference：偏好习惯
@@ -503,9 +760,12 @@ async function extractMemoryFromConv(conv) {
 {"type":"fact","text":"简略信息（一句话扼要）","detail":"详细内容（可选，更多细节描述）"}
 {"type":"preference","text":"喜欢简短回复"}
 
-text 字段填写简洁扼要的一句话，detail 字段可选，补充更多细节。
-如果没有值得长期记忆的信息，输出空数组 []。
-只输出JSON行，不要其他文字。`
+规则：
+- 只提取「尚未收录」的新信息；与已有记忆相同或高度近似的不要重复提取
+- 若信息是对已有记忆的补充或再次确认，输出合并格式：{"merge_id":"已有条目ID","text":"合并后的一句话","detail":"补充细节(可选)"}，不要新增条目
+- text 字段填写简洁扼要的一句话，detail 字段可选，补充更多细节。
+- 如果没有值得长期记忆的信息，输出空数组 []。
+- 只输出JSON行，不要其他文字。`
           },
           { role: 'user', content: convContext + '\n\n请提取以上对话中值得长期记忆的关键信息。' }
         ],
@@ -524,6 +784,12 @@ text 字段填写简洁扼要的一句话，detail 字段可选，补充更多�
         try {
           const parsed = JSON.parse(line);
           if (Array.isArray(parsed)) continue; // skip empty array
+          if (parsed.merge_id) {
+            // 合并到已有条目（防重引导：AI 对近似内容输出 merge_id 而非新条目）
+            const target = memory.autoFacts.find(e => e.id === parsed.merge_id);
+            if (target) mergeIntoEntry(target, target.type, parsed.text || target.text, conv.id, conv.title, parsed.detail, false);
+            continue;
+          }
           if (parsed.type && parsed.text && MEMORY_CATEGORIES[parsed.type]) {
             upsertAutoFact(memory, parsed.type, parsed.text, conv.id, conv.title, parsed.detail);
           }
@@ -719,6 +985,23 @@ async function runDailyMemoryIntegration() {
     if (isDebugMode()) console.warn('[Memory] Daily integration error:', err.message);
   }
 
+  // ── 每日 AI 兜底去重（方案 A/B，且 autoFacts 达到配置阈值才触发）──
+  const dailyMode = getDedupMode();
+  if (dailyMode !== 'C' && memory.autoFacts.length >= getDedupThreshold()) {
+    try {
+      const suggestions = await requestAIDedupSuggestions(memory);
+      // 方案 B：AI 兜底前先做一次纯 JS 去重，减少 AI 输入噪音
+      let mergedDaily = 0;
+      if (dailyMode === 'B') mergedDaily += runLocalDedup(memory);
+      mergedDaily += mergeDuplicatedFacts(memory, suggestions);
+      if (mergedDaily > 0 && isDebugMode()) {
+        console.log('[Memory] Daily dedup merged', mergedDaily, 'duplicates');
+      }
+    } catch (err) {
+      if (isDebugMode()) console.warn('[Memory] Daily dedup failed:', err.message);
+    }
+  }
+
   memory.lastDailyIntegration = today;
   saveAiMemory(memory);
 
@@ -803,7 +1086,14 @@ function parseMemoryTags(assistantContent, convId, convTitle) {
   while ((match = regex.exec(assistantContent)) !== null) {
     try {
       const parsed = JSON.parse(match[1]);
-      if (parsed.type && parsed.text && MEMORY_CATEGORIES[parsed.type]) {
+      if (parsed.id) {
+        // 防重引导：AI 提交已有条目 ID → 合并更新该条目（不新增重复）
+        const target = memory.autoFacts.find(e => e.id === parsed.id);
+        if (target) {
+          mergeIntoEntry(target, target.type, parsed.text || target.text, convId, convTitle, parsed.detail, true);
+          count++;
+        }
+      } else if (parsed.type && parsed.text && MEMORY_CATEGORIES[parsed.type]) {
         const entry = upsertAutoFact(memory, parsed.type, parsed.text.trim(), convId, convTitle, parsed.detail);
         if (entry) count++;
       }
@@ -878,4 +1168,10 @@ window.updateAutoFact = updateAutoFact;
 window.updateConvSummary = updateConvSummary;
 window.toolListMemories = toolListMemories;
 window.toolGetMemoryDetail = toolGetMemoryDetail;
+window.getDedupMode = getDedupMode;
+window.getDedupThreshold = getDedupThreshold;
+window.runLocalDedup = runLocalDedup;
+window.requestAIDedupSuggestions = requestAIDedupSuggestions;
+window.mergeDuplicatedFacts = mergeDuplicatedFacts;
+window.runManualDedup = runManualDedup;
 window.MEMORY_CATEGORIES = MEMORY_CATEGORIES;

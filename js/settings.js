@@ -1,7 +1,11 @@
 // ═══════════ Changelog Modal ═══════════
 function initChangelog() {
   const fullChangelog = [
-    { id: 13, time: '2026-08-02T14:00', content: '<b>v0.1.12</b> — 笔记复习与日历修复：<br><br>🐞 <b>复习日期时区统一</b> — 笔记复习日期的计算与日历/逾期展示统一使用本地时区（此前用 UTC 截断，上午 8 点前创建的笔记复习日会提前一天显示）<br>🐞 <b>宽松/自定义复习模式生效</b> — 新笔记首轮复习固定 1 天、未按复习模式计算；现按当前模式的首个间隔（标准 1 天 / 宽松 2 天 / 自定义按设置）<br>🐞 <b>日历复习日期修复</b> — 日历页复习日期映射构建报错与整月重复解析已修复' },
+    { id: 19, time: '2026-08-05T10:00', content: '<b>v0.3.0</b> — 好友系统（Supabase 云端）：<br><br>👥 <b>真实联网好友</b> — 全新「好友」页面，基于 Supabase 云端服务，实现跨设备真实好友：<br>&emsp;• <b>账号系统</b> — 邮箱注册 / 登录 / 退出，会话持久化，自动恢复登录<br>&emsp;• <b>好友管理</b> — 按用户名 / 昵称搜索添加、好友请求收发（接受 / 拒绝 / 撤回）、删除好友、好友列表<br>&emsp;• <b>好友分组</b> — 创建 / 重命名 / 删除分组，好友自由归类（彩色标签）<br>&emsp;• <b>好友资料卡</b> — 头像、昵称、简介、在线状态、最近学习统计（7 日打卡 / 专注 / 完成数）<br>&emsp;• <b>学习动态流</b> — 好友的打卡、专注突破、任务完成、连续天数等动态实时推送<br>&emsp;• <b>实时聊天</b> — 与好友实时收发消息、未读红点、最近消息预览<br>🔒 <b>隐私安全</b> — 只同步聚合统计（打卡 / 专注时长 / 完成数量），绝不上传具体待办与笔记内容；所有云表启用行级安全（RLS），仅本人与好友可见<br>⚙️ <b>配置</b> — 设置 → 好友：填入 Supabase 项目 URL 与 anon key 即可启用；建表脚本见 <code>supabase/schema.sql</code>' },
+    { id: 18, time: '2026-08-05T01:00', content: '<b>v0.2.1</b> — 扩展管理体验升级：<br><br>🗑️ <b>扩展软件内回收站</b> — 卸载扩展不再直接删除，而是移入软件自带的回收站（回收站页面新增「扩展」分类），可随时恢复 / 彻底删除；清空回收站会一并清空扩展回收站<br>📥 <b>导入扩展</b> — 扩展页新增「导入扩展」按钮（选择文件夹）与全页拖拽导入：把扩展文件夹拖到扩展管理页任意位置即可导入，多文件夹批量支持<br>🔃 <b>刷新修复</b> — 「刷新」现在会强制重扫磁盘，删除 / 拖入扩展目录后点刷新即可立即反映到列表；扩展页列表支持上下滚动<br>🧹 <b>回收站目录不误扫</b> — 修复扩展列表把回收站 trash 文件夹误认成扩展的问题' },
+    { id: 17, time: '2026-08-04T22:30', content: '<b>v0.2.0</b> — 扩展生态里程碑 + AI 编程体验全面升级：<br><br>🤖 <b>AI 编程助手升级为 CodeBuddy CLI Agent 模式</b> — 不再直调模型返回代码，而是通过本机 CodeBuddy CLI 运行完整 Agent，自主读取源码、编写扩展文件、多步推理全栈式开发；一键安装 / 权限边界（扩展目录可写、源码只读）/ 自动备份随时回滚<br>💬 <b>多项目标签页 + 消息流</b> — AI 编程页重构为「多项目标签页 + 线性消息流」布局，每个标签页是一个独立开发项目；运行中可切换标签页等待，日志后台持续累积<br>🖥️ <b>Agent 动态流式展示</b> — 日志改为「一次回复 = 一个大气泡」逐条流式插入：AI 文本 Markdown 渲染、工具调用中文名 + 参数撑满可点击展开、CLI 初始化大 JSON 自动折叠；完成后主页面显示最后回复全文 + 插件详情卡片 + 自动折叠对话日志<br>🧩 <b>扩展系统</b> — plugin（安全插件，受限 extAPI 白名单）/ patch（源码补丁，PatchEngine 运行时覆盖）两类扩展，内置快捷访问 / 音乐播放器 / 学习统计三个官方插件；扩展管理独立页面<br>📋 <b>扩展列表卡片</b> — 名称 / 类型 / 版本 / 大小 / 启用开关，支持查看代码 / 回滚 / 卸载 / 打开目录 / 刷新' },
+    { id: 16, time: '2026-08-04T20:00', content: '<b>v0.1.15</b> — AI 编程助手升级为 CodeBuddy CLI Agent 模式：<br><br>🤖 <b>仅 CodeBuddy CLI 执行引擎</b> — AI 编程不再直调模型返回代码，而是通过本机 CodeBuddy CLI 运行完整 Agent，自主读取源码、编写扩展文件、多步推理，真正做到全栈式开发；运行过程流式日志实时可见<br>&emsp;• <b>一键安装</b> — 本机无 CLI 时，AI 编程页 / 设置页提供「一键安装」（npm install -g @tencent-ai/codebuddy-code，可勾选国内镜像加速）<br>&emsp;• <b>权限边界</b> — Agent 只读写扩展目录，应用源码目录只读（Read/Edit/Write 白名单工具 + 目录约束）；打包版自动导出源码快照供参考<br>&emsp;• <b>授权</b> — 复用本机 CodeBuddy 登录凭据，或配置 CodeBuddy API Key（设置 → AI 设置 → CodeBuddy CLI）<br>&emsp;• <b>自动备份</b> — 每次运行前自动备份全部扩展，修改可随时回滚' },
+    { id: 15, time: '2026-08-04T18:00', content: '<b>v0.1.14</b> — 扩展系统与 AI 编程助手：<br><br>🧩 <b>扩展系统</b> — 应用现在支持外部扩展，可在不修改核心源码的前提下新增或修改功能：<br>&emsp;• <b>plugin（安全插件）</b> — 通过受限 extAPI 白名单接口新增功能：注册侧边栏项 / 独立面板 / 工具栏按钮 / 订阅事件 / 私有数据区<br>&emsp;• <b>patch（源码补丁）</b> — 通过 PatchEngine 运行时函数覆盖修改现有功能，卸载自动恢复原函数，真正可实时装载 / 卸载 / 回滚<br>&emsp;• 扩展存放于 <b>~/.my-study-table/extensions/&lt;id&gt;/</b>（manifest.json + main.js + backup/），应用前自动备份快照<br>&emsp;• <b>内置插件</b> — 快捷访问 / 音乐播放器 / 学习统计 三个官方功能已内置扩展化，可在扩展页启用 / 禁用 / 移除（一键恢复）<br>🤖 <b>AI 编程助手</b> — 侧边栏新增「AI 编程」页面：用自然语言描述需求，AI 自动分析应用代码结构并生成扩展（返回功能说明 + 代码预览），一键「应用」= 自动备份 + 写入 + 即时装载；兼容任意 OpenAI 格式端点（CodeBuddy / Codex / DeepSeek / 自建代理）<br>⚙️ <b>扩展管理</b> — 侧边栏新增「扩展」页面：扩展列表卡片（启用开关 / 查看代码 / 回滚 / 卸载）、打开扩展目录、刷新；设置弹窗加宽、Tab 改为单行横向滑动' },
     { id: 12, time: '2026-08-02T12:00', content: '<b>v0.1.11</b> — 自动更新功能：<br><br>🔄 <b>一键自动更新</b> — 应用接入 electron-updater，发布新版本后会自动检测到更新<br>⏰ <b>多种检查时机</b> — 启动时自动检查 + 每小时定时检查 + 设置页「检查更新」手动按钮<br>📦 <b>下载进度显示</b> — 后台静默下载安装包，弹窗内实时显示下载进度，下载完成后一键「重启并安装」<br>⚠️ <b>版本说明</b> — 仅 NSIS 安装版支持自动更新；便携版/解压版会提示前往发布页手动下载<br>📄 <b>发布准备</b> — package.json 版本号与应用内更新日志对齐为 v0.1.x，配置 GitHub Releases 发布源' },
     { id: 11, time: '2026-08-02T10:00', content: '<b>v0.1.10</b> — AI 聊天内容捕获增强、拖拽添加附件、代码审查批量修复：<br><br>📝 <b>AI 聊天选中文字右键保存为笔记</b> — 在 AI 回复中选中任意文字，右键菜单新增「保存为笔记」，一键生成新笔记；同时提供「复制选中文字」<br>🧾 <b>选区格式化内容还原</b> — 选中内容跨表格/分隔线/代码块/标题时，自动把渲染结果逆向还原为 Markdown 存入笔记（表格保留 | 结构、分隔线还原为 ---、KaTeX 公式还原为 LaTeX、代码块/加粗/斜体保留）；聊天时间戳/按钮等界面元素自动剔除<br>📎 <b>AI 对话标签页拖拽添加附件</b> — 从文件管理器拖拽文件到 AI 对话区域即添加附件，拖动时显示「松开以添加附件」高亮提示；与文件选择按钮共用大小限制与 Kimi 图片处理逻辑<br>🔧 <b>代码审查批量修复</b> — ①编辑目标时变量名错误导致保存崩溃；②回收站/归档恢复文件夹不再丢失嵌套子笔记；③AI 对话勾选待办同步记录完成日期（日历/统计保持一致）；④AI 工具循环重复检测重复计数导致提前终止；⑤自定义状态名含引号时下拉菜单属性/脚本注入修复；⑥统计页 AI 输出转义防 XSS；⑦音频文件读取前先校验扩展名白名单；⑧待办/日历渲染性能优化（消除逐节点重复 JSON 解析与 O(n²) 后代统计）；⑨AI 会话调试日志设上限防止 localStorage 膨胀；⑩记忆系统日期改为本地时区、手动记忆详情查询修复、Ctrl+Z 不再干扰输入框原生撤销' },
     { id: 10, time: '2026-07-23T00:00', content: '<b>v0.1.9</b> — 外观设置交互重构、液态玻璃折射三控件拆分、卡片玻璃效果修复：<br><br>🎨 <b>预设→自定义模式统一切换</b> — 选择预设后修改任何参数自动切换到自定义模式，完整复制预设所有有效值（accent/bgType/bgAngle/bgFrom/bgTo/bgImage/bgVideo/glass/blur/opacity/refract）作为起点；14 个设置 handler 统一使用 switchToCustomMode(cfg) 入口<br>🔓 <b>预设模式下滑条恢复可操作</b> — 选预设后背景类型按钮、背景编辑控件（渐变角度/颜色/图片URL）、玻璃滑块（磨砂/透明度/折射）不再 disabled 或隐藏；始终用 effective 值渲染可编辑控件<br>🔬 <b>折射强度拆分为三项独立控制</b> — 弯曲程度（SVG位移强度 0~60px）、偏折程度（弯曲区域宽度 0~0.4）、顶层辉光（高光亮度 0~1）；旧 glassRefract 自动迁移为 glassCurve + glassGlow<br>✨ <b>顶层辉光优化</b> — 新增 filter: brightness() 动态控制亮度；顶部高光更锐利（三段梯度）；角落高光更集中（源心 15% 3%）；新增底部右侧环境反射；::after 边框四边完整定义；暗色模式同步增强<br>🧩 <b>卡片玻璃效果定位修复</b> — `.card` 缺少 `position: relative` 导致辉光伪元素飘到视口外，新增 `[data-glass="true"] .card { position: relative; }`' },
@@ -329,6 +333,20 @@ if (!aiConvs.find(c => c.id === activeConvId)) {
   if (activeConvId) localStorage.setItem('study_active_conv', activeConvId);
 }
 
+// ── 树状对话：启动时把每个对话迁移/初始化为树结构 ──
+if (Array.isArray(aiConvs)) {
+  let migrated = false;
+  for (const c of aiConvs) {
+    if (typeof ensureTree === 'function' && !isTreeConv(c)) {
+      ensureTree(c);
+      migrated = true;
+    }
+  }
+  if (migrated) {
+    try { saveData('study_ai_convs', aiConvs); } catch (_) {}
+  }
+}
+
 function getActiveConv() {
   return aiConvs.find(c => c.id === activeConvId) || null;
 }
@@ -476,6 +494,392 @@ function switchSettingsTab(tab) {
   if (tab === 'appearance' && typeof renderAppearancePanel === 'function') {
     renderAppearancePanel();
   }
+  // Render extensions panel
+  if (tab === 'extensions') renderExtensionsPanel();
+  // Render CodeBuddy CLI config panel
+  if (tab === 'api' && typeof renderCodebuddyCliConfig === 'function') {
+    renderCodebuddyCliConfig();
+  }
+}
+
+// ═══════════ Extension Management ═══════════
+function setExtStatus(msg, isError) {
+  const el = document.getElementById('extensionsStatus');
+  if (!el) return;
+  el.className = 'settings-status ' + (isError ? 'error' : '');
+  el.textContent = msg || '';
+}
+
+function escapeHtml(s) {
+  return String(s || '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+}
+
+async function renderExtensionsPanel() {
+  setupExtDropZone();
+  const listEl = document.getElementById('extensionsList');
+  if (!listEl) return;
+  setExtStatus('加载中…');
+  let exts = [];
+  try {
+    if (typeof window.ExtManager !== 'undefined' && window.ExtManager.list) {
+      let all = window.ExtManager.list();
+      if (all.length === 0 && typeof window.ExtManager.loadAll === 'function') {
+        await window.ExtManager.loadAll();
+        all = window.ExtManager.list();
+      }
+      exts = all.map(e => ({
+        id: e.id,
+        manifest: e.meta,
+        hasMain: !!e.mainCode,
+        size: e.mainCode ? e.mainCode.length : 0,
+        error: e.error,
+        builtin: !!e.builtin
+      }));
+    } else {
+      setExtStatus('扩展系统不可用', true);
+      listEl.innerHTML = '';
+      return;
+    }
+  } catch (e) {
+    setExtStatus('加载失败: ' + e.message, true);
+    listEl.innerHTML = '';
+    return;
+  }
+
+  // 已被移除的内置扩展（可恢复）
+  const removedBuiltins = (typeof window.ExtManager !== 'undefined' && window.ExtManager.listBuiltins)
+    ? window.ExtManager.listBuiltins().filter(b => !exts.find(e => e.id === b.id))
+    : [];
+
+  if (exts.length === 0 && removedBuiltins.length === 0) {
+    listEl.innerHTML = `<div class="ext-empty">
+      <p>还没有安装任何扩展。</p>
+      <p class="hint" style="margin-top:4px;">点「用 AI 生成扩展」让 AI 帮你写第一个扩展，或把扩展目录放到 ~/.my-study-table/extensions/。</p>
+    </div>`;
+    setExtStatus('');
+    return;
+  }
+
+  const typeLabels = { plugin: '插件', patch: '补丁' };
+  listEl.innerHTML = exts.map(ext => {
+    const m = ext.manifest || { name: ext.id, type: 'plugin', version: '?', description: '', enabled: true };
+    const enabled = m.enabled !== false;
+    const sizeStr = ext.size > 1024 * 1024 ? (ext.size / 1024 / 1024).toFixed(1) + 'MB' : Math.round(ext.size / 1024) + 'KB';
+    const builtinBadge = ext.builtin ? '<span class="ext-badge ext-badge-builtin">内置</span>' : '';
+    const rollbackBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="rollbackExt('${ext.id}')"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:13px;height:13px;"></i> 回滚</button>`;
+    const removeLabel = ext.builtin ? '移除' : '卸载';
+    return `<div class="ext-card">
+      <div class="ext-card-header">
+        <div class="ext-card-left">
+          <span class="ext-card-name"><i data-lucide="${m.type === 'patch' ? 'wrench' : 'puzzle'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> ${escapeHtml(m.name || ext.id)}</span>
+          <span class="ext-badge ext-badge-${m.type}">${typeLabels[m.type] || m.type}</span>
+          ${builtinBadge}
+          <span class="ext-card-meta">v${escapeHtml(m.version || '?')} · ${sizeStr}</span>
+        </div>
+        <label class="toggle-switch ext-toggle">
+          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleExtension('${ext.id}', this.checked)">
+          <span class="toggle-slider"></span>
+        </label>
+      </div>
+      <div class="ext-card-desc">${escapeHtml(m.description || '（无描述）')}</div>
+      <div class="ext-card-actions">
+        <button class="ext-action-btn" onclick="viewExtCode('${ext.id}')"><i data-lucide="file-code" class="lucide-icon" style="width:13px;height:13px;"></i> 查看代码</button>
+        ${rollbackBtn}
+        <button class="ext-action-btn ext-action-danger" onclick="removeExt('${ext.id}')"><i data-lucide="trash-2" class="lucide-icon" style="width:13px;height:13px;"></i> ${removeLabel}</button>
+      </div>
+      ${ext.error ? `<div class="ext-error">⚠ 上次装载出错: ${escapeHtml(ext.error)}</div>` : ''}
+    </div>`;
+  }).join('');
+
+  if (removedBuiltins.length > 0) {
+    listEl.innerHTML += `<div class="ext-removed-section">
+      <div class="settings-section-title" style="margin-top:14px;"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 已移除的内置扩展</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
+        ${removedBuiltins.map(b => `<button class="ext-action-btn" onclick="restoreBuiltinExt('${b.id}')"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i> 恢复 ${escapeHtml((b.meta && b.meta.name) || b.id)}</button>`).join('')}
+      </div>
+    </div>`;
+  }
+
+  if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
+  setExtStatus('');
+}
+
+// 从回收站恢复扩展（被回收站页面调用；需在全局可用）
+async function restoreTrashedExt(trashDir) {
+  setExtStatus('正在恢复…');
+  try {
+    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashRestore) {
+      const res = await window.electronAPI.extTrashRestore({ trashDir });
+      if (res && res.ok) {
+        if (typeof window.ExtManager !== 'undefined' && window.ExtManager.reload) {
+          await window.ExtManager.reload();
+        }
+        setExtStatus('已恢复扩展：' + res.id);
+      } else {
+        setExtStatus('恢复失败：' + ((res && res.reason) || '未知错误'), true);
+      }
+    } else {
+      setExtStatus('当前环境不支持恢复扩展', true);
+    }
+  } catch (e) {
+    setExtStatus('恢复失败: ' + e.message, true);
+  }
+  refreshActiveExtSections();
+}
+
+// 从回收站彻底删除扩展（被回收站页面调用；需在全局可用）
+async function purgeTrashedExt(trashDir) {
+  const msg = '确定要彻底删除这个扩展吗？此操作不可恢复！';
+  if (typeof showCustomConfirm === 'function') {
+    const confirmed = await showCustomConfirm(msg);
+    if (!confirmed) return;
+  } else {
+    if (!confirm(msg)) return;
+  }
+  setExtStatus('正在彻底删除…');
+  try {
+    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashPurge) {
+      const res = await window.electronAPI.extTrashPurge({ trashDir });
+      if (res && res.ok) setExtStatus('已彻底删除');
+      else setExtStatus('删除失败：' + ((res && res.reason) || '未知错误'), true);
+    } else {
+      setExtStatus('当前环境不支持删除', true);
+    }
+  } catch (e) {
+    setExtStatus('删除失败: ' + e.message, true);
+  }
+  refreshActiveExtSections();
+}
+
+// 回收站操作后刷新当前可见的相关视图（回收站页面 / 扩展页面）
+function refreshActiveExtSections() {
+  const active = document.querySelector('.section.active');
+  if (active && active.id === 'section-trash' && typeof renderTrash === 'function') {
+    renderTrash();
+  }
+  if (typeof renderExtensionsPanel === 'function') renderExtensionsPanel();
+}
+
+// 恢复被移除的内置扩展
+async function restoreBuiltinExt(id) {
+  setExtStatus('正在恢复…');
+  try {
+    if (typeof window.ExtManager !== 'undefined') {
+      window.ExtManager.restoreBuiltin(id);
+      await window.ExtManager.loadAll();
+      await window.ExtManager.mount(id);
+      if (typeof renderSidebarNav === 'function') renderSidebarNav();
+      setExtStatus('已恢复并启用内置扩展');
+    }
+  } catch (e) {
+    setExtStatus('恢复失败: ' + e.message, true);
+  }
+  await renderExtensionsPanel();
+}
+
+async function toggleExtension(id, enabled) {
+  setExtStatus('正在' + (enabled ? '启用' : '禁用') + '…');
+  try {
+    if (typeof window.ExtManager !== 'undefined' && window.ExtManager.setEnabled) {
+      const res = await window.ExtManager.setEnabled(id, enabled);
+      if (!res.ok) setExtStatus(res.reason, true);
+    } else {
+      setExtStatus('扩展管理器未就绪', true);
+    }
+  } catch (e) {
+    setExtStatus('操作失败: ' + e.message, true);
+  }
+  await renderExtensionsPanel();
+}
+
+async function viewExtCode(id) {
+  try {
+    let code = '';
+    // 内置扩展：从 registry 读取；磁盘扩展：走 IPC
+    const ext = (typeof window.ExtManager !== 'undefined' && window.ExtManager.get) ? window.ExtManager.get(id) : null;
+    if (ext && ext.builtin) {
+      code = ext.mainCode || '';
+    } else if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extRead) {
+      code = await window.electronAPI.extRead({ id, file: 'main.js' });
+    }
+    const win = window.open('', '_blank');
+    if (win) {
+      win.document.write('<pre style="padding:16px;font-size:12px;line-height:1.6;white-space:pre-wrap;word-break:break-all;">' + escapeHtml(code) + '</pre>');
+      win.document.title = '扩展代码: ' + id;
+    } else {
+      setExtStatus('浏览器拦截了弹窗，请允许弹窗', true);
+    }
+  } catch (e) {
+    setExtStatus('读取失败: ' + e.message, true);
+  }
+}
+
+async function rollbackExt(id) {
+  if (!confirm('将把扩展恢复到最近一次备份。继续？')) return;
+  setExtStatus('正在回滚…');
+  try {
+    if (typeof window.Codegen !== 'undefined' && window.Codegen.rollback) {
+      const res = await window.Codegen.rollback(id);
+      setExtStatus(res.ok ? '已回滚到最近备份，已重新装载' : '回滚失败: ' + res.reason, !res.ok);
+    } else {
+      setExtStatus('Codegen 未就绪', true);
+    }
+  } catch (e) {
+    setExtStatus('回滚失败: ' + e.message, true);
+  }
+  await renderExtensionsPanel();
+}
+
+async function removeExt(id) {
+  const ext = (typeof window.ExtManager !== 'undefined' && window.ExtManager.get) ? window.ExtManager.get(id) : null;
+  const isBuiltin = ext && ext.builtin;
+  const msg = isBuiltin
+    ? '确定移除内置扩展「' + escapeHtml(id) + '」吗？<br><small>可从页面底部「已移除的内置扩展」恢复。</small>'
+    : '确定卸载扩展「' + escapeHtml(id) + '」吗？<br><small>扩展将移入回收站，可随时恢复；扩展数据（study_ext_&lt;id&gt;_ 前缀）会保留。</small>';
+  if (typeof showCustomConfirm === 'function') {
+    const confirmed = await showCustomConfirm(msg);
+    if (!confirmed) return;
+  } else {
+    if (!confirm(isBuiltin ? '确定移除内置扩展「' + id + '」？' : '确定卸载扩展「' + id + '」？')) return;
+  }
+  setExtStatus(isBuiltin ? '正在移除…' : '正在卸载…');
+  try {
+    let trashed = false;
+    if (typeof window.ExtManager !== 'undefined' && window.ExtManager.remove) {
+      const res = await window.ExtManager.remove(id);
+      trashed = !!(res && res.trashed);
+    }
+    setExtStatus(isBuiltin ? '已移除' : (trashed ? '已卸载，扩展已移入回收站' : '已卸载'));
+  } catch (e) {
+    setExtStatus('卸载失败: ' + e.message, true);
+  }
+  await renderExtensionsPanel();
+}
+
+async function openExtensionsDir() {
+  try {
+    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extOpenDir) {
+      await window.electronAPI.extOpenDir();
+    } else {
+      setExtStatus('当前环境不支持打开目录', true);
+    }
+  } catch (e) {
+    setExtStatus('打开失败: ' + e.message, true);
+  }
+}
+
+// 刷新：强制重扫磁盘（新增/删除的扩展目录会反映到列表）
+async function refreshExtensionsList() {
+  try {
+    if (typeof window.ExtManager !== 'undefined' && window.ExtManager.reload) {
+      await window.ExtManager.reload();
+    } else if (typeof window.ExtManager !== 'undefined' && window.ExtManager.loadAll) {
+      await window.ExtManager.loadAll();
+    }
+  } catch (e) {
+    setExtStatus('刷新失败: ' + e.message, true);
+  }
+  await renderExtensionsPanel();
+}
+
+// 导入扩展：弹出文件夹选择框，复制到扩展目录
+async function importExtension() {
+  try {
+    if (typeof window.electronAPI === 'undefined' || !window.electronAPI.extImport) {
+      setExtStatus('当前环境不支持导入扩展', true);
+      return;
+    }
+    setExtStatus('正在导入…');
+    const res = await window.electronAPI.extImport({ sourcePath: '' });
+    if (res && res.canceled) {
+      setExtStatus('');
+      return;
+    }
+    if (res && res.ok) {
+      if (typeof window.ExtManager !== 'undefined' && window.ExtManager.reload) {
+        await window.ExtManager.reload();
+      }
+      await renderExtensionsPanel();
+      setExtStatus('已导入扩展：' + res.id);
+    } else {
+      setExtStatus('导入失败：' + ((res && res.reason) || '未知错误'), true);
+    }
+  } catch (e) {
+    setExtStatus('导入失败: ' + e.message, true);
+  }
+}
+
+// 拖拽文件夹导入扩展：整个扩展页面任意位置都可拖放
+function setupExtDropZone() {
+  const sec = document.getElementById('section-extensions');
+  if (!sec || sec.dataset.ready === '1') return;
+  sec.dataset.ready = '1';
+  sec.addEventListener('dragenter', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    sec.classList.add('dragging');
+  });
+  sec.addEventListener('dragover', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.dataTransfer) e.dataTransfer.dropEffect = 'copy';
+    sec.classList.add('dragging');
+  });
+  sec.addEventListener('dragleave', (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    // 仅当真正离开整个 section（而非进入子元素）时移除高亮
+    if (e.target === sec) sec.classList.remove('dragging');
+  });
+  sec.addEventListener('drop', async (e) => {
+    e.preventDefault();
+    e.stopPropagation();
+    sec.classList.remove('dragging');
+    const files = e.dataTransfer && e.dataTransfer.files;
+    if (!files || !files.length) return;
+    const candidates = [];
+    for (const f of Array.from(files)) {
+      let p = '';
+      try {
+        if (typeof window.electronAPI !== 'undefined' && window.electronAPI.getPathForFile) {
+          p = window.electronAPI.getPathForFile(f) || '';
+        }
+      } catch (err) { /* 忽略单文件失败 */ }
+      if (p) candidates.push(p);
+    }
+    if (!candidates.length) {
+      setExtStatus('无法读取拖入的文件路径', true);
+      return;
+    }
+    setExtStatus('正在导入 ' + candidates.length + ' 个文件夹…');
+    let okCount = 0;
+    let errMsg = '';
+    for (const p of candidates) {
+      try {
+        const res = await window.electronAPI.extImport({ sourcePath: p });
+        if (res && res.ok) okCount++;
+        else if (res && res.reason) errMsg = res.reason;
+      } catch (err) {
+        errMsg = String(err && err.message || err);
+      }
+    }
+    if (typeof window.ExtManager !== 'undefined' && window.ExtManager.reload) {
+      await window.ExtManager.reload();
+    }
+    await renderExtensionsPanel();
+    setExtStatus(
+      okCount > 0
+        ? '已导入 ' + okCount + ' 个扩展' + (errMsg ? '，另有失败：' + errMsg : '')
+        : '导入失败：' + (errMsg || '未知错误'),
+      okCount === 0
+    );
+  });
+}
+
+function openCodegenSection() {
+  // 关闭设置弹窗，跳转到 AI 编程页面
+  closeSettingsModal();
+  if (typeof switchTab === 'function') switchTab('codegen');
 }
 
 function openSettingsModal() {
@@ -1497,7 +1901,7 @@ async function executeAutomation(conv, auto) {
   const triggerMsg = `[🤖 系统自动触发] 这是一条由定时自动化任务自动发送的消息。当前时间：${timeStr}。\n任务内容：${auto.prompt}\n\n请根据上述任务内容执行操作。`;
 
   // Push as a user message into the conversation so AI responds naturally
-  conv.messages.push({ role: 'user', content: triggerMsg, time: timeStr });
+  appendMessage(conv, { role: 'user', content: triggerMsg, time: timeStr });
   saveData('study_ai_convs', aiConvs);
 
   try {
@@ -1517,7 +1921,7 @@ async function executeAutomation(conv, auto) {
     const keyName = getActiveKeyDisplayName();
     const messageObj = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
     if (finalReasoning) messageObj.reasoning = finalReasoning;
-    conv.messages.push(messageObj);
+    appendMessage(conv, messageObj);
 
     saveData('study_ai_convs', aiConvs);
 
@@ -1544,7 +1948,7 @@ async function executeAutomation(conv, auto) {
     );
 
   } catch (err) {
-    conv.messages.push({ role: 'assistant', content: '❌ 自动化执行出错：' + err.message, time: timeStr, keyName: getActiveKeyDisplayName() });
+    appendMessage(conv, { role: 'assistant', content: '❌ 自动化执行出错：' + err.message, time: timeStr, keyName: getActiveKeyDisplayName() });
     saveData('study_ai_convs', aiConvs);
     if (activeConvId === conv.id) renderAiMessages();
   }
@@ -2335,6 +2739,7 @@ function getDailyReportConv() {
       autoTitled: true,
       _dailyReport: true
     };
+    if (typeof initTreeOnConv === 'function') initTreeOnConv(conv);
     aiConvs.push(conv);
     saveData('study_ai_convs', aiConvs);
   } else if (conv.title !== '📋 每日日报') {
@@ -2651,12 +3056,10 @@ ${data.habitsOverview.length > 0
       const respData = await resp.json();
       const report = (respData.choices?.[0]?.message?.content || '').trim();
       if (report) {
-        conv.messages.push({ role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' });
-        conv.messages.push({ role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
+        appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' });
+        appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
         // Keep only last 30 messages to avoid bloating
-        if (conv.messages.length > 30) {
-          conv.messages = conv.messages.slice(-30);
-        }
+        trimConvMessages(conv, 30);
         saveData('study_ai_convs', aiConvs);
         // Refresh AI chat if user is viewing the report conversation
         if (activeConvId === conv.id) {
@@ -2674,887 +3077,6 @@ ${data.habitsOverview.length > 0
       if (debugEl) { debugEl.textContent = '日报生成失败: ' + (e.message || e); debugEl.className = 'settings-status'; }
     } catch {}
   }
-}
-
-// ═══════════ Custom Theme & Background System ═══════════
-
-const THEME_PRESETS = {
-  default:  { name:'默认',  icon:'circle',     light:{accent:'#4f6ef7'},                    dark:{accent:'#818cf8'} },
-  sky:      { name:'天空',  icon:'cloud',       light:{accent:'#3b82f6',bg:'gradient',gAngle:200,gFrom:'#e0f2fe',gTo:'#fdf2f8'}, dark:{accent:'#60a5fa',bg:'gradient',gAngle:200,gFrom:'#1e3a5f',gTo:'#1a1a2e'} },
-  forest:   { name:'森林',  icon:'tree-pine',   light:{accent:'#059669',bg:'gradient',gAngle:160,gFrom:'#d1fae5',gTo:'#ecfdf5'}, dark:{accent:'#34d399',bg:'gradient',gAngle:160,gFrom:'#064e3b',gTo:'#0f172a'} },
-  sunset:   { name:'日落',  icon:'sunset',      light:{accent:'#f97316',bg:'gradient',gAngle:135,gFrom:'#fef3c7',gTo:'#fce7f3'}, dark:{accent:'#fb923c',bg:'gradient',gAngle:135,gFrom:'#7c2d12',gTo:'#1a1a2e'} },
-  lavender: { name:'薰衣草',icon:'flower',      light:{accent:'#8b5cf6',bg:'gradient',gAngle:135,gFrom:'#ede9fe',gTo:'#fae8ff'}, dark:{accent:'#a78bfa',bg:'gradient',gAngle:135,gFrom:'#2e1065',gTo:'#0f172a'} },
-  slate:    { name:'墨灰',  icon:'layers',      light:{accent:'#64748b'},                    dark:{accent:'#94a3b8'} },
-  glass:    { name:'磨砂玻璃',icon:'sparkles',   light:{accent:'#4f6ef7',glass:true},         dark:{accent:'#818cf8',glass:true} },
-};
-
-const ACCENT_PRESETS = ['#4f6ef7','#3b82f6','#059669','#f97316','#8b5cf6','#64748b','#ef4444','#ec4899','#14b8a6','#f59e0b'];
-
-// ── Custom (user-created) presets ──
-function getCustomPresets() {
-  try {
-    const raw = localStorage.getItem('study_custom_presets');
-    return raw ? JSON.parse(raw) : {};
-  } catch { return {}; }
-}
-
-function saveCustomPresets(data) {
-  localStorage.setItem('study_custom_presets', JSON.stringify(data));
-}
-
-function getAllPresets() {
-  const custom = getCustomPresets();
-  // Custom presets override built-in by same id (unlikely), merge custom last
-  return { ...THEME_PRESETS, ...custom };
-}
-
-function deleteCustomPreset(id) {
-  if (THEME_PRESETS[id]) return; // Don't delete built-in presets
-  const custom = getCustomPresets();
-  delete custom[id];
-  saveCustomPresets(custom);
-}
-
-function loadCustomTheme() {
-  try {
-    const raw = localStorage.getItem('study_theme_custom');
-    if (!raw) return createDefaultTheme();
-    const data = { ...createDefaultTheme(), ...JSON.parse(raw) };
-    // Migrate glassRefract → glassCurve / glassDeflect / glassGlow
-    if (data.glassRefract !== undefined && data.glassCurve === undefined) {
-      data.glassCurve = data.glassRefract;
-      data.glassDeflect = 18;
-      data.glassGlow = data.glassRefract;
-      delete data.glassRefract;
-    }
-    return data;
-  } catch { return createDefaultTheme(); }
-}
-
-function createDefaultTheme() {
-  return { preset:'default', accent:'#4f6ef7', bgType:'none', bgColor:'#f0f2f5', bgAngle:135, bgFrom:'#667eea', bgTo:'#764ba2', bgImage:'', bgVideo:'', bgOverlay:0.3, bgBlur:0, glass:false, glassBlur:16, glassOpacity:100, glassCurve:60, glassDeflect:18, glassGlow:50 };
-}
-
-function saveCustomTheme(data) {
-  localStorage.setItem('study_theme_custom', JSON.stringify(data));
-}
-
-// ── Helpers ──
-
-function adjustColor(hex, amount) {
-  const num = parseInt(hex.replace('#',''), 16);
-  const r = Math.min(255, Math.max(0, ((num >> 16) & 0xFF) + amount));
-  const g = Math.min(255, Math.max(0, ((num >> 8) & 0xFF) + amount));
-  const b = Math.min(255, Math.max(0, (num & 0xFF) + amount));
-  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
-}
-
-function isDarkTheme() {
-  const html = document.documentElement;
-  return html.getAttribute('data-theme') === 'dark';
-}
-
-// ── Apply custom theme CSS variables via injected <style> ──
-
-function applyCustomTheme() {
-  const cfg = loadCustomTheme();
-  const mode = isDarkTheme() ? 'dark' : 'light';
-  const allPresets = getAllPresets();
-  const p = allPresets[cfg.preset];
-  const base = (p && p[mode]) || { accent: cfg.accent };
-
-  // Determine effective accent and background from preset or custom
-  const accent = cfg.preset === 'custom' || !p ? cfg.accent : base.accent || cfg.accent;
-  const hover = adjustColor(accent, isDarkTheme() ? 25 : -25);
-  const bgImage = buildBgImageValue(cfg, mode, p);
-  const overlay = `rgba(0,0,0,${cfg.bgOverlay})`;
-  const blur = cfg.bgBlur + 'px';
-
-  // Build CSS text
-  const css = [
-    `:root {`,
-    `  --primary: ${accent};`,
-    `  --primary-hover: ${hover};`,
-    `  --bg-image: ${bgImage};`,
-    `  --theme-overlay: ${overlay};`,
-    `  --bg-blur: ${blur};`,
-    `}`,
-    // Override dark-theme specific vars if in dark mode
-    isDarkTheme() ? `[data-theme="dark"] { --primary: ${accent}; --primary-hover: ${hover}; }` : '',
-  ].filter(Boolean).join('\n');
-
-  // Inject or update
-  let el = document.getElementById('theme-custom-css');
-  if (!el) {
-    el = document.createElement('style');
-    el.id = 'theme-custom-css';
-    document.head.appendChild(el);
-  }
-  el.textContent = css;
-
-  // Apply glass effect attribute
-  const glass = (cfg.preset !== 'custom' && base.glass === true) ? true : !!cfg.glass;
-  document.documentElement.setAttribute('data-glass', glass ? 'true' : 'false');
-  // Apply glass blur intensity
-  const glassBlurVal = (cfg.preset !== 'custom' && base.glassBlur !== undefined) ? base.glassBlur : (cfg.glassBlur ?? 16);
-  document.documentElement.style.setProperty('--glass-blur', glassBlurVal + 'px');
-  // Apply glass opacity (interpolate CSS variable alphas)
-  if (glass) {
-    const glassOpacityVal = (cfg.preset !== 'custom' && base.glassOpacity !== undefined) ? base.glassOpacity : (cfg.glassOpacity !== undefined ? cfg.glassOpacity : 100);
-    applyGlassOpacity(glassOpacityVal);
-    // Apply glass refraction sub-controls
-    const curveVal = (cfg.preset !== 'custom' && base.glassCurve !== undefined) ? base.glassCurve : (cfg.glassCurve ?? 60);
-    const deflectVal = (cfg.preset !== 'custom' && base.glassDeflect !== undefined) ? base.glassDeflect : (cfg.glassDeflect ?? 18);
-    const glowVal = (cfg.preset !== 'custom' && base.glassGlow !== undefined) ? base.glassGlow : (cfg.glassGlow ?? 50);
-    applyGlassCurve(curveVal);
-    applyGlassDeflect(deflectVal);
-    applyGlassGlow(glowVal);
-  }
-
-  // Handle video background
-  const effectiveBgType = (cfg.preset !== 'custom' && base && base.bg) ? base.bg : cfg.bgType;
-  const effectiveBgVideo = (cfg.preset !== 'custom' && base && base.bgVideo) ? base.bgVideo : (cfg.bgVideo || '');
-  const videoEl = document.querySelector('.app-bg-video');
-  const videoOverlay = document.querySelector('.app-bg-video-overlay');
-  const bgLayer = document.querySelector('.app-bg-layer');
-
-  if (effectiveBgType === 'video' && effectiveBgVideo && videoEl) {
-    videoEl.src = effectiveBgVideo;
-    videoEl.classList.add('active');
-    if (videoOverlay) videoOverlay.classList.add('active');
-    if (bgLayer) bgLayer.style.display = 'none';
-    videoEl.play().catch(() => {}); // autoplay may be blocked, silently ignore
-  } else {
-    if (videoEl) { videoEl.classList.remove('active'); videoEl.pause(); }
-    if (videoOverlay) videoOverlay.classList.remove('active');
-    if (bgLayer) bgLayer.style.display = '';
-  }
-}
-
-function buildBgImageValue(cfg, mode, preset) {
-  // Use preset background if active preset has one and user hasn't customized
-  if (preset && cfg.preset !== 'custom' && cfg.bgType === 'none') {
-    const pMode = preset[mode] || preset.light || {};
-    if (pMode.bg === 'gradient') {
-      return `linear-gradient(${pMode.gAngle || 135}deg, ${pMode.gFrom || '#667eea'}, ${pMode.gTo || '#764ba2'})`;
-    }
-    if (pMode.bg === 'image' && pMode.bgImage) {
-      return pMode.bgImage.startsWith('url(') ? pMode.bgImage : `url(${pMode.bgImage})`;
-    }
-  }
-  // Use custom background
-  switch (cfg.bgType) {
-    case 'color': return 'none'; // use --bg via background-color
-    case 'gradient': return `linear-gradient(${cfg.bgAngle}deg, ${cfg.bgFrom}, ${cfg.bgTo})`;
-    case 'image': return cfg.bgImage ? `url(${cfg.bgImage})` : 'none';
-    case 'video': return 'none'; // handled by <video> element in applyCustomTheme
-    default: return 'none';
-  }
-}
-
-// ── Glass opacity interpolation ──
-// For each glass CSS variable, linearly interpolate alpha between opaque and glass values.
-const GLASS_VAR_DEFS = {
-  light: [
-    { name:'--card',               o: [255,255,255,0.95], g: [255,255,255,0.15] },
-    { name:'--sidebar-bg',         o: [255,255,255,0.98], g: [255,255,255,0.18] },
-    { name:'--todo-bg',            o: [255,255,255,0.95], g: [255,255,255,0.1] },
-    { name:'--todo-hover-bg',      o: [255,255,255,0.95], g: [255,255,255,0.18] },
-    { name:'--input-bg',           o: [255,255,255,0.92], g: [255,255,255,0.08] },
-    { name:'--hover-bg',           o: [255,255,255,0.9],  g: [255,255,255,0.12] },
-    { name:'--search-bg',          o: [255,255,255,0.93], g: [255,255,255,0.1] },
-    { name:'--note-item-bg',       o: [255,255,255,0.93], g: [255,255,255,0.14] },
-    { name:'--note-item-active-bg',o: [79,110,247,0.08],  g: [79,110,247,0.1] },
-    { name:'--modal-bg',           o: [255,255,255,0.95], g: [255,255,255,0.35] },
-    { name:'--cat-section-bg',     o: [255,255,255,0.9],  g: [255,255,255,0.08] },
-    { name:'--cat-header-bg',      o: [255,255,255,0.93], g: [255,255,255,0.15] },
-    { name:'--sub-input-bg',       o: [255,255,255,0.92], g: [255,255,255,0.1] },
-    { name:'--badge-bg',           o: [255,255,255,0.93], g: [255,255,255,0.14] },
-    { name:'--progress-bg',        o: [255,255,255,0.9],  g: [255,255,255,0.1] },
-    { name:'--path-bg',            o: [255,255,255,0.9],  g: [255,255,255,0.1] },
-    { name:'--note-list-bg',       o: [255,255,255,0.9],  g: [255,255,255,0.08] },
-    { name:'--modal-overlay',      o: [0,0,0,0.1],        g: [0,0,0,0.2] },
-  ],
-  dark: [
-    { name:'--card',               o: [15,23,42,0.95],    g: [15,23,42,0.15] },
-    { name:'--sidebar-bg',         o: [15,23,42,0.98],    g: [15,23,42,0.2] },
-    { name:'--todo-bg',            o: [15,23,42,0.95],    g: [15,23,42,0.1] },
-    { name:'--todo-hover-bg',      o: [30,41,59,0.95],    g: [30,41,59,0.18] },
-    { name:'--input-bg',           o: [15,23,42,0.92],    g: [15,23,42,0.08] },
-    { name:'--hover-bg',           o: [30,41,59,0.92],    g: [30,41,59,0.12] },
-    { name:'--search-bg',          o: [15,23,42,0.93],    g: [15,23,42,0.1] },
-    { name:'--note-item-bg',       o: [15,23,42,0.93],    g: [15,23,42,0.14] },
-    { name:'--note-item-active-bg',o: [129,140,248,0.1],  g: [129,140,248,0.12] },
-    { name:'--modal-bg',           o: [15,23,42,0.95],    g: [15,23,42,0.35] },
-    { name:'--cat-section-bg',     o: [15,23,42,0.9],     g: [15,23,42,0.08] },
-    { name:'--cat-header-bg',      o: [15,23,42,0.93],    g: [15,23,42,0.15] },
-    { name:'--sub-input-bg',       o: [15,23,42,0.92],    g: [15,23,42,0.1] },
-    { name:'--badge-bg',           o: [30,41,59,0.93],    g: [30,41,59,0.14] },
-    { name:'--progress-bg',        o: [30,41,59,0.92],    g: [30,41,59,0.12] },
-    { name:'--path-bg',            o: [15,23,42,0.9],     g: [15,23,42,0.1] },
-    { name:'--note-list-bg',       o: [15,23,42,0.9],     g: [15,23,42,0.08] },
-    { name:'--modal-overlay',      o: [0,0,0,0.15],       g: [0,0,0,0.3] },
-  ]
-};
-
-function applyGlassOpacity(opacityPercent) {
-  // 0% = 不透明实色, 100% = 最透明玻璃
-  const t = Math.max(0, Math.min(100, opacityPercent)) / 100; // 0..1
-  const mode = isDarkTheme() ? 'dark' : 'light';
-  const defs = GLASS_VAR_DEFS[mode];
-  const style = document.documentElement.style;
-  for (const def of defs) {
-    const alpha = def.o[3] - (def.o[3] - def.g[3]) * t;
-    style.setProperty(def.name, `rgba(${def.o[0]},${def.o[1]},${def.o[2]},${alpha.toFixed(3)})`);
-  }
-}
-
-// ── Glass refraction sub-controls ──
-// 弯曲程度: SVG displacement scale (0~60px max displacement at edges)
-function applyGlassCurve(percent) {
-  const t = Math.max(0, Math.min(100, percent));
-  if (typeof updateLiquidGlass === 'function') {
-    updateLiquidGlass(Math.round(t * 0.6), undefined);
-  }
-}
-
-// 偏折程度: edge zone width (0%~40%), how far inward the bending extends
-function applyGlassDeflect(percent) {
-  const t = Math.max(0, Math.min(100, percent));
-  const edgeRatio = (t / 100) * 0.4; // 0 ~ 0.4
-  if (typeof updateLiquidGlass === 'function') {
-    updateLiquidGlass(undefined, edgeRatio);
-  }
-}
-
-// 顶层辉光: specular highlight intensity (0~100%)
-function applyGlassGlow(percent) {
-  const t = Math.max(0, Math.min(100, percent));
-  document.documentElement.style.setProperty('--glass-glow', (t / 100).toFixed(2));
-}
-
-function applyPreset(presetId) {
-  const allPresets = getAllPresets();
-  const preset = allPresets[presetId];
-  if (!preset) return;
-  const cfg = loadCustomTheme();
-  cfg.preset = presetId;
-  cfg.bgType = 'none';
-  // Sync glass flag — use preset value, default to false
-  const currentMode = isDarkTheme() ? 'dark' : 'light';
-  const presetModeData = preset[currentMode] || preset.light || {};
-  cfg.glass = presetModeData.glass === true;
-  cfg.glassBlur = presetModeData.glassBlur !== undefined ? presetModeData.glassBlur : 16;
-  cfg.glassOpacity = presetModeData.glassOpacity !== undefined ? presetModeData.glassOpacity : 100;
-  cfg.glassCurve = presetModeData.glassCurve !== undefined ? presetModeData.glassCurve : 60;
-  cfg.glassDeflect = presetModeData.glassDeflect !== undefined ? presetModeData.glassDeflect : 18;
-  cfg.glassGlow = presetModeData.glassGlow !== undefined ? presetModeData.glassGlow : 50;
-  saveCustomTheme(cfg);
-  applyCustomTheme();
-}
-
-// ── Switch from preset to custom mode (sync all effective preset values into cfg) ──
-function switchToCustomMode(cfg) {
-  if (cfg.preset === 'custom') return cfg;
-  const allPresets = getAllPresets();
-  const preset = allPresets[cfg.preset];
-  const mode = isDarkTheme() ? 'dark' : 'light';
-  const base = (preset && preset[mode]) ? preset[mode] : (preset && preset.light ? preset.light : null);
-  if (!base) { cfg.preset = 'custom'; return cfg; }
-  // Copy all effective preset values into cfg so custom mode starts from the preset
-  cfg.accent = base.accent || cfg.accent;
-  cfg.bgType = base.bg || cfg.bgType;
-  cfg.bgAngle = base.gAngle !== undefined ? base.gAngle : cfg.bgAngle;
-  cfg.bgFrom = base.gFrom || cfg.bgFrom;
-  cfg.bgTo = base.gTo || cfg.bgTo;
-  cfg.bgImage = base.bgImage || cfg.bgImage;
-  cfg.bgVideo = base.bgVideo || cfg.bgVideo;
-  cfg.glass = base.glass === true;
-  cfg.glassBlur = base.glassBlur !== undefined ? base.glassBlur : (cfg.glassBlur ?? 16);
-  cfg.glassOpacity = base.glassOpacity !== undefined ? base.glassOpacity : (cfg.glassOpacity ?? 100);
-  cfg.glassCurve = base.glassCurve !== undefined ? base.glassCurve : (cfg.glassCurve ?? 60);
-  cfg.glassDeflect = base.glassDeflect !== undefined ? base.glassDeflect : (cfg.glassDeflect ?? 18);
-  cfg.glassGlow = base.glassGlow !== undefined ? base.glassGlow : (cfg.glassGlow ?? 50);
-  cfg.preset = 'custom';
-  return cfg;
-}
-
-// ── Render Appearance Panel ──
-
-function renderAppearancePanel() {
-  const container = document.getElementById('appearancePanelContent');
-  if (!container) return;
-
-  const cfg = loadCustomTheme();
-  const mode = isDarkTheme() ? 'dark' : 'light';
-
-  // Resolve preset mode data once for reuse
-  const allPresets = getAllPresets();
-  const preset = allPresets[cfg.preset];
-  const presetMode = preset && preset[mode] ? preset[mode] : null;
-  const isCustomPreset = cfg.preset !== 'default' && !THEME_PRESETS[cfg.preset];
-  const customPresets = getCustomPresets();
-
-  // Build preset cards HTML — built-in first, then custom
-  const builtInEntries = Object.entries(THEME_PRESETS);
-  const customEntries = Object.entries(customPresets);
-  const allEntries = [...builtInEntries, ...customEntries];
-
-  const presetCards = allEntries.map(([id, p]) => {
-    const active = cfg.preset === id ? ' active' : '';
-    const isCustom = !!customPresets[id];
-    const pm = p[mode] || p.light || {};
-    let previewStyle = '';
-    if (pm.bg === 'gradient') {
-      previewStyle = `background:linear-gradient(${pm.gAngle || 135}deg,${pm.gFrom || '#667eea'},${pm.gTo || '#764ba2'})`;
-    } else if (pm.bg === 'image' && pm.bgImage) {
-      previewStyle = `background-image:url(${pm.bgImage});background-size:cover`;
-    } else if (pm.bg === 'video') {
-      previewStyle = `background:#1a1a2e`; // dark with ▶ overlay via CSS
-    } else {
-      previewStyle = `background:${pm.accent || p.light?.accent || '#4f6ef7'}`;
-    }
-    return `<div class="theme-preset-card${active}" data-preset="${id}" title="${p.name}">
-      <div class="tpc-preview" style="${previewStyle}"></div>
-      <div class="tpc-name">${p.name}</div>
-      ${isCustom ? '<span class="tpc-delete" data-delete-preset="' + id + '" title="删除预设">✕</span>' : ''}
-    </div>`;
-  }).join('');
-
-  // Accent swatches — use effective accent from preset or custom
-  const effectiveAccent = (cfg.preset !== 'custom' && presetMode && presetMode.accent) ? presetMode.accent : cfg.accent;
-  const swatches = ACCENT_PRESETS.map(c => {
-    const active = c === effectiveAccent ? ' active' : '';
-    return `<button class="accent-swatch${active}" style="background:${c}" data-accent="${c}" title="${c}"></button>`;
-  }).join('');
-
-  // Determine effective bg type from preset or custom
-  const effectiveBgType = (cfg.preset !== 'custom' && presetMode && presetMode.bg) ? presetMode.bg : cfg.bgType;
-  const isPresetBg = cfg.preset !== 'custom' && presetMode && presetMode.bg;
-
-  // Determine effective glass from preset or custom
-  const effectiveGlass = (cfg.preset !== 'custom' && presetMode && presetMode.glass === true) ? true : !!cfg.glass;
-  const isPresetGlass = cfg.preset !== 'custom' && presetMode && presetMode.glass === true;
-  // Determine effective glass blur from preset or custom
-  const effectiveGlassBlur = (cfg.preset !== 'custom' && presetMode && presetMode.glassBlur !== undefined) ? presetMode.glassBlur : (cfg.glassBlur ?? 16);
-  const isPresetGlassBlur = cfg.preset !== 'custom' && presetMode && presetMode.glassBlur !== undefined;
-  // Determine effective glass opacity from preset or custom
-  const effectiveGlassOpacity = (cfg.preset !== 'custom' && presetMode && presetMode.glassOpacity !== undefined) ? presetMode.glassOpacity : (cfg.glassOpacity !== undefined ? cfg.glassOpacity : 0);
-  const isPresetGlassOpacity = cfg.preset !== 'custom' && presetMode && presetMode.glassOpacity !== undefined;
-  // Determine effective glass refraction sub-controls
-  const effectiveGlassCurve = (cfg.preset !== 'custom' && presetMode && presetMode.glassCurve !== undefined) ? presetMode.glassCurve : (cfg.glassCurve !== undefined ? cfg.glassCurve : 60);
-  const effectiveGlassDeflect = (cfg.preset !== 'custom' && presetMode && presetMode.glassDeflect !== undefined) ? presetMode.glassDeflect : (cfg.glassDeflect !== undefined ? cfg.glassDeflect : 18);
-  const effectiveGlassGlow = (cfg.preset !== 'custom' && presetMode && presetMode.glassGlow !== undefined) ? presetMode.glassGlow : (cfg.glassGlow !== undefined ? cfg.glassGlow : 50);
-  // Effective background values (from preset or cfg)
-  const effectiveBgColor = (cfg.preset !== 'custom' && presetMode && presetMode.bgColor) ? presetMode.bgColor : (cfg.bgColor || '#f0f2f5');
-  const effectiveBgAngle = (cfg.preset !== 'custom' && presetMode && presetMode.gAngle !== undefined) ? presetMode.gAngle : (cfg.bgAngle || 135);
-  const effectiveBgFrom = (cfg.preset !== 'custom' && presetMode && presetMode.gFrom) ? presetMode.gFrom : (cfg.bgFrom || '#667eea');
-  const effectiveBgTo = (cfg.preset !== 'custom' && presetMode && presetMode.gTo) ? presetMode.gTo : (cfg.bgTo || '#764ba2');
-  const effectiveBgImage = (cfg.preset !== 'custom' && presetMode && presetMode.bgImage) ? presetMode.bgImage : (cfg.bgImage || '');
-  const effectiveBgVideo = (cfg.preset !== 'custom' && presetMode && presetMode.bgVideo) ? presetMode.bgVideo : (cfg.bgVideo || '');
-  const effectiveBgOverlay = (cfg.preset !== 'custom' && presetMode && presetMode.bgOverlay !== undefined) ? presetMode.bgOverlay : (cfg.bgOverlay || 0.3);
-  const effectiveBgBlur = (cfg.preset !== 'custom' && presetMode && presetMode.bgBlur !== undefined) ? presetMode.bgBlur : (cfg.bgBlur || 0);
-
-  // Background type
-  const bgTypes = [
-    { id:'none', label:'无' },
-    { id:'color', label:'纯色' },
-    { id:'gradient', label:'渐变' },
-    { id:'image', label:'图片' },
-    { id:'video', label:'视频' },
-  ];
-  const bgTabs = bgTypes.map(t => {
-    const active = effectiveBgType === t.id ? ' active' : '';
-    return `<button class="bg-type-tab${active}" data-bgtype="${t.id}">${t.label}</button>`;
-  }).join('');
-
-  // Build bg edit controls — always show editable, using effective values
-  let bgExtra = '';
-  if (effectiveBgType === 'color') {
-    bgExtra = `<div class="bg-gradient-row">
-      <label>颜色</label>
-      <input type="color" id="bgColorPicker" value="${effectiveBgColor}" style="width:48px;height:28px">
-    </div>`;
-  } else if (effectiveBgType === 'gradient') {
-    bgExtra = `
-      <div class="bg-gradient-row">
-        <label>角度</label>
-        <input type="range" id="bgAngleSlider" min="0" max="360" value="${effectiveBgAngle}">
-        <span class="slider-val" id="bgAngleVal">${effectiveBgAngle}°</span>
-      </div>
-      <div class="bg-gradient-row">
-        <label>起点</label>
-        <input type="color" id="bgFromPicker" value="${effectiveBgFrom}">
-        <label>终点</label>
-        <input type="color" id="bgToPicker" value="${effectiveBgTo}">
-      </div>`;
-  } else if (effectiveBgType === 'image') {
-    bgExtra = `<div class="bg-image-url-row">
-      <input type="text" id="bgImageUrl" value="${(effectiveBgImage || '').replace(/"/g, '&quot;')}" placeholder="输入图片 URL 或 Data URL">
-      <button id="bgImageApply">应用</button>
-    </div>
-    <div class="bg-image-local-row">
-      <button id="bgImagePickLocal" style="padding:5px 14px;border:1px dashed var(--border);border-radius:6px;background:transparent;color:var(--text-secondary);font-size:12px;cursor:pointer;">
-        <i data-lucide="folder-open" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"></i>打开本地文件
-      </button>
-    </div>`;
-  } else if (effectiveBgType === 'video') {
-    bgExtra = `<div class="bg-image-url-row">
-      <input type="text" id="bgVideoUrl" value="${(effectiveBgVideo || '').replace(/"/g, '&quot;')}" placeholder="输入视频 URL 或文件路径">
-      <button id="bgVideoApply">应用</button>
-    </div>
-    <div class="bg-image-local-row">
-      <button id="bgVideoPickLocal" style="padding:5px 14px;border:1px dashed var(--border);border-radius:6px;background:transparent;color:var(--text-secondary);font-size:12px;cursor:pointer;">
-        <i data-lucide="video" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"></i>打开本地文件
-      </button>
-    </div>`;
-  }
-
-  // Overlay & blur sliders (when bg is active, whether preset or custom)
-  const showSliders = effectiveBgType !== 'none';
-  const sliderSection = !showSliders ? '' : `
-    <div class="settings-section">
-      <h3><i data-lucide="contrast" class="lucide-icon" style="width:14px;height:14px"></i> 覆盖与模糊</h3>
-      <div class="appearance-slider">
-        <label>覆盖</label>
-        <input type="range" id="bgOverlaySlider" min="0" max="1" step="0.05" value="${effectiveBgOverlay}">
-        <span class="slider-val" id="bgOverlayVal">${Math.round(effectiveBgOverlay * 100)}%</span>
-      </div>
-      <div class="appearance-slider">
-        <label>模糊</label>
-        <input type="range" id="bgBlurSlider" min="0" max="20" step="1" value="${effectiveBgBlur}">
-        <span class="slider-val" id="bgBlurVal">${effectiveBgBlur}px</span>
-      </div>
-    </div>`;
-
-  container.innerHTML = `
-    <div class="settings-section">
-      <h3><i data-lucide="shapes" class="lucide-icon" style="width:14px;height:14px"></i> 主题预设</h3>
-      <div class="theme-presets">${presetCards}</div>
-      <button id="saveAsPresetBtn" style="margin-top:10px;padding:5px 14px;border:1px dashed var(--border);border-radius:6px;background:transparent;color:var(--text-secondary);font-size:12px;cursor:pointer;width:100%;">
-        <i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"></i>保存为预设
-      </button>
-    </div>
-
-    <div class="settings-section">
-      <h3><i data-lucide="pipette" class="lucide-icon" style="width:14px;height:14px"></i> 强调色</h3>
-      <div class="accent-swatches">
-        ${swatches}
-        <input type="color" class="accent-custom-input" id="accentCustomPicker" value="${effectiveAccent}" title="自定义颜色">
-      </div>
-    </div>
-
-    <div class="settings-section">
-      <h3><i data-lucide="image" class="lucide-icon" style="width:14px;height:14px"></i> 背景</h3>
-      <div class="bg-type-tabs">${bgTabs}</div>
-      ${bgExtra}
-      ${sliderSection}
-    </div>
-
-    <div class="settings-section">
-      <h3><i data-lucide="sparkles" class="lucide-icon" style="width:14px;height:14px"></i> 效果</h3>
-      <div class="settings-item-row">
-        <span class="settings-item-label">
-          磨砂玻璃效果
-          <small class="settings-item-desc">让侧栏、卡片等界面呈现半透明毛玻璃质感</small>
-        </span>
-        <label class="toggle-switch">
-          <input type="checkbox" id="glassToggle" ${effectiveGlass ? 'checked' : ''}>
-          <span class="toggle-slider"></span>
-        </label>
-      </div>
-      ${effectiveGlass ? `<div class="slider-row" style="margin-top:8px;">
-        <span style="font-size:12px;color:var(--text-secondary);">磨砂程度</span>
-        <input type="range" id="glassBlurSlider" min="0" max="50" value="${effectiveGlassBlur}">
-        <span id="glassBlurVal" style="font-size:12px;color:var(--text-secondary);min-width:32px;">${effectiveGlassBlur}px</span>
-      </div>
-      <div class="slider-row" style="margin-top:6px;">
-        <span style="font-size:12px;color:var(--text-secondary);">透明度</span>
-        <input type="range" id="glassOpacitySlider" min="0" max="100" value="${effectiveGlassOpacity}">
-        <span id="glassOpacityVal" style="font-size:12px;color:var(--text-secondary);min-width:36px;">${effectiveGlassOpacity}%</span>
-      </div>
-      <div class="slider-row" style="margin-top:6px;">
-        <span style="font-size:12px;color:var(--text-secondary);">弯曲程度</span>
-        <input type="range" id="glassCurveSlider" min="0" max="100" value="${effectiveGlassCurve}">
-        <span id="glassCurveVal" style="font-size:12px;color:var(--text-secondary);min-width:36px;">${effectiveGlassCurve}%</span>
-      </div>
-      <div class="slider-row" style="margin-top:6px;">
-        <span style="font-size:12px;color:var(--text-secondary);">偏折程度</span>
-        <input type="range" id="glassDeflectSlider" min="0" max="100" value="${effectiveGlassDeflect}">
-        <span id="glassDeflectVal" style="font-size:12px;color:var(--text-secondary);min-width:36px;">${effectiveGlassDeflect}%</span>
-      </div>
-      <div class="slider-row" style="margin-top:6px;">
-        <span style="font-size:12px;color:var(--text-secondary);">顶层辉光</span>
-        <input type="range" id="glassGlowSlider" min="0" max="100" value="${effectiveGlassGlow}">
-        <span id="glassGlowVal" style="font-size:12px;color:var(--text-secondary);min-width:36px;">${effectiveGlassGlow}%</span>
-      </div>` : ''}
-      ${isPresetGlass ? '<div class="bg-preset-info">由「' + preset.name + '」预设提供此效果</div>' : ''}
-    </div>
-
-    <div class="settings-section" style="text-align:center;padding-top:12px">
-      <button id="themeResetBtn" style="padding:6px 16px;border:1px solid var(--border);border-radius:6px;background:var(--card);color:var(--text);font-size:12px;cursor:pointer;">
-        <i data-lucide="rotate-ccw" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;margin-right:4px"></i>恢复默认
-      </button>
-    </div>
-  `;
-
-  lucide.createIcons();
-  bindAppearanceEvents();
-}
-
-function bindAppearanceEvents() {
-  // Preset cards
-  document.querySelectorAll('.theme-preset-card').forEach(card => {
-    card.addEventListener('click', () => {
-      applyPreset(card.dataset.preset);
-      renderAppearancePanel();
-    });
-  });
-
-  // Accent swatches
-  document.querySelectorAll('.accent-swatch').forEach(sw => {
-    sw.addEventListener('click', () => {
-      let cfg = loadCustomTheme();
-      cfg = switchToCustomMode(cfg);
-      cfg.accent = sw.dataset.accent;
-      saveCustomTheme(cfg);
-      applyCustomTheme();
-      renderAppearancePanel();
-    });
-  });
-
-  // Custom accent picker
-  const accentPicker = document.getElementById('accentCustomPicker');
-  if (accentPicker) {
-    accentPicker.addEventListener('input', () => {
-      let cfg = loadCustomTheme();
-      cfg = switchToCustomMode(cfg);
-      cfg.accent = accentPicker.value;
-      saveCustomTheme(cfg);
-      applyCustomTheme();
-      document.querySelectorAll('.accent-swatch').forEach(s => s.classList.remove('active'));
-    });
-  }
-
-  // Background type tabs
-  document.querySelectorAll('.bg-type-tab').forEach(tab => {
-    tab.addEventListener('click', () => {
-      let cfg = loadCustomTheme();
-      cfg = switchToCustomMode(cfg);
-      cfg.bgType = tab.dataset.bgtype;
-      saveCustomTheme(cfg);
-      applyCustomTheme();
-      renderAppearancePanel();
-    });
-  });
-
-  // Color
-  const bgColor = document.getElementById('bgColorPicker');
-  if (bgColor) bgColor.addEventListener('input', () => {
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.bgColor = bgColor.value;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // Gradient angle
-  const angleSlider = document.getElementById('bgAngleSlider');
-  if (angleSlider) {
-    angleSlider.addEventListener('input', () => {
-      const val = angleSlider.value;
-      document.getElementById('bgAngleVal').textContent = val + '°';
-      let cfg = loadCustomTheme();
-      cfg = switchToCustomMode(cfg);
-      cfg.bgAngle = parseInt(val); saveCustomTheme(cfg);
-      applyCustomTheme();
-    });
-  }
-  const fromPicker = document.getElementById('bgFromPicker');
-  if (fromPicker) fromPicker.addEventListener('input', () => {
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.bgFrom = fromPicker.value; saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-  const toPicker = document.getElementById('bgToPicker');
-  if (toPicker) toPicker.addEventListener('input', () => {
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.bgTo = toPicker.value; saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // Image URL
-  const imgApply = document.getElementById('bgImageApply');
-  if (imgApply) imgApply.addEventListener('click', () => {
-    const urlInput = document.getElementById('bgImageUrl');
-    if (!urlInput) return;
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.bgImage = urlInput.value.trim();
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // Overlay
-  const overlaySlider = document.getElementById('bgOverlaySlider');
-  if (overlaySlider) overlaySlider.addEventListener('input', () => {
-    const val = parseFloat(overlaySlider.value);
-    document.getElementById('bgOverlayVal').textContent = Math.round(val * 100) + '%';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.bgOverlay = val; saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // Blur
-  const blurSlider = document.getElementById('bgBlurSlider');
-  if (blurSlider) blurSlider.addEventListener('input', () => {
-    const val = parseInt(blurSlider.value);
-    document.getElementById('bgBlurVal').textContent = val + 'px';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.bgBlur = val; saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // ── Glass effect toggle ──
-  const glassToggle = document.getElementById('glassToggle');
-  if (glassToggle) glassToggle.addEventListener('change', () => {
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.glass = glassToggle.checked;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-    renderAppearancePanel();
-  });
-
-  // ── Glass blur slider ──
-  const glassBlurSlider = document.getElementById('glassBlurSlider');
-  if (glassBlurSlider) glassBlurSlider.addEventListener('input', () => {
-    const val = parseInt(glassBlurSlider.value);
-    const valEl = document.getElementById('glassBlurVal');
-    if (valEl) valEl.textContent = val + 'px';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.glassBlur = val;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // ── Glass opacity slider ──
-  const glassOpacitySlider = document.getElementById('glassOpacitySlider');
-  if (glassOpacitySlider) glassOpacitySlider.addEventListener('input', () => {
-    const val = parseInt(glassOpacitySlider.value);
-    const valEl = document.getElementById('glassOpacityVal');
-    if (valEl) valEl.textContent = val + '%';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.glassOpacity = val;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // ── Glass curve (弯曲程度) ──
-  const glassCurveSlider = document.getElementById('glassCurveSlider');
-  if (glassCurveSlider) glassCurveSlider.addEventListener('input', () => {
-    const val = parseInt(glassCurveSlider.value);
-    const valEl = document.getElementById('glassCurveVal');
-    if (valEl) valEl.textContent = val + '%';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.glassCurve = val;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // ── Glass deflect (偏折程度) ──
-  const glassDeflectSlider = document.getElementById('glassDeflectSlider');
-  if (glassDeflectSlider) glassDeflectSlider.addEventListener('input', () => {
-    const val = parseInt(glassDeflectSlider.value);
-    const valEl = document.getElementById('glassDeflectVal');
-    if (valEl) valEl.textContent = val + '%';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.glassDeflect = val;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // ── Glass glow (顶层辉光) ──
-  const glassGlowSlider = document.getElementById('glassGlowSlider');
-  if (glassGlowSlider) glassGlowSlider.addEventListener('input', () => {
-    const val = parseInt(glassGlowSlider.value);
-    const valEl = document.getElementById('glassGlowVal');
-    if (valEl) valEl.textContent = val + '%';
-    let cfg = loadCustomTheme();
-    cfg = switchToCustomMode(cfg);
-    cfg.glassGlow = val;
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-  });
-
-  // ── Custom Preset: Save as preset ──
-  const savePresetBtn = document.getElementById('saveAsPresetBtn');
-  if (savePresetBtn) savePresetBtn.addEventListener('click', async () => {
-    const name = await showCustomPrompt('为新预设命名：', '我的主题');
-    if (!name || !name.trim()) return;
-    const id = 'custom_' + Date.now();
-    const cfg = loadCustomTheme();
-    const mode = isDarkTheme() ? 'dark' : 'light';
-    // Build preset config from current effective settings
-    const presetData = {
-      name: name.trim(),
-      icon: 'palette',
-      [mode]: {
-        accent: cfg.accent,
-        bg: cfg.bgType !== 'none' ? cfg.bgType : undefined,
-        bgColor: cfg.bgColor,
-        bgAngle: cfg.bgAngle,
-        bgFrom: cfg.bgFrom,
-        bgTo: cfg.bgTo,
-        bgImage: cfg.bgImage || undefined,
-        bgVideo: cfg.bgVideo || undefined,
-        glass: cfg.glass || undefined,
-        glassBlur: cfg.glassBlur !== undefined ? cfg.glassBlur : undefined,
-        glassOpacity: cfg.glassOpacity !== undefined ? cfg.glassOpacity : undefined,
-        glassCurve: cfg.glassCurve !== undefined ? cfg.glassCurve : undefined,
-        glassDeflect: cfg.glassDeflect !== undefined ? cfg.glassDeflect : undefined,
-        glassGlow: cfg.glassGlow !== undefined ? cfg.glassGlow : undefined
-      }
-    };
-    // Remove undefined fields
-    Object.keys(presetData[mode]).forEach(k => {
-      if (presetData[mode][k] === undefined) delete presetData[mode][k];
-    });
-    const custom = getCustomPresets();
-    custom[id] = presetData;
-    saveCustomPresets(custom);
-    // Apply as active preset
-    cfg.preset = id;
-    cfg.bgType = 'none';
-    saveCustomTheme(cfg);
-    applyCustomTheme();
-    renderAppearancePanel();
-  });
-
-  // ── Custom Preset: Delete ──
-  document.querySelectorAll('.tpc-delete').forEach(delBtn => {
-    delBtn.addEventListener('click', async (e) => {
-      e.stopPropagation();
-      const presetId = delBtn.dataset.deletePreset;
-      if (!presetId) return;
-      const confirmed = await showCustomConfirm(`确认删除预设「${getAllPresets()[presetId]?.name || presetId}」？`);
-      if (!confirmed) return;
-      deleteCustomPreset(presetId);
-      // If this preset was active, switch to default
-      const cfg = loadCustomTheme();
-      if (cfg.preset === presetId) {
-        cfg.preset = 'default';
-        cfg.bgType = 'none';
-        saveCustomTheme(cfg);
-        applyCustomTheme();
-      }
-      renderAppearancePanel();
-    });
-  });
-
-  // ── Local image file picker ──
-  const pickLocalBtn = document.getElementById('bgImagePickLocal');
-  if (pickLocalBtn) pickLocalBtn.addEventListener('click', async () => {
-    if (window.electronAPI && window.electronAPI.openImageDialog) {
-      const result = await window.electronAPI.openImageDialog();
-      if (!result || !result.dataUrl) return;
-      if (result.warning) alert(result.warning);
-      const urlInput = document.getElementById('bgImageUrl');
-      if (urlInput) urlInput.value = result.dataUrl;
-      const cfg = loadCustomTheme();
-      cfg.bgImage = result.dataUrl;
-      saveCustomTheme(cfg);
-      applyCustomTheme();
-    } else {
-      // Fallback for non-Electron: use hidden file input
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'image/*';
-      fileInput.onchange = () => {
-        const file = fileInput.files[0];
-        if (!file) return;
-        if (file.size > 6 * 1024 * 1024) { alert('图片较大（>6MB），可能影响性能'); }
-        const reader = new FileReader();
-        reader.onload = () => {
-          const urlInput = document.getElementById('bgImageUrl');
-          if (urlInput) urlInput.value = reader.result;
-          const cfg = loadCustomTheme();
-          cfg.bgImage = reader.result;
-          saveCustomTheme(cfg);
-          applyCustomTheme();
-        };
-        reader.readAsDataURL(file);
-      };
-      fileInput.click();
-    }
-  });
-
-  // ── Video URL apply ──
-  const videoApplyBtn = document.getElementById('bgVideoApply');
-  const videoUrlInput = document.getElementById('bgVideoUrl');
-  if (videoApplyBtn && videoUrlInput) {
-    videoApplyBtn.addEventListener('click', () => {
-      const val = videoUrlInput.value.trim();
-      const cfg = loadCustomTheme();
-      cfg.bgVideo = val;
-      saveCustomTheme(cfg);
-      applyCustomTheme();
-    });
-    videoUrlInput.addEventListener('keydown', (e) => {
-      if (e.key === 'Enter') videoApplyBtn.click();
-    });
-  }
-
-  // ── Local video file picker ──
-  const pickVideoBtn = document.getElementById('bgVideoPickLocal');
-  if (pickVideoBtn) pickVideoBtn.addEventListener('click', async () => {
-    if (window.electronAPI && window.electronAPI.openVideoDialog) {
-      const result = await window.electronAPI.openVideoDialog();
-      if (!result) return;
-      if (result.error) { alert(result.error); return; }
-      if (result.fileUrl) {
-        const urlInput = document.getElementById('bgVideoUrl');
-        if (urlInput) urlInput.value = result.fileUrl;
-        const cfg = loadCustomTheme();
-        cfg.bgVideo = result.fileUrl;
-        saveCustomTheme(cfg);
-        applyCustomTheme();
-      }
-    } else {
-      // Fallback for non-Electron: use hidden file input
-      const fileInput = document.createElement('input');
-      fileInput.type = 'file';
-      fileInput.accept = 'video/*';
-      fileInput.onchange = () => {
-        const file = fileInput.files[0];
-        if (!file) return;
-        const url = URL.createObjectURL(file);
-        const urlInput = document.getElementById('bgVideoUrl');
-        if (urlInput) urlInput.value = url;
-        const cfg = loadCustomTheme();
-        cfg.bgVideo = url;
-        saveCustomTheme(cfg);
-        applyCustomTheme();
-      };
-      fileInput.click();
-    }
-  });
-
-  // Reset
-  const resetBtn = document.getElementById('themeResetBtn');
-  if (resetBtn) resetBtn.addEventListener('click', () => {
-    localStorage.removeItem('study_theme_custom');
-    applyCustomTheme();
-    renderAppearancePanel();
-  });
 }
 
 // ═══════════ Evening Daily Report ═══════════
@@ -3888,11 +3410,9 @@ ${data.habitsOverview.length > 0
       const respData = await resp.json();
       const report = (respData.choices?.[0]?.message?.content || '').trim();
       if (report) {
-        conv.messages.push({ role: 'user', content: '生成 ' + todayStr + ' 晚间日报' });
-        conv.messages.push({ role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
-        if (conv.messages.length > 30) {
-          conv.messages = conv.messages.slice(-30);
-        }
+        appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' });
+        appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
+        trimConvMessages(conv, 30);
         saveData('study_ai_convs', aiConvs);
         // Send Windows notification (before render/mark to ensure delivery)
         try {
@@ -3997,6 +3517,12 @@ function renderMemoryPanel() {
   // ── Auto Facts ──
   const autoList = document.getElementById('memoryAutoList');
   if (autoList) {
+    // ── Dedup controls: restore saved values ──
+    const dedupSel = document.getElementById('memoryDedupMode');
+    if (dedupSel && typeof getDedupMode === 'function') dedupSel.value = getDedupMode();
+    const thresholdInput = document.getElementById('memoryDedupThreshold');
+    if (thresholdInput && typeof getDedupThreshold === 'function') thresholdInput.value = getDedupThreshold();
+
     const filter = document.getElementById('memoryAutoFilter');
     const filterType = filter ? filter.value : '';
     let entries = [...memory.autoFacts];
@@ -4013,6 +3539,7 @@ function renderMemoryPanel() {
         const pct = Math.round(e.confidence * 100);
         const date = new Date(e.updatedAt).toLocaleDateString('zh-CN');
         const sourceInfo = e.sourceConvTitle ? ` | 来源：${escapeHtml(e.sourceConvTitle)}` : '';
+        const mergeBadge = (e.mergeCount > 0) ? ` | <span style="color:var(--primary);font-weight:600;">已合并 ${e.mergeCount} 条</span>` : '';
         const hasDetail = e.detail && e.detail.trim();
         const detailId = 'memAutoDetail_' + e.id;
         return `
@@ -4030,9 +3557,10 @@ function renderMemoryPanel() {
               <button class="mem-conf-btn" onclick="memoryAdjustConfidence(${e.id}, 0.05)" title="置信度 +5%">+</button>
               <button class="mem-conf-btn" onclick="memoryAdjustConfidence(${e.id}, -0.05)" title="置信度 -5%">−</button>
             </div>
-            <div class="memory-card-meta">${date}${sourceInfo}</div>
+            <div class="memory-card-meta">${date}${sourceInfo}${mergeBadge}</div>
           </div>
           <div class="memory-card-actions">
+            <button onclick="memoryConvertToManual(${e.id})" title="转为手动记忆">📌</button>
             <button onclick="memoryEditAuto(${e.id})" title="编辑">✏️</button>
             <button onclick="memoryDeleteAuto(${e.id})" title="删除" style="color:var(--danger);">🗑️</button>
           </div>
@@ -4225,6 +3753,33 @@ function memoryDeleteAuto(id) {
   showMemoryStatus('✅ 已删除');
 }
 
+// 将自动记忆条目转为手动记忆（用户主动固定，AI 更重视）
+function memoryConvertToManual(id) {
+  if (typeof loadAiMemory !== 'function' || typeof saveAiMemory !== 'function') return;
+  const memory = loadAiMemory();
+  const idx = memory.autoFacts.findIndex(e => e.id === id);
+  if (idx === -1) return;
+  const e = memory.autoFacts[idx];
+  // 手动记忆上限保护（与 addManualNote 一致）
+  if (typeof addManualNote === 'function') {
+    addManualNote(memory, e.text, e.detail);
+  } else {
+    memory.manualNotes.push({
+      id: genId(),
+      content: e.text,
+      detail: e.detail || '',
+      createdAt: e.createdAt || Date.now(),
+      updatedAt: Date.now()
+    });
+    if (memory.manualNotes.length > 50) memory.manualNotes = memory.manualNotes.slice(-50);
+  }
+  // 从自动记忆中移除
+  memory.autoFacts.splice(idx, 1);
+  saveAiMemory(memory);
+  renderMemoryPanel();
+  showMemoryStatus('✅ 已转为手动记忆');
+}
+
 function memoryClearAuto() {
   if (typeof loadAiMemory !== 'function' || typeof saveAiMemory !== 'function') return;
   if (typeof showCustomConfirm !== 'function') {
@@ -4315,6 +3870,40 @@ function showMemoryStatus(msg) {
   setTimeout(() => { el.textContent = ''; el.className = 'memory-status'; }, 3000);
 }
 
+// ── Dedup Settings Handlers ──
+function saveMemoryDedupMode() {
+  const sel = document.getElementById('memoryDedupMode');
+  if (!sel) return;
+  localStorage.setItem('study_memory_dedup_mode', sel.value);
+  const label = sel.value === 'A' ? '完全AI（写入不做本地合并）' : sel.value === 'B' ? 'JS本地合并 + AI每日兜底' : '纯JS本地合并（无AI兜底）';
+  showMemoryStatus(`✅ 去重方案已切换：${label}`);
+}
+
+function saveMemoryDedupThreshold() {
+  const input = document.getElementById('memoryDedupThreshold');
+  if (!input) return;
+  let v = parseInt(input.value, 10);
+  if (isNaN(v)) v = 30;
+  v = Math.max(10, Math.min(50, v));
+  input.value = v;
+  localStorage.setItem('study_memory_dedup_threshold', String(v));
+  showMemoryStatus(`✅ 每日 AI 兜底阈值已设为 ${v} 条`);
+}
+
+async function runManualDedupBtn() {
+  const btn = document.getElementById('memoryDedupRunBtn');
+  if (btn) { btn.disabled = true; btn.textContent = '⏳ 去重中...'; }
+  try {
+    if (typeof runManualDedup === 'function') await runManualDedup();
+    else showMemoryStatus('❌ 去重模块未加载');
+  } catch (err) {
+    console.warn('[Memory] Manual dedup error:', err);
+    showMemoryStatus('❌ 去重失败：' + err.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '⚡ 立即去重'; }
+  }
+}
+
 // Hook into openSettingsModal to render memory panel when tab is shown
 const _origOpenSettingsModal = openSettingsModal;
 openSettingsModal = function() {
@@ -4323,6 +3912,9 @@ openSettingsModal = function() {
   setTimeout(() => {
     if (typeof renderMemoryPanel === 'function' && _settingsTab === 'memory') {
       renderMemoryPanel();
+    }
+    if (_settingsTab === 'friends' && typeof loadFriendsSettings === 'function') {
+      loadFriendsSettings();
     }
   }, 150);
 };
@@ -4337,4 +3929,237 @@ switchSettingsTab = function(tab) {
   if (tab === 'data' && typeof loadTodoStatusesToSettings === 'function') {
     loadTodoStatusesToSettings();
   }
+  if (tab === 'api' && typeof renderCodebuddyCliConfig === 'function') {
+    renderCodebuddyCliConfig();
+  }
+  if (tab === 'friends' && typeof loadFriendsSettings === 'function') {
+    loadFriendsSettings();
+  }
 };
+
+// ═══════════ 好友系统配置（Supabase） ═══════════
+function loadFriendsSettings() {
+  const urlEl = document.getElementById('friendsSupabaseUrl');
+  const keyEl = document.getElementById('friendsAnonKey');
+  if (!urlEl || !keyEl) return;
+  const cfg = getFriendsConfig();
+  urlEl.value = cfg.url || '';
+  keyEl.value = cfg.anonKey || '';
+}
+
+// 校验 Supabase 配置并给出反馈
+async function saveFriendsSettings(reconnect) {
+  const urlEl = document.getElementById('friendsSupabaseUrl');
+  const keyEl = document.getElementById('friendsAnonKey');
+  const btn = document.getElementById('friendsSaveBtn');
+  const st = document.getElementById('friendsSettingsStatus');
+  if (!urlEl || !keyEl) return;
+  const url = urlEl.value.trim();
+  const anonKey = keyEl.value.trim();
+
+  const showStatus = (cls, msg) => {
+    if (!st) return;
+    st.className = 'settings-status ' + cls;
+    st.textContent = msg;
+    st.style.display = 'block';
+  };
+
+  if (!url || !anonKey) {
+    showStatus('error', '⚠️ 请先填写 Project URL 和 Anon Public Key');
+    return;
+  }
+  if (!/^https:\/\/.+/.test(url)) {
+    showStatus('error', '⚠️ Project URL 需以 https:// 开头，且不要带 /rest/v1/ 路径');
+    return;
+  }
+
+  const btnHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ 正在连接…'; }
+  showStatus('info', '正在保存配置并测试连接…');
+
+  saveFriendsConfig({ url, anonKey });
+  if (typeof resetSupabaseClient === 'function') resetSupabaseClient();
+
+  // 测试连接：探测 profiles 表是否可访问（可区分网络问题/未建表/无权限）
+  let test = { ok: false, error: '未知错误' };
+  try {
+    const client = getSupabaseClient();
+    if (!client) {
+      test = { ok: false, error: '客户端初始化失败，请检查 URL 是否正确' };
+    } else {
+      const { error } = await client.from('profiles').select('id', { count: 'exact', head: true });
+      if (!error) {
+        test = { ok: true };
+      } else if (error.code === '42P01' || /relation.*does not exist/i.test(error.message || '')) {
+        test = { ok: false, error: '⚠️ 数据库中找不到表：请先在 Supabase SQL Editor 执行 supabase/schema.sql 建表脚本' };
+      } else if (error.code === '42501' || /permission denied/i.test(error.message || '')) {
+        test = { ok: false, error: '⚠️ 无表访问权限：请确认已执行 schema.sql（含 GRANT 授权段），或打开 "Automatically expose new tables"' };
+      } else if (error.code === 'PGRST301' || /JWT/i.test(error.message || '')) {
+        test = { ok: false, error: '⚠️ Anon Key 无效：请确认复制的是 anon public key 而非 service_role key' };
+      } else {
+        test = { ok: false, error: '连接失败：' + (error.message || '未知错误') };
+      }
+    }
+  } catch (e) {
+    test = { ok: false, error: '网络异常：' + e.message };
+  }
+
+  if (test.ok) {
+    showStatus('success', '✅ 连接成功！已正确读写 profiles 表');
+    if (reconnect && typeof renderFriends === 'function') {
+      if (document.getElementById('section-friends')?.classList.contains('active')) renderFriends();
+    }
+  } else {
+    showStatus('error', test.error);
+  }
+
+  if (btn) {
+    btn.disabled = false;
+    btn.innerHTML = btnHtml;
+    setTimeout(() => { if (typeof lucide !== 'undefined') lucide.createIcons(); }, 0);
+  }
+  // 3.5s 后自动隐藏成功信息，错误信息保留
+  if (test.ok) setTimeout(() => { if (st) st.style.display = 'none'; }, 3500);
+}
+
+// ═══════════ CodeBuddy CLI 配置区 ═══════════
+function getCliPath() {
+  try { return localStorage.getItem('study_codebuddy_cli_path') || ''; } catch (e) { return ''; }
+}
+function saveCliPath(p) {
+  try { localStorage.setItem('study_codebuddy_cli_path', p); } catch (e) {}
+}
+
+async function renderCodebuddyCliConfig() {
+  const el = document.getElementById('codebuddyCliConfig');
+  if (!el) return;
+  el.innerHTML = '<div class="hint" style="text-align:center;padding:12px;">正在检测 CodeBuddy CLI…</div>';
+  let cli = { found: false, path: '' };
+  try {
+    if (window.electronAPI && window.electronAPI.codebuddyLocate) {
+      const res = await window.electronAPI.codebuddyLocate({ userPath: getCliPath() });
+      cli = res || { found: false, path: '' };
+    }
+  } catch (e) {
+    cli = { found: false, path: '', reason: e.message };
+  }
+
+  const apiKey = (typeof window.Codegen !== 'undefined' && window.Codegen.getCodebuddyApiKey)
+    ? window.Codegen.getCodebuddyApiKey() : '';
+
+  el.innerHTML = `
+    <div style="background:var(--todo-bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span class="cg-key-status ${cli.found ? 'ok' : 'warn'}">
+          <i data-lucide="${cli.found ? 'check-circle-2' : 'alert-circle'}" class="lucide-icon" style="width:14px;height:14px;"></i>
+          ${cli.found ? 'CLI 已就绪' : '未检测到 CLI'}
+        </span>
+        ${cli.path ? `<span style="font-size:11px;color:var(--text-secondary);word-break:break-all;">${escapeHtml(cli.path)}</span>` : ''}
+      </div>
+      <div class="settings-field" style="margin-bottom:6px;">
+        <label>CLI 路径（留空自动探测）</label>
+        <input type="text" id="codebuddyCliPathInput" value="${escapeHtml(getCliPath())}" placeholder="如 C:\\Users\\you\\AppData\\Roaming\\npm\\codebuddy.cmd">
+      </div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
+        <button class="btn-save-settings" onclick="saveCodebuddyCliPath()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--primary);">保存路径</button>
+        <button class="btn-save-settings" onclick="reprobeCodebuddyCli()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--border);color:var(--text);">重新探测</button>
+        <button class="btn-save-settings" onclick="installCodebuddyCli()" style="width:auto;padding:5px 12px;font-size:12px;background:#8b5cf6;">${cli.found ? '重新安装' : '一键安装'}</button>
+      </div>
+      ${!cli.found ? `
+      <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--text-secondary);line-height:1.6;">
+        <b>安装指引：</b>需 Node.js ≥ 18.20，然后执行：<br>
+        <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px;">npm install -g @tencent-ai/codebuddy-code</code><br>
+        或在终端运行 <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px;">codebuddy</code> 完成微信/QQ 登录。
+      </div>` : ''}
+      <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:8px;font-size:12px;color:var(--text-secondary);">
+        <input type="checkbox" id="codebuddyUseMirror" style="width:14px;height:14px;accent-color:var(--primary);"> 使用国内镜像安装（npmmirror）
+      </label>
+    </div>
+    <div class="settings-field" style="margin-bottom:8px;">
+      <label>CodeBuddy API Key（可选，用于无需扫码登录的授权）</label>
+      <input type="password" id="codebuddyApiKeyInput" value="${escapeHtml(apiKey)}" placeholder="留空则使用本机已登录凭据">
+      <span class="hint">从 CodeBuddy 控制台获取；中国版环境自动设为 internal。留空时使用 CLI 已登录的 OAuth 凭据。</span>
+    </div>
+    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
+      <button class="btn-save-settings" onclick="saveCodebuddyApiKey()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--primary);">保存 API Key</button>
+      <button class="btn-save-settings" onclick="clearCodebuddyApiKey()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--border);color:var(--text);">清除</button>
+    </div>
+    <div class="settings-status" id="codebuddyCliStatus"></div>
+    <div class="cg-agent-log-wrap" id="codebuddyInstallLogWrap" style="display:none;">
+      <div class="cg-col-title"><i data-lucide="terminal" class="lucide-icon" style="width:13px;height:13px;"></i> 安装日志</div>
+      <pre class="cg-agent-log" id="codebuddyInstallLog"></pre>
+    </div>
+  `;
+  if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
+}
+
+function codebuddyCliStatus(msg, isError) {
+  const el = document.getElementById('codebuddyCliStatus');
+  if (!el) return;
+  el.className = 'settings-status' + (isError ? ' error' : '');
+  el.textContent = msg || '';
+}
+
+function saveCodebuddyCliPath() {
+  const input = document.getElementById('codebuddyCliPathInput');
+  if (!input) return;
+  saveCliPath(input.value.trim());
+  codebuddyCliStatus('路径已保存');
+  setTimeout(renderCodebuddyCliConfig, 500);
+  if (typeof window.refreshCliBar === 'function') window.refreshCliBar();
+}
+
+async function reprobeCodebuddyCli() {
+  codebuddyCliStatus('正在重新探测…');
+  try {
+    const res = await window.electronAPI.codebuddyLocate({ userPath: getCliPath() });
+    codebuddyCliStatus(res && res.found ? '✅ 已找到 CLI: ' + res.path : '❌ 仍未检测到 CLI');
+  } catch (e) {
+    codebuddyCliStatus('探测失败: ' + e.message, true);
+  }
+  await renderCodebuddyCliConfig();
+  if (typeof window.refreshCliBar === 'function') window.refreshCliBar();
+}
+
+async function installCodebuddyCli() {
+  const logWrap = document.getElementById('codebuddyInstallLogWrap');
+  const logEl = document.getElementById('codebuddyInstallLog');
+  if (logWrap) logWrap.style.display = 'block';
+  if (logEl) logEl.textContent = '';
+  const useMirror = !!(document.getElementById('codebuddyUseMirror') && document.getElementById('codebuddyUseMirror').checked);
+  const append = (text) => {
+    if (logEl) { logEl.textContent += text; logEl.scrollTop = logEl.scrollHeight; }
+  };
+  codebuddyCliStatus('正在安装 CodeBuddy CLI…');
+  const off = window.electronAPI.onCodebuddyInstallOutput((payload) => {
+    if (payload && payload.text) append(payload.text);
+  });
+  try {
+    const res = await window.electronAPI.codebuddyInstall({ useMirror });
+    codebuddyCliStatus(res && res.ok ? '✅ 安装完成，CLI 已就绪' : '❌ 安装失败：' + ((res && res.reason) || '未知错误'), !(res && res.ok));
+  } catch (e) {
+    codebuddyCliStatus('安装出错: ' + e.message, true);
+  } finally {
+    if (off) off();
+    setTimeout(renderCodebuddyCliConfig, 500);
+    if (typeof window.refreshCliBar === 'function') window.refreshCliBar();
+  }
+}
+
+function saveCodebuddyApiKey() {
+  const input = document.getElementById('codebuddyApiKeyInput');
+  if (!input) return;
+  if (typeof window.Codegen !== 'undefined' && window.Codegen.setCodebuddyApiKey) {
+    window.Codegen.setCodebuddyApiKey(input.value.trim());
+  }
+  codebuddyCliStatus('✅ API Key 已保存');
+}
+
+function clearCodebuddyApiKey() {
+  if (typeof window.Codegen !== 'undefined' && window.Codegen.setCodebuddyApiKey) {
+    window.Codegen.setCodebuddyApiKey('');
+  }
+  const input = document.getElementById('codebuddyApiKeyInput');
+  if (input) input.value = '';
+  codebuddyCliStatus('✅ API Key 已清除');
+}

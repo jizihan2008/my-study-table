@@ -1,0 +1,294 @@
+-- ═══════════════════════════════════════════════════════════════════
+-- My Study Table — 好友系统数据库 Schema（Supabase / PostgreSQL）
+-- 使用方法：在 Supabase Dashboard → SQL Editor 中粘贴执行整个脚本。
+-- 执行后还需：
+--   1. Authentication → Providers → Email 关闭 "Confirm email"（可选，便于直接登录）
+--   2. 复制 Project URL 与 anon public key 填入应用「设置 → 好友」面板
+-- ═══════════════════════════════════════════════════════════════════
+
+-- ─────────────────────────────────────────────
+-- 1. 用户资料 profiles
+-- ─────────────────────────────────────────────
+create table if not exists public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  username text unique not null,                    -- 用户名（搜索/添加好友的唯一标识）
+  nickname text not null default '',                -- 昵称
+  avatar_url text not null default '',              -- 头像 URL
+  bio text not null default '',                     -- 简介
+  online_status text not null default 'offline',    -- online | offline
+  last_seen timestamptz not null default now(),     -- 最近活跃时间
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+alter table public.profiles enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 2. 好友分组 friend_groups
+-- ─────────────────────────────────────────────
+create table if not exists public.friend_groups (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  name text not null,
+  color text not null default '#4f6ef7',
+  created_at timestamptz not null default now()
+);
+alter table public.friend_groups enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 3. 好友关系 friendships（user_id 为发起方 / friend_id 为接收方）
+-- ─────────────────────────────────────────────
+create table if not exists public.friendships (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  friend_id uuid not null references public.profiles(id) on delete cascade,
+  status text not null default 'pending',           -- pending | accepted
+  group_id uuid references public.friend_groups(id) on delete set null,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint friendships_unique_pair unique (user_id, friend_id),
+  constraint friendships_no_self check (user_id <> friend_id)
+);
+alter table public.friendships enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 4. 聚合学习统计 study_stats（每日一行，仅聚合数据，不包含具体内容）
+-- ─────────────────────────────────────────────
+create table if not exists public.study_stats (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  date date not null,
+  checkin boolean not null default false,           -- 当日是否打卡
+  focus_ms bigint not null default 0,               -- 当日专注时长（毫秒）
+  todos_done int not null default 0,                -- 当日完成任务数
+  habit_count int not null default 0,               -- 当日习惯打卡次数
+  streak int not null default 0,                    -- 连续学习天数
+  updated_at timestamptz not null default now(),
+  constraint study_stats_unique_date unique (user_id, date)
+);
+alter table public.study_stats enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 4b. 本周专注 Top5 待办 weekly_focus_todos（仅标题+时长聚合，供好友查看）
+-- ─────────────────────────────────────────────
+create table if not exists public.weekly_focus_todos (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  week_start date not null,                        -- 本周周一日期
+  todo_id bigint not null,                         -- 本地待办 id
+  title text not null,                             -- 待办标题
+  focus_ms bigint not null default 0,              -- 本周该待办专注毫秒
+  updated_at timestamptz not null default now(),
+  constraint weekly_focus_unique unique (user_id, week_start, todo_id)
+);
+alter table public.weekly_focus_todos enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 5. 好友动态 activities
+-- ─────────────────────────────────────────────
+create table if not exists public.activities (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  type text not null,                               -- checkin | focus | todos_done | habit | streak
+  content text not null,                            -- 动态文案
+  meta jsonb not null default '{}'::jsonb,          -- 附加数据（如 {date, minutes}）
+  created_at timestamptz not null default now()
+);
+create index if not exists activities_user_created_idx on public.activities (user_id, created_at desc);
+alter table public.activities enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 6. 会话 conversations（user_a < user_b 规范化顺序）
+-- ─────────────────────────────────────────────
+create table if not exists public.conversations (
+  id uuid primary key default gen_random_uuid(),
+  user_a uuid not null references public.profiles(id) on delete cascade,
+  user_b uuid not null references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  constraint conversations_unique_pair unique (user_a, user_b)
+);
+alter table public.conversations enable row level security;
+
+-- ─────────────────────────────────────────────
+-- 7. 消息 messages
+-- ─────────────────────────────────────────────
+create table if not exists public.messages (
+  id bigint generated always as identity primary key,
+  conversation_id uuid not null references public.conversations(id) on delete cascade,
+  sender_id uuid not null references public.profiles(id) on delete cascade,
+  content text not null,
+  created_at timestamptz not null default now(),
+  read_at timestamptz
+);
+create index if not exists messages_conv_created_idx on public.messages (conversation_id, created_at);
+alter table public.messages enable row level security;
+
+-- ═══════════════════════════════════════════════════════════════════
+-- RLS 辅助函数
+-- ═══════════════════════════════════════════════════════════════════
+
+-- 判断 target 是否为当前登录用户的好友
+create or replace function public.is_friend(target uuid)
+returns boolean
+language sql stable
+security definer
+set search_path = public
+as $$
+  select exists (
+    select 1 from public.friendships f
+    where f.status = 'accepted'
+      and ((f.user_id = auth.uid() and f.friend_id = target)
+        or (f.user_id = target and f.friend_id = auth.uid()))
+  );
+$$;
+
+-- ═══════════════════════════════════════════════════════════════════
+-- RLS 策略
+-- ═══════════════════════════════════════════════════════════════════
+
+-- profiles：所有登录用户可读，本人可更新
+drop policy if exists "profiles_readable" on public.profiles;
+create policy "profiles_readable" on public.profiles
+  for select using (auth.uid() is not null);
+drop policy if exists "profiles_self_update" on public.profiles;
+create policy "profiles_self_update" on public.profiles
+  for update using (auth.uid() = id);
+
+-- friend_groups：仅本人
+drop policy if exists "groups_self_all" on public.friend_groups;
+create policy "groups_self_all" on public.friend_groups
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- friendships：双向相关方可见、可操作
+drop policy if exists "friendships_readable" on public.friendships;
+create policy "friendships_readable" on public.friendships
+  for select using (auth.uid() = user_id or auth.uid() = friend_id);
+drop policy if exists "friendships_insert" on public.friendships;
+create policy "friendships_insert" on public.friendships
+  for insert with check (auth.uid() = user_id);
+drop policy if exists "friendships_update" on public.friendships;
+create policy "friendships_update" on public.friendships
+  for update using (auth.uid() = user_id or auth.uid() = friend_id)
+  with check (auth.uid() = user_id or auth.uid() = friend_id);
+drop policy if exists "friendships_delete" on public.friendships;
+create policy "friendships_delete" on public.friendships
+  for delete using (auth.uid() = user_id or auth.uid() = friend_id);
+
+-- study_stats：本人可读写，好友可读
+drop policy if exists "stats_readable" on public.study_stats;
+create policy "stats_readable" on public.study_stats
+  for select using (auth.uid() = user_id or public.is_friend(user_id));
+drop policy if exists "stats_self_write" on public.study_stats;
+create policy "stats_self_write" on public.study_stats
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- weekly_focus_todos：本人可读写，好友可读
+drop policy if exists "weekly_todos_readable" on public.weekly_focus_todos;
+create policy "weekly_todos_readable" on public.weekly_focus_todos
+  for select using (auth.uid() = user_id or public.is_friend(user_id));
+drop policy if exists "weekly_todos_self_write" on public.weekly_focus_todos;
+create policy "weekly_todos_self_write" on public.weekly_focus_todos
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- activities：本人可写，本人与好友可读
+drop policy if exists "activities_readable" on public.activities;
+create policy "activities_readable" on public.activities
+  for select using (auth.uid() = user_id or public.is_friend(user_id));
+drop policy if exists "activities_self_write" on public.activities;
+create policy "activities_self_write" on public.activities
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- conversations：参与者可读可写
+drop policy if exists "conv_readable" on public.conversations;
+create policy "conv_readable" on public.conversations
+  for select using (auth.uid() = user_a or auth.uid() = user_b);
+drop policy if exists "conv_insert" on public.conversations;
+create policy "conv_insert" on public.conversations
+  for insert with check (auth.uid() = user_a or auth.uid() = user_b);
+drop policy if exists "conv_update" on public.conversations;
+create policy "conv_update" on public.conversations
+  for update using (auth.uid() = user_a or auth.uid() = user_b)
+  with check (auth.uid() = user_a or auth.uid() = user_b);
+
+-- messages：会话参与者可读，发送者本人可写
+drop policy if exists "messages_readable" on public.messages;
+create policy "messages_readable" on public.messages
+  for select using (
+    exists (
+      select 1 from public.conversations c
+      where c.id = conversation_id and (c.user_a = auth.uid() or c.user_b = auth.uid())
+    )
+  );
+drop policy if exists "messages_insert" on public.messages;
+create policy "messages_insert" on public.messages
+  for insert with check (
+    auth.uid() = sender_id
+    and exists (
+      select 1 from public.conversations c
+      where c.id = conversation_id and (c.user_a = auth.uid() or c.user_b = auth.uid())
+    )
+  );
+drop policy if exists "messages_update" on public.messages;
+create policy "messages_update" on public.messages
+  for update using (
+    exists (
+      select 1 from public.conversations c
+      where c.id = conversation_id and (c.user_a = auth.uid() or c.user_b = auth.uid())
+    )
+  );
+
+-- ═══════════════════════════════════════════════════════════════════
+-- 授权 Data API 角色（anon / authenticated / service_role）
+-- 若新建项目时关闭了 "Automatically expose new tables"，此段必不可少；
+-- 若保持开启，重复 GRANT 也幂等无害。数据访问仍由上方 RLS 策略精确控制。
+-- ═══════════════════════════════════════════════════════════════════
+grant usage on schema public to anon, authenticated, service_role;
+grant all on table public.profiles to anon, authenticated, service_role;
+grant all on table public.friend_groups to anon, authenticated, service_role;
+grant all on table public.friendships to anon, authenticated, service_role;
+grant all on table public.study_stats to anon, authenticated, service_role;
+grant all on table public.activities to anon, authenticated, service_role;
+grant all on table public.conversations to anon, authenticated, service_role;
+grant all on table public.messages to anon, authenticated, service_role;
+grant all on sequence public.messages_id_seq to anon, authenticated, service_role;
+grant all on table public.weekly_focus_todos to anon, authenticated, service_role;
+
+-- ═══════════════════════════════════════════════════════════════════
+-- 触发器：注册用户后自动创建 profile（用户名从 user_metadata 提取）
+-- ═══════════════════════════════════════════════════════════════════
+create or replace function public.handle_new_user()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.profiles (id, username, nickname)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'username', 'user_' || left(new.id::text, 8)),
+    coalesce(new.raw_user_meta_data->>'nickname', new.raw_user_meta_data->>'username', '')
+  )
+  on conflict (id) do nothing;
+  return new;
+end;
+$$;
+
+drop trigger if exists on_auth_user_created on auth.users;
+create trigger on_auth_user_created
+  after insert on auth.users
+  for each row execute function public.handle_new_user();
+
+-- ═══════════════════════════════════════════════════════════════════
+-- 启用 Realtime（供动态流与聊天实时推送）
+-- ═══════════════════════════════════════════════════════════════════
+do $$ begin alter publication supabase_realtime add table public.activities; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.messages; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.conversations; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.profiles; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.study_stats; exception when duplicate_object then null; end $$;
+do $$ begin alter publication supabase_realtime add table public.weekly_focus_todos; exception when duplicate_object then null; end $$;

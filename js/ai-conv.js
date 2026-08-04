@@ -59,6 +59,7 @@ function createNewConv() {
     messages: [],
     autoTitled: false
   };
+  if (typeof initTreeOnConv === 'function') initTreeOnConv(conv);
   aiConvs.push(conv);
   activeConvId = conv.id;
   localStorage.setItem('study_active_conv', activeConvId);
@@ -101,7 +102,8 @@ function deleteConv(id, e) {
   if (aiConvs.length <= 1) {
     // Don't delete the last one, just clear it
     const lastConv = aiConvs[0];
-    lastConv.messages = [];
+    if (typeof resetConvTree === 'function') resetConvTree(lastConv);
+    else lastConv.messages = [];
     lastConv.title = '默认对话';
     lastConv.systemPrompt = '';
     safeSaveAiConvs();
@@ -152,7 +154,8 @@ function clearConvMessages(e) {
     if (!confirmed) return;
     const conv = getActiveConv();
     if (!conv) return;
-    conv.messages = [];
+    if (typeof resetConvTree === 'function') resetConvTree(conv);
+    else conv.messages = [];
     safeSaveAiConvs();
     renderAiMessages();
   });
@@ -243,7 +246,8 @@ function exportConvLog() {
         log.push(`  ${m.reasoning}`);
       }
 
-      // If this user message has multiple candidates (DeepSeek-style), export them
+      // ── 分支导出：树模式下 user 节点可能有多个候选分支（兄弟节点）──
+      // 兼容旧 _candidates 数据（导出前已迁移，正常不会再出现）
       if (m._candidates && m._candidates.length > 0) {
         const activeIdx = m._activeCandidate || 0;
         log.push('');
@@ -263,6 +267,37 @@ function exportConvLog() {
             log.push(`   ${typeof cm.content === 'string' ? cm.content : safeJsonStringify(cm.content)}`);
           }
           log.push(`  ── 候选 #${ci + 1} 结束 ──`);
+        });
+      } else if (m.role === 'user' && conv.tree && m.id && conv.tree[m.id] && conv.tree[m.id].children && conv.tree[m.id].children.length > 1) {
+        const node = conv.tree[m.id];
+        const activeChildId = (conv.activePath || []).includes(node.children[0]) ? node.children[0] : (conv.activePath || []).find(id => node.children.includes(id));
+        const activeIdx = activeChildId ? node.children.indexOf(activeChildId) : 0;
+        log.push('');
+        log.push(`  🔀 分支回复（共 ${node.children.length} 个分支，当前显示第 ${activeIdx + 1} 个）`);
+        node.children.forEach((cid, ci) => {
+          const marker = ci === activeIdx ? ' → [当前]' : '';
+          const branchMsgs = [];
+          // 收集该分支的完整链（沿 children 向下直到无分支）
+          let cur = cid;
+          let guard = 0;
+          while (cur && conv.tree[cur] && guard++ < 100) {
+            branchMsgs.push(conv.tree[cur]);
+            const kids = conv.tree[cur].children || [];
+            if (kids.length === 0) break;
+            cur = kids[0];
+          }
+          log.push(`  ── 分支 #${ci + 1}${marker}（共 ${branchMsgs.length} 条消息）──`);
+          for (const bm of branchMsgs) {
+            const roleLabel = bm.role === 'user' ? '👤 用户' : bm.role === 'assistant' ? '🤖 AI' : '⚙️ 系统';
+            log.push(`   [${roleLabel}]${bm.time ? ' — ' + bm.time : ''}`);
+            if (bm.keyName) log.push(`   Key: ${bm.keyName}`);
+            if (bm.reasoning) {
+              log.push(`   🧠 深度思考：`);
+              log.push(`   ${bm.reasoning}`);
+            }
+            log.push(`   ${typeof bm.content === 'string' ? bm.content : safeJsonStringify(bm.content)}`);
+          }
+          log.push(`  ── 分支 #${ci + 1} 结束 ──`);
         });
       }
     });

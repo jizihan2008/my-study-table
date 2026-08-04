@@ -481,7 +481,7 @@ async function executeCallAiAndPush(params, conv) {
     const now = new Date();
     const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
 
-    conv.messages.push({
+    appendMessage(conv, {
       role: 'assistant',
       content: reply,
       time: timeStr,

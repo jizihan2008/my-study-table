@@ -35,6 +35,9 @@ function safeSaveAiConvs() {
           if (c.systemPrompt !== undefined) copy.systemPrompt = c.systemPrompt;
           if (c.autoTitled !== undefined) copy.autoTitled = c.autoTitled;
           if (c.createdAt !== undefined) copy.createdAt = c.createdAt;
+          // 树状对话字段
+          if (c.tree !== undefined) copy.tree = c.tree;
+          if (c.activePath !== undefined) copy.activePath = c.activePath;
           return copy;
         }
         return c;

@@ -74,6 +74,10 @@ function renderAiChat() {
             <i data-lucide="globe" class="lucide-icon" style="width:16px;height:16px;"></i>
             <span>智能搜索</span>
           </button>
+          <button type="button" class="ai-pill-toggle" id="aiToolbarTreeBtn" onclick="toggleAiTreePanel()" title="分支树导航（查看所有对话分支）">
+            <i data-lucide="git-branch" class="lucide-icon" style="width:16px;height:16px;"></i>
+            <span>分支树</span>
+          </button>
         </div>
         <select class="ai-toolbar-quick" id="aiToolbarQuick" onchange="onAiToolbarQuickChange()">
           <option value="">📋 快捷操作...</option>
@@ -112,6 +116,13 @@ function renderAiChat() {
   updateSidebarAiBadge();
   // Initialize toolbar state
   initAiToolbar();
+  // Restore tree float open state after DOM rebuild
+  if (_aiTreePanelOpen) {
+    const overlay = document.getElementById('aiTreeFloatOverlay');
+    if (overlay && overlay.style.display !== 'none') {
+      renderAiTreePanel();
+    }
+  }
   // Enable horizontal scroll on tabs via mouse wheel
   const tabsWrap = document.querySelector('.ai-conv-tabs-wrap');
   if (tabsWrap && !tabsWrap._wheelAttached) {
@@ -132,54 +143,50 @@ function renderAiMessages() {
   const conv = getActiveConv();
   if (!conv) return;
 
-  // Build a list of items to render. User messages with _candidates emit both the user msg
-  // and the full message chain of the active candidate (DeepSeek-style switching).
-  // Standalone assistant/system messages (legacy data) are still rendered.
-  // When a user msg has _candidates, skip ALL subsequent standalone messages
-  // (assistant + system) that belong to that same exchange — they are duplicates
-  // already rendered via the candidate chain. Stop skipping when we hit the next user msg.
+  // 树状对话：conv.messages 是活跃路径的扁平视图（由树引擎同步）。
+  // 直接遍历节点序列渲染，同时为每个消息记录其树节点 id（nodeId），
+  // 以便挂载分支切换/分叉按钮。迁移后的旧数据也已转换为树。
   const renderItems = [];
-  let skipUntilUser = false;
-  for (let idx = 0; idx < conv.messages.length; idx++) {
-    const m = conv.messages[idx];
-    if (m.role === 'user' && m._candidates && m._candidates.length > 0) {
-      skipUntilUser = true;
-      renderItems.push({ type: 'user', msg: m, idx });
-      const activeCand = getActiveCandidate(m);
-      if (activeCand && activeCand.messages) {
-        const chain = activeCand.messages;
-        for (let ci = 0; ci < chain.length; ci++) {
-          const isLast = ci === chain.length - 1;
-          renderItems.push({
-            type: 'candidate_msg',
-            msg: chain[ci],
-            userIdx: idx,
-            isLastInChain: isLast,
-            total: m._candidates.length,
-            active: m._activeCandidate || 0
-          });
-        }
-      } else if (activeCand && activeCand.content) {
-        // Legacy: single assistant message as candidate
-        renderItems.push({
-          type: 'candidate_msg',
-          msg: activeCand,
-          userIdx: idx,
-          isLastInChain: true,
-          total: m._candidates.length,
-          active: m._activeCandidate || 0
-        });
+  const pathNodes = isTreeConv(conv) ? activePathNodes(conv) : [];
+  // 无树结构兜底：直接用 messages（正常情况下不应发生）
+  const seq = pathNodes.length > 0 ? pathNodes : (conv.messages || []);
+  for (let idx = 0; idx < seq.length; idx++) {
+    const n = seq[idx];
+    if (!n || !n.role || n.role === 'root') continue;
+    const m = n; // 树节点即消息（含全部字段 + nodeId）
+    const nodeId = n.id;
+    if (m.role === 'user') {
+      // 用户消息处的分支 = 编辑产生的"不同问题"分支（同父下的 user 兄弟数，含自己）
+      // 渲染层用现有 siblingNodeIds 过滤 role 计算，不改底层逻辑
+      // curIndex：当前 user 在同父 user 兄弟中的序号（从 1 开始）
+      let userSib = 1, userCur = 1;
+      if (isTreeConv(conv)) {
+        const parentId = conv.tree[nodeId] ? conv.tree[nodeId].parentId : null;
+        const allSib = parentId && conv.tree[parentId] ? conv.tree[parentId].children : [];
+        const userSibs = allSib.filter(sid => conv.tree[sid] && conv.tree[sid].role === 'user');
+        userSib = userSibs.length || 1;
+        userCur = userSibs.indexOf(nodeId) >= 0 ? userSibs.indexOf(nodeId) + 1 : 1;
       }
-    } else if (m.role === 'user') {
-      skipUntilUser = false;
-      renderItems.push({ type: 'user', msg: m, idx });
-    } else if (skipUntilUser) {
-      // Skip all messages (assistant + system) that are duplicates of the candidate chain
-      continue;
+      renderItems.push({
+        type: 'user', msg: m, idx, nodeId,
+        branchCount: userSib,
+        branchCurIndex: userCur,
+        activeBranchChild: null
+      });
     } else if (m.role === 'assistant') {
-      renderItems.push({ type: 'assistant', msg: m, idx });
+      // AI 消息处的分支 = 同一问题重新生成的候选数（同父下的 assistant 兄弟数，含自己）
+      // curIndex：当前 assistant 在同父 assistant 兄弟中的序号（从 1 开始）
+      let sib = 1, asstCur = 1;
+      if (isTreeConv(conv)) {
+        const parentId = conv.tree[nodeId] ? conv.tree[nodeId].parentId : null;
+        const allSib = parentId && conv.tree[parentId] ? conv.tree[parentId].children : [];
+        const asstSibs = allSib.filter(sid => conv.tree[sid] && conv.tree[sid].role === 'assistant');
+        sib = asstSibs.length || 1;
+        asstCur = asstSibs.indexOf(nodeId) >= 0 ? asstSibs.indexOf(nodeId) + 1 : 1;
+      }
+      renderItems.push({ type: 'assistant', msg: m, idx, nodeId, branchCount: sib, branchCurIndex: asstCur });
     } else if (m.role === 'system') {
-      renderItems.push({ type: 'system', msg: m, idx });
+      renderItems.push({ type: 'system', msg: m, idx, nodeId });
     }
   }
 
@@ -216,7 +223,7 @@ function renderAiMessages() {
     }
 
     // For system messages with tool call info, render as friendly notification
-    if ((item.type === 'system' || item.type === 'candidate_msg') && m._toolInfo) {
+    if (m._toolInfo) {
       const friendlyLabels = {
         'list_todos': '📋 待办事项列表',
         'get_todo_detail': '📋 待办详情',
@@ -289,63 +296,81 @@ function renderAiMessages() {
 
     // If the assistant message only contained tool calls (no visible text),
     // show a friendly placeholder instead of an empty bubble.
-    const isAssistant = item.type === 'candidate_msg' ? m.role === 'assistant' : (item.type === 'candidate' || item.type === 'assistant');
-    let contentHtml = formatAiContent(cleanContent);
-    if (!contentHtml && isAssistant && hasToolCall) {
-      contentHtml = '<span class="ai-tool-placeholder">🔧 正在执行操作...</span>';
+    const isAssistant = item.type === 'assistant';
+    // 编辑模式：user 消息正在内联编辑时，气泡内容替换为 textarea + 操作按钮
+    const isEditingMsg = item.type === 'user' && _aiMsgEditingUserId === item.nodeId;
+    let contentHtml;
+    if (isEditingMsg) {
+      const rawText = typeof m.content === 'string' ? m.content : '';
+      contentHtml = `
+        <textarea id="aiMsgEditInput-${item.nodeId}" class="ai-msg-edit-input" rows="3" onkeydown="onAiMsgEditKeydown(event, ${item.nodeId})">${escapeHtml(rawText)}</textarea>
+        <div class="ai-msg-edit-actions">
+          <button class="ai-tree-edit-btn primary" onclick="event.stopPropagation(); confirmEditAiMsg(${item.nodeId})">发送</button>
+          <button class="ai-tree-edit-btn" onclick="event.stopPropagation(); cancelEditAiMsg()">取消</button>
+        </div>
+      `;
+    } else {
+      contentHtml = formatAiContent(cleanContent);
+      if (!contentHtml && isAssistant && hasToolCall) {
+        contentHtml = '<span class="ai-tool-placeholder">🔧 正在执行操作...</span>';
+      }
     }
 
     const timeLabel = m.time ? `<div class="ai-chat-time">${m.time}</div>` : '';
     const keyNameHtml = (isAssistant && m.keyName) ? `<div class="ai-chat-keyname">🔑 ${escapeHtml(m.keyName)}</div>` : '';
 
-    // Bottom controls for candidate (DeepSeek-style): pager + regen + adopt
-    // Attached to the last candidate_msg in the chain
+    // ── 树状对话底部控制 ──
     let bottomHtml = '';
-    if (item.type === 'candidate_msg' && item.isLastInChain) {
-      const userMsg = conv.messages[item.userIdx];
-      const isAdopted = userMsg && userMsg._adopted;
-      const canNav = item.total > 1 && !isAdopted;
-      const prevDisabled = !canNav ? 'disabled' : '';
-      const nextDisabled = !canNav ? 'disabled' : '';
-      const userIdx = item.userIdx;
-      const pagerHtml = canNav
-        ? `<button class="ai-msg-cand-nav" onclick="navigateCandidate(${userIdx}, -1)" title="上一条" ${prevDisabled}>
+    if (item.type === 'assistant') {
+      const loading = isAiLoading(conv.id);
+      const canNav = item.branchCount > 1 && !loading;
+      // 分支切换（多个候选回复 = 兄弟分支）
+      let pagerHtml = '';
+      if (canNav) {
+        pagerHtml = `
+          <button class="ai-msg-cand-nav" onclick="navigateCandidateBranch(${item.nodeId}, -1)" title="上一个候选">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg>
           </button>
-          <span class="ai-msg-cand-count">${item.active + 1} / ${item.total}</span>
-          <button class="ai-msg-cand-nav" onclick="navigateCandidate(${userIdx}, 1)" title="下一条" ${nextDisabled}>
+          <span class="ai-msg-cand-count">${item.branchCurIndex}/${item.branchCount}</span>
+          <button class="ai-msg-cand-nav" onclick="navigateCandidateBranch(${item.nodeId}, 1)" title="下一个候选">
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>`
-        : '';
-      const regenBtn = (!isAiLoading(conv.id) && !isAdopted) ? `<button class="ai-msg-regen" onclick="regenerateAiMessage(${userIdx})" title="换一条">
+          </button>`;
+      }
+      // 换一条 / 从这里分叉：在父 user 下新建分支
+      const regenBtn = !loading ? `<button class="ai-msg-regen" onclick="regenerateAiMessage(${item.nodeId})" title="换一条（在父节点下新建分支）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         换一条
       </button>` : '';
-      const adoptBtn = (item.total > 1 && !isAiLoading(conv.id) && !isAdopted) ? `<button class="ai-msg-adopt" onclick="adoptCandidate(${userIdx})" title="将这条作为下一条消息的上下文">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="20 6 9 17 4 12"/></svg>
-        采用本条
-      </button>` : '';
-      if (isAdopted) {
-        bottomHtml = item.total > 1
-          ? `<div class="ai-msg-controls" style="justify-content:flex-end;">
-              <button class="ai-msg-adopted-toggle" onclick="unadoptCandidate(${userIdx})">切换候选 (${item.active + 1}/${item.total})</button>
-             </div>`
-          : '';
-      } else {
-        bottomHtml = `<div class="ai-msg-controls">${pagerHtml}<div class="ai-msg-actions">${regenBtn}${adoptBtn}</div></div>`;
+      if (pagerHtml || regenBtn) {
+        bottomHtml = `<div class="ai-msg-controls"><div class="ai-msg-cand-pager">${pagerHtml}</div><div class="ai-msg-actions">${regenBtn}</div></div>`;
       }
-    } else if (item.type === 'assistant') {
-      // Legacy standalone assistant: keep simple regen
-      if (!isAiLoading(conv.id)) {
-        bottomHtml = `<button class="ai-msg-regen" onclick="regenerateAiMessage(${idx})" title="重新生成">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-          重新生成
+    } else if (item.type === 'user') {
+      // 用户消息下方操作栏：编辑按钮（始终显示）+ 分叉时显示候选分支切换
+      const loading = isAiLoading(conv.id);
+      let userControls = '';
+      if (!loading && item.nodeId) {
+        // 编辑按钮：点击进入内联编辑模式（在气泡内）
+        userControls += `<button class="ai-msg-edit-btn" onclick="startEditAiMsg(${item.nodeId})" title="编辑这条消息，编辑后发送将创建新分支">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
+          编辑
         </button>`;
+      }
+      if (item.branchCount > 1 && !loading) {
+        userControls += `<button class="ai-msg-cand-nav" onclick="switchUserVersion(${item.nodeId}, -1)" title="编辑产生的其他版本">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="15 18 9 12 15 6"/></svg>
+        </button>
+        <span class="ai-msg-branch-label">${item.branchCurIndex}/${item.branchCount}</span>
+        <button class="ai-msg-cand-nav" onclick="switchUserVersion(${item.nodeId}, 1)" title="编辑产生的其他版本">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="13" height="13"><polyline points="9 18 15 12 9 6"/></svg>
+        </button>`;
+      }
+      if (userControls) {
+        bottomHtml = `<div class="ai-msg-controls" style="justify-content:flex-start;">${userControls}</div>`;
       }
     }
 
-    const roleClass = isAssistant ? 'assistant' : (item.type === 'system' || (item.type === 'candidate_msg' && m._toolInfo) ? 'system' : 'user');
-    const avatar = isAssistant ? '🤖' : (item.type === 'system' || (item.type === 'candidate_msg' && m._toolInfo) ? '⚙️' : '👤');
+    const roleClass = isAssistant ? 'assistant' : (item.type === 'system' ? 'system' : 'user');
+    const avatar = isAssistant ? '🤖' : (item.type === 'system' ? '⚙️' : '👤');
     const kimiSearchBadge = (m._kimiSearchResult) ? '<div class="ai-kimi-search-badge">🔍 Kimi 联网搜索</div>' : '';
 
     return `
@@ -376,6 +401,372 @@ function renderAiMessages() {
   }
   container.scrollTop = container.scrollHeight;
 }
+
+// ═══════════ 树形导航浮窗（模仿复习浮窗，body 级可拖拽） ═══════════
+let _aiTreePanelOpen = false;
+// 编辑消息状态：记录正在内联编辑的 user 节点 id
+let _aiTreeEditingUserId = null;
+// 主消息流编辑状态：记录正在内联编辑的 user 节点 id
+let _aiMsgEditingUserId = null;
+
+// ── 主消息流：编辑用户消息（编辑后发送 = 创建编辑分支并重新生成）──
+function startEditAiMsg(nodeId) {
+  _aiMsgEditingUserId = nodeId;
+  renderAiMessages();
+}
+
+function cancelEditAiMsg() {
+  _aiMsgEditingUserId = null;
+  renderAiMessages();
+}
+
+async function confirmEditAiMsg(nodeId) {
+  const input = document.getElementById('aiMsgEditInput-' + nodeId);
+  if (!input) return;
+  const text = input.value;
+  _aiMsgEditingUserId = null;
+  renderAiMessages();
+  if (text && text.trim()) {
+    await sendEditedMessage(nodeId, text);
+  }
+}
+
+function onAiMsgEditKeydown(event, nodeId) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    confirmEditAiMsg(nodeId);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelEditAiMsg();
+  }
+}
+
+// 开始编辑某条 user 消息（在树浮窗中）
+function startEditAiTreeMsg(nodeId) {
+  _aiTreeEditingUserId = nodeId;
+  renderAiTreePanel();
+}
+
+// 取消编辑
+function cancelEditAiTreeMsg() {
+  _aiTreeEditingUserId = null;
+  renderAiTreePanel();
+}
+
+// 确认编辑：读取输入框内容 → 创建编辑分支并发送（类似重新生成）
+async function confirmEditAiTreeMsg(nodeId) {
+  const input = document.getElementById('aiTreeEditInput-' + nodeId);
+  if (!input) return;
+  const text = input.value;
+  _aiTreeEditingUserId = null;
+  renderAiTreePanel();
+  if (text && text.trim()) {
+    await sendEditedMessage(nodeId, text);
+  }
+}
+
+// 树浮窗内编辑输入框的键盘事件（Enter 发送，Esc 取消）
+function onAiTreeEditKeydown(event, nodeId) {
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault();
+    confirmEditAiTreeMsg(nodeId);
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    cancelEditAiTreeMsg();
+  }
+}
+
+function openAiTreeFloat() {
+  const overlay = document.getElementById('aiTreeFloatOverlay');
+  if (!overlay) return;
+  overlay.style.display = 'block';
+  renderAiTreePanel();
+  // 默认定位右下角
+  const f = document.getElementById('aiTreeFloat');
+  if (f) {
+    f.style.left = ''; f.style.top = '';
+    f.style.right = '24px'; f.style.bottom = '24px';
+    f.style.position = 'fixed';
+  }
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+
+function closeAiTreeFloat() {
+  const overlay = document.getElementById('aiTreeFloatOverlay');
+  if (overlay) overlay.style.display = 'none';
+  _aiTreePanelOpen = false;
+}
+
+function toggleAiTreePanel() {
+  const overlay = document.getElementById('aiTreeFloatOverlay');
+  if (!overlay) return;
+  if (overlay.style.display === 'none') {
+    _aiTreePanelOpen = true;
+    openAiTreeFloat();
+  } else {
+    _aiTreePanelOpen = false;
+    closeAiTreeFloat();
+  }
+}
+
+function renderAiTreePanel() {
+  const body = document.getElementById('aiTreeFloatBody');
+  if (!body) return;
+  const conv = getActiveConv();
+  if (!conv || !isTreeConv(conv)) {
+    body.innerHTML = '<div class="ai-tree-empty">当前对话没有可展示的树。</div>';
+    return;
+  }
+  const tree = conv.tree;
+  const activeSet = new Set(conv.activePath);
+  const root = tree['root'];
+
+  // ── 完整树路径渲染（交换组）──
+  // 数据模型仍为消息级节点（保证消息流/上下文兼容）。树导航按「交换」聚合展示：
+  //   - 一次「用户提问 + AI 回复（含工具链）」= 一个**交换组**：👤 行 + 🤖 行作为同一节点，
+  //     选中/取消联动（点击组内任意位置切换该分支）。
+  //   - user 下的每个 child = 一个候选回复分支，各形成一个交换组（父 user 在多个分支前重复出现）：
+  //       👤 b → 🤖 回复B → 👤 c → 🤖 回复C
+  //       与   👤 b → 🤖 回复B'  （并列，无"分支 N"文字）
+  //   - 分支内的嵌套交换递归展开（缩进表示层级）。
+
+  // 沿 first-child 链折叠工具链，返回该分支的交换终点信息：
+  // { replyNodeId, replyText, hasReply }
+  const foldBranch = (cid) => {
+    let lastReply = null;
+    let cur = cid;
+    let guard = 0;
+    while (cur && tree[cur] && guard++ < 300) {
+      const n = tree[cur];
+      if (n.role === 'user') break; // 嵌套交换起点，停止折叠
+      if (n.role === 'assistant' && n.content && String(n.content).trim()) {
+        lastReply = { nodeId: cur, content: n.content };
+      }
+      const kids2 = n.children || [];
+      if (kids2.length === 0) break;
+      cur = kids2[0];
+    }
+    const replyNodeId = lastReply ? lastReply.nodeId : cid;
+    const replyText = lastReply
+      ? summarizeNode({ content: lastReply.content })
+      : '(等待回复…)';
+    return { replyNodeId, replyText, hasReply: !!lastReply };
+  };
+
+  // 渲染一个 user 节点的 👤 行（支持编辑模式：编辑中显示输入框 + 发送/取消）
+  const renderUserLine = (userId, depth, groupActive) => {
+    const user = tree[userId];
+    const editing = _aiTreeEditingUserId === userId;
+    const label = editing
+      ? ''
+      : (groupActive ? '<span class="ai-tree-dot"></span>' : '');
+    // 编辑模式：输入框 + 操作按钮
+    if (editing) {
+      const rawText = typeof user.content === 'string' ? user.content : '';
+      return `
+        <div class="ai-tree-edit" style="padding-left:${depth * 16}px;">
+          <textarea id="aiTreeEditInput-${userId}" class="ai-tree-edit-input" rows="2" onkeydown="onAiTreeEditKeydown(event, ${userId})">${escapeHtml(rawText)}</textarea>
+          <div class="ai-tree-edit-actions">
+            <button class="ai-tree-edit-btn primary" onclick="event.stopPropagation(); confirmEditAiTreeMsg(${userId})">发送</button>
+            <button class="ai-tree-edit-btn" onclick="event.stopPropagation(); cancelEditAiTreeMsg()">取消</button>
+          </div>
+        </div>
+      `;
+    }
+    // 普通模式：👤 行 + 编辑按钮
+    return `
+      <div class="ai-tree-row" style="padding-left:${depth * 16}px;">
+        <div class="ai-tree-node exchange ${groupActive ? 'active' : ''}">
+          ${label}
+          <span class="ai-tree-q">👤 ${summarizeNode(user)}</span>
+          <button class="ai-tree-edit-ico" title="编辑这条消息" onclick="event.stopPropagation(); startEditAiTreeMsg(${userId})">
+            <i data-lucide="pencil" class="lucide-icon" style="width:12px;height:12px;"></i>
+          </button>
+        </div>
+      </div>
+    `;
+  };
+
+  // 渲染一个交换组（👤 行 + 🤖 行，整体选中联动），并递归其嵌套交换。
+  const renderExchangeGroup = (userId, depth) => {
+    const user = tree[userId];
+    if (!user) return '';
+    const kids = user.children || [];
+    // 无回复分支：只渲染 user 行（自身可切换）
+    if (kids.length === 0) {
+      const isActive = activeSet.has(userId);
+      return `
+        <div class="ai-tree-exchange-group" onclick="switchToTreeBranch(${userId})">
+          ${renderUserLine(userId, depth, isActive)}
+        </div>
+      `;
+    }
+    let html = '';
+    for (let bi = 0; bi < kids.length; bi++) {
+      const cid = kids[bi];
+      const childNode = tree[cid];
+      if (!childNode) continue;
+      const { replyNodeId, replyText, hasReply } = foldBranch(cid);
+      // 交换组 active：以该分支的回复链终点是否在活跃路径为准（选中/取消联动）。
+      // 注意不能用 activeSet.has(userId)——同一 user 的多个候选分支会共享该 user 节点，
+      // 若用 user 判断会导致所有分支组同时高亮。
+      const groupActive = activeSet.has(replyNodeId);
+      const clickId = replyNodeId || userId;
+      html += `
+        <div class="ai-tree-exchange-group ${groupActive ? 'active' : ''}" onclick="switchToTreeBranch(${clickId})">
+          ${renderUserLine(userId, depth, groupActive)}
+          <div class="ai-tree-reply ${groupActive ? 'active' : ''}">
+            🤖 ${hasReply ? replyText : '(等待回复…)'}
+          </div>
+        </div>
+      `;
+      // 该分支内嵌套的 user 交换：下钻到回复终点（最后一个非 user 节点），
+      // 对其所有 role==='user' 的 children 分别递归渲染交换组。
+      // （编辑消息场景下，一个 assistant 回复节点下可并列多个 user 分支：b 与 b'）
+      let endNodeId = cid;
+      let cur2 = cid;
+      let guard2 = 0;
+      while (cur2 && tree[cur2] && guard2++ < 300) {
+        const n2 = tree[cur2];
+        if (n2.role === 'user') break;
+        endNodeId = cur2;
+        const kids2 = n2.children || [];
+        if (kids2.length === 0) break;
+        cur2 = kids2[0];
+      }
+      const endNode = tree[endNodeId];
+      if (endNode && endNode.children) {
+        for (const kid of endNode.children) {
+          const k = tree[kid];
+          if (k && k.role === 'user') {
+            html += renderExchangeGroup(k.id, depth + 1);
+          }
+        }
+      }
+    }
+    return html;
+  };
+
+  // 从 root 开始：渲染第一层所有 user 交换
+  const firstUsers = collectNestedUserIds(conv, root.id)
+    .filter(uid => !tree[uid].parentId || tree[uid].parentId === 'root' || tree[tree[uid].parentId].role === 'root');
+  // 兜底：若第一层无 user（异常数据），用全部顶层 user
+  let html = '';
+  for (const nu of firstUsers.length > 0 ? firstUsers : collectNestedUserIds(conv, root.id)) {
+    html += renderExchangeGroup(nu, 0);
+  }
+  body.innerHTML = html || '<div class="ai-tree-empty">当前对话没有可展示的树。</div>';
+  if (typeof lucide !== 'undefined') {
+    try { lucide.createIcons(); } catch (_) {}
+  }
+}
+
+// 节点摘要：取内容前 28 字符（user 用原文，assistant 去掉隐藏标签）
+function summarizeNode(node) {
+  if (!node || typeof node.content !== 'string') return '(空)';
+  let text = node.content
+    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+    .replace(/<call_ai>[\s\S]*?<\/call_ai>/g, '')
+    .replace(/<memory>[\s\S]*?<\/memory>/g, '')
+    .trim();
+  if (!text) return '(工具调用)';
+  return escapeHtml(text.length > 28 ? text.slice(0, 28) + '…' : text);
+}
+
+// 点击树节点 → 切换到该分支
+function switchToTreeBranch(nodeId) {
+  const conv = getActiveConv();
+  if (!conv) return;
+  if (switchBranch(conv, nodeId)) {
+    safeSaveAiConvs();
+    renderAiMessages();
+    renderAiTreePanel();
+  }
+}
+
+// 用户消息处：切换"编辑产生的版本"（user 兄弟）。
+// 切到目标 user 后，若其有回复链（children），继续下钻到回复链终点，
+// 避免切换后该 user 下方的 assistant 消息消失（activePath 只到 user 节点）。
+function switchUserVersion(userNodeId, delta) {
+  const conv = getActiveConv();
+  if (!conv || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
+  // 同父下的 user 兄弟（编辑产生的其他版本）
+  const siblings = siblingNodeIds(conv, userNodeId)
+    .filter(sid => conv.tree[sid] && conv.tree[sid].role === 'user');
+  if (siblings.length === 0) return;
+  const n = siblings.length + 1; // 含自己
+  const curIdx = siblings.indexOf(userNodeId);
+  const newIdx = (curIdx + delta + n) % n;
+  const targetId = newIdx === curIdx ? userNodeId : siblings[newIdx];
+  // 下钻到回复链终点：若目标 user 有 assistant 回复（children），沿 first-child 走到末尾
+  let target = targetId;
+  const tNode = conv.tree[targetId];
+  if (tNode && tNode.children && tNode.children.length > 0) {
+    let cur = tNode.children[0];
+    let guard = 0;
+    while (cur && conv.tree[cur] && guard++ < 300) {
+      const cn = conv.tree[cur];
+      if (cn.role === 'user') break; // 嵌套交换起点，停在回复链终点
+      const kids = cn.children || [];
+      if (kids.length === 0) break;
+      cur = kids[0];
+    }
+    target = cur;
+  }
+  if (switchBranch(conv, target)) {
+    safeSaveAiConvs();
+    renderAiMessages();
+  }
+}
+
+// ═══════════ 树形导航浮窗拖拽（仿复习浮窗） ═══════════
+(function() {
+  let dragState = null;
+  let dragOccurred = false;
+
+  function initDrag(e) {
+    const float = document.getElementById('aiTreeFloat');
+    const header = document.getElementById('aiTreeFloatHeader');
+    if (!float || !header) return;
+    if (!header.contains(e.target)) return;
+    dragOccurred = false;
+    const rect = float.getBoundingClientRect();
+    dragState = {
+      el: float,
+      startX: e.clientX,
+      startY: e.clientY,
+      origLeft: rect.left,
+      origTop: rect.top
+    };
+    document.addEventListener('mousemove', onDragMove);
+    document.addEventListener('mouseup', onDragEnd);
+    e.preventDefault();
+  }
+
+  function onDragMove(e) {
+    if (!dragState) return;
+    const dx = e.clientX - dragState.startX;
+    const dy = e.clientY - dragState.startY;
+    if (Math.abs(dx) > 2 || Math.abs(dy) > 2) dragOccurred = true;
+    if (!dragOccurred) return;
+    dragState.el.style.position = 'fixed';
+    dragState.el.style.left = (dragState.origLeft + dx) + 'px';
+    dragState.el.style.top = (dragState.origTop + dy) + 'px';
+    dragState.el.style.margin = '0';
+  }
+
+  function onDragEnd() {
+    document.removeEventListener('mousemove', onDragMove);
+    document.removeEventListener('mouseup', onDragEnd);
+    dragState = null;
+  }
+
+  document.addEventListener('mousedown', function(e) {
+    const overlay = document.getElementById('aiTreeFloatOverlay');
+    if (!overlay || overlay.style.display === 'none') return;
+    initDrag(e);
+  });
+})();
 
 function toggleReasoning(toggleEl) {
   const contentEl = toggleEl.nextElementSibling;

@@ -1,3 +1,6 @@
 node_modules/
 dist/
 out/
+publish_log*.txt
+.cg-verify-*
+.codebuddy/plans/
