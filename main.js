@@ -612,6 +612,12 @@ ipcMain.handle('ext:list', async () => {
       dir,
       manifest,
       hasMain,
+      hasManifest: !!manifest,
+      type: (manifest && manifest.type) || 'plugin',
+      builtin: false,
+      name: (manifest && manifest.name) || entry.name,
+      version: (manifest && manifest.version) || '1.0.0',
+      author: (manifest && manifest.author) || '',
       size,
       mtime,
       error
@@ -620,9 +626,9 @@ ipcMain.handle('ext:list', async () => {
 });
 
 // IPC: 读取扩展内文件（白名单：仅扩展目录内部）
-ipcMain.handle('ext:read', async (event, { id, file }) => {
+ipcMain.handle('ext:read', async (event, { id, file, filename }) => {
   const dir = extDir(id);
-  const target = path.resolve(dir, String(file || 'main.js'));
+  const target = path.resolve(dir, String((file || filename) || 'main.js'));
   if (!isPathInside(dir, target)) throw new Error('非法路径');
   return fs.readFileSync(target, 'utf-8');
 });
@@ -1228,7 +1234,7 @@ ipcMain.handle('codebuddy:install', async (event, { useMirror } = {}) => {
 // IPC: 运行 CodeBuddy CLI agent 任务（核心）
 // 参数：{ prompt, userPath?, apiKey?, useMirror? }
 // cwd 强制为 extensionsDir；add-dir 为源码只读目录（开发=项目根，打包=source-snapshot）
-ipcMain.handle('codebuddy:run', async (event, { prompt, userPath, apiKey } = {}) => {
+ipcMain.handle('codebuddy:run', async (event, { prompt, userPath, apiKey, mode } = {}) => {
   const cleanPrompt = String(prompt || '').trim();
   if (!cleanPrompt) return { ok: false, reason: 'prompt 为空' };
 
@@ -1245,10 +1251,18 @@ ipcMain.handle('codebuddy:run', async (event, { prompt, userPath, apiKey } = {})
     sourceDir = exportSourceSnapshot();
   }
 
-  // 3. 组装 spawn 参数（全部数组元素传入，防 shell 注入）
-  const args = ['-p', cleanPrompt, '--output-format', 'stream-json', '--add-dir', sourceDir, '--allowedTools', 'Read Edit Write', '--dangerously-skip-permissions'];
+  // 3. 按模式决定 allowedTools
+  //    craft: Read Edit Write（可读写）
+  //    plan/ask/clarify: 只读 Read（禁写入，澄清轮必须只读）
+  const effectiveMode = mode || 'craft';
+  const allowedTools = (effectiveMode === 'plan' || effectiveMode === 'ask' || effectiveMode === 'clarify')
+    ? 'Read'
+    : 'Read Edit Write';
 
-  // 4. 环境变量（API Key 授权时注入）
+  // 4. 组装 spawn 参数（全部数组元素传入，防 shell 注入）
+  const args = ['-p', cleanPrompt, '--output-format', 'stream-json', '--add-dir', sourceDir, '--allowedTools', allowedTools, '--dangerously-skip-permissions'];
+
+  // 5. 环境变量（API Key 授权时注入）
   const env = Object.assign({}, process.env);
   if (apiKey) {
     env.CODEBUDDY_API_KEY = String(apiKey);

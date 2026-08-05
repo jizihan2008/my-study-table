@@ -82,10 +82,35 @@ function showCustomConfirm(message, options = {}) {
       dontAskEl.checked = false;
     }
 
+    // Optional: hide warning icon and/or action buttons (for custom modal content)
+    // 感叹号默认隐藏（用户不喜欢警告图标），除非显式 showIcon: true
+    const iconEl = document.getElementById('confirmIcon');
+    if (iconEl) iconEl.style.display = options.showIcon ? '' : 'none';
+    if (cancelBtn && okBtn && cancelBtn.parentElement) {
+      cancelBtn.parentElement.style.display = options.hideActions ? 'none' : '';
+    }
+
     overlay.classList.add('open');
+
+    // JS 兜底：限制弹窗不超过窗口高度，超高时弹窗整体滚动（不影响内容贴合高度）
+    requestAnimationFrame(() => {
+      const dialog = overlay.querySelector('.confirm-dialog');
+      if (!dialog) return;
+      const availH = window.innerHeight - 40;
+      if (dialog.offsetHeight > availH) {
+        dialog.style.maxHeight = availH + 'px';
+        dialog.style.overflowY = 'auto';
+      }
+    });
 
     function cleanup(result) {
       overlay.classList.remove('open');
+      // 恢复内联高度，避免影响下次弹窗
+      const dialog = overlay.querySelector('.confirm-dialog');
+      if (dialog) {
+        dialog.style.maxHeight = '';
+        dialog.style.overflowY = '';
+      }
       cancelBtn.removeEventListener('click', onCancel);
       okBtn.removeEventListener('click', onOk);
       overlay.removeEventListener('click', onOverlayClick);
@@ -104,7 +129,8 @@ function showCustomConfirm(message, options = {}) {
     }
     function onKeyDown(e) {
       if (e.key === 'Escape') cleanup(false);
-      if (e.key === 'Enter') cleanup(true);
+      // 隐藏按钮的自定义弹窗有自己的提交逻辑，Enter 不自动关闭
+      if (e.key === 'Enter' && !options.hideActions) cleanup(true);
     }
 
     cancelBtn.addEventListener('click', onCancel);

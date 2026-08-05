@@ -146,10 +146,10 @@ $$;
 -- RLS 策略
 -- ═══════════════════════════════════════════════════════════════════
 
--- profiles：所有登录用户可读，本人可更新
+-- profiles：所有人可读（匿名也能看昵称/用户名，供插件市场展示作者），本人可更新
 drop policy if exists "profiles_readable" on public.profiles;
 create policy "profiles_readable" on public.profiles
-  for select using (auth.uid() is not null);
+  for select using (true);
 drop policy if exists "profiles_self_update" on public.profiles;
 create policy "profiles_self_update" on public.profiles
   for update using (auth.uid() = id);
@@ -292,3 +292,145 @@ do $$ begin alter publication supabase_realtime add table public.conversations; 
 do $$ begin alter publication supabase_realtime add table public.profiles; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.study_stats; exception when duplicate_object then null; end $$;
 do $$ begin alter publication supabase_realtime add table public.weekly_focus_todos; exception when duplicate_object then null; end $$;
+
+-- ═══════════════════════════════════════════════════════════════════
+-- 插件市场（v0.2.3）
+-- ═══════════════════════════════════════════════════════════════════
+
+-- 插件商店条目表
+create table if not exists public.plugin_store_items (
+  id         uuid primary key default gen_random_uuid(),
+  author_id  uuid references public.profiles(id) on delete set null,
+  author_name text not null default '',
+  ext_id     text not null,                          -- 插件 id（manifest.id）
+  name       text not null,
+  type       text not null check (type in ('plugin','patch')),
+  version    text not null default '1.0.0',
+  description text not null default '',
+  tags       text[] default '{}',                   -- 标签：["todo","notes","timer"]
+  downloads  integer not null default 0,
+  rating     real default 0,                        -- 平均评分 0~5
+  status     text not null default 'pending' check (status in ('pending','approved','rejected')),
+  file_path  text not null,                         -- Storage 路径
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+-- 索引
+create index if not exists idx_plugin_store_status  on public.plugin_store_items (status);
+create index if not exists idx_plugin_store_tags    on public.plugin_store_items using gin (tags);
+create index if not exists idx_plugin_store_download on public.plugin_store_items (downloads desc);
+
+-- 下载历史（记录谁下载了什么）
+create table if not exists public.plugin_downloads (
+  id         uuid primary key default gen_random_uuid(),
+  plugin_id  uuid references public.plugin_store_items(id) on delete cascade,
+  user_id    uuid references public.profiles(id) on delete set null,
+  created_at timestamptz not null default now()
+);
+create index if not exists idx_plugin_downloads_plugin on public.plugin_downloads (plugin_id);
+
+-- 下载量自增 RPC（security definer 绕过 RLS，因下载者非作者无法直接 UPDATE）
+create or replace function public.increment_downloads(target_plugin_id uuid)
+returns void
+language sql
+security definer
+set search_path = public
+as $$
+  update public.plugin_store_items
+     set downloads = downloads + 1
+   where id = target_plugin_id;
+$$;
+
+-- 评分
+create table if not exists public.plugin_ratings (
+  id         uuid primary key default gen_random_uuid(),
+  plugin_id  uuid references public.plugin_store_items(id) on delete cascade,
+  user_id    uuid references public.profiles(id) on delete cascade,
+  rating     integer not null check (rating >= 1 and rating <= 5),
+  created_at timestamptz not null default now(),
+  unique(plugin_id, user_id)
+);
+
+-- RLS
+alter table public.plugin_store_items enable row level security;
+alter table public.plugin_downloads    enable row level security;
+alter table public.plugin_ratings      enable row level security;
+
+-- 插件条目：所有人可读（仅 approved），作者可写自己的
+drop policy if exists "Anyone can read approved plugins" on public.plugin_store_items;
+create policy "Anyone can read approved plugins" on public.plugin_store_items
+  for select using (status = 'approved');
+
+drop policy if exists "Author can manage own plugins" on public.plugin_store_items;
+create policy "Author can manage own plugins" on public.plugin_store_items
+  for all using (author_id = auth.uid()) with check (author_id = auth.uid());
+
+-- 下载记录：本人可读/写
+drop policy if exists "Users can read own downloads" on public.plugin_downloads;
+create policy "Users can read own downloads" on public.plugin_downloads
+  for select using (user_id = auth.uid());
+
+drop policy if exists "Users can insert downloads" on public.plugin_downloads;
+create policy "Users can insert downloads" on public.plugin_downloads
+  for insert with check (user_id = auth.uid());
+
+-- 评分：所有人可读，本人可写
+drop policy if exists "Anyone can read ratings" on public.plugin_ratings;
+create policy "Anyone can read ratings" on public.plugin_ratings
+  for select using (true);
+
+drop policy if exists "Users can manage own ratings" on public.plugin_ratings;
+create policy "Users can manage own ratings" on public.plugin_ratings
+  for all using (user_id = auth.uid()) with check (user_id = auth.uid());
+
+-- 权限：授权 anon/authenticated 访问这三张表（PostgREST 不会自动识别新表）
+grant all on public.plugin_store_items to anon, authenticated;
+grant all on public.plugin_downloads  to anon, authenticated;
+grant all on public.plugin_ratings    to anon, authenticated;
+
+-- Storage 存储桶：插件市场文件
+insert into storage.buckets (id, name, public)
+values ('plugin-store', 'plugin-store', true)
+on conflict (id) do nothing;
+
+-- Storage RLS：插件上传/更新/删除 + 读取
+-- 注意：上传用 upsert:true，文件已存在时会走 UPDATE，必须有 for all（覆盖 UPDATE）而非仅 for insert
+drop policy if exists "Authenticated users can manage plugin files" on storage.objects;
+create policy "Authenticated users can manage plugin files" on storage.objects
+  for all
+  using (bucket_id = 'plugin-store' and auth.role() = 'authenticated')
+  with check (bucket_id = 'plugin-store' and auth.role() = 'authenticated');
+
+drop policy if exists "Anyone can read plugin files" on storage.objects;
+create policy "Anyone can read plugin files" on storage.objects
+  for select using (bucket_id = 'plugin-store');
+
+-- 更新插件平均评分的触发器
+create or replace function public.update_plugin_avg_rating()
+returns trigger language plpgsql security definer as $$
+begin
+  update public.plugin_store_items
+  set rating = (select coalesce(avg(rating), 0) from public.plugin_ratings where plugin_id = coalesce(new.plugin_id, old.plugin_id)),
+      updated_at = now()
+  where id = coalesce(new.plugin_id, old.plugin_id);
+  return null;
+end $$;
+
+drop trigger if exists trg_plugin_rating_update on public.plugin_ratings;
+create trigger trg_plugin_rating_update
+  after insert or update or delete on public.plugin_ratings
+  for each row execute function public.update_plugin_avg_rating();
+
+-- ═══════════════════════════════════════════════════════════════════
+-- Storage 配置说明（需在 Supabase 控制台手动操作）
+-- ═══════════════════════════════════════════════════════════════════
+-- 1. 创建 bucket：名称 plugin-store，勾选 Public bucket
+-- 2. Storage RLS Policy → plugin-store bucket：
+--    SELECT (读取)：bucket_id = 'plugin-store' → 允许所有人（public）
+--    INSERT (上传)：bucket_id = 'plugin-store' → 仅认证用户（auth.role() = 'authenticated'）
+-- 3. 插件文件存储格式：
+--    - 路径：<plugin_id>/<version>/<ext_id>.zip
+--    - zip 内容：manifest.json + main.js
+--    示例：550e8400-e29b-41d4-a716-446655440000/1.0.0/my-plugin.zip
+

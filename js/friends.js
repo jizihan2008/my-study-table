@@ -6,12 +6,31 @@
 //           动态流 / 好友页整体渲染；聊天功能在 friends-chat.js 中。
 // ═══════════════════════════════════════════════════════════════════
 
-// ═══════════════ 配置管理 ═══════════════
-const FRIENDS_CFG_KEY = 'study_friends_config';
+// ═══════════════ 配置管理（与插件市场共用 Supabase 连接） ═══════════════
+const FRIENDS_CFG_KEY = 'study_supabase_config';
+const OLD_FRIENDS_CFG_KEY = 'study_friends_config';
 
 function getFriendsConfig() {
-  try { return JSON.parse(localStorage.getItem(FRIENDS_CFG_KEY)) || {}; }
-  catch (e) { return {}; }
+  try {
+    let raw = localStorage.getItem(FRIENDS_CFG_KEY);
+    if (raw) return JSON.parse(raw);
+    // 从旧键迁移
+    raw = localStorage.getItem(OLD_FRIENDS_CFG_KEY);
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      if (cfg.url && cfg.anonKey) {
+        localStorage.setItem(FRIENDS_CFG_KEY, raw);
+      }
+      return cfg;
+    }
+    // 再尝试插件市场的旧键
+    raw = localStorage.getItem('study_plugin_store_config');
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      if (cfg.url && cfg.anonKey) return cfg;
+    }
+    return {};
+  } catch (e) { return {}; }
 }
 function saveFriendsConfig(cfg) {
   localStorage.setItem(FRIENDS_CFG_KEY, JSON.stringify(cfg));
@@ -934,8 +953,8 @@ function renderFriendsLogin() {
   <div class="fr-auth-wrap">
     <div class="fr-auth-card">
       <div class="fr-auth-tabs">
-        <button class="fr-auth-tab active" id="frAuthTabLogin" onclick="frSwitchAuthTab('login')">登录</button>
-        <button class="fr-auth-tab" id="frAuthTabRegister" onclick="frSwitchAuthTab('register')">注册</button>
+        <button class="fr-auth-tab active" id="frAuthTabLogin" onclick="frSwitchAuthTab('login')">登录账号</button>
+        <button class="fr-auth-tab" id="frAuthTabRegister" onclick="frSwitchAuthTab('register')">注册新账号</button>
       </div>
       <div id="frAuthBody">
         ${frLoginForm()}
@@ -955,7 +974,7 @@ function frLoginForm() {
   return `
   <div class="fr-auth-form">
     <i data-lucide="log-in" class="lucide-icon fr-auth-icon"></i>
-    <h3>登录好友系统</h3>
+    <h3>登录账号</h3>
     <label class="fr-auth-label">邮箱</label>
     <input type="email" class="fr-auth-input" id="frLoginEmail" placeholder="you@example.com" onkeydown="if(event.key==='Enter')frDoLogin()">
     <label class="fr-auth-label">密码</label>

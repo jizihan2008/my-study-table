@@ -1,6 +1,8 @@
 // ═══════════ Changelog Modal ═══════════
 function initChangelog() {
   const fullChangelog = [
+    { id: 21, time: '2026-08-05T12:00', content: '<b>v0.2.4</b> — AI 问答体验修复：<br><br>💬 <b>Ask（问答）模式体验修复</b> — 之前 ask/plan 模式完成后会误显示「扩展文件已写入」，现改为正确的只读提示：<br>&emsp;• Ask 模式 → 「回答完成，仅读取源码参考，未修改任何文件」<br>&emsp;• Plan 模式 → 「方案已生成」，方案卡片不再误标为「安全插件」、不再显示「已写入扩展目录」<br>💾 <b>模式选择持久化</b> — 选中的 AI 编程模式（Craft/Plan/Ask）会记住，重启应用后保持上次选择' },
+    { id: 20, time: '2026-08-05T01:00', content: '<b>v0.2.3</b> — AI 编程三模式 + 插件市场：<br><br>🧭 <b>AI 编程三模式</b> — AI 编程输入区新增模式选择器（类比 CodeBuddy）：<br>&emsp;• <b>Craft（开发）</b> — 全功能模式，可读写扩展目录，直接生成代码<br>&emsp;• <b>Plan（规划）</b> — 只读模式，AI 分析需求并给出详细实现方案和架构设计，不写文件<br>&emsp;• <b>Ask（问答）</b> — 只读模式，回答应用架构、API、扩展开发相关问题<br>&emsp;• 消息流中 plan/ask 模式用户消息带有模式标记<br>🛒 <b>插件市场</b> — 全新「插件市场」页面，基于 Supabase 的免费社区市场：<br>&emsp;• <b>浏览下载</b> — 浏览已上架扩展，支持名称/标签搜索，一键下载安装到本地<br>&emsp;• <b>上传发布</b> — 将本地扩展发布到市场，经审核后供其他用户下载<br>&emsp;• <b>评分系统</b> — 对已安装的扩展打分（1~5 星）<br>&emsp;• <b>ZIP 导入</b> — 支持从本地 ZIP 文件直接安装扩展<br>&emsp;• <b>配置</b> — 设置 → 插件市场：与好友系统共用 Supabase 项目，填入 URL + anon key 即可<br>⚠️ 使用前提：需在 Supabase 控制台执行 <code>supabase/schema.sql</code> 新增的插件市场建表语句，并创建 <code>plugin-store</code> Storage bucket' },
     { id: 19, time: '2026-08-05T10:00', content: '<b>v0.3.0</b> — 好友系统（Supabase 云端）：<br><br>👥 <b>真实联网好友</b> — 全新「好友」页面，基于 Supabase 云端服务，实现跨设备真实好友：<br>&emsp;• <b>账号系统</b> — 邮箱注册 / 登录 / 退出，会话持久化，自动恢复登录<br>&emsp;• <b>好友管理</b> — 按用户名 / 昵称搜索添加、好友请求收发（接受 / 拒绝 / 撤回）、删除好友、好友列表<br>&emsp;• <b>好友分组</b> — 创建 / 重命名 / 删除分组，好友自由归类（彩色标签）<br>&emsp;• <b>好友资料卡</b> — 头像、昵称、简介、在线状态、最近学习统计（7 日打卡 / 专注 / 完成数）<br>&emsp;• <b>学习动态流</b> — 好友的打卡、专注突破、任务完成、连续天数等动态实时推送<br>&emsp;• <b>实时聊天</b> — 与好友实时收发消息、未读红点、最近消息预览<br>🔒 <b>隐私安全</b> — 只同步聚合统计（打卡 / 专注时长 / 完成数量），绝不上传具体待办与笔记内容；所有云表启用行级安全（RLS），仅本人与好友可见<br>⚙️ <b>配置</b> — 设置 → 好友：填入 Supabase 项目 URL 与 anon key 即可启用；建表脚本见 <code>supabase/schema.sql</code>' },
     { id: 18, time: '2026-08-05T01:00', content: '<b>v0.2.1</b> — 扩展管理体验升级：<br><br>🗑️ <b>扩展软件内回收站</b> — 卸载扩展不再直接删除，而是移入软件自带的回收站（回收站页面新增「扩展」分类），可随时恢复 / 彻底删除；清空回收站会一并清空扩展回收站<br>📥 <b>导入扩展</b> — 扩展页新增「导入扩展」按钮（选择文件夹）与全页拖拽导入：把扩展文件夹拖到扩展管理页任意位置即可导入，多文件夹批量支持<br>🔃 <b>刷新修复</b> — 「刷新」现在会强制重扫磁盘，删除 / 拖入扩展目录后点刷新即可立即反映到列表；扩展页列表支持上下滚动<br>🧹 <b>回收站目录不误扫</b> — 修复扩展列表把回收站 trash 文件夹误认成扩展的问题' },
     { id: 17, time: '2026-08-04T22:30', content: '<b>v0.2.0</b> — 扩展生态里程碑 + AI 编程体验全面升级：<br><br>🤖 <b>AI 编程助手升级为 CodeBuddy CLI Agent 模式</b> — 不再直调模型返回代码，而是通过本机 CodeBuddy CLI 运行完整 Agent，自主读取源码、编写扩展文件、多步推理全栈式开发；一键安装 / 权限边界（扩展目录可写、源码只读）/ 自动备份随时回滚<br>💬 <b>多项目标签页 + 消息流</b> — AI 编程页重构为「多项目标签页 + 线性消息流」布局，每个标签页是一个独立开发项目；运行中可切换标签页等待，日志后台持续累积<br>🖥️ <b>Agent 动态流式展示</b> — 日志改为「一次回复 = 一个大气泡」逐条流式插入：AI 文本 Markdown 渲染、工具调用中文名 + 参数撑满可点击展开、CLI 初始化大 JSON 自动折叠；完成后主页面显示最后回复全文 + 插件详情卡片 + 自动折叠对话日志<br>🧩 <b>扩展系统</b> — plugin（安全插件，受限 extAPI 白名单）/ patch（源码补丁，PatchEngine 运行时覆盖）两类扩展，内置快捷访问 / 音乐播放器 / 学习统计三个官方插件；扩展管理独立页面<br>📋 <b>扩展列表卡片</b> — 名称 / 类型 / 版本 / 大小 / 启用开关，支持查看代码 / 回滚 / 卸载 / 打开目录 / 刷新' },
@@ -485,8 +487,11 @@ function switchSettingsTab(tab) {
   _settingsTab = tab;
   document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
-  document.getElementById('settingsTab' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
-  document.getElementById('settingsPanel' + tab.charAt(0).toUpperCase() + tab.slice(1)).classList.add('active');
+  const tabEl = document.getElementById('settingsTab' + tab.charAt(0).toUpperCase() + tab.slice(1));
+  const panelEl = document.getElementById('settingsPanel' + tab.charAt(0).toUpperCase() + tab.slice(1));
+  if (!tabEl || !panelEl) return;
+  tabEl.classList.add('active');
+  panelEl.classList.add('active');
   // Clear status messages
   const statusEl = document.getElementById('settingsStatus');
   if (statusEl) { statusEl.className = 'settings-status'; statusEl.textContent = ''; }
@@ -499,6 +504,10 @@ function switchSettingsTab(tab) {
   // Render CodeBuddy CLI config panel
   if (tab === 'api' && typeof renderCodebuddyCliConfig === 'function') {
     renderCodebuddyCliConfig();
+  }
+  // Load Supabase connection settings
+  if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
+    loadSupabaseSettings();
   }
 }
 
@@ -561,12 +570,24 @@ async function renderExtensionsPanel() {
   }
 
   const typeLabels = { plugin: '插件', patch: '补丁' };
+  // 查询已发布到市场的扩展 id 集合
+  let uploadedIds = new Set();
+  try {
+    if (typeof window.Store !== 'undefined' && window.Store.fetchUploadedExtIds) {
+      uploadedIds = await window.Store.fetchUploadedExtIds();
+    }
+  } catch (e) { /* 忽略 */ }
   listEl.innerHTML = exts.map(ext => {
     const m = ext.manifest || { name: ext.id, type: 'plugin', version: '?', description: '', enabled: true };
     const enabled = m.enabled !== false;
     const sizeStr = ext.size > 1024 * 1024 ? (ext.size / 1024 / 1024).toFixed(1) + 'MB' : Math.round(ext.size / 1024) + 'KB';
     const builtinBadge = ext.builtin ? '<span class="ext-badge ext-badge-builtin">内置</span>' : '';
+    const published = !ext.builtin && uploadedIds.has(ext.id);
+    const publishBadge = ext.builtin ? '' : (published
+      ? '<span class="ext-badge ext-badge-published" title="已发布到插件市场"><i data-lucide="check" class="lucide-icon" style="width:11px;height:11px;vertical-align:-1px;"></i> 已发布</span>'
+      : '<span class="ext-badge ext-badge-unpublished" title="尚未发布到插件市场">未发布</span>');
     const rollbackBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="rollbackExt('${ext.id}')"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:13px;height:13px;"></i> 回滚</button>`;
+    const publishBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="window.Store && window.Store.doUpload('${ext.id}')"><i data-lucide="upload" class="lucide-icon" style="width:13px;height:13px;"></i> 发布</button>`;
     const removeLabel = ext.builtin ? '移除' : '卸载';
     return `<div class="ext-card">
       <div class="ext-card-header">
@@ -574,6 +595,7 @@ async function renderExtensionsPanel() {
           <span class="ext-card-name"><i data-lucide="${m.type === 'patch' ? 'wrench' : 'puzzle'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> ${escapeHtml(m.name || ext.id)}</span>
           <span class="ext-badge ext-badge-${m.type}">${typeLabels[m.type] || m.type}</span>
           ${builtinBadge}
+          ${publishBadge}
           <span class="ext-card-meta">v${escapeHtml(m.version || '?')} · ${sizeStr}</span>
         </div>
         <label class="toggle-switch ext-toggle">
@@ -584,6 +606,7 @@ async function renderExtensionsPanel() {
       <div class="ext-card-desc">${escapeHtml(m.description || '（无描述）')}</div>
       <div class="ext-card-actions">
         <button class="ext-action-btn" onclick="viewExtCode('${ext.id}')"><i data-lucide="file-code" class="lucide-icon" style="width:13px;height:13px;"></i> 查看代码</button>
+        ${publishBtn}
         ${rollbackBtn}
         <button class="ext-action-btn ext-action-danger" onclick="removeExt('${ext.id}')"><i data-lucide="trash-2" class="lucide-icon" style="width:13px;height:13px;"></i> ${removeLabel}</button>
       </div>
@@ -3913,8 +3936,8 @@ openSettingsModal = function() {
     if (typeof renderMemoryPanel === 'function' && _settingsTab === 'memory') {
       renderMemoryPanel();
     }
-    if (_settingsTab === 'friends' && typeof loadFriendsSettings === 'function') {
-      loadFriendsSettings();
+    if (_settingsTab === 'supabase' && typeof loadSupabaseSettings === 'function') {
+      loadSupabaseSettings();
     }
   }, 150);
 };
@@ -3932,27 +3955,27 @@ switchSettingsTab = function(tab) {
   if (tab === 'api' && typeof renderCodebuddyCliConfig === 'function') {
     renderCodebuddyCliConfig();
   }
-  if (tab === 'friends' && typeof loadFriendsSettings === 'function') {
-    loadFriendsSettings();
+  if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
+    loadSupabaseSettings();
   }
 };
 
-// ═══════════ 好友系统配置（Supabase） ═══════════
-function loadFriendsSettings() {
-  const urlEl = document.getElementById('friendsSupabaseUrl');
-  const keyEl = document.getElementById('friendsAnonKey');
+// ═══════════ Supabase 连接配置（好友 & 插件市场共享） ═══════════
+function loadSupabaseSettings() {
+  const urlEl = document.getElementById('supabaseUrl');
+  const keyEl = document.getElementById('supabaseAnonKey');
   if (!urlEl || !keyEl) return;
   const cfg = getFriendsConfig();
   urlEl.value = cfg.url || '';
   keyEl.value = cfg.anonKey || '';
 }
 
-// 校验 Supabase 配置并给出反馈
-async function saveFriendsSettings(reconnect) {
-  const urlEl = document.getElementById('friendsSupabaseUrl');
-  const keyEl = document.getElementById('friendsAnonKey');
-  const btn = document.getElementById('friendsSaveBtn');
-  const st = document.getElementById('friendsSettingsStatus');
+// 保存 Supabase 配置并测试连接
+async function saveSupabaseSettings(reconnect) {
+  const urlEl = document.getElementById('supabaseUrl');
+  const keyEl = document.getElementById('supabaseAnonKey');
+  const btn = document.getElementById('supabaseSaveBtn');
+  const st = document.getElementById('supabaseStatus');
   if (!urlEl || !keyEl) return;
   const url = urlEl.value.trim();
   const anonKey = keyEl.value.trim();
@@ -3978,9 +4001,13 @@ async function saveFriendsSettings(reconnect) {
   showStatus('info', '正在保存配置并测试连接…');
 
   saveFriendsConfig({ url, anonKey });
+  // 重置两端客户端
   if (typeof resetSupabaseClient === 'function') resetSupabaseClient();
+  if (typeof window.Store !== 'undefined' && window.Store.saveStoreConfig) {
+    window.Store.saveStoreConfig({ url, anonKey });
+  }
 
-  // 测试连接：探测 profiles 表是否可访问（可区分网络问题/未建表/无权限）
+  // 测试连接：探测 profiles 表是否可访问
   let test = { ok: false, error: '未知错误' };
   try {
     const client = getSupabaseClient();

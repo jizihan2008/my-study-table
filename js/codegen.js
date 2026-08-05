@@ -120,11 +120,15 @@ window.Codegen = (function () {
   }
 
   // ── 构建 Agent Prompt ──
-  async function buildAgentPrompt(userReq) {
+  async function buildAgentPrompt(userReq, mode, project) {
     const ctx = await buildContext(userReq);
+    const effectiveMode = mode || 'craft';
+    const historyText = buildProjectHistory(project);
     const lines = [
       '你是 My Study Table（一款 Electron 学习桌面应用）的扩展开发 Agent。',
-      '你的任务：根据用户需求，在扩展目录（当前工作目录）内创建或修改一个扩展。',
+      '',
+      '## 任务模式：' + _modeLabel(effectiveMode),
+      _modeSystemInstruction(effectiveMode),
       '',
       '## 扩展目录结构（当前工作目录即扩展根目录）',
       '每个扩展是一个子目录 <id>/，包含两个文件：',
@@ -143,7 +147,7 @@ window.Codegen = (function () {
       '   卸载时自动恢复原函数。',
       '',
       '## 权限约束（必须严格遵守）',
-      '- 只允许在扩展根目录内创建/修改子目录、manifest.json、main.js 文件。',
+      _modePermissionConstraint(effectiveMode),
       '- 应用核心源码（js/ css/ index.html）只读，禁止修改任何核心文件。',
       '- 若目标扩展已存在，先读取其 manifest.json 与 main.js 了解现状再修改。',
       '- 避免使用 Bash 等系统命令，只做文件读写。',
@@ -156,51 +160,216 @@ window.Codegen = (function () {
       '### 关键源码片段',
       ctx.snippetText || '（无）',
       '',
-      '## 输出约定',
-      '直接写入扩展文件（创建目录 + manifest.json + main.js）。',
-      '全部完成后，在回复的最后一行输出一个 JSON 对象（不要有其他文字）：',
-      '{"type":"plugin或patch","id":"扩展id","name":"扩展名称","description":"一句话说明","summary":"对修改和功能的详细说明，面向用户"}',
-      '',
+      _modeOutputConvention(effectiveMode),
+      // 方案 C 分层注入：整个项目标签页的会话历史（近期完整 + 早期决策节点）
+      ...(historyText ? ['', '## 项目对话历史（本项目此前所有轮次的对话记录）', historyText] : []),
       '## 用户需求',
       userReq
     ];
     return lines.join('\n');
   }
 
+  // ═══════════ 项目会话分层注入（方案 C）═══════════
+  // 近期消息完整重放 + 早期仅保留 clarify 问答 / plan 方案等决策节点，
+  // 平衡上下文完整性与 prompt 长度。clarify 轮的问题与用户回答、
+  // plan 轮的方案、craft 轮的完成摘要都会作为决策节点注入。
+  const CG_HISTORY_RECENT_PAIRS = 6; // 近期完整重放的问答对数
+
+  function buildProjectHistory(project) {
+    if (!project || !Array.isArray(project.messages) || !project.messages.length) return '';
+    const msgs = project.messages;
+    // 最近 N 对 user+assistant 完整重放（成对计，×2 覆盖 user+assistant 两条）
+    const recentStart = Math.max(0, msgs.length - CG_HISTORY_RECENT_PAIRS * 2);
+    const out = [];
+    let pendingUser = null;
+    msgs.forEach((m, i) => {
+      if (m.role === 'user') { pendingUser = { msg: m, idx: i }; return; }
+      if (m.role !== 'assistant' || !pendingUser) return;
+      const pair = { user: pendingUser.msg, asst: m, isRecent: i >= recentStart };
+      pendingUser = null;
+      const block = buildHistoryPair(pair);
+      if (block) out.push(block);
+    });
+    return out.join('\n');
+  }
+
+  // 单个问答对的注入块：近期完整重放；早期仅保留决策节点
+  function buildHistoryPair(pair) {
+    const { user, asst, isRecent } = pair;
+    const userText = String(user.content || '').trim();
+    if (!userText) return '';
+    const decision = historyDecisionNode(asst);
+    if (!isRecent && !decision) return '';
+    const modeMark = user.mode && user.mode !== 'craft'
+      ? '（' + (cgModeBadgeLabel(user.mode) || user.mode) + '）'
+      : '';
+    const aiLine = decision || (function () {
+      const last = getLastAgentText(asst);
+      return last ? 'AI：' + last : '';
+    })();
+    if (!aiLine) return '';
+    return '用户' + modeMark + '：' + userText + '\n' + aiLine;
+  }
+
+  // 提取消息中的决策节点文本（clarify 问答 / plan 方案 / 完成摘要），无则返回空
+  function historyDecisionNode(asst) {
+    if (asst && asst.clarify && Array.isArray(asst.clarify.questions) && asst.clarify.questions.length) {
+      const qs = asst.clarify.questions
+        .map(q => (typeof q === 'string' ? q : (q && q.q || '')))
+        .filter(Boolean).join(' / ');
+      let text = 'AI 澄清提问：' + qs;
+      if (asst.clarify.answer) text += '\n用户回答：' + asst.clarify.answer;
+      return text;
+    }
+    if (asst && asst.summary) {
+      const s = asst.summary;
+      if (s.type === 'plan') return 'AI 方案：' + (s.name || s.id) + ' — ' + (s.description || '');
+      if (s.type === 'plugin' || s.type === 'patch') return 'AI 已完成开发（' + s.type + '）：' + (s.name || s.id) + ' — ' + (s.description || '');
+    }
+    return '';
+  }
+
+  function _modeLabel(mode) {
+    if (mode === 'plan') return '规划（Plan）';
+    if (mode === 'ask')  return '问答（Ask）';
+    if (mode === 'clarify') return '澄清（Clarify）';
+    return '开发（Craft）';
+  }
+
+  function _modeSystemInstruction(mode) {
+    if (mode === 'plan') {
+      return [
+        '你只做分析和规划，**不创建或修改任何文件**。请：',
+        '1. 深入分析需求，理解用户想要什么',
+        '2. 阅读相关源码，给出详细的实现方案：架构设计、文件结构、核心代码思路',
+        '3. 列出实现步骤、注意事项和建议',
+        '**所有文件操作（Edit/Write）都被禁用，你只能读取代码进行参考。**'
+      ].join('\n');
+    }
+    if (mode === 'ask') {
+      return [
+        '你是 My Study Table 的专家顾问，**不创建或修改任何文件**。请：',
+        '1. 回答用户关于应用架构、API、扩展机制的问题',
+        '2. 解释代码逻辑，提供开发建议',
+        '3. 阅读源码作为参考，给出详尽的解答',
+        '**所有文件操作（Edit/Write）都被禁用，你只能读取代码进行参考。**'
+      ].join('\n');
+    }
+    if (mode === 'clarify') {
+      return [
+        '你是需求澄清专家，**不创建或修改任何文件**。你的唯一任务是：在动手前主动向用户提问，澄清需求。',
+        '请严格遵守以下行为准则：',
+        '1. **信息不足就必须提问**：只要需求存在模糊点、歧义或缺失信息，就必须先提问澄清，禁止猜测、禁止假设、禁止直接给方案',
+        '2. **优先提问**：宁可多问，不可不问。即使你觉得能猜，只要有任何不确定性就提问',
+        '3. 一次提出 2~5 个最关键的澄清问题，覆盖：功能范围、交互细节、数据来源、边界情况、与现有功能的集成方式',
+        '4. 提问要具体、可回答，尽量给出候选选项帮助用户快速选择',
+        '5. 只有当你对需求完全有把握（几乎没有模糊点）时，才可以直接说明你的理解而不提问',
+        '**所有文件操作（Edit/Write）都被禁用，你只能读取代码进行参考。**'
+      ].join('\n');
+    }
+    // craft
+    return '你的任务：根据用户需求，在扩展目录（当前工作目录）内创建或修改一个扩展。';
+  }
+
+  function _modePermissionConstraint(mode) {
+    if (mode === 'plan' || mode === 'ask' || mode === 'clarify') {
+      return '- **本模式禁止创建/修改任何文件**（工具已禁用），只可以读取源码参考。';
+    }
+    return '- 只允许在扩展根目录内创建/修改子目录、manifest.json、main.js 文件。';
+  }
+
+  function _modeOutputConvention(mode) {
+    if (mode === 'plan') {
+      return [
+        '## 输出约定',
+        '只需输出方案说明，**不要写文件**。',
+        '在回复的最后一行输出一个 JSON 对象（不要有其他文字）：',
+        '{"type":"plan","id":"计划id","name":"方案名称","description":"一句话说明","summary":"详细的实现方案说明"}'
+      ].join('\n');
+    }
+    if (mode === 'ask') {
+      return [
+        '## 输出约定',
+        '直接回答问题或解释代码，**不要写文件**。无需输出 JSON。'
+      ].join('\n');
+    }
+    if (mode === 'clarify') {
+      return [
+        '## 输出约定',
+        '只输出澄清问题，**不要写文件、不要给出实现方案**。',
+        '在回复的最后一行输出一个 JSON 对象（不要有其他文字）：',
+        '{"type":"clarify","questions":[{"q":"问题1","options":["候选答案1","候选答案2"]},{"q":"问题2","options":[]}]}',
+        '要求：',
+        '- questions 是数组，每个元素必须有 q（问题文本），最多 5 个、最少 2 个',
+        '- options 为可选候选答案数组，没有候选答案时为空数组 []',
+        '- 问题要具体且基于用户需求，禁止问与需求无关的泛泛问题'
+      ].join('\n');
+    }
+    // craft
+    return [
+      '## 输出约定',
+      '直接写入扩展文件（创建目录 + manifest.json + main.js）。',
+      '全部完成后，在回复的最后一行输出一个 JSON 对象（不要有其他文字）：',
+      '{"type":"plugin或patch","id":"扩展id","name":"扩展名称","description":"一句话说明","summary":"对修改和功能的详细说明，面向用户"}'
+    ].join('\n');
+  }
+
   // ── 运行 Agent（核心）──
-  async function runAgent(userReq) {
+  // project 可选：当前项目标签页对象，用于分层注入整项目会话历史
+  async function runAgent(userReq, mode, project) {
     const cli = await locateCli();
     if (!cli.found) {
       throw new Error('未检测到 CodeBuddy CLI，请先安装（设置 → AI 设置 → 一键安装，或 npm install -g @tencent-ai/codebuddy-code）');
     }
 
-    // 1. 预备份所有现有扩展（agent 可能修改任一扩展）
-    try {
-      const exts = await window.electronAPI.extList();
-      for (const ext of exts) {
-        if (ext.hasMain) await window.electronAPI.extBackup({ id: ext.id });
-      }
-    } catch (e) { console.warn('[codegen] 预备份失败', e); }
+    const effectiveMode = mode || 'craft';
+    const proj = project || getActiveCgProject();
+
+    // 1. 预备份所有现有扩展（agent 可能修改任一扩展）——plan/ask/clarify 模式无需备份
+    if (effectiveMode === 'craft') {
+      try {
+        const exts = await window.electronAPI.extList();
+        for (const ext of exts) {
+          if (ext.hasMain) await window.electronAPI.extBackup({ id: ext.id });
+        }
+      } catch (e) { console.warn('[codegen] 预备份失败', e); }
+    }
 
     // 2. 构建 prompt 并运行
-    const prompt = await buildAgentPrompt(userReq);
+    const prompt = await buildAgentPrompt(userReq, effectiveMode, proj);
     const result = await window.electronAPI.codebuddyRun({
       prompt,
       userPath: getCliPath(),
-      apiKey: getCodebuddyApiKey()
+      apiKey: getCodebuddyApiKey(),
+      mode: effectiveMode
     });
 
     // 3. 解析 agent 输出：明确失败检测优先，其次提取摘要
     //    （CLI 退出码可能为 0，但 agent 内部 result 事件带 is_error 时仍算失败）
     const hardError = extractAgentError(result.stdout);
     const ok = !!result.ok && !hardError;
+
+    // clarify 模式：优先提取澄清问题（{type:'clarify', questions}），不作为正式摘要
+    if (ok && effectiveMode === 'clarify') {
+      let clarify = null;
+      try { clarify = extractClarify(result.stdout); } catch (e) { console.warn('[codegen] 解析澄清失败', e); }
+      return {
+        ok,
+        exitCode: result.exitCode,
+        summary: null,
+        clarify,
+        stdout: result.stdout || '',
+        stderr: hardError || result.stderr || ''
+      };
+    }
+
     let summary = null;
     if (ok) {
       try { summary = parseAgentSummary(result.stdout); } catch (e) { console.warn('[codegen] 解析摘要失败', e); }
     }
 
-    // 4. 重新装载扩展（仅在确实成功时）
-    if (ok && typeof window.ExtManager !== 'undefined') {
+    // 4. 重新装载扩展（仅在 craft 模式且确实成功时）
+    if (ok && effectiveMode === 'craft' && typeof window.ExtManager !== 'undefined') {
       try { await window.ExtManager.loadAll(); await window.ExtManager.init(); } catch (e) { console.error('[codegen] 装载失败', e); }
     }
     if (typeof renderSidebarNav === 'function') renderSidebarNav();
@@ -246,10 +415,67 @@ window.Codegen = (function () {
     try { return JSON.parse(s); } catch (e) { return null; }
   }
 
+  // 从 agent 输出中提取澄清问题 JSON（{type:'clarify', questions:[...]}）。
+  // 与 parseAgentSummary 同源两种形态：独立 JSON 行 / 嵌套在 assistant text 里。
+  function extractClarify(stdout) {
+    const text = String(stdout || '');
+    const lines = text.split('\n').map(l => l.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i];
+      const m = line.match(/\{[\s\S]*\}/);
+      const candidate = m ? m[0] : line;
+      const obj = tryParseJson(candidate);
+      if (obj && typeof obj === 'object' && obj.type === 'clarify' && Array.isArray(obj.questions)) {
+        const qs = normalizeClarifyQuestions(obj.questions);
+        if (qs.length) return { questions: qs };
+      }
+      // 形态 2：嵌套在 assistant 事件的 text 字段里
+      if (obj && obj.type === 'assistant' && obj.message && Array.isArray(obj.message.content)) {
+        const nested = findClarifyInTexts(obj.message.content);
+        if (nested) return nested;
+      }
+    }
+    return null;
+  }
+
+  // 规范化澄清问题：兼容字符串与 {q, options} 两种形态，过滤空问题，上限 5 个
+  function normalizeClarifyQuestions(questions) {
+    const qs = [];
+    for (const raw of questions) {
+      const q = typeof raw === 'string' ? String(raw).trim() : (raw && typeof raw === 'object' ? String(raw.q || '').trim() : '');
+      if (!q) continue;
+      const options = (raw && typeof raw === 'object' && Array.isArray(raw.options))
+        ? raw.options.map(o => String(o)).filter(Boolean).slice(0, 6)
+        : [];
+      qs.push({ q, options });
+      if (qs.length >= 5) break;
+    }
+    return qs;
+  }
+
+  // 在 assistant 事件的 content 数组的 text 段中查找澄清 JSON
+  function findClarifyInTexts(content) {
+    for (let i = content.length - 1; i >= 0; i--) {
+      const c = content[i];
+      if (!c || typeof c.text !== 'string') continue;
+      const lines = c.text.split('\n').map(l => l.trim()).filter(Boolean);
+      for (let j = lines.length - 1; j >= 0; j--) {
+        const m = lines[j].match(/\{[\s\S]*\}/);
+        const candidate = m ? m[0] : lines[j];
+        const obj = tryParseJson(candidate);
+        if (obj && typeof obj === 'object' && obj.type === 'clarify' && Array.isArray(obj.questions)) {
+          const qs = normalizeClarifyQuestions(obj.questions);
+          if (qs.length) return { questions: qs };
+        }
+      }
+    }
+    return null;
+  }
+
   // 判断是否为约定的插件/补丁摘要
   function isSummaryObj(obj) {
     return !!(obj && typeof obj === 'object' &&
-      (obj.type === 'plugin' || obj.type === 'patch') && obj.id && obj.name);
+      (obj.type === 'plugin' || obj.type === 'patch' || obj.type === 'plan') && obj.id && obj.name);
   }
 
   // 在 assistant 事件的 content 数组的 text 段中查找摘要 JSON
@@ -342,6 +568,13 @@ window.Codegen = (function () {
   let cgActiveId = null;
   let cgRenamingId = null;   // 正在内联重命名的项目 id
   let _generating = false;   // 是否有 Agent 在运行
+  // AI 编程模式：craft=写代码，plan=出方案，ask=问答，clarify=需求澄清（localStorage 持久化）
+  let cgMode = (function() {
+    try {
+      const saved = localStorage.getItem('study_cg_mode');
+      return (saved === 'plan' || saved === 'ask' || saved === 'clarify' || saved === 'craft') ? saved : 'craft';
+    } catch (e) { return 'craft'; }
+  })();
 
   function genCgId() {
     return 'cg' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -512,8 +745,9 @@ window.Codegen = (function () {
 
   const CG_GUIDE_ITEMS = [
     { icon: 'bot', color: '#8b5cf6', title: 'CodeBuddy Agent', desc: '调用本机 CodeBuddy CLI，agent 会自主读文件、写代码、建扩展，全栈式完成你的需求。' },
+    { icon: 'message-circle-question', color: '#10b981', title: 'Clarify 澄清', desc: '需求不明确时先用 Clarify 模式，AI 会主动提问，回答后自动带上下文进入方案与开发。' },
     { icon: 'wrench', color: '#d97706', title: '修改现有功能', desc: '可生成「源码补丁」覆盖任意全局函数，或直接修改已有扩展，卸载时自动恢复原状。' },
-    { icon: 'shield-check', color: '#10b981', title: '安全可回滚', desc: '运行前自动备份全部扩展，完成后随时可在「扩展」页面中禁用、卸载或一键回滚。' }
+    { icon: 'shield-check', color: '#0284c7', title: '安全可回滚', desc: '运行前自动备份全部扩展，完成后随时可在「扩展」页面中禁用、卸载或一键回滚。' }
   ];
 
   // 项目标签
@@ -559,13 +793,25 @@ window.Codegen = (function () {
     return project.messages.map(m => renderCgMsg(m)).join('');
   }
 
+  // 用户消息上的模式徽标文案
+  function cgModeBadgeLabel(mode) {
+    if (mode === 'plan') return '方案';
+    if (mode === 'ask') return '问答';
+    if (mode === 'clarify') return '澄清';
+    return '';
+  }
+
   function renderCgMsg(m) {
     const timeHtml = m.time ? `<div class="cg-msg-time">${m.time}</div>` : '';
     if (m.role === 'user') {
+      const modeBadge = m.mode && m.mode !== 'craft'
+        ? `<span class="cg-mode-badge cg-mode-badge-${m.mode}">${cgModeBadgeLabel(m.mode)}</span>`
+        : '';
       return `
       <div class="cg-msg user">
         <div class="cg-msg-avatar"><i data-lucide="user" class="lucide-icon" style="width:15px;height:15px;"></i></div>
         <div class="cg-msg-body">
+          ${modeBadge}
           <div class="cg-msg-bubble cg-user-bubble">${escapeHtml(m.content)}</div>
           ${timeHtml}
         </div>
@@ -594,6 +840,15 @@ window.Codegen = (function () {
         </div>`;
     }
 
+    // 澄清提问卡：AI 主动反问，等待用户逐条回答
+    if (m.clarify && !m.clarify.answered) {
+      return renderCgClarifyCard(m);
+    }
+    // 澄清已回答：展示答案摘要 + 继续入口
+    if (m.clarify && m.clarify.answered) {
+      return renderCgClarifyAnswered(m);
+    }
+
     if (m.install) {
       return `
         <div class="cg-result">
@@ -609,16 +864,28 @@ window.Codegen = (function () {
 
     if (m.ok) {
       const finalReply = renderCgFinalReply(m);
-      const card = m.summary
+      const isAsk = m.mode === 'ask';
+      const isPlan = m.mode === 'plan';
+      const isClarify = m.mode === 'clarify';
+      // plan 模式有 JSON 方案摘要 → 渲染方案卡；ask/clarify 只读 → 只显示回复，无文件写入
+      const card = m.summary && m.summary.type === 'plan'
         ? renderCgResultCard(m)
-        : `
-        <div class="cg-result">
-          <div class="cg-result-desc">Agent 执行完成。扩展文件已写入，扩展列表已刷新，可到「扩展」页面查看与管理。</div>
-          <div class="cg-result-actions">
-            <button class="cg-apply-btn" onclick="openExtensionsSettings()"><i data-lucide="puzzle" class="lucide-icon" style="width:14px;height:14px;"></i> 打开扩展管理</button>
-            <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续生成</button>
-          </div>
-        </div>`;
+        : (isAsk || isPlan || isClarify
+          ? `
+          <div class="cg-result">
+            <div class="cg-result-desc"><i data-lucide="check-circle-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:-2px;"></i> ${isClarify ? 'AI 未提出澄清问题，可以直接开始规划或开发' : (isPlan ? '方案已生成' : '回答完成')}。本次为${isClarify ? '澄清' : (isPlan ? '规划' : '问答')}模式，仅读取源码参考，未修改任何文件。</div>
+            <div class="cg-result-actions">
+              <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续${isClarify ? '澄清' : (isPlan ? '规划' : '提问')}</button>
+            </div>
+          </div>`
+          : `
+          <div class="cg-result">
+            <div class="cg-result-desc">Agent 执行完成。扩展文件已写入，扩展列表已刷新，可到「扩展」页面查看与管理。</div>
+            <div class="cg-result-actions">
+              <button class="cg-apply-btn" onclick="openExtensionsSettings()"><i data-lucide="puzzle" class="lucide-icon" style="width:14px;height:14px;"></i> 打开扩展管理</button>
+              <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续生成</button>
+            </div>
+          </div>`);
       return finalReply + card + renderCgLogToggleStream(m);
     }
     // 失败
@@ -642,8 +909,82 @@ window.Codegen = (function () {
     return '';
   }
 
+  // ── 澄清提问卡：列出 AI 提出的问题，等待用户逐条回答 ──
+  function renderCgClarifyCard(m) {
+    const questions = (m.clarify && m.clarify.questions) || [];
+    return `
+      <div class="cg-result cg-result-clarify">
+        <div class="cg-result-header">
+          <div class="cg-result-title-wrap">
+            <span class="cg-result-title"><i data-lucide="message-circle-question" class="lucide-icon" style="width:16px;height:16px;"></i> 需求澄清</span>
+            <span class="cg-mode-badge cg-mode-badge-clarify">Clarify</span>
+          </div>
+        </div>
+        <div class="cg-result-desc">在继续之前，我需要确认以下问题（请逐条填写，留空表示由 AI 决定）：</div>
+        <div class="cg-clarify-list">
+          ${questions.map((q, i) => `
+            <div class="cg-clarify-item">
+              <div class="cg-clarify-q"><span class="cg-clarify-num">${i + 1}</span>${escapeHtml(q.q)}</div>
+              ${(q.options && q.options.length) ? `
+                <div class="cg-clarify-options">
+                  ${q.options.map((o, j) => `
+                    <button class="cg-clarify-opt" data-uid="${m._uid}" data-idx="${i}" data-val="${escapeHtml(o).replace(/"/g, '&quot;')}" onclick="cgFillClarify(this)">${escapeHtml(o)}</button>`).join('')}
+                </div>` : ''}
+              <textarea class="cg-clarify-input" id="cgClarifyInput-${m._uid}-${i}" rows="2" placeholder="输入你的回答…（留空则由 AI 决定）"></textarea>
+            </div>`).join('')}
+        </div>
+        <div class="cg-result-actions">
+          <button class="cg-apply-btn" onclick="cgAnswerClarify('${m._uid}')"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;"></i> 提交回答</button>
+        </div>
+      </div>
+      ${renderCgLogToggleStream(m)}`;
+  }
+
+  // ── 澄清已回答：展示答案摘要 + 「继续规划 / 直接开发」入口 ──
+  function renderCgClarifyAnswered(m) {
+    const answer = (m.clarify && m.clarify.answer) || '';
+    return `
+      <div class="cg-result cg-result-clarify-done">
+        <div class="cg-result-header">
+          <div class="cg-result-title-wrap">
+            <span class="cg-result-title"><i data-lucide="check-circle-2" class="lucide-icon" style="width:16px;height:16px;"></i> 澄清回答已记录</span>
+            <span class="cg-mode-badge cg-mode-badge-clarify">Clarify</span>
+          </div>
+        </div>
+        <div class="cg-clarify-answer">
+          <div class="cg-col-title"><i data-lucide="info" class="lucide-icon" style="width:13px;height:13px;"></i> 你的回答（已注入项目会话，后续方案与开发会基于它）</div>
+          <pre class="cg-clarify-answer-text">${escapeHtml(answer)}</pre>
+        </div>
+        <div class="cg-result-actions">
+          <button class="cg-apply-btn" onclick="cgProceedAfterClarify('${m._uid}', 'plan')"><i data-lucide="map" class="lucide-icon" style="width:14px;height:14px;"></i> 生成实现方案</button>
+          <button class="cg-ghost-btn" onclick="cgProceedAfterClarify('${m._uid}', 'craft')"><i data-lucide="wand-2" class="lucide-icon" style="width:14px;height:14px;"></i> 直接开发</button>
+        </div>
+      </div>
+      ${renderCgLogToggleStream(m)}`;
+  }
+
   function renderCgResultCard(m) {
     const s = m.summary;
+    // plan 模式：方案卡（不写文件）
+    if (s.type === 'plan') {
+      return `
+      <div class="cg-result">
+        <div class="cg-result-header">
+          <div class="cg-result-title-wrap">
+            <span class="cg-result-title"><i data-lucide="map" class="lucide-icon" style="width:16px;height:16px;"></i> ${escapeHtml(s.name || s.id)}</span>
+            <span class="cg-mode-badge cg-mode-badge-plan">实现方案</span>
+          </div>
+        </div>
+        <div class="cg-result-desc">${escapeHtml(s.description || '')}</div>
+        <div class="cg-result-col cg-result-col-summary">
+          <div class="cg-col-title"><i data-lucide="info" class="lucide-icon" style="width:13px;height:13px;"></i> 方案说明</div>
+          <div class="cg-summary-md">${renderMarkdownSafe(s.summary || '（无说明）')}</div>
+        </div>
+        <div class="cg-result-actions">
+          <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续规划</button>
+        </div>
+      </div>`;
+    }
     const typeLabel = s.type === 'patch' ? '源码补丁' : '安全插件';
     return `
       <div class="cg-result">
@@ -1061,6 +1402,41 @@ window.Codegen = (function () {
     }
   }
 
+  // ── AI 编程模式选择器 ──
+  function cgSetMode(mode) {
+    if (!['craft', 'plan', 'ask', 'clarify'].includes(mode)) mode = 'craft';
+    cgMode = mode;
+    try { localStorage.setItem('study_cg_mode', mode); } catch (e) { /* 忽略 */ }
+    // 更新按钮状态
+    const sel = document.getElementById('codegenModeSelector');
+    if (sel) {
+      sel.querySelectorAll('.cg-mode-btn').forEach(b => {
+        b.classList.toggle('active', b.dataset.mode === mode);
+      });
+    }
+    // 更新 placeholder
+    const ta = document.getElementById('codegenReqInput');
+    if (ta) ta.placeholder = _cgPlaceholder();
+    // 更新按钮文字
+    const btn = document.getElementById('codegenGenBtn');
+    if (btn) {
+      const span = btn.querySelector('span');
+      if (span) {
+        if (mode === 'plan') span.textContent = '生成方案';
+        else if (mode === 'ask') span.textContent = '提问';
+        else if (mode === 'clarify') span.textContent = '澄清需求';
+        else span.textContent = '运行 Agent';
+      }
+    }
+  }
+
+  function _cgPlaceholder() {
+    if (cgMode === 'plan') return '描述你想要的扩展功能，AI 会给出详细的实现方案（不会写文件）';
+    if (cgMode === 'ask')  return '问关于应用架构、API、扩展开发的任何问题（不会写文件）';
+    if (cgMode === 'clarify') return '描述你的需求，AI 会先主动澄清关键问题再继续（不会写文件）';
+    return '描述你想要的功能或修改，例如：在待办页面加一个「随机挑一个任务」按钮（Enter 发送）';
+  }
+
   function renderCodegen() {
     const body = document.getElementById('codegenBody');
     if (!body) return;
@@ -1106,9 +1482,23 @@ window.Codegen = (function () {
 
       <!-- 输入区 -->
       <div class="cg-input-wrap">
+        <div class="cg-mode-selector" id="codegenModeSelector">
+          <button class="cg-mode-btn${cgMode === 'craft' ? ' active' : ''}" data-mode="craft" onclick="cgSetMode('craft')" title="编写代码——全功能模式，可读写文件">
+            <i data-lucide="wand-2" class="lucide-icon" style="width:14px;height:14px;"></i> Craft
+          </button>
+          <button class="cg-mode-btn${cgMode === 'plan' ? ' active' : ''}" data-mode="plan" onclick="cgSetMode('plan')" title="出方案——只读，给出实现方案和架构设计">
+            <i data-lucide="map" class="lucide-icon" style="width:14px;height:14px;"></i> Plan
+          </button>
+          <button class="cg-mode-btn${cgMode === 'ask' ? ' active' : ''}" data-mode="ask" onclick="cgSetMode('ask')" title="问答——只读，解答代码和应用问题">
+            <i data-lucide="help-circle" class="lucide-icon" style="width:14px;height:14px;"></i> Ask
+          </button>
+          <button class="cg-mode-btn${cgMode === 'clarify' ? ' active' : ''}" data-mode="clarify" onclick="cgSetMode('clarify')" title="澄清——只读，AI 先主动提问澄清需求，不写文件">
+            <i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;"></i> Clarify
+          </button>
+        </div>
         <div class="cg-input-row">
           <textarea id="codegenReqInput" rows="3"
-            placeholder="描述你想要的功能或修改，例如：在待办页面加一个「随机挑一个任务」按钮（Enter 发送）"
+            placeholder="${_cgPlaceholder()}"
             onkeydown="handleCgInputKey(event)" oninput="autoResizeCgInput()"></textarea>
           <button id="codegenGenBtn" class="cg-gen-btn" onclick="cgGenerate()">
             <i data-lucide="sparkles" class="lucide-icon" style="width:17px;height:17px;"></i>
@@ -1328,8 +1718,8 @@ window.Codegen = (function () {
     // 写入用户需求 + 空的 assistant 消息（运行中）
     p.draft = '';
     const timeStr = nowTime();
-    p.messages.push({ role: 'user', content: req, time: timeStr });
-    const aMsg = { role: 'assistant', content: '', time: timeStr, running: true, ok: false, exitCode: null, summary: null, log: '', logGroups: [], error: null, _uid: genCgId() };
+    p.messages.push({ role: 'user', content: req, time: timeStr, mode: cgMode });
+    const aMsg = { role: 'assistant', content: '', time: timeStr, running: true, ok: false, exitCode: null, summary: null, log: '', logGroups: [], error: null, _uid: genCgId(), mode: cgMode };
     p.messages.push(aMsg);
     if (input) input.value = '';
     saveCgProjects();
@@ -1346,11 +1736,14 @@ window.Codegen = (function () {
         }) : null;
 
     try {
-      const res = await runAgent(req);
+      const res = await runAgent(req, cgMode);
       aMsg.running = false;
       aMsg.ok = !!res.ok;
       aMsg.exitCode = res.exitCode;
       aMsg.summary = res.summary || null;
+      aMsg.clarify = res.clarify
+        ? { questions: res.clarify.questions || [], answered: false, answer: '' }
+        : null;
       aMsg.error = !res.ok ? (res.stderr || 'exit-' + res.exitCode) : null;
       saveCgProjects();
     } catch (e) {
@@ -1409,6 +1802,11 @@ window.Codegen = (function () {
   window.openCgLoginTerminal = openCgLoginTerminal;
   window.openCgApiKeyConfig = openCgApiKeyConfig;
   window.recheckCgLogin = recheckCgLogin;
+  window.cgSetMode = cgSetMode;
+  // 澄清交互
+  window.cgFillClarify = cgFillClarify;
+  window.cgAnswerClarify = cgAnswerClarify;
+  window.cgProceedAfterClarify = cgProceedAfterClarify;
 
   return {
     buildContext,

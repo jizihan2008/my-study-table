@@ -192,6 +192,7 @@ function switchTab(tab) {
   // links / music / stats 由内置扩展（builtin-links / builtin-music / builtin-stats）负责渲染
   if (tab === 'codegen') { if (typeof renderCodegen === 'function') renderCodegen(); }
   if (tab === 'extensions') { if (typeof renderExtensionsPanel === 'function') renderExtensionsPanel(); }
+  if (tab === 'store') { if (typeof window.Store !== 'undefined' && window.Store.renderStore) window.Store.renderStore(); }
   // Initialize Lucide icons for dynamically rendered content
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
 }
@@ -208,6 +209,7 @@ const ALL_NAV_ITEMS = [
   { id: 'ai',        icon: 'bot',           label: 'AI 助手' },
   { id: 'codegen',   icon: 'code-2',        label: 'AI 编程' },
   { id: 'extensions',icon: 'puzzle',        label: '扩展' },
+  { id: 'store',     icon: 'store',         label: '插件市场' },
   { id: 'trash',     icon: 'trash-2',       label: '回收站' },
   { id: 'archive',   icon: 'archive',       label: '归档' }
 ];
