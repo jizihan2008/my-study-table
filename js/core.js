@@ -180,6 +180,7 @@ function switchTab(tab) {
     window.ExtManager.switchToExtSection(tab);
   }
   if (tab === 'todo' && typeof refreshRepeatTodos === 'function') refreshRepeatTodos();
+  if (tab === 'taskline' && typeof renderTaskLine === 'function') renderTaskLine();
   if (tab === 'notes') renderNotes();
   if (tab === 'ai') renderAiChat();
   if (tab === 'today') renderToday();
@@ -200,6 +201,7 @@ function switchTab(tab) {
 // ═══════════ Navigation Management ═══════════
 const ALL_NAV_ITEMS = [
   { id: 'todo',      icon: 'check-square',  label: '待办' },
+  { id: 'taskline',  icon: 'swords',        label: '任务线' },
   { id: 'notes',     icon: 'file-text',     label: '笔记' },
   { id: 'today',     icon: 'calendar-check',label: '今天' },
   { id: 'calendar',  icon: 'calendar',      label: '日历' },

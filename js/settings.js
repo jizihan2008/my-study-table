@@ -1,7 +1,7 @@
 // ═══════════ Changelog Modal ═══════════
 function initChangelog() {
   const fullChangelog = [
-    { id: 21, time: '2026-08-05T12:00', content: '<b>v0.2.4</b> — AI 问答体验修复：<br><br>💬 <b>Ask（问答）模式体验修复</b> — 之前 ask/plan 模式完成后会误显示「扩展文件已写入」，现改为正确的只读提示：<br>&emsp;• Ask 模式 → 「回答完成，仅读取源码参考，未修改任何文件」<br>&emsp;• Plan 模式 → 「方案已生成」，方案卡片不再误标为「安全插件」、不再显示「已写入扩展目录」<br>💾 <b>模式选择持久化</b> — 选中的 AI 编程模式（Craft/Plan/Ask）会记住，重启应用后保持上次选择' },
+    { id: 22, time: '2026-08-05T22:00', content: '<b>v0.2.5</b> — 任务线系统（GTNH 式任务书）：<br><br>🗺️ <b>任务图</b> — GTNH 式平面任务图：<b>金色框</b>=主线关键任务、<b>蓝色框</b>=支线任务、<b>箭头连线</b>=前置依赖（完成 A 解锁 B），由 AI 设计任务线的样子，推进感拉满<br>📂 <b>章节目录浮窗</b> — 侧边栏顶部「章节」按钮展开目录（主线章节 / 素质线），徽章收藏与自定义奖励池收纳在浮窗 Tab 内<br>⚔️ <b>任务机制</b> — 任务带<b>三段式描述</b>（目标 / 意义 / 产出）、<b>前置依赖解锁</b>、<b>完成条件</b>（绑定待办完成 / 笔记撰写 / 专注计时达标 / 手动打卡，自动检测 + 手动双轨）<br>🎖️ <b>奖励</b> — 即时反馈（完成任务通知 + 自动结算）+ 徽章收藏墙（章节达成 / 累计完成）+ 自定义奖励池（完成任务计数兑换，自己填欲望清单）<br>🤖 <b>与对话 AI 深度适配</b> — 注册 <code>quest_get / quest_create / quest_create_line / quest_update / quest_link_todo / quest_link_note / quest_link_timer / quest_complete / quest_skip / quest_review</code> 等 12 个工具，AI 对话里说「给我英语线加任务」「我刚完成 XX」即可直接操作；AI 生成任务默认<b>草稿</b>状态待你确认；system prompt 自动注入当前任务线状态（主线章节 / 激活任务 / 进度 / 卡点）<br>☀️ <b>日报联动</b> — 晨间 / 晚间日报新增任务线板块（主线进度 / 激活任务 / 昨日完成任务），回顾与开启今天都带任务线视角' },
     { id: 20, time: '2026-08-05T01:00', content: '<b>v0.2.3</b> — AI 编程三模式 + 插件市场：<br><br>🧭 <b>AI 编程三模式</b> — AI 编程输入区新增模式选择器（类比 CodeBuddy）：<br>&emsp;• <b>Craft（开发）</b> — 全功能模式，可读写扩展目录，直接生成代码<br>&emsp;• <b>Plan（规划）</b> — 只读模式，AI 分析需求并给出详细实现方案和架构设计，不写文件<br>&emsp;• <b>Ask（问答）</b> — 只读模式，回答应用架构、API、扩展开发相关问题<br>&emsp;• 消息流中 plan/ask 模式用户消息带有模式标记<br>🛒 <b>插件市场</b> — 全新「插件市场」页面，基于 Supabase 的免费社区市场：<br>&emsp;• <b>浏览下载</b> — 浏览已上架扩展，支持名称/标签搜索，一键下载安装到本地<br>&emsp;• <b>上传发布</b> — 将本地扩展发布到市场，经审核后供其他用户下载<br>&emsp;• <b>评分系统</b> — 对已安装的扩展打分（1~5 星）<br>&emsp;• <b>ZIP 导入</b> — 支持从本地 ZIP 文件直接安装扩展<br>&emsp;• <b>配置</b> — 设置 → 插件市场：与好友系统共用 Supabase 项目，填入 URL + anon key 即可<br>⚠️ 使用前提：需在 Supabase 控制台执行 <code>supabase/schema.sql</code> 新增的插件市场建表语句，并创建 <code>plugin-store</code> Storage bucket' },
     { id: 19, time: '2026-08-05T10:00', content: '<b>v0.3.0</b> — 好友系统（Supabase 云端）：<br><br>👥 <b>真实联网好友</b> — 全新「好友」页面，基于 Supabase 云端服务，实现跨设备真实好友：<br>&emsp;• <b>账号系统</b> — 邮箱注册 / 登录 / 退出，会话持久化，自动恢复登录<br>&emsp;• <b>好友管理</b> — 按用户名 / 昵称搜索添加、好友请求收发（接受 / 拒绝 / 撤回）、删除好友、好友列表<br>&emsp;• <b>好友分组</b> — 创建 / 重命名 / 删除分组，好友自由归类（彩色标签）<br>&emsp;• <b>好友资料卡</b> — 头像、昵称、简介、在线状态、最近学习统计（7 日打卡 / 专注 / 完成数）<br>&emsp;• <b>学习动态流</b> — 好友的打卡、专注突破、任务完成、连续天数等动态实时推送<br>&emsp;• <b>实时聊天</b> — 与好友实时收发消息、未读红点、最近消息预览<br>🔒 <b>隐私安全</b> — 只同步聚合统计（打卡 / 专注时长 / 完成数量），绝不上传具体待办与笔记内容；所有云表启用行级安全（RLS），仅本人与好友可见<br>⚙️ <b>配置</b> — 设置 → 好友：填入 Supabase 项目 URL 与 anon key 即可启用；建表脚本见 <code>supabase/schema.sql</code>' },
     { id: 18, time: '2026-08-05T01:00', content: '<b>v0.2.1</b> — 扩展管理体验升级：<br><br>🗑️ <b>扩展软件内回收站</b> — 卸载扩展不再直接删除，而是移入软件自带的回收站（回收站页面新增「扩展」分类），可随时恢复 / 彻底删除；清空回收站会一并清空扩展回收站<br>📥 <b>导入扩展</b> — 扩展页新增「导入扩展」按钮（选择文件夹）与全页拖拽导入：把扩展文件夹拖到扩展管理页任意位置即可导入，多文件夹批量支持<br>🔃 <b>刷新修复</b> — 「刷新」现在会强制重扫磁盘，删除 / 拖入扩展目录后点刷新即可立即反映到列表；扩展页列表支持上下滚动<br>🧹 <b>回收站目录不误扫</b> — 修复扩展列表把回收站 trash 文件夹误认成扩展的问题' },
@@ -181,6 +181,7 @@ function renderHelpModal() {
               <li><b>📅 日历视图</b>：月视图展示待办截止日期、完成记录和计时数据</li>
               <li><b>⏱️ 计时器</b>：支持关联待办和长期目标的计时器，含时段记录和历史</li>
               <li><b>🎵 音乐</b>：本地音乐播放器，含浮动控制球</li>
+              <li><b>🗺️ 任务线</b>：GTNH 式任务书系统——主线（人生阶段，顺序推进）+ 素质线（并行成长）双轴章节；任务带前置依赖解锁、完成条件（绑定待办/笔记/计时）、三段式描述；奖励=经验等级 + 徽章收藏 + 自定义奖励池</li>
               <li><b>🤖 AI 学习助手</b>：多对话标签页、多模型支持、深度思考、工具调用、多候选回复、网络搜索、图片/文档附件、多 AI 协作、长期记忆、定时自动化</li>
               <li><b>⏰ 自动化任务</b>：可创建定时任务，到达指定时间后自动触发 AI 执行</li>
               <li><b>⚙️ 设置面板</b>：AI 设置、记忆管理、笔记设置、自动化管理、数据备份、调试</li>
@@ -212,6 +213,7 @@ function renderHelpModal() {
             <p style="margin:0 0 2px 0;"><b>⏰ 自动化：</b>schedule_automation（创建定时任务，at=HH:MM，prompt=触发指令，repeat=daily/once）、list_automations（查看所有自动化任务）、delete_automation（删除指定自动化）</p>
             <p style="margin:0 0 2px 0;"><b>🧠 记忆：</b>list_memories（列出记忆条目）、get_memory_detail（查看记忆详情）；AI 也可在回复中嵌入 <code>&lt;memory&gt;{"type":"类型","text":"简略信息","detail":"详细内容"}&lt;/memory&gt;</code> 来提交记忆</p>
             <p style="margin:0 0 2px 0;"><b>🌐 网络搜索：</b>web_search（联网搜索，支持 Brave / Tavily / Exa / SearchAPI / DuckDuckGo 五种引擎）</p>
+            <p style="margin:0 0 2px 0;"><b>🗺️ 任务线：</b>quest_get（查看任务线）、quest_create_line（创建章节：main主线/quality素质线）、quest_update_line（更新章节）、quest_create（创建任务：kind 分 main主线/side支线，desc 一段文字描述含目标/意义/产出 + 依赖）、quest_update（更新任务）、quest_link_todo / quest_link_note / quest_link_timer（绑定完成条件）、quest_add_manual_cond（手动打卡条件）、quest_complete（完成任务，解锁下游）、quest_skip（跳过）、quest_review（复盘卡点）</p>
             <p style="margin:0;"><b>🤖 多 AI 协作：</b>AI 在回复中嵌入 <code>&lt;call_ai&gt;{"keyId":"目标 Key","prompt":"消息"}&lt;/call_ai&gt;</code> 来唤起其他 AI</p>
           </div>
         </div>
@@ -2865,6 +2867,39 @@ function collectDailyReportData() {
     ydayTimerSessions.sort((a, b) => a.timeRange.localeCompare(b.timeRange));
   } catch {}
 
+  // 任务线数据（GTNH 式任务书）
+  let taskline = null;
+  if (typeof loadTaskLineStore === 'function' && typeof tlMainLineUnlocked === 'function') {
+    try {
+      const tlStore = loadTaskLineStore();
+      if (tlStore.lines.length > 0) {
+        const mains = tlStore.lines.filter(l => l.type === 'main').sort((a, b) => (a.sort || 0) - (b.sort || 0));
+        const cur = mains.find(l => {
+          if (!tlMainLineUnlocked(tlStore, l)) return false;
+          const lqs = tlStore.quests.filter(q => q.lineId === l.id);
+          if (lqs.length === 0) return true;
+          return !lqs.every(q => q.status === 'done');
+        }) || mains[mains.length - 1] || null;
+        const active = tlStore.quests.filter(q => q.status === 'active');
+        const ydayDoneQuests = tlStore.quests.filter(q => q.status === 'done' && q.completedAt === yesterdayStr);
+        taskline = {
+          initialized: true,
+          currentMain: cur ? cur.name : (mains.length ? mains[mains.length - 1].name : null),
+          mainProgress: cur ? (() => {
+            const qs = tlStore.quests.filter(q => q.lineId === cur.id);
+            if (qs.length === 0) return null;
+            const done = qs.filter(q => q.status === 'done' || q.status === 'skipped').length;
+            return Math.round(done / qs.length * 100);
+          })() : null,
+          activeCount: active.length,
+          activeNames: active.slice(0, 5).map(q => q.title),
+          ydayDone: ydayDoneQuests.map(q => q.title),
+          doneCount: tlStore.quests.filter(q => q.status === 'done').length
+        };
+      }
+    } catch (e) { taskline = null; }
+  }
+
   // Previous daily report for context continuity
   const prevConv = getDailyReportConv();
   const prevReport = prevConv && prevConv.messages.length >= 2
@@ -2885,27 +2920,32 @@ function collectDailyReportData() {
     undoneTodos: undoneTodos.map(t => ({ text: t.text, id: t.id, dueDate: t.dueDate, tags: t.tags })),
     totalTodos: todos.length,
     totalDone: todos.filter(t => t.done).length,
+    taskline,
     ydayNotes: ydayNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     ydayTimerStr: ydayTimerMs > 0 ? fmtTimer(ydayTimerMs) : '无',
     ydayTimerSessions,
     prevReport,
     isCheckedInToday: checkinData.dates.includes(todayStr),
-    // Review data
+    // Review data（getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象，须解包 .note）
     reviewDueCount: typeof getNotesDueForReview === 'function' ? getNotesDueForReview().length : 0,
     reviewDueNotes: typeof getNotesDueForReview === 'function'
-      ? getNotesDueForReview().map(n => ({
-          id: n.id, title: n.title || '未命名',
-          reviewCount: (n._reviewHistory || []).length,
-          overdueDays: n._lastReviewDate
-            ? Math.floor((Date.now() - new Date(n._lastReviewDate).getTime()) / 86400000) - n._reviewDays || 0 : 0
-        }))
+      ? getNotesDueForReview().map(d => {
+          const n = d.note;
+          const nextStr = (typeof toLocalDateStr === 'function' && d.nextReviewDate) ? toLocalDateStr(d.nextReviewDate) : '';
+          const overdueDays = (nextStr && nextStr < todayStr)
+            ? Math.max(0, Math.round((new Date(todayStr).getTime() - new Date(nextStr).getTime()) / 86400000))
+            : 0;
+          return {
+            id: n.id, title: n.title || '未命名',
+            reviewCount: d.reviewCount, // 已完成复习轮数
+            overdueDays
+          };
+        })
       : [],
     overdueReviewCount: typeof getNotesDueForReview === 'function'
-      ? getNotesDueForReview().filter(n => {
-          if (!n._lastReviewDate) return false;
-          const expectedDate = new Date(n._lastReviewDate);
-          expectedDate.setDate(expectedDate.getDate() + (n._reviewDays || 1));
-          return expectedDate < new Date(new Date().toISOString().slice(0, 10));
+      ? getNotesDueForReview().filter(d => {
+          const nextStr = (typeof toLocalDateStr === 'function' && d.nextReviewDate) ? toLocalDateStr(d.nextReviewDate) : '';
+          return nextStr && nextStr < todayStr;
         }).length
       : 0,
     notesWithReviewHistory: typeof getNotesDueForReview === 'function'
@@ -2921,21 +2961,21 @@ function collectDailyReportData() {
       catch { return 0; }
     })() : 0,
 
-    // Habits data
+    // Habits data（早间日报回顾的是昨天：用 yesterdayStr，并标注昨日）
     habitsOverview: typeof loadHabits === 'function' ? (() => {
       try {
         const h = loadHabits();
-        const todayStr = getTodayStr();
         return h.map(habit => {
-          const todayCount = (habit.checkins && habit.checkins[todayStr]) ? habit.checkins[todayStr] : 0;
-          const todayMet = todayCount >= (habit.dailyTarget || 1);
-          const streak = calcHabitStreak ? calcHabitStreak(habit) : 0;
+          const dayCount = (habit.checkins && habit.checkins[yesterdayStr]) ? habit.checkins[yesterdayStr] : 0;
+          const dayMet = dayCount >= (habit.dailyTarget || 1);
+          // calcStreak 返回 { streak, bestStreak, todayCount, todayMet, target }
+          const streak = (typeof calcStreak === 'function') ? (calcStreak(habit).streak || 0) : 0;
           return {
             name: habit.name,
             emoji: habit.emoji || '',
-            todayCount,
+            dayCount,
             dailyTarget: habit.dailyTarget || 1,
-            todayMet,
+            dayMet,
             streak
           };
         });
@@ -2944,11 +2984,10 @@ function collectDailyReportData() {
     habitsCount: typeof loadHabits === 'function' ? (() => {
       try { return loadHabits().length; } catch { return 0; }
     })() : 0,
-    habitsDoneToday: typeof loadHabits === 'function' ? (() => {
+    habitsDoneYesterday: typeof loadHabits === 'function' ? (() => {
       try {
-        const todayStr = getTodayStr();
         return loadHabits().filter(h => {
-          const c = (h.checkins && h.checkins[todayStr]) ? h.checkins[todayStr] : 0;
+          const c = (h.checkins && h.checkins[yesterdayStr]) ? h.checkins[yesterdayStr] : 0;
           return c >= (h.dailyTarget || 1);
         }).length;
       } catch { return 0; }
@@ -3026,20 +3065,23 @@ ${noteLines}
 【复习状态】${data.notesWithReviewHistory}/${data.totalNotes} 篇笔记参与间隔复习
 ${data.reviewDueNotes.length > 0
   ? data.reviewDueNotes.map(n => {
-      const stage = `第${n.reviewCount}轮`;
+      const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
       const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
       return `  - 📖 ${n.title}（${stage}${overdue}）`;
     }).join('\n')
   : '  （暂无待复习笔记）'}
 ${data.overdueReviewCount > 0 ? `⚠️ 其中 ${data.overdueReviewCount} 篇已逾期` : ''}
-【今日习惯】${data.habitsDoneToday}/${data.habitsCount} 已完成
+【昨日习惯】（昨日完成情况）${data.habitsDoneYesterday}/${data.habitsCount} 已完成
 ${data.habitsOverview.length > 0
   ? data.habitsOverview.map(h => {
-      const status = h.todayMet ? '✓' : '○';
-      const detail = h.todayMet ? `已完成(${h.todayCount}/${h.dailyTarget})` : `未完成(${h.todayCount}/${h.dailyTarget})`;
+      const status = h.dayMet ? '✓' : '○';
+      const detail = h.dayMet ? `昨日已完成(${h.dayCount}/${h.dailyTarget})` : `昨日未完成(${h.dayCount}/${h.dailyTarget})`;
       return `  - ${status} ${h.emoji} ${h.name} — ${detail}，连续 ${h.streak} 天`;
     }).join('\n')
-  : '  （暂无习惯）'}${prevReportBlock}
+  : '  （暂无习惯）'}
+${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务｜主线「${data.taskline.currentMain || '未创建'}」${data.taskline.mainProgress !== null ? '进度 ' + data.taskline.mainProgress + '%' : '（暂无任务）'}
+  - 激活任务 ${data.taskline.activeCount} 个${data.taskline.activeNames.length > 0 ? '：' + data.taskline.activeNames.join('、') : ''}
+  ${data.taskline.ydayDone.length > 0 ? '- 昨日完成任务：' + data.taskline.ydayDone.join('、') : ''}` : ''}${prevReportBlock}
 
 ---
 
@@ -3051,8 +3093,9 @@ ${data.habitsOverview.length > 0
 4. **📝 笔记回顾** — 昨天写的笔记有什么值得今天延续的思路？
 5. **🎯 今日方向** — 今天截止的任务有哪些？基于昨日状态，今天最值得优先做什么？
 6. **🧠 复习习惯** — 待复习笔记的状态如何？是否有逾期未复习的？复习频率和节奏是否健康？是否需要调整复习策略？
-7. **💡 日常习惯** — 今天哪些习惯做得好？哪些习惯掉链子了？有没有连续坚持很棒的？是否注意到什么模式？
-8. **💪 一句话鼓励** — 给我一句适合今天状态的鼓励
+7. **💡 日常习惯** — 昨天哪些习惯完成了？哪些习惯掉链子了？有没有连续坚持很棒的？是否注意到什么模式？
+8. **🗺️ 任务线推进** — 当前主线章节与激活任务进展如何？昨日完成了任务线里的哪些任务？今天建议优先推进哪个任务线目标（可生成对应待办）？
+9. **💪 一句话鼓励** — 给我一句适合今天状态的鼓励
 
 格式自由，语气自然、清醒、有方向感。用 Markdown 但不要太刻板。`;
 
@@ -3067,7 +3110,7 @@ ${data.habitsOverview.length > 0
       body: JSON.stringify({
         model: apiCfg.model,
         messages: [
-          { role: 'system', content: '你是用户的学习伙伴，在每天早上打卡后生成一份晨间日报。你的角色是：清醒、温暖、有洞察力。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n\n═══ 你的任务 ═══\n帮助用户回顾昨天（完成/未完成/模式发现），并开启今天（优先级/方向/心态）。你也关注用户的复习习惯（笔记的间隔重复复习是知识内化的关键，逾期复习会降低记忆效果）和日常习惯（坚持频率、有无掉链子、模式洞察）。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+          { role: 'system', content: '你是用户的学习伙伴，在每天早上打卡后生成一份晨间日报。你的角色是：清醒、温暖、有洞察力。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾昨天（完成/未完成/模式发现），并开启今天（优先级/方向/心态）。你也关注用户的复习习惯（笔记的间隔重复复习是知识内化的关键，逾期复习会降低记忆效果）和日常习惯（坚持频率、有无掉链子、模式洞察）。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
           ...conv.messages.slice(-20),
           { role: 'user', content: reportPrompt }
         ],
@@ -3263,33 +3306,36 @@ function collectEveningReportData() {
     todayTimerStr: todayTimerMs > 0 ? fmtDuration(todayTimerMs) : '无',
     todayTimerSessions,
     prevReport,
-    // Review data
+    // Review data（getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象，须解包 .note）
     reviewDueCount: typeof getNotesDueForReview === 'function' ? getNotesDueForReview().length : 0,
     reviewDueNotes: typeof getNotesDueForReview === 'function'
-      ? getNotesDueForReview().map(n => ({
-          id: n.id, title: n.title || '未命名',
-          reviewCount: (n._reviewHistory || []).length,
-          overdueDays: n._lastReviewDate
-            ? Math.floor((Date.now() - new Date(n._lastReviewDate).getTime()) / 86400000) - (n._reviewDays || 0) : 0
-        }))
+      ? getNotesDueForReview().map(d => {
+          const n = d.note;
+          const nextStr = (typeof toLocalDateStr === 'function' && d.nextReviewDate) ? toLocalDateStr(d.nextReviewDate) : '';
+          const overdueDays = (nextStr && nextStr < todayStr)
+            ? Math.max(0, Math.round((new Date(todayStr).getTime() - new Date(nextStr).getTime()) / 86400000))
+            : 0;
+          return {
+            id: n.id, title: n.title || '未命名',
+            reviewCount: d.reviewCount,
+            overdueDays
+          };
+        })
       : [],
     overrideReviewCount: typeof getNotesDueForReview === 'function'
-      ? getNotesDueForReview().filter(n => {
-          if (!n._lastReviewDate) return false;
-          const expectedDate = new Date(n._lastReviewDate);
-          expectedDate.setDate(expectedDate.getDate() + (n._reviewDays || 1));
-          return expectedDate < new Date(new Date().toISOString().slice(0, 10));
+      ? getNotesDueForReview().filter(d => {
+          const nextStr = (typeof toLocalDateStr === 'function' && d.nextReviewDate) ? toLocalDateStr(d.nextReviewDate) : '';
+          return nextStr && nextStr < todayStr;
         }).length
       : 0,
     // Habits data
     habitsOverview: typeof loadHabits === 'function' ? (() => {
       try {
         const h = loadHabits();
-        const todayStr = getTodayStr();
         return h.map(habit => {
           const todayCount = (habit.checkins && habit.checkins[todayStr]) ? habit.checkins[todayStr] : 0;
           const todayMet = todayCount >= (habit.dailyTarget || 1);
-          const streak = typeof calcHabitStreak === 'function' ? calcHabitStreak(habit) : 0;
+          const streak = (typeof calcStreak === 'function') ? (calcStreak(habit).streak || 0) : 0;
           return { name: habit.name, emoji: habit.emoji || '', todayCount, dailyTarget: habit.dailyTarget || 1, todayMet, streak };
         });
       } catch { return []; }
@@ -3379,7 +3425,7 @@ ${noteLines}
 【复习状态】${data.reviewDueNotes.length > 0 ? '有 ' + data.reviewDueNotes.length + ' 篇待复习' : '无待复习笔记'}
 ${data.reviewDueNotes.length > 0
   ? data.reviewDueNotes.map(n => {
-      const stage = `第${n.reviewCount}轮`;
+      const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
       const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
       return `  - 📖 ${n.title}（${stage}${overdue}）`;
     }).join('\n')
@@ -3391,7 +3437,10 @@ ${data.habitsOverview.length > 0
       const detail = h.todayMet ? `已完成(${h.todayCount}/${h.dailyTarget})` : `未完成(${h.todayCount}/${h.dailyTarget})`;
       return `  - ${status} ${h.emoji} ${h.name} — ${detail}，连续 ${h.streak} 天`;
     }).join('\n')
-  : '  （暂无习惯）'}${prevReportBlock}
+  : '  （暂无习惯）'}
+${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务｜主线「${data.taskline.currentMain || '未创建'}」${data.taskline.mainProgress !== null ? '进度 ' + data.taskline.mainProgress + '%' : '（暂无任务）'}
+  - 激活任务 ${data.taskline.activeCount} 个${data.taskline.activeNames.length > 0 ? '：' + data.taskline.activeNames.join('、') : ''}
+  ${data.taskline.ydayDone.length > 0 ? '- 今日完成任务：' + data.taskline.ydayDone.join('、') : ''}` : ''}${prevReportBlock}
 
 ---
 
@@ -3404,8 +3453,9 @@ ${data.habitsOverview.length > 0
 5. **⚠️ 遗留事项** — 哪些事情今天没做完？是否仍然重要？需要调整截止日期还是明天优先？
 6. **🧠 复习习惯** — 今天复习了吗？剩余待复习笔记的状态如何？
 7. **💡 日常习惯** — 今天的习惯打卡情况，有什么模式值得注意？
-8. **🔮 明天预告** — 结合明天截止和全局待办，明天最值得关注的 1-3 件事是什么？
-9. **💪 晚安寄语** — 一句温暖的结束语
+8. **🗺️ 任务线推进** — 今天的任务线有哪些进展（完成任务/条件推进）？当前主线章节和激活任务的状态如何？
+9. **🔮 明天预告** — 结合明天截止、全局待办和任务线激活任务，明天最值得关注的 1-3 件事是什么？
+10. **💪 晚安寄语** — 一句温暖的结束语
 
 格式自由，语气自然、温暖、有沉淀感。用 Markdown 但不要太刻板。内容长度适中就好。`;
 
@@ -3421,7 +3471,7 @@ ${data.habitsOverview.length > 0
       body: JSON.stringify({
         model: apiCfg.model,
         messages: [
-          { role: 'system', content: '你是用户的学习伙伴，在每天晚上生成一份晚间日报。你的角色是：温暖、有洞察力、善于总结。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n\n═══ 你的任务 ═══\n帮助用户回顾今天（完成了什么/有什么收获/时间花在哪里），并帮助用户沉淀心得、放松心态。你也关注复习习惯和日常习惯的状态。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+          { role: 'system', content: '你是用户的学习伙伴，在每天晚上生成一份晚间日报。你的角色是：温暖、有洞察力、善于总结。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾今天（完成了什么/有什么收获/时间花在哪里），并帮助用户沉淀心得、放松心态。你也关注复习习惯和日常习惯的状态。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
           ...conv.messages.slice(-20),
           { role: 'user', content: reportPrompt }
         ],

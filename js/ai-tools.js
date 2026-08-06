@@ -135,6 +135,54 @@ const AI_TOOLS = {
   web_search: {
     description: '联网搜索互联网信息。当用户询问实时信息、新闻、最新知识或你需要获取外部资料时使用。支持 Brave / Tavily / Exa / SearchAPI 等搜索引擎。返回搜索结果摘要。注意：当前时间：' + new Date().toISOString().slice(0, 10),
     params: { query: '搜索关键词（string，必填）', max_results: '返回结果数量，最多10个，默认5（number，可选）' }
+  },
+  quest_get: {
+    description: '查看任务线系统全貌：主线章节（人生阶段）、素质线（并行成长）、任务状态、进度、徽章、奖励池。可指定章节或任务查看详情。注意：当前数据快照中已包含任务线状态摘要，如需全部任务详情才调用本工具',
+    params: { lineId: '章节ID（number，可选，只看该章节的任务）', questId: '任务ID（number，可选，看单个任务详情）' }
+  },
+  quest_create_line: {
+    description: '创建任务线章节。type=main 为人生主线阶段（顺序推进，完成上一章解锁下一章），type=quality 为素质线（并行成长，如英语/体能/阅读/专业技能）。用于把用户的顶层设计/目标拆解为章节',
+    params: { name: '章节名称（string，必填）', type: '章节类型：main主线/quality素质线（string，默认quality）', desc: '章节描述，说明这一阶段的意义（string，可选）' }
+  },
+  quest_update_line: {
+    description: '更新任务线章节的名称或描述',
+    params: { id: '章节ID（number，必填）', name: '新名称（string，可选）', desc: '新描述（string，可选）' }
+  },
+  quest_create: {
+    description: '创建任务（里程碑）。新任务默认 draft 草稿状态，需用户确认后转 active。任务支持前置依赖（deps，完成 A 解锁 B）和完成条件。desc 是任务的一段完整文字描述（不要太短，建议 80~200 字），必须包含三方面内容：目标（这个任务具体要做什么）、意义（为什么重要，如何推动人生顶层/素质线目标）、产出（完成后获得什么能力/状态）。kind 区分主线/支线任务：主线任务用金色框表示章节关键里程碑，支线任务用蓝色框。pos 可指定任务在画布上的摆放位置（GTNH 手动画布风格），同一章节内任一任务设了 pos 即整章切为手动布局，未设 pos 的任务会自动排到默认区，箭头仍按 deps 自动连接。⚠️ 依赖设计（DAG）：deps 可引用任意章节的任务 ID 实现跨章节依赖（跨线交织），主线关键任务（kind=main）是锚点，支线任务应挂在锚点上或相互交叉；禁止把所有任务排成 A→B→C 单一直线链，同层级应并行展开',
+    params: { lineId: '所属章节ID（number，必填）', title: '任务标题（string，必填）', kind: '任务类型：main主线/side支线（string，默认side）', desc: '任务完整描述（string，可选，一段文字，需包含目标/意义/产出，不要太短）', deps: '前置依赖任务ID数组（array of numbers，可选）——可引用任意章节的任务ID（跨章节依赖），用任务线状态摘要中的 [ID:xxx] 关键任务锚点', pos: '任务在画布上的位置 {x,y}（object，可选）——x/y 为非负整数画布坐标；设了即整章切手动布局', milestone: '是否重点标注（boolean，可选）' }
+  },
+  quest_update: {
+    description: '更新任务的标题、描述、类型、依赖、位置或状态。状态可取：draft/active/locked/done/skipped；kind 可取 main/side；pos 为画布坐标 {x,y}（传 null 可清除手动位置回退自动布局）。⚠️ 依赖设计（DAG）：deps 可引用任意章节任务 ID（跨章节依赖），应构成多线交织的 DAG 而非单一直线链，主线关键任务作锚点',
+    params: { id: '任务ID（number，必填）', title: '新标题（string，可选）', kind: '任务类型 main主线/side支线（string，可选）', desc: '任务完整描述（string，可选，一段文字，含目标/意义/产出）', status: '新状态（string，可选）', deps: '前置依赖任务ID数组（array of numbers，可选）——可引用任意章节的任务ID（跨章节依赖）', pos: '任务在画布上的位置 {x,y}（object，可选）——传 null 清除手动位置回退自动布局' }
+  },
+  quest_link_todo: {
+    description: '为任务绑定完成条件：完成指定待办后任务条件达成（自动检测）',
+    params: { questId: '任务ID（number，必填）', todoId: '待办ID（number，必填）' }
+  },
+  quest_link_note: {
+    description: '为任务绑定完成条件：创建/撰写指定笔记后任务条件达成（自动检测）',
+    params: { questId: '任务ID（number，必填）', noteId: '笔记ID（number，必填）' }
+  },
+  quest_link_timer: {
+    description: '为任务绑定完成条件：对指定待办/目标专注计时累计达标后任务条件达成（自动检测）',
+    params: { questId: '任务ID（number，必填）', targetId: '计时目标ID（number，必填）', minutes: '累计专注分钟数（number，必填）', targetType: '目标类型：todo/goal（string，可选，默认todo）' }
+  },
+  quest_add_manual_cond: {
+    description: '为任务添加手动打卡条件（如"和导师聊一次"等无法自动检测的抽象条件）',
+    params: { questId: '任务ID（number，必填）', label: '条件描述（string，必填）' }
+  },
+  quest_complete: {
+    description: '标记任务完成，触发徽章检测并解锁下游任务。注意：草稿任务需先确认、锁定任务需先完成前置',
+    params: { id: '任务ID（number，必填）' }
+  },
+  quest_skip: {
+    description: '跳过任务（GTNH 支持跳过任务，避免被不合理的任务卡死）',
+    params: { id: '任务ID（number，必填）' }
+  },
+  quest_review: {
+    description: '复盘任务线：获取当前卡点（长期无进展的任务）、难度失衡、章节进度，并给出下一步行动建议。常用于晚间复盘或用户感到停滞时',
+    params: {}
   }
 };
 
@@ -308,19 +356,21 @@ function buildToolsSystemPrompt() {
     const dueNotes = getNotesDueForReview();
     const allNotes = (typeof notes !== 'undefined' && Array.isArray(notes)) ? notes.filter(n => n.type === 'note' && n.content && n.content.trim()) : [];
     const reviewedCount = allNotes.filter(n => n._reviewHistory && n._reviewHistory.length > 0).length;
-    const overdueCount = dueNotes.filter(n => {
+    const overdueCount = dueNotes.filter(d => {
       const nextDate = typeof calcNextReviewDate === 'function'
-        ? toLocalDateStr(calcNextReviewDate(n)) : '';
+        ? toLocalDateStr(calcNextReviewDate(d.note)) : '';
       return nextDate && nextDate < todayStr;
     }).length;
     prompt += `🧠 复习：${dueNotes.length} 篇待复习（${overdueCount} 篇逾期），${reviewedCount}/${allNotes.length} 篇参与间隔复习`;
     if (dueNotes.length > 0) {
-      prompt += `\n   ${dueNotes.slice(0, 8).map(n => {
-        const count = (n._reviewHistory || []).length;
+      prompt += `\n   ${dueNotes.slice(0, 8).map(d => {
+        const n = d.note;
+        const count = d.reviewCount;
         const nextDate = typeof calcNextReviewDate === 'function'
           ? toLocalDateStr(calcNextReviewDate(n)) : '';
         const overdue = nextDate && nextDate < todayStr ? ' ⚠️逾期' : '';
-        return `📖 ${n.title || '未命名'}(第${count}轮${overdue})`;
+        const stage = count === 0 ? '新笔记' : `第${count + 1}轮`;
+        return `📖 ${n.title || '未命名'}(${stage}${overdue})`;
       }).join('，')}`;
       if (dueNotes.length > 8) prompt += ` ...等${dueNotes.length}篇`;
     }
@@ -347,6 +397,13 @@ function buildToolsSystemPrompt() {
       }
       prompt += '\n';
     } catch {}
+  }
+
+  // 任务线状态（GTNH 式任务书系统）
+  if (typeof buildAiSummary === 'function') {
+    try {
+      prompt += '\n' + buildAiSummary();
+    } catch (e) { /* ignore */ }
   }
 
   // 笔记 & 链接
@@ -579,6 +636,7 @@ async function executeToolCall(action, params) {
         delete t.completedAt;
       }
       saveData('study_todos_v2', todos);
+      if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
       return `✅ 已将待办"${t.text}"标记为${t.done ? '已完成' : '未完成'}`;
     }
     case 'move_todo': {
@@ -963,11 +1021,13 @@ async function executeToolCall(action, params) {
 
       if (dueNotes.length > 0) {
         result += `📖 待复习笔记列表：\n`;
-        dueNotes.forEach((n, i) => {
-          const count = (n._reviewHistory || []).length;
+        dueNotes.forEach((d, i) => {
+          const n = d.note; // getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象
+          const count = d.reviewCount;
           const intervalDays = typeof calcNextReviewDate === 'function' ? (() => {
             const next = calcNextReviewDate(n);
-            const lastReview = n._lastReviewDate ? new Date(n._lastReviewDate) : null;
+            const lastReview = n._reviewHistory && n._reviewHistory.length > 0
+              ? new Date(n._reviewHistory[n._reviewHistory.length - 1]) : null;
             if (lastReview) {
               const diff = Math.round((next - lastReview) / 86400000);
               return diff;
@@ -1061,6 +1121,7 @@ async function executeToolCall(action, params) {
             }
           });
           saveData('study_todos_v2', todos);
+          if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
           return `✅ 已批量${targetDone === true ? '勾选' : targetDone === false ? '取消勾选' : '切换'} ${affected} 个待办`;
         }
         case 'set_tags': {
@@ -1399,6 +1460,237 @@ async function executeToolCall(action, params) {
       const result = await performWebSearch(query, maxResults);
       if (!result) return `🌐 未找到"${query}"的相关搜索结果`;
       return `🌐 网络搜索结果（"${query}"）：\n\n${result}`;
+    }
+    // ── 任务线系统（GTNH 式任务书） ──
+    case 'quest_get': {
+      if (typeof loadTaskLineStore !== 'function' || typeof buildAiSummary !== 'function') return '❌ 任务线系统未加载。';
+      const qStore = loadTaskLineStore();
+      const qId = params.questId ? Number(params.questId) : null;
+      const qLineId = params.lineId ? Number(params.lineId) : null;
+      if (qId) {
+        const q = qStore.quests.find(x => x.id === qId);
+        if (!q) return `❌ 未找到任务 ID ${qId}`;
+        const line = qStore.lines.find(l => l.id === q.lineId);
+        const statusMap = { draft: '草稿（待确认）', locked: '锁定（前置未完成）', active: '进行中', done: '已完成', skipped: '已跳过' };
+        let r = `🔍 任务详情 [ID:${q.id}]\n`;
+        r += `📌 ${q.title}\n`;
+        r += `📂 所属：${line ? (line.type === 'main' ? '主线' : '素质线') + '「' + line.name + '」' : '（章节已删除）'}\n`;
+        r += `📊 状态：${statusMap[q.status] || q.status}\n`;
+        if (q.desc) r += `📜 描述：${q.desc}\n`;
+        if (q.deps && q.deps.length > 0) {
+          r += `🔗 前置依赖：\n`;
+          for (const did of q.deps) {
+            const d = qStore.quests.find(x => x.id === did);
+            const dmet = d && (d.status === 'done' || d.status === 'skipped');
+            r += `   ${dmet ? '✅' : '⬜'} [ID:${did}] ${d ? d.title : '（已删除）'}\n`;
+          }
+        }
+        if (q.conditions && q.conditions.length > 0) {
+          r += `📋 完成条件（${q.conditions.filter(c => tlIsCondMet(c)).length}/${q.conditions.length}）：\n`;
+          q.conditions.forEach((c, i) => {
+            const met = tlIsCondMet(c);
+            r += `   ${met ? '✅' : '⬜'} ${i + 1}. ${c.label || c.type}${c.type === 'timer' ? '（' + c.minutes + ' 分钟）' : ''}\n`;
+          });
+        }
+        r += `📐 类型：${q.kind === 'main' ? '主线关键任务' : '支线任务'}`;
+        if (q.pos && typeof q.pos.x === 'number' && typeof q.pos.y === 'number') {
+          r += `\n📍 画布位置：(${q.pos.x}, ${q.pos.y})`;
+        }
+        return r;
+      }
+      if (qLineId) {
+        const line = qStore.lines.find(l => l.id === qLineId);
+        if (!line) return `❌ 未找到章节 ID ${qLineId}`;
+        const qs = qStore.quests.filter(x => x.lineId === qLineId);
+        let r = `📂 章节「${line.name}」任务列表（${qs.length} 个）\n`;
+        if (qs.length === 0) return r + '（暂无任务，可用 quest_create 创建）';
+        for (const q of qs) {
+          const met = tlQuestCondMetCount(q);
+          r += `   [ID:${q.id}] ${q.status === 'done' ? '✅' : q.status === 'locked' ? '🔒' : q.status === 'draft' ? '✏️' : q.status === 'skipped' ? '⏭️' : '▶️'} ${q.kind === 'main' ? '⭐' : '🔷'} ${q.title}` + (q.conditions.length ? `（条件 ${met}/${q.conditions.length}）` : '') + '\n';
+        }
+        return r;
+      }
+      return buildAiSummary() + '\n\n（完整任务列表可用 quest_get 指定 lineId 查看）';
+    }
+    case 'quest_create_line': {
+      if (typeof tlAddLine !== 'function') return '❌ 任务线系统未加载。';
+      const name = params.name;
+      if (!name || !name.trim()) return '❌ 创建失败：缺少章节名称';
+      const type = params.type === 'main' ? 'main' : 'quality';
+      const line = tlAddLine({ name, type, desc: params.desc || '' });
+      if (!line) return '❌ 创建失败';
+      return `✅ 已创建${type === 'main' ? '主线章节' : '素质线'}「${line.name}」[ID:${line.id}]` + (params.desc ? `\n   描述：${params.desc}` : '');
+    }
+    case 'quest_update_line': {
+      if (typeof tlUpdateLine !== 'function') return '❌ 任务线系统未加载。';
+      const id = Number(params.id);
+      if (!id) return '❌ 缺少章节ID';
+      const patch = {};
+      if (params.name !== undefined) patch.name = params.name;
+      if (params.desc !== undefined) patch.desc = params.desc;
+      const line = tlUpdateLine(id, patch);
+      if (!line) return `❌ 未找到章节 ID ${id}`;
+      return `✅ 已更新章节「${line.name}」`;
+    }
+    case 'quest_create': {
+      if (typeof tlAddQuest !== 'function') return '❌ 任务线系统未加载。';
+      const lineId = Number(params.lineId);
+      const title = params.title;
+      if (!lineId) return '❌ 创建失败：缺少 lineId（所属章节）';
+      if (!title || !title.trim()) return '❌ 创建失败：缺少任务标题';
+      const q = tlAddQuest({
+        lineId,
+        title,
+        kind: params.kind === 'main' ? 'main' : 'side',
+        desc: params.desc || '',
+        deps: params.deps,
+        milestone: params.milestone === true,
+        pos: params.pos
+      });
+      if (!q) return `❌ 创建失败：章节 ID ${lineId} 不存在`;
+      const depNames = (q.deps || []).map(did => { const d = tlGetQuest(did); return d ? d.title : '#' + did; });
+      // deps 有效性校验：不存在的任务 ID 会让任务永远锁定，提示 AI 修正
+      const invalidDeps = (q.deps || []).filter(did => !tlGetQuest(did));
+      const invalidHint = invalidDeps.length > 0
+        ? `\n   ⚠️ 警告：${invalidDeps.join('、')} 不是有效的任务 ID，该任务将保持锁定。请用 quest_get 确认正确的 [ID:xxx]（可跨章节），再用 quest_update 修正 deps，或删除该依赖。`
+        : '';
+      return `✅ 已创建${q.kind === 'main' ? '【主线】' : '【支线】'}任务「${q.title}」[ID:${q.id}]（草稿状态，用户确认后转 active）\n` +
+        `   所属章节：[ID:${lineId}]\n` +
+        (q.desc ? `   📜 描述：${q.desc}\n` : '') +
+        (depNames.length ? `   🔗 前置依赖：${depNames.join('、')}\n` : '') +
+        `   📐 在任务图中显示为${q.kind === 'main' ? '金色主线框' : '蓝色支线框'}` +
+        invalidHint;
+    }
+    case 'quest_update': {
+      if (typeof tlUpdateQuest !== 'function') return '❌ 任务线系统未加载。';
+      const id = Number(params.id);
+      if (!id) return '❌ 缺少任务ID';
+      const patch = {};
+      if (params.title !== undefined) patch.title = params.title;
+      if (params.desc !== undefined) patch.desc = params.desc;
+      if (params.status !== undefined) patch.status = params.status;
+      if (params.kind !== undefined) patch.kind = params.kind;
+      if (params.deps !== undefined) patch.deps = Array.isArray(params.deps) ? params.deps.map(Number) : patch.deps;
+      if (params.pos !== undefined) patch.pos = params.pos;
+      const q = tlUpdateQuest(id, patch);
+      if (!q) return `❌ 未找到任务 ID ${id}`;
+      // 状态改为 active 后，根据依赖重新判定（deps 未满足则自动转 locked）
+      if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(id);
+      const finalQ = tlGetQuest(id);
+      const statusText = finalQ ? finalQ.status : (params.status || '');
+      let invalidHint = '';
+      if (patch.deps !== undefined && q.deps && q.deps.length > 0) {
+        const invalidDeps = q.deps.filter(did => !tlGetQuest(did));
+        if (invalidDeps.length > 0) {
+          invalidHint = `\n   ⚠️ 警告：${invalidDeps.join('、')} 不是有效的任务 ID，该任务将保持锁定。请用 quest_get 确认正确的 [ID:xxx]（可跨章节）后修正。`;
+        }
+      }
+      return `✅ 已更新任务「${q.title}」` + (params.status ? `（状态：${statusText}）` : '') + (finalQ && statusText === 'locked' ? '，前置任务未完成，已转为锁定' : '') + invalidHint;
+    }
+    case 'quest_link_todo': {
+      if (typeof tlGetQuest !== 'function' || typeof tlMakeTodoCond !== 'function') return '❌ 任务线系统未加载。';
+      const qId = Number(params.questId);
+      const todoId = Number(params.todoId);
+      if (!qId || !todoId) return '❌ 缺少 questId 或 todoId';
+      const q = tlGetQuest(qId);
+      if (!q) return `❌ 未找到任务 ID ${qId}`;
+      const t = typeof findTodo === 'function' ? findTodo(todoId) : null;
+      if (!t) return `❌ 未找到待办 ID ${todoId}`;
+      const cond = tlMakeTodoCond(todoId);
+      q.conditions = q.conditions || [];
+      if (q.conditions.some(c => c.type === 'todo' && c.todoId === todoId)) return `ℹ️ 该待办已绑定为此任务的条件`;
+      q.conditions.push(cond);
+      const store = loadTaskLineStore();
+      saveTaskLineStore(store);
+      if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(qId);
+      if (typeof renderTaskLine === 'function') renderTaskLine();
+      return `✅ 已绑定完成条件：${cond.label}`;
+    }
+    case 'quest_link_note': {
+      if (typeof tlGetQuest !== 'function' || typeof tlMakeNoteCond !== 'function') return '❌ 任务线系统未加载。';
+      const qId = Number(params.questId);
+      const noteId = Number(params.noteId);
+      if (!qId || !noteId) return '❌ 缺少 questId 或 noteId';
+      const q = tlGetQuest(qId);
+      if (!q) return `❌ 未找到任务 ID ${qId}`;
+      const n = (typeof notes !== 'undefined') ? notes.find(x => x.id === noteId && x.type === 'note') : null;
+      if (!n) return `❌ 未找到笔记 ID ${noteId}`;
+      const cond = tlMakeNoteCond(noteId);
+      q.conditions = q.conditions || [];
+      if (q.conditions.some(c => c.type === 'note' && c.noteId === noteId)) return `ℹ️ 该笔记已绑定为此任务的条件`;
+      q.conditions.push(cond);
+      const store = loadTaskLineStore();
+      saveTaskLineStore(store);
+      if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(qId);
+      if (typeof renderTaskLine === 'function') renderTaskLine();
+      return `✅ 已绑定完成条件：${cond.label}`;
+    }
+    case 'quest_link_timer': {
+      if (typeof tlGetQuest !== 'function' || typeof tlMakeTimerCond !== 'function') return '❌ 任务线系统未加载。';
+      const qId = Number(params.questId);
+      const targetId = Number(params.targetId);
+      const minutes = Number(params.minutes) || 0;
+      if (!qId || !targetId || !minutes) return '❌ 缺少 questId、targetId 或 minutes';
+      const q = tlGetQuest(qId);
+      if (!q) return `❌ 未找到任务 ID ${qId}`;
+      const cond = tlMakeTimerCond(targetId, minutes, params.targetType || 'todo');
+      q.conditions = q.conditions || [];
+      q.conditions.push(cond);
+      const store = loadTaskLineStore();
+      saveTaskLineStore(store);
+      if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(qId);
+      if (typeof renderTaskLine === 'function') renderTaskLine();
+      return `✅ 已绑定完成条件：${cond.label}`;
+    }
+    case 'quest_add_manual_cond': {
+      if (typeof tlGetQuest !== 'function') return '❌ 任务线系统未加载。';
+      const qId = Number(params.questId);
+      const label = params.label;
+      if (!qId || !label) return '❌ 缺少 questId 或 label';
+      const q = tlGetQuest(qId);
+      if (!q) return `❌ 未找到任务 ID ${qId}`;
+      q.conditions = q.conditions || [];
+      q.conditions.push({ type: 'manual', label, done: false });
+      const store = loadTaskLineStore();
+      saveTaskLineStore(store);
+      if (typeof renderTaskLine === 'function') renderTaskLine();
+      return `✅ 已添加手动打卡条件：${label}`;
+    }
+    case 'quest_complete': {
+      if (typeof tlCompleteQuest !== 'function') return '❌ 任务线系统未加载。';
+      const id = Number(params.id);
+      if (!id) return '❌ 缺少任务ID';
+      const res = tlCompleteQuest(id, 'ai');
+      if (!res.ok) return '❌ ' + res.msg;
+      return `✅ ${res.msg}` + (res.badge && res.badge.length > 0 ? `｜新徽章：${res.badge.map(b => b.name).join('、')}` : '');
+    }
+    case 'quest_skip': {
+      if (typeof tlSkipQuest !== 'function') return '❌ 任务线系统未加载。';
+      const id = Number(params.id);
+      if (!id) return '❌ 缺少任务ID';
+      const res = tlSkipQuest(id);
+      if (!res.ok) return '❌ ' + res.msg;
+      return `✅ ${res.msg}`;
+    }
+    case 'quest_review': {
+      if (typeof buildAiSummary !== 'function' || typeof loadTaskLineStore !== 'function') return '❌ 任务线系统未加载。';
+      const store = loadTaskLineStore();
+      let r = buildAiSummary();
+      // 卡点分析
+      const stuck = store.quests.filter(q => q.status === 'active' && q.conditions.length > 0 && tlQuestCondMetCount(q) === 0);
+      const half = store.quests.filter(q => q.status === 'active' && q.conditions.length > 0 && tlQuestCondMetCount(q) > 0 && !tlQuestCondMet(q));
+      const lockedCount = store.quests.filter(q => q.status === 'locked').length;
+      if (stuck.length > 0) {
+        r += `\n⏳ 长期无进展（条件全部未动，建议拆分或调整）：\n`;
+        for (const q of stuck) r += `   · [ID:${q.id}] ${q.title}（条件 ${tlQuestCondMetCount(q)}/${q.conditions.length}）\n`;
+      }
+      if (half.length > 0) {
+        r += `\n🚧 进行中（条件部分达成，建议近期完成）：\n`;
+        for (const q of half) r += `   · [ID:${q.id}] ${q.title}（条件 ${tlQuestCondMetCount(q)}/${q.conditions.length}）\n`;
+      }
+      if (lockedCount > 0) r += `\n🔒 ${lockedCount} 个任务因前置未完成而锁定。\n`;
+      r += `\n💡 请基于以上数据给用户 1~3 条下一步行动建议（可配合 add_todo 创建今日待办）。`;
+      return r;
     }
     default:
       return `错误：未知的工具 "${action}"`;

@@ -267,6 +267,7 @@ function renderAiMessages() {
       // Only keep the data content (the numbered list starting with [1])
       let dataContent = m.content.replace(/^\[工具调用[^\]]*\]\n?/, '');
       dataContent = dataContent.replace(/^.*?（共\d+个）\n*/m, '');
+      dataContent = dataContent.replace(/\n{3,}/g, '\n\n'); // 压缩多余空行
       dataContent = dataContent.replace(/\n+$/, ''); // trim trailing newlines
       dataContent = escapeHtml(dataContent);
       return `
@@ -291,6 +292,7 @@ function renderAiMessages() {
         .replace(/<tool_call>[\s\S]*?<tool_call>/g, '')
         .replace(/<call_ai>[\s\S]*?<\/call_ai>/g, '')
         .replace(/<memory>[\s\S]*?<\/memory>/g, '')
+        .replace(/\n{3,}/g, '\n\n') // 压缩移除标签后残留的空行
         .trim();
     }
 

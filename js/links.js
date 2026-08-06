@@ -92,6 +92,8 @@ function renderLinkCards(linkList) {
 function renderLinks() {
   const pc = document.getElementById('linksPanels');
   const empty = document.getElementById('linkEmpty');
+  // 快捷访问面板由内置扩展 builtin-links 动态注入，未加载时直接跳过，避免 null 崩溃
+  if (!pc || !empty) return;
   updateCatSuggestions();
   if (links.length === 0) { pc.innerHTML = ''; empty.style.display = ''; return; }
   empty.style.display = 'none';

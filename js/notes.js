@@ -784,8 +784,10 @@ function renderNotes(){
   if(textarea)textarea.value=note.content;
   switchNoteView(noteViewMode);
   const chars=(note.content||'').replace(/\s/g,'').length;
-  document.getElementById('notesWordCount').textContent=chars+' 字';
-  document.getElementById('notesStatus').textContent='已保存';
+  const wcEl=document.getElementById('notesWordCount');
+  const stEl=document.getElementById('notesStatus');
+  if (wcEl) wcEl.textContent=chars+' 字';
+  if (stEl) stEl.textContent='已保存';
   updateLastEditedDisplay(note);
   renderNoteSummary();
   renderNotesTagInput();

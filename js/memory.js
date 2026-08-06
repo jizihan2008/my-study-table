@@ -589,6 +589,21 @@ function formatMemoryForPrompt() {
     section += memory.profileText.trim() + '\n';
   }
 
+  // ── Taskline summary (GTNH 式任务书状态) ──
+  if (typeof loadTaskLineStore === 'function' && typeof tlMainLineUnlocked === 'function') {
+    try {
+      const tls = loadTaskLineStore();
+      if (tls.lines.length > 0) {
+        section += '\n【任务线状态】\n';
+        const mains = tls.lines.filter(l => l.type === 'main').sort((a, b) => (a.sort || 0) - (b.sort || 0));
+        const cur = mains.find(l => tlMainLineUnlocked(tls, l)) || mains[mains.length - 1];
+        if (cur) section += `主线「${cur.name}」｜`;
+        const active = tls.quests.filter(q => q.status === 'active');
+        section += `激活任务 ${active.length} 个：${active.slice(0, 3).map(q => q.title).join('、') || '无'}\n`;
+      }
+    } catch (e) { /* ignore */ }
+  }
+
   // ── Manual Notes (show title only) ──
   if (memory.manualNotes.length > 0) {
     section += '\n【用户设置的事实】（用户手动添加）\n';

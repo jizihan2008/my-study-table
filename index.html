@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Study Table</title>
-<link rel="stylesheet" href="css/style.css?v=20260805-r17">
+<link rel="stylesheet" href="css/style.css?v=20260805-r22">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -102,6 +102,16 @@
           <p id="todoEmptyText">暂无待办事项，点击「新增」添加吧 ✨</p>
         </div>
       </div>
+    </div>
+  </div>
+
+  <!-- ── Taskline Section ── -->
+  <div class="section" id="section-taskline">
+    <div class="card">
+      <div class="section-header">
+        <span class="section-title"><i data-lucide="swords" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 任务线</span>
+      </div>
+      <div class="card-scroll" id="tasklineApp"></div>
     </div>
   </div>
 
@@ -1171,25 +1181,26 @@
 <script src="js/core.js?v=20260805-r11"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260724-r13"></script>
-    <script src="js/notes.js?v=20260724-r11"></script>
-    <script src="js/links.js?v=20260724-r6"></script>
+    <script src="js/notes.js?v=20260805-r12"></script>
+    <script src="js/links.js?v=20260805-r7"></script>
     <script src="js/today.js?v=20260723-r1"></script>
     <!-- AI 模块（按依赖顺序加载） -->
     <script src="js/ai-utils.js?v=20260805-r4"></script>
     <script src="js/ai-tree.js?v=20260804-r3"></script>
     <script src="js/ai-conv.js?v=20260803-r1"></script>
     <script src="js/ai-attach.js"></script>
-    <script src="js/ai-render.js?v=20260804-r7"></script>
-    <script src="js/ai-tools.js?v=20260803-r1"></script>
+    <script src="js/ai-render.js?v=20260805-r8"></script>
+    <script src="js/ai-tools.js?v=20260806-r4"></script>
     <script src="js/ai-search.js"></script>
     <script src="js/ai-api.js?v=20260803-r1"></script>
     <script src="js/ai-send.js?v=20260804-r3"></script>
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260803-r1"></script>
-    <script src="js/settings.js?v=20260805-r11"></script>
+    <script src="js/settings.js?v=20260806-r12"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <script src="js/calendar.js?v=20260724-r7"></script>
+    <script src="js/taskline.js?v=20260806-r7"></script>
     <script src="js/timer.js?v=20260724-r19"></script>
     <script src="js/habits.js?v=20260724-r1"></script>
     <script src="js/stats.js?v=20260724-r1"></script>
@@ -1203,7 +1214,7 @@
     <script src="js/patch-engine.js?v=20260804-r1"></script>
     <script src="js/builtin-extensions.js?v=20260804-r1"></script>
     <script src="js/ext-manager.js?v=20260804-r2"></script>
-    <script src="js/codegen.js?v=20260805-r12"></script>
+    <script src="js/codegen.js?v=20260805-r13"></script>
     <script src="js/store.js?v=20260805-r13"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load

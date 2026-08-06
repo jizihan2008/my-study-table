@@ -1761,6 +1761,96 @@ window.Codegen = (function () {
     }
   }
 
+  // ── 澄清交互：查找消息 / 填充选项 / 提交回答 / 继续生成 ──
+  function findCgMessage(uid) {
+    for (const p of cgProjects) {
+      const m = (p.messages || []).find(x => x._uid === uid);
+      if (m) return m;
+    }
+    return null;
+  }
+
+  // 点击澄清选项：把选项文本填入对应问题的输入框并高亮
+  function cgFillClarify(btn) {
+    if (!btn) return;
+    const uid = btn.getAttribute('data-uid');
+    const idx = btn.getAttribute('data-idx');
+    const val = btn.getAttribute('data-val') || '';
+    const ta = (uid && idx !== null) ? document.getElementById('cgClarifyInput-' + uid + '-' + idx) : null;
+    if (ta) ta.value = val;
+    const opts = btn.parentNode ? btn.parentNode.querySelectorAll('.cg-clarify-opt') : [];
+    opts.forEach(o => o.classList.remove('active'));
+    btn.classList.add('active');
+  }
+
+  // 提交澄清回答：收集各问题输入框的非空回答 → 写入消息 → 切换到「已回答」卡
+  function cgAnswerClarify(uid) {
+    const m = findCgMessage(uid);
+    if (!m) return;
+    const qs = (m.clarify && m.clarify.questions) || [];
+    const answers = [];
+    qs.forEach((q, i) => {
+      const ta = document.getElementById('cgClarifyInput-' + uid + '-' + i);
+      const val = ta ? ta.value.trim() : '';
+      if (val) answers.push((q.q || '问题' + (i + 1)) + '：' + val);
+    });
+    if (!m.clarify) m.clarify = {};
+    m.clarify.answer = answers.length > 0 ? answers.join('\n') : '（用户未填写具体回答，由 AI 自行决定）';
+    m.clarify.answered = true;
+    saveCgProjects();
+    renderCodegen();
+  }
+
+  // 已回答后继续：按 mode 重新跑 Agent（plan=生成方案 / craft=直接开发），需求=澄清回答
+  async function cgProceedAfterClarify(uid, mode) {
+    if (_generating) { cgStatus('已有 Agent 在运行，请等待完成。', true); return; }
+    const p = getActiveCgProject();
+    if (!p) return;
+    const m = findCgMessage(uid);
+    if (!m) return;
+    if (mode !== 'plan' && mode !== 'craft') mode = 'craft';
+    const answer = (m.clarify && m.clarify.answer) || '';
+    const req = (answer && answer.indexOf('（用户未填写具体回答') !== 0) ? answer : '请基于上面的需求继续生成。';
+    if (typeof cgSetMode === 'function') cgSetMode(mode);
+    const timeStr = nowTime();
+    p.messages.push({ role: 'user', content: '（澄清回答）\n' + req, time: timeStr, mode });
+    const aMsg = { role: 'assistant', content: '', time: timeStr, running: true, ok: false, exitCode: null, summary: null, log: '', logGroups: [], error: null, _uid: genCgId(), mode };
+    p.messages.push(aMsg);
+    if (m.clarify) m.clarify.answered = true;
+    saveCgProjects();
+    _generating = true;
+    renderCodegen();
+    scrollCgToBottom();
+    cgStatus('正在运行 CodeBuddy Agent（基于澄清回答）…');
+    const appendAgentLog = createLogAppender(aMsg);
+    const off = (typeof window.electronAPI !== 'undefined' && window.electronAPI.onCodegenAgentOutput)
+      ? window.electronAPI.onCodegenAgentOutput((payload) => {
+          if (payload && payload.text) appendAgentLog(payload.text);
+        }) : null;
+    try {
+      const res = await runAgent(req, mode);
+      aMsg.running = false;
+      aMsg.ok = !!res.ok;
+      aMsg.exitCode = res.exitCode;
+      aMsg.summary = res.summary || null;
+      aMsg.clarify = res.clarify ? { questions: res.clarify.questions || [], answered: false, answer: '' } : null;
+      aMsg.error = !res.ok ? (res.stderr || 'exit-' + res.exitCode) : null;
+      saveCgProjects();
+    } catch (e) {
+      aMsg.running = false;
+      aMsg.ok = false;
+      aMsg.exitCode = null;
+      aMsg.error = String(e && e.message || e);
+      saveCgProjects();
+    } finally {
+      if (off) off();
+      _generating = false;
+      renderCodegen();
+      scrollCgToBottom();
+      cgStatus(aMsg.ok ? 'Agent 执行完成。' : 'Agent 执行失败，详见消息区日志。', !aMsg.ok);
+    }
+  }
+
   // 继续生成 / 重新输入（兼容入口：聚焦输入框）
   function cgContinue() {
     const input = document.getElementById('codegenReqInput');

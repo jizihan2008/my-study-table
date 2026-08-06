@@ -316,9 +316,11 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
     // Store tool call results as system messages with metadata for UI rendering
     const toolNames = toolCalls.map(tc => tc.action).join('、');
     const toolLabel = toolCalls.length === 1 ? toolCalls[0].action : toolNames;
+    // 压缩工具结果里的多余空行，避免 UI 中留大片空白
+    const compactResults = String(resultsText || '').replace(/\n{3,}/g, '\n\n').trim();
     appendMessage(conv, {
       role: 'system',
-      content: '【工具执行结果】\n' + resultsText,
+      content: '【工具执行结果】\n' + compactResults,
       _toolInfo: { toolNames, toolLabel, results: toolResults }
     });
 
@@ -353,11 +355,12 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
   }
 
   // Refresh views after all tool calls are done
+  // 逐个 try 保护：任一视图 DOM 未就绪（如 builtin-links 扩展未加载）不拖垮整个 AI 流程
   if (allToolResults.length > 0) {
-    renderTodos();
-    renderLinks();
-    renderNotes();
-    renderToday();
+    try { renderTodos(); } catch (e) { console.warn('[AI] renderTodos 失败:', e); }
+    try { renderLinks(); } catch (e) { console.warn('[AI] renderLinks 失败:', e); }
+    try { renderNotes(); } catch (e) { console.warn('[AI] renderNotes 失败:', e); }
+    try { renderToday(); } catch (e) { console.warn('[AI] renderToday 失败:', e); }
   }
 
   return { finalCleanText, finalRawReply, finalReasoning, allToolResults };

@@ -439,6 +439,8 @@ function toggleTodo(id) {
   }
   // When unchecking parent, children keep their current state
   saveData('study_todos_v2', todos);
+  // 任务线联动：待办完成状态变化后自动结算任务线完成条件
+  if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
   renderTodos();
 }
 
