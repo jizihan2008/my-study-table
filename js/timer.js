@@ -85,6 +85,9 @@ function loadAndRestoreTimerState() {
       renderTimer();
       saveTimerState(); // persist on every tick
     }, 500);
+    // 恢复运行中的计时器 → 显示右下角浮窗
+    timerFloatVisible = true;
+    updateTimerFloat();
     clearTimerState(); // consumed
   } else {
     // Timer was paused/stopped — just restore state
@@ -230,6 +233,9 @@ function renderTimer() {
   // Center the timer panel when history is collapsed
   const card = container.closest('.card');
   if (card) card.classList.toggle('timer-centered', !timerHistoryExpanded);
+
+  // Sync floating window time/targets/buttons
+  updateTimerFloat();
 }
 
 // ── Timer history collapse state ──
@@ -383,6 +389,9 @@ function timerStart() {
   }, 500);
   saveTimerState();
   renderTimer();
+  // 计时开始 → 显示右下角浮窗（只有点击关闭按钮才关闭）
+  timerFloatVisible = true;
+  updateTimerFloat();
 }
 
 function timerPause() {
@@ -919,6 +928,140 @@ function deleteTimerRecord(recordId) {
       renderTimer();
     }
   }
+}
+
+// ═══════════ Timer Floating Window (右下角浮窗) ═══════════
+// 计时器开始后，右下角出现浮窗（参考音乐悬浮球）。
+// 只有点击关闭按钮才会关闭；暂停/停止/保存/重置均不会自动关闭。
+let timerFloatVisible = false; // 浮窗是否显示
+
+function timerFloatTargetHtml() {
+  const linkedTodo = timerLinkedTodoId ? findTodo(timerLinkedTodoId) : null;
+  const linkedGoal = timerLinkedGoalId ? loadGoals().find(g => g.id === timerLinkedGoalId) : null;
+  let html = '';
+  // 只显示待办名称，不显示目录路径
+  if (linkedTodo) {
+    html += `<div class="tf-target-row"><span class="tf-target-ico">📋</span><span class="tf-target-text" title="${escapeHtml(linkedTodo.text)}">${escapeHtml(linkedTodo.text)}</span></div>`;
+  } else {
+    html += `<div class="tf-target-row tf-empty"><span class="tf-target-ico">📋</span><span class="tf-target-text">未关联待办</span></div>`;
+  }
+  if (linkedGoal) {
+    html += `<div class="tf-target-row"><span class="tf-target-ico">🎯</span><span class="tf-target-text" title="${escapeHtml(linkedGoal.text)}">${escapeHtml(linkedGoal.text)}</span></div>`;
+  } else {
+    html += `<div class="tf-target-row tf-empty"><span class="tf-target-ico">🎯</span><span class="tf-target-text">未关联目标</span></div>`;
+  }
+  return html;
+}
+
+function timerFloatControlsHtml() {
+  // 按钮符号与主计时器面板统一：暂停/停止/保存用 Lucide 图标，开始/重置用符号字符
+  if (timerRunning) {
+    return `
+      <button class="tf-btn tf-pause" onclick="timerPause()" title="暂停"><i data-lucide="pause-circle" class="lucide-icon"></i></button>
+      <button class="tf-btn tf-stop" onclick="timerStop()" title="停止并保存"><i data-lucide="stop-circle" class="lucide-icon"></i></button>`;
+  }
+  return `
+    <button class="tf-btn tf-start" onclick="timerStart()" title="开始">▶</button>
+    <button class="tf-btn tf-save" onclick="timerSave()" title="保存"><i data-lucide="save" class="lucide-icon"></i></button>
+    <button class="tf-btn tf-reset" onclick="timerReset()" title="重置">⟲</button>`;
+}
+
+function createTimerFloat() {
+  const ball = document.createElement('div');
+  ball.id = 'timerFloat';
+  ball.className = 'timer-float';
+  ball.innerHTML = `
+    <div class="tf-header">
+      <span class="tf-icon">⏱</span>
+      <span class="tf-title">专注计时</span>
+      <button class="tf-close" onclick="event.stopPropagation(); closeTimerFloat()" title="关闭浮窗">✕</button>
+    </div>
+    <div class="tf-body" onclick="timerFloatGo()">
+      <div class="tf-time" id="tfTime">0:00</div>
+      <div class="tf-targets" id="tfTarget">${timerFloatTargetHtml()}</div>
+    </div>
+    <div class="tf-controls" id="tfControls">${timerFloatControlsHtml()}</div>
+  `;
+  return ball;
+}
+
+function updateTimerFloat() {
+  if (!timerFloatVisible) return;
+  let ball = document.getElementById('timerFloat');
+  if (!ball) {
+    ball = createTimerFloat();
+    // 若音乐浮球正在显示，浮窗底部自动上移避免重叠
+    const musicBall = document.getElementById('musicFloat');
+    if (musicBall && musicBall.style.display !== 'none') {
+      ball.style.bottom = '96px';
+    }
+    document.body.appendChild(ball);
+    makeTimerFloatDraggable(ball);
+  }
+  const totalMs = timerElapsed + (timerRunning ? Date.now() - timerSessionStart : 0);
+  const timeEl = document.getElementById('tfTime');
+  if (timeEl) timeEl.textContent = formatTimerTime(totalMs);
+  const targetEl = document.getElementById('tfTarget');
+  if (targetEl) targetEl.innerHTML = timerFloatTargetHtml();
+  const controlsEl = document.getElementById('tfControls');
+  if (controlsEl) controlsEl.innerHTML = timerFloatControlsHtml();
+  // Refresh Lucide icons for the newly rendered buttons
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function closeTimerFloat() {
+  timerFloatVisible = false;
+  const ball = document.getElementById('timerFloat');
+  if (ball) ball.remove();
+}
+
+function timerFloatGo() {
+  switchTab('timer');
+}
+
+function makeTimerFloatDraggable(el) {
+  let isDragging = false, startX, startY, origX, origY;
+  const header = el.querySelector('.tf-header');
+
+  function onStart(e) {
+    if (e.target.closest('.tf-close')) return; // 关闭按钮不触发拖动
+    const touch = e.touches ? e.touches[0] : e;
+    isDragging = true;
+    startX = touch.clientX;
+    startY = touch.clientY;
+    const rect = el.getBoundingClientRect();
+    origX = rect.left;
+    origY = rect.top;
+    el.classList.add('dragging');
+    document.addEventListener('mousemove', onMove);
+    document.addEventListener('mouseup', onEnd);
+    document.addEventListener('touchmove', onMove, { passive: true });
+    document.addEventListener('touchend', onEnd);
+  }
+
+  function onMove(e) {
+    if (!isDragging) return;
+    const touch = e.touches ? e.touches[0] : e;
+    const dx = touch.clientX - startX;
+    const dy = touch.clientY - startY;
+    el.style.left = (origX + dx) + 'px';
+    el.style.top = (origY + dy) + 'px';
+    el.style.right = 'auto';
+    el.style.bottom = 'auto';
+  }
+
+  function onEnd() {
+    if (!isDragging) return;
+    isDragging = false;
+    el.classList.remove('dragging');
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onEnd);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onEnd);
+  }
+
+  header.addEventListener('mousedown', onStart);
+  header.addEventListener('touchstart', onStart, { passive: true });
 }
 
 // Restore timer state on page load (survives refresh / window close)

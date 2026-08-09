@@ -230,10 +230,10 @@ window.Codegen = (function () {
   }
 
   function _modeLabel(mode) {
-    if (mode === 'plan') return '规划（Plan）';
-    if (mode === 'ask')  return '问答（Ask）';
-    if (mode === 'clarify') return '澄清（Clarify）';
-    return '开发（Craft）';
+    if (mode === 'plan') return '方案';
+    if (mode === 'ask')  return '问答';
+    if (mode === 'clarify') return '澄清';
+    return '开发';
   }
 
   function _modeSystemInstruction(mode) {
@@ -735,17 +735,9 @@ window.Codegen = (function () {
     return '<pre class="codegen-summary">' + escapeHtml(raw) + '</pre>';
   }
 
-  const CG_SAMPLES = [
-    '给待办加一个「随机挑一个任务」按钮，点击后随机选中一条未完成任务',
-    '在笔记编辑器底部加一个实时字数统计',
-    '新建一个「番茄钟」面板，25 分钟倒计时 + 开始/暂停/重置',
-    '待办完成时播放一段提示音',
-    '在「今天」页面加一个励志名言卡片'
-  ];
-
   const CG_GUIDE_ITEMS = [
     { icon: 'bot', color: '#8b5cf6', title: 'CodeBuddy Agent', desc: '调用本机 CodeBuddy CLI，agent 会自主读文件、写代码、建扩展，全栈式完成你的需求。' },
-    { icon: 'message-circle-question', color: '#10b981', title: 'Clarify 澄清', desc: '需求不明确时先用 Clarify 模式，AI 会主动提问，回答后自动带上下文进入方案与开发。' },
+    { icon: 'message-circle-question', color: '#10b981', title: '需求澄清', desc: '需求不明确时先用澄清模式，AI 会主动提问，回答后自动带上下文进入方案与开发。' },
     { icon: 'wrench', color: '#d97706', title: '修改现有功能', desc: '可生成「源码补丁」覆盖任意全局函数，或直接修改已有扩展，卸载时自动恢复原状。' },
     { icon: 'shield-check', color: '#0284c7', title: '安全可回滚', desc: '运行前自动备份全部扩展，完成后随时可在「扩展」页面中禁用、卸载或一键回滚。' }
   ];
@@ -867,14 +859,19 @@ window.Codegen = (function () {
       const isAsk = m.mode === 'ask';
       const isPlan = m.mode === 'plan';
       const isClarify = m.mode === 'clarify';
-      // plan 模式有 JSON 方案摘要 → 渲染方案卡；ask/clarify 只读 → 只显示回复，无文件写入
-      const card = m.summary && m.summary.type === 'plan'
+      // 有摘要（plan=方案卡 / plugin|patch=扩展信息卡）→ 渲染结果卡；ask/clarify 只读 → 只显示回复，无文件写入
+      // plan 结束后提供「开始开发」按钮：以原需求切到 craft 模式直接开发（仿「生成实现方案」样式）
+      const devBtn = isPlan
+        ? `<button class="cg-apply-btn" onclick="cgStartDev('${m._uid}')"><i data-lucide="play" class="lucide-icon" style="width:14px;height:14px;"></i> 开始开发</button>`
+        : '';
+      const card = m.summary
         ? renderCgResultCard(m)
         : (isAsk || isPlan || isClarify
           ? `
           <div class="cg-result">
             <div class="cg-result-desc"><i data-lucide="check-circle-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:-2px;"></i> ${isClarify ? 'AI 未提出澄清问题，可以直接开始规划或开发' : (isPlan ? '方案已生成' : '回答完成')}。本次为${isClarify ? '澄清' : (isPlan ? '规划' : '问答')}模式，仅读取源码参考，未修改任何文件。</div>
             <div class="cg-result-actions">
+              ${devBtn}
               <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续${isClarify ? '澄清' : (isPlan ? '规划' : '提问')}</button>
             </div>
           </div>`
@@ -917,7 +914,7 @@ window.Codegen = (function () {
         <div class="cg-result-header">
           <div class="cg-result-title-wrap">
             <span class="cg-result-title"><i data-lucide="message-circle-question" class="lucide-icon" style="width:16px;height:16px;"></i> 需求澄清</span>
-            <span class="cg-mode-badge cg-mode-badge-clarify">Clarify</span>
+            <span class="cg-mode-badge cg-mode-badge-clarify">澄清</span>
           </div>
         </div>
         <div class="cg-result-desc">在继续之前，我需要确认以下问题（请逐条填写，留空表示由 AI 决定）：</div>
@@ -948,7 +945,7 @@ window.Codegen = (function () {
         <div class="cg-result-header">
           <div class="cg-result-title-wrap">
             <span class="cg-result-title"><i data-lucide="check-circle-2" class="lucide-icon" style="width:16px;height:16px;"></i> 澄清回答已记录</span>
-            <span class="cg-mode-badge cg-mode-badge-clarify">Clarify</span>
+            <span class="cg-mode-badge cg-mode-badge-clarify">澄清</span>
           </div>
         </div>
         <div class="cg-clarify-answer">
@@ -981,6 +978,7 @@ window.Codegen = (function () {
           <div class="cg-summary-md">${renderMarkdownSafe(s.summary || '（无说明）')}</div>
         </div>
         <div class="cg-result-actions">
+          <button class="cg-apply-btn" onclick="cgStartDev('${m._uid}')"><i data-lucide="play" class="lucide-icon" style="width:14px;height:14px;"></i> 开始开发</button>
           <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续规划</button>
         </div>
       </div>`;
@@ -1483,17 +1481,17 @@ window.Codegen = (function () {
       <!-- 输入区 -->
       <div class="cg-input-wrap">
         <div class="cg-mode-selector" id="codegenModeSelector">
-          <button class="cg-mode-btn${cgMode === 'craft' ? ' active' : ''}" data-mode="craft" onclick="cgSetMode('craft')" title="编写代码——全功能模式，可读写文件">
-            <i data-lucide="wand-2" class="lucide-icon" style="width:14px;height:14px;"></i> Craft
+          <button class="cg-mode-btn${cgMode === 'craft' ? ' active' : ''}" data-mode="craft" onclick="cgSetMode('craft')" title="开发——全功能模式，可读写文件">
+            <i data-lucide="wand-2" class="lucide-icon" style="width:14px;height:14px;"></i> 开发
           </button>
-          <button class="cg-mode-btn${cgMode === 'plan' ? ' active' : ''}" data-mode="plan" onclick="cgSetMode('plan')" title="出方案——只读，给出实现方案和架构设计">
-            <i data-lucide="map" class="lucide-icon" style="width:14px;height:14px;"></i> Plan
+          <button class="cg-mode-btn${cgMode === 'plan' ? ' active' : ''}" data-mode="plan" onclick="cgSetMode('plan')" title="方案——只读，给出实现方案和架构设计">
+            <i data-lucide="map" class="lucide-icon" style="width:14px;height:14px;"></i> 方案
           </button>
           <button class="cg-mode-btn${cgMode === 'ask' ? ' active' : ''}" data-mode="ask" onclick="cgSetMode('ask')" title="问答——只读，解答代码和应用问题">
-            <i data-lucide="help-circle" class="lucide-icon" style="width:14px;height:14px;"></i> Ask
+            <i data-lucide="help-circle" class="lucide-icon" style="width:14px;height:14px;"></i> 问答
           </button>
           <button class="cg-mode-btn${cgMode === 'clarify' ? ' active' : ''}" data-mode="clarify" onclick="cgSetMode('clarify')" title="澄清——只读，AI 先主动提问澄清需求，不写文件">
-            <i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;"></i> Clarify
+            <i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;"></i> 澄清
           </button>
         </div>
         <div class="cg-input-row">
@@ -1504,10 +1502,6 @@ window.Codegen = (function () {
             <i data-lucide="sparkles" class="lucide-icon" style="width:17px;height:17px;"></i>
             <span>运行 Agent</span>
           </button>
-        </div>
-        <div class="cg-samples">
-          <span class="cg-samples-label"><i data-lucide="lightbulb" class="lucide-icon" style="width:13px;height:13px;"></i> 试试：</span>
-          ${CG_SAMPLES.map(s => `<button class="cg-chip" onclick="fillCgSample('${escapeHtml(s).replace(/'/g, '\\u0027')}')">${escapeHtml(s)}</button>`).join('')}
         </div>
         <div class="cg-type-hint">
           <span><i data-lucide="puzzle" class="lucide-icon" style="width:13px;height:13px;"></i> 新增功能 → 生成「插件」</span>
@@ -1557,14 +1551,7 @@ window.Codegen = (function () {
     if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
   }
 
-  function fillCgSample(text) {
-    const input = document.getElementById('codegenReqInput');
-    if (input) {
-      input.value = String(text);
-      input.focus();
-      autoResizeCgInput();
-    }
-  }
+
 
   function openSettingsApiTab() {
     if (typeof openSettingsModal === 'function') openSettingsModal();
@@ -1851,6 +1838,60 @@ window.Codegen = (function () {
     }
   }
 
+  // plan 结束后开始开发：用该 plan 消息对应的原需求，切到 craft 模式直接运行 Agent
+  async function cgStartDev(uid) {
+    if (_generating) { cgStatus('已有 Agent 在运行，请等待完成。', true); return; }
+    const p = getActiveCgProject();
+    if (!p) return;
+    const m = findCgMessage(uid);
+    if (!m) return;
+    // 找该 assistant 消息之前最近的 user 消息作为需求
+    const idx = (p.messages || []).indexOf(m);
+    let req = '';
+    for (let i = idx - 1; i >= 0; i--) {
+      const um = p.messages[i];
+      if (um && um.role === 'user') { req = (um.content || '').trim(); break; }
+    }
+    if (!req) req = '请基于上面的方案开始开发。';
+    if (typeof cgSetMode === 'function') cgSetMode('craft');
+    const timeStr = nowTime();
+    p.messages.push({ role: 'user', content: req, time: timeStr, mode: 'craft' });
+    const aMsg = { role: 'assistant', content: '', time: timeStr, running: true, ok: false, exitCode: null, summary: null, log: '', logGroups: [], error: null, _uid: genCgId(), mode: 'craft' };
+    p.messages.push(aMsg);
+    saveCgProjects();
+    _generating = true;
+    renderCodegen();
+    scrollCgToBottom();
+    cgStatus('正在运行 CodeBuddy Agent（开始开发）…');
+    const appendAgentLog = createLogAppender(aMsg);
+    const off = (typeof window.electronAPI !== 'undefined' && window.electronAPI.onCodegenAgentOutput)
+      ? window.electronAPI.onCodegenAgentOutput((payload) => {
+          if (payload && payload.text) appendAgentLog(payload.text);
+        }) : null;
+    try {
+      const res = await runAgent(req, 'craft');
+      aMsg.running = false;
+      aMsg.ok = !!res.ok;
+      aMsg.exitCode = res.exitCode;
+      aMsg.summary = res.summary || null;
+      aMsg.clarify = res.clarify ? { questions: res.clarify.questions || [], answered: false, answer: '' } : null;
+      aMsg.error = !res.ok ? (res.stderr || 'exit-' + res.exitCode) : null;
+      saveCgProjects();
+    } catch (e) {
+      aMsg.running = false;
+      aMsg.ok = false;
+      aMsg.exitCode = null;
+      aMsg.error = String(e && e.message || e);
+      saveCgProjects();
+    } finally {
+      if (off) off();
+      _generating = false;
+      renderCodegen();
+      scrollCgToBottom();
+      cgStatus(aMsg.ok ? 'Agent 执行完成。' : 'Agent 执行失败，详见消息区日志。', !aMsg.ok);
+    }
+  }
+
   // 继续生成 / 重新输入（兼容入口：聚焦输入框）
   function cgContinue() {
     const input = document.getElementById('codegenReqInput');
@@ -1866,10 +1907,10 @@ window.Codegen = (function () {
   window.renderCodegen = renderCodegen;
   window.cgGenerate = cgGenerate;
   window.cgDiscard = cgDiscard;
-  window.fillCgSample = fillCgSample;
   window.openSettingsApiTab = openSettingsApiTab;
   window.openExtensionsSettings = openExtensionsSettings;
   window.cgContinue = cgContinue;
+  window.cgStartDev = cgStartDev;
   window.installCliFromCodegen = installCliFromCodegen;
   window.refreshCliBar = refreshCliBar;
   window.locateCodebuddyCli = locateCli;

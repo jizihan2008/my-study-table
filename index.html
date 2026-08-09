@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Study Table</title>
-<link rel="stylesheet" href="css/style.css?v=20260805-r22">
+<link rel="stylesheet" href="css/style.css?v=20260808-r30">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -1178,30 +1178,30 @@
 
 <script src="lib/katex/katex.min.js"></script>
 <script src="js/liquid-glass.js?v=20260722-r23"></script>
-<script src="js/core.js?v=20260805-r11"></script>
+<script src="js/core.js?v=20260807-r12"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
-<script src="js/todos.js?v=20260724-r13"></script>
+<script src="js/todos.js?v=20260807-r14"></script>
     <script src="js/notes.js?v=20260805-r12"></script>
     <script src="js/links.js?v=20260805-r7"></script>
     <script src="js/today.js?v=20260723-r1"></script>
     <!-- AI 模块（按依赖顺序加载） -->
-    <script src="js/ai-utils.js?v=20260805-r4"></script>
+    <script src="js/ai-utils.js?v=20260807-r5"></script>
     <script src="js/ai-tree.js?v=20260804-r3"></script>
     <script src="js/ai-conv.js?v=20260803-r1"></script>
-    <script src="js/ai-attach.js"></script>
+    <script src="js/ai-attach.js?v=20260807-r1"></script>
     <script src="js/ai-render.js?v=20260805-r8"></script>
-    <script src="js/ai-tools.js?v=20260806-r4"></script>
+    <script src="js/ai-tools.js?v=20260808-r5"></script>
     <script src="js/ai-search.js"></script>
     <script src="js/ai-api.js?v=20260803-r1"></script>
     <script src="js/ai-send.js?v=20260804-r3"></script>
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260803-r1"></script>
-    <script src="js/settings.js?v=20260806-r12"></script>
+    <script src="js/settings.js?v=20260807-r13"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <script src="js/calendar.js?v=20260724-r7"></script>
-    <script src="js/taskline.js?v=20260806-r7"></script>
-    <script src="js/timer.js?v=20260724-r19"></script>
+    <script src="js/taskline.js?v=20260809-r26"></script>
+    <script src="js/timer.js?v=20260809-r21"></script>
     <script src="js/habits.js?v=20260724-r1"></script>
     <script src="js/stats.js?v=20260724-r1"></script>
     <script src="js/updater.js?v=20260802-r1"></script>
@@ -1214,7 +1214,7 @@
     <script src="js/patch-engine.js?v=20260804-r1"></script>
     <script src="js/builtin-extensions.js?v=20260804-r1"></script>
     <script src="js/ext-manager.js?v=20260804-r2"></script>
-    <script src="js/codegen.js?v=20260805-r13"></script>
+    <script src="js/codegen.js?v=20260808-r14"></script>
     <script src="js/store.js?v=20260805-r13"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
@@ -1283,6 +1283,8 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-sep"></div>
   <div class="context-menu-item" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
   <div class="context-menu-item" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加至今日聚焦</div>
   <div id="todoCtxSortItems">
     <div class="context-menu-sep"></div>
     <div class="context-menu-item" onclick="todoCtxSort('alpha')"><i data-lucide="arrow-up-a-z" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按标题排序</div>
@@ -1291,6 +1293,26 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-sep"></div>
   <div class="context-menu-item" onclick="todoCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
   <div class="context-menu-item danger" onclick="todoCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
+</div>
+
+<!-- Right-click context menu for taskline graph -->
+<div class="context-menu" id="tlTaskContextMenu">
+  <div class="context-menu-item" id="tlCtxDragMode" onclick="tlCtxToggleDrag()"><i data-lucide="move" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 拖拽模式</div>
+  <div class="context-menu-item" onclick="tlCtxAddQuest()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加任务</div>
+  <div class="context-menu-item" onclick="tlCtxEditLine()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑章节</div>
+  <div class="context-menu-item" id="tlCtxAutoComplete" onclick="tlCtxToggleAuto()"><i data-lucide="check-circle" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 自动完成</div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item danger" onclick="tlCtxDeleteLine()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除章节</div>
+</div>
+
+<!-- Right-click context menu for a quest node -->
+<div class="context-menu" id="tlQuestContextMenu">
+  <div class="context-menu-item" id="tlQCtxSkip" onclick="tlQCtxSkip()"><i data-lucide="skip-forward" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 跳过任务</div>
+  <div class="context-menu-item" id="tlQCtxConfirm" onclick="tlQCtxConfirm()"><i data-lucide="play" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 确认任务</div>
+  <div class="context-menu-item" id="tlQCtxDone" onclick="tlQCtxDone()"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 完成任务</div>
+  <div class="context-menu-item" onclick="tlQCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑任务</div>
+  <div class="context-menu-sep"></div>
+  <div class="context-menu-item danger" onclick="tlQCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除任务</div>
 </div>
 
 <!-- Right-click context menu for categories -->

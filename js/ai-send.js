@@ -34,19 +34,19 @@ function updateAiSendButton() {
 }
 
 async function sendAiMessage() {
-  if (isAiLoading(getActiveConvId())) return;
+  if (isAiLoading(getActiveConvId())) return null;
   const input = document.getElementById('aiInput');
-  if (!input) return;
+  if (!input) return null;
   const text = input.value.trim();
   // Allow empty text if there are attachments
-  if (!text && aiAttachments.length === 0) return;
+  if (!text && aiAttachments.length === 0) return null;
   // Clear draft for this conv before sending
   clearAiDraft();
   const apiCfg = getEffectiveApiConfig();
-  if (!apiCfg.apiKey) { openSettingsModal(); return; }
+  if (!apiCfg.apiKey) { openSettingsModal(); return null; }
 
   const conv = getActiveConv();
-  if (!conv) return;
+  if (!conv) return null;
 
   // Snapshot current attachments
   const currentAttachments = [...aiAttachments];
@@ -165,8 +165,10 @@ async function sendAiMessage() {
   const deepThinkParams = buildDeepThinkParams(apiCfg);
   console.log('[API] model:', apiCfg.model, 'deepThink:', apiCfg.deepThink, 'deepThinkParams:', JSON.stringify(deepThinkParams));
 
+  let aiReplyText = null; // 最终回复文本（供调用方回填等使用）
   try {
     const { finalCleanText, finalRawReply, finalReasoning } = await runToolCallLoop(apiCfg, conv, null);
+    aiReplyText = finalCleanText || null;
 
     // Build the final assistant message
     const keyName = getActiveKeyDisplayName();
@@ -217,6 +219,8 @@ async function sendAiMessage() {
   if (shouldAutoTitle && typeof isAutoTitleEnabled === 'function' && isAutoTitleEnabled()) {
     generateConvTitle(conv);
   }
+
+  return aiReplyText;
 }
 
 // ═══════════ 树状对话：候选分支导航 ═══════════

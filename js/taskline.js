@@ -538,7 +538,8 @@ function buildAiSummary() {
 · deps 可引用任意章节的任务 ID（跨章节依赖，包括主线其他章节、其他素质线的任务），用上方 [ID:xxx] 锚点；
 · 主线关键任务（kind=main）作为章节里程碑锚点，支线任务（kind=side）应挂在锚点下方或相互交叉，形成分支汇合；
 · 禁止把所有任务排成 A→B→C→D 的单链：同一层级应并行展开（如主线打基础的同时，素质线可并行推进）；
-· deps 必须无环（草稿阶段可自行规划整张图），跨章节引用前先用 quest_get(lineId=章节ID) 确认任务存在。`;
+· deps 必须无环（草稿阶段可自行规划整张图），跨章节引用前先用 quest_get(lineId=章节ID) 确认任务存在。
+✍️ GTNH 任务描述风格（写 quest_create / quest_update 的 desc 时遵循）：像通关过的老玩家坐在旁边教你——第二人称"你"的向导口吻，短句+感叹号，轻松俏皮不端着。结构四段式：①钩子开场（"是时候...了"/"什么...?"/"你可能已经注意到..."）；②怎么做（具体路径，需要配方时用 NEI/tooltip 指路，不抄清单）；③意义/价值（"你将会..."，为什么重要）；④收尾激励（"作为奖励..."/"祝你好运"）。标题要短且有梗（谐音/口语），如「奶牛应该Moo!」。禁止说明书腔（第一步/第二步）、学术腔（综上所述）、空洞口号（努力吧）和网络烂梗。内容可以硬核，语气永远轻松。`;
   return s;
 }
 
@@ -580,11 +581,12 @@ function tlLineProgress(line) {
 
 // ─────────────────────── 任务图布局（GTNH 式平面图） ───────────────────────
 let tlActiveLineId = null;
-let tlDragMode = false; // 拖拽模式：开启后可在画布上手动拖动节点
+let tlDragMode = true; // 拖拽模式：默认开启，可直接拖动节点（点击=打开详情，按住拖动=移动）
+let tlSuppressClick = false; // 拖动后抑制节点 click（避免误开详情）
 const TL_NODE_H = 52;
 const TL_GAP_X = 56;
 const TL_GAP_Y = 20;
-const TL_PAD = 30;
+const TL_PAD = 60;
 
 function tlComputeDepth(quests) {
   const depth = {};
@@ -607,7 +609,36 @@ function tlComputeDepth(quests) {
   quests.forEach(q => calc(q));
   return depth;
 }
-// 返回 { width, height, nodes: { id, x, y, w }, edges: [{x1,y1,x2,y2,ext}], manual }
+// 计算两个节点之间"最接近"的连接锚点：从前置节点最接近目标节点的那条边，
+// 指向目标节点最接近前置节点的那条边。
+// 锚点始终取边的中点；在两对候选中点（水平：左右边中点对 / 垂直：上下边中点对）
+// 中按欧氏距离选择更短的一对，保证连线从最近的中点进出。
+// 特殊规则：两节点在水平方向有重叠（一方右端超过另一方左端）时，
+// 禁止用左/右缘中点连接（箭头会穿进重叠区域），强制改用上下边中点对。
+function tlEdgeAnchorPoints(a, b) {
+  const acx = a.x + a.w / 2, acy = a.y + a.h / 2;
+  const bcx = b.x + b.w / 2, bcy = b.y + b.h / 2;
+  // 水平方向是否重叠：a 的右端 > b 的左端 且 b 的右端 > a 的左端
+  const hOverlap = a.x + a.w > b.x && b.x + b.w > a.x;
+  // 垂直中点对：a 上 b 下 → a 底缘中点 ↔ b 顶缘中点；反之互换
+  let v1, v2;
+  if (acy <= bcy) { v1 = { x: acx, y: a.y + a.h }; v2 = { x: bcx, y: b.y }; }
+  else { v1 = { x: acx, y: a.y }; v2 = { x: bcx, y: b.y + b.h }; }
+  if (hOverlap) {
+    // 水平重叠：左/右缘中点会穿入重叠区，强制用垂直（上下边）中点对
+    return { x1: v1.x, y1: v1.y, x2: v2.x, y2: v2.y, vertical: true };
+  }
+  // 水平中点对：a 左 b 右 → a 右缘中点 ↔ b 左缘中点；反之互换
+  let h1, h2;
+  if (acx <= bcx) { h1 = { x: a.x + a.w, y: acy }; h2 = { x: b.x, y: bcy }; }
+  else { h1 = { x: a.x, y: acy }; h2 = { x: b.x + b.w, y: bcy }; }
+  const dist2 = (p, q) => (q.x - p.x) * (q.x - p.x) + (q.y - p.y) * (q.y - p.y);
+  const useH = dist2(h1, h2) <= dist2(v1, v2);
+  if (useH) return { x1: h1.x, y1: h1.y, x2: h2.x, y2: h2.y, vertical: false };
+  return { x1: v1.x, y1: v1.y, x2: v2.x, y2: v2.y, vertical: true };
+}
+
+// 返回 { width, height, nodes: { id, x, y, w }, edges: [{x1,y1,x2,y2,ext,vertical}], manual }
 // extQuests：跨章节外部占位任务（渲染为虚线灰框，不参与条件/解锁逻辑）
 function tlLayoutGraph(quests, extQuests) {
   const extList = (extQuests || []).map(e => Object.assign({}, e, { _ext: true, sort: -1 }));
@@ -653,11 +684,10 @@ function tlLayoutGraph(quests, extQuests) {
       const depPos = nodes[did];
       if (!depPos) continue;
       const dep = all.find(x => x.id === did);
+      const pt = tlEdgeAnchorPoints(depPos, srcPos);
       edges.push({
-        x1: depPos.x + depPos.w,
-        y1: depPos.y + TL_NODE_H / 2,
-        x2: srcPos.x,
-        y2: srcPos.y + TL_NODE_H / 2,
+        x1: pt.x1, y1: pt.y1, x2: pt.x2, y2: pt.y2,
+        vertical: pt.vertical,
         ext: !!(dep && dep._ext) // 指向外部占位节点的边用虚线
       });
     }
@@ -710,11 +740,10 @@ function tlLayoutGraphManual(quests, extList, all) {
       const depPos = nodes[did];
       if (!depPos) continue;
       const dep = all.find(x => x.id === did);
+      const pt = tlEdgeAnchorPoints(depPos, srcPos);
       edges.push({
-        x1: depPos.x + depPos.w,
-        y1: depPos.y + TL_NODE_H / 2,
-        x2: srcPos.x,
-        y2: srcPos.y + TL_NODE_H / 2,
+        x1: pt.x1, y1: pt.y1, x2: pt.x2, y2: pt.y2,
+        vertical: pt.vertical,
         ext: !!(dep && dep._ext) // 指向外部占位节点的边用虚线
       });
     }
@@ -735,29 +764,14 @@ function renderTaskLine() {
     tlActiveLineId = store.lines[0].id;
   }
   const line = store.lines.find(l => l.id === tlActiveLineId) || null;
-  const balance = tlRewardBalance(store);
   let html = '';
-  // ── 顶部工具条 ──
-  html += `<div class="tl-toolbar">
-    <button class="tl-tool-btn tl-tool-chapter" onclick="tlOpenChapterPanel('chapters')">
-      <i data-lucide="map" class="lucide-icon" style="width:15px;height:15px;"></i>
-      <span class="tl-tool-chapter-name">${line ? escapeHtml(line.name) : '选择章节'}</span>
-      <i data-lucide="chevron-down" class="lucide-icon" style="width:13px;height:13px;"></i>
-    </button>
-    <div class="tl-toolbar-stats">
-      <button class="tl-tool-btn" onclick="tlOpenChapterPanel('badges')" title="徽章收藏"><i data-lucide="award" class="lucide-icon" style="width:15px;height:15px;"></i><span>${store.badges.length}</span></button>
-      <button class="tl-tool-btn" onclick="tlOpenChapterPanel('rewards')" title="奖励兑换（可兑换 ${balance} 个任务额度）"><i data-lucide="gift" class="lucide-icon" style="width:15px;height:15px;"></i><span>${balance}</span></button>
-    </div>
-    <div class="tl-toolbar-actions">
-      <label class="tl-auto-toggle" title="条件满足时自动完成任务">
-        <input type="checkbox" class="tl-checkbox" ${store.toggle.autoComplete !== false ? 'checked' : ''} onchange="tlToggleAutoComplete(this.checked)">
-        <span>自动完成</span>
-      </label>
-      ${line ? `<button class="btn-add tl-tool-add" onclick="tlOpenQuestForm(${line.id})"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i>任务</button>` : ''}
-    </div>
-  </div>`;
-  // ── 主区域：任务图 ──
-  if (!line) {
+  // 任务图画布：占满整个卡片
+  html += `<div class="tl-layout">`;
+  html += `<div class="tl-main">`;
+  if (tlMainView === 'badges') {
+    // 主区域：徽章与奖励界面
+    html += tlRenderBadgesMain(store);
+  } else if (!line) {
     html += `<div class="tl-empty tl-empty-big">
       <i data-lucide="map" class="lucide-icon" style="width:52px;height:52px;opacity:.35;"></i>
       <p>任务线尚未开始。在 AI 对话中说「把我的目标拆成任务线」，让 AI 设计主线章节和素质线，任务图会在这里展开。</p>
@@ -769,9 +783,16 @@ function renderTaskLine() {
   } else {
     html += tlRenderGraph(store, line);
   }
-  html += `<div class="tl-footer-hint">💡 任务线由 AI 设计任务的样子：<b>金色框 = 主线关键任务</b>，<b>蓝色框 = 支线任务</b>，箭头 = 依赖关系。在 AI 对话中直接说「给英语素质线加任务」「查看任务线」即可。</div>`;
+  html += `</div>`;
+  // 右侧 hover 触发条（仿左侧界面栏）
+  html += `<div class="tl-sidebar-hover-trigger" id="tlSidebarHoverTrigger" title="展开任务线侧边栏"></div>`;
+  html += `</div>`;
+  // 右侧侧边栏：fixed 浮层，hover 滑入
+  html += tlRenderSidebar(store, line);
   app.innerHTML = html;
+  tlApplyGraphView(); // 恢复画布缩放/平移视图状态（若有画布）
   if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
+  initTlSidebarHover();
 }
 
 // 单章节任务图
@@ -813,7 +834,9 @@ function tlRenderGraph(store, line) {
     nodesHtml += `<div class="tl-node tl-node-${q.kind} tl-node-${q.status}${q.milestone ? ' tl-node-milestone' : ''}${tlDragMode ? ' tl-node-draggable' : ''}"
       style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;"
       data-qid="${q.id}"
-      ${tlDragMode ? `onmousedown="return tlNodeDragStart(event, ${q.id})"` : `onclick="tlOpenQuestDetail(${q.id})"`}
+      onmousedown="return tlNodeDragStart(event, ${q.id})"
+      onclick="tlOpenQuestDetail(${q.id})"
+      oncontextmenu="tlShowQuestContextMenu(event, ${q.id})"
       title="${escapeHtml(q.title)}">
       <div class="tl-node-head">
         <span class="tl-node-icon">${iconMap[q.status] || '❓'}</span>
@@ -842,30 +865,35 @@ function tlRenderGraph(store, line) {
   }
   let edgesHtml = '';
   for (const e of layout.edges) {
-    const mx = (e.x1 + e.x2) / 2;
     const cls = e.ext ? 'tl-edge tl-edge-ext' : 'tl-edge';
-    edgesHtml += `<path class="${cls}" d="M ${e.x1} ${e.y1} C ${mx} ${e.y1}, ${mx} ${e.y2}, ${e.x2} ${e.y2}" marker-end="url(#tlArrow)"/>`;
+    let d;
+    if (e.vertical) {
+      const my = (e.y1 + e.y2) / 2;
+      d = `M ${e.x1} ${e.y1} C ${e.x1} ${my}, ${e.x2} ${my}, ${e.x2} ${e.y2}`;
+    } else {
+      const mx = (e.x1 + e.x2) / 2;
+      d = `M ${e.x1} ${e.y1} C ${mx} ${e.y1}, ${mx} ${e.y2}, ${e.x2} ${e.y2}`;
+    }
+    edgesHtml += `<path class="${cls}" d="${d}" marker-end="url(#tlArrow)"/>`;
   }
-  const lockedBanner = isLocked ? `<div class="tl-locked-banner"><i data-lucide="lock" class="lucide-icon" style="width:14px;height:14px;"></i> 前置章节未完成，本章节任务已锁定</div>` : '';
-  return `<div class="tl-graph-wrap">
-    ${lockedBanner}
-    <div class="tl-graph-head">
-      <div class="tl-graph-title">
-        <span class="tl-line-type-badge ${line.type === 'main' ? 'tl-type-main' : 'tl-type-quality'}">${line.type === 'main' ? '主线章节' : '素质线'}</span>
-        <span class="tl-graph-name">${escapeHtml(line.name)}</span>
-      </div>
-      <div class="tl-graph-progress">
-        <div class="tl-graph-progress-track"><div class="tl-graph-progress-fill" style="width:${p.percent}%;"></div></div>
-        <span class="tl-graph-pct">${p.percent}%</span>
-      </div>
-      <div class="tl-graph-actions">
-        <button class="notes-undo-btn ${tlDragMode ? 'active' : ''}" onclick="tlToggleDragMode()" title="开启后可直接拖动节点调整位置（写入画布坐标）"><i data-lucide="${tlDragMode ? 'hand' : 'move'}" class="lucide-icon" style="width:13px;height:13px;"></i>${tlDragMode ? '拖拽中' : '拖拽'}</button>
-        <button class="notes-undo-btn" onclick="tlOpenLineEditForm(${line.id})" title="编辑章节"><i data-lucide="pencil" class="lucide-icon" style="width:13px;height:13px;"></i></button>
-        <button class="notes-undo-btn" onclick="tlDeleteLineAsk(${line.id})" title="删除章节"><i data-lucide="trash-2" class="lucide-icon" style="width:13px;height:13px;"></i></button>
-      </div>
-    </div>
-    ${line.desc ? `<div class="tl-graph-desc">${escapeHtml(line.desc)}</div>` : ''}
-    <div class="tl-graph-canvas">
+  // 图例（浮动在画布右下角）
+  const extCount = quests.reduce((acc, q) => {
+    for (const did of (q.deps || [])) {
+      const dep = store.quests.find(x => x.id === did);
+      if (dep && dep.lineId !== line.id) { acc.push(did); break; }
+    }
+    return acc;
+  }, []).length;
+  const legendHtml = `<div class="tl-graph-legend tl-graph-legend-float">
+    <span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-main"></span>主线关键</span>
+    <span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-side"></span>支线任务</span>
+    <span class="tl-legend-item"><i data-lucide="lock" class="lucide-icon" style="width:11px;height:11px;"></i>未解锁</span>
+    <span class="tl-legend-item"><i data-lucide="check" class="lucide-icon" style="width:11px;height:11px;"></i>已完成</span>
+    ${extCount > 0 ? `<span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-ext"></span>跨章节依赖</span>` : ''}
+  </div>`;
+  const lockedBanner = isLocked ? `<div class="tl-locked-banner tl-locked-banner-float"><i data-lucide="lock" class="lucide-icon" style="width:14px;height:14px;"></i> 前置章节未完成，本章节任务已锁定</div>` : '';
+  return `<div class="tl-graph-wrap" id="tlGraphWrap" oncontextmenu="tlShowGraphContextMenu(event, ${line.id})">
+    <div class="tl-graph-canvas" onmousedown="tlGraphCanvasDown(event)" onwheel="tlGraphCanvasWheel(event)">
       <div class="tl-graph-inner" style="width:${layout.width}px;height:${layout.height}px;">
         <svg class="tl-graph-svg" width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}">
           <defs><marker id="tlArrow" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="var(--primary)"/></marker></defs>
@@ -874,23 +902,421 @@ function tlRenderGraph(store, line) {
         <div class="tl-graph-nodes">${nodesHtml}</div>
       </div>
     </div>
-    <div class="tl-graph-legend">
-      <span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-main"></span>主线关键任务</span>
-      <span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-side"></span>支线任务</span>
-      <span class="tl-legend-item"><i data-lucide="lock" class="lucide-icon" style="width:11px;height:11px;"></i>未解锁</span>
-      <span class="tl-legend-item"><i data-lucide="check" class="lucide-icon" style="width:11px;height:11px;"></i>已完成</span>
-      ${extQuests.length > 0 ? `<span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-ext"></span>跨章节依赖（虚线，点击跳转）</span>` : ''}
-    </div>
+    ${lockedBanner}
+    ${legendHtml}
+    <div class="tl-zoom-indicator" id="tlZoomIndicator" onclick="tlResetGraphView()" title="复位视图（快捷键 R）：恢复 100% 缩放与初始位置">100%</div>
   </div>`;
 }
 
-// ── 拖拽模式：切换 / 节点拖动 ──
+// 主区域视图：'graph' 章节画布（默认） | 'badges' 徽章与奖励界面
+let tlMainView = 'graph';
+function tlShowBadges() {
+  tlMainView = 'badges';
+  renderTaskLine();
+}
+
+// 右侧侧边栏：fixed 浮层（仿左侧界面栏，hover 滑入/收起）
+// 仅章节列表（主线 + 独立章节）+ 底部「徽章与奖励」入口；
+// 章节级操作（拖拽/加任务/编辑/删除）移到任务图右键菜单
+function tlRenderSidebar(store, line) {
+  let html = `<div class="tl-sidebar" id="tlSidebar">`;
+  html += `<div class="tl-side-bar-head">
+    <span class="tl-side-bar-title">任务线</span>
+    <button class="tl-side-toggle" onclick="tlToggleSidebar()" title="收起侧边栏"><i data-lucide="panel-right-close" class="lucide-icon" style="width:15px;height:15px;"></i></button>
+  </div>`;
+  // 主线章节（无标题、无框）
+  html += `<div class="tl-side-group">${tlRenderSideLines(store, 'main')}</div>`;
+  html += `<div class="tl-side-sep"></div>`;
+  // 独立章节（无标题、无框）
+  html += `<div class="tl-side-group">${tlRenderSideLines(store, 'quality')}</div>`;
+  html += `<div class="tl-side-sep"></div>`;
+  // 徽章与奖励入口：点击后主卡片切换为徽章奖励界面
+  html += `<button class="tl-side-entry ${tlMainView === 'badges' ? 'active' : ''}" onclick="tlShowBadges()">
+    <i data-lucide="award" class="lucide-icon" style="width:15px;height:15px;"></i>
+    <span>徽章与奖励</span>
+    <i data-lucide="chevron-right" class="lucide-icon" style="width:13px;height:13px;margin-left:auto;"></i>
+  </button>`;
+  html += `</div>`;
+  return html;
+}
+
+// 侧边栏-章节列表项（type: main | quality），点击切换当前章节并回画布视图
+function tlRenderSideLines(store, type) {
+  const lines = store.lines.filter(l => l.type === type).sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  if (lines.length === 0) return `<div class="tl-catalog-empty">暂无${type === 'main' ? '主线' : '独立'}章节</div>`;
+  return lines.map(l => {
+    const p = tlLineProgress(l);
+    const isCur = l.id === tlActiveLineId && tlMainView !== 'badges';
+    const curMark = isCur ? '<span class="tl-catalog-cur">当前</span>' : '';
+    const lockMark = p.locked ? ' <span class="tl-catalog-lock">🔒</span>' : '';
+    return `<div class="tl-catalog-item ${isCur ? 'active' : ''}" onclick="tlSwitchLine(${l.id})">
+      <div class="tl-catalog-item-main">
+        <span class="tl-catalog-name">${escapeHtml(l.name)}</span>${curMark}${lockMark}
+        <span class="tl-catalog-progress">${p.done}/${p.total} · ${p.percent}%</span>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// 主区域-徽章与奖励界面（点侧边栏「徽章与奖励」入口后主卡片显示）
+function tlRenderBadgesMain(store) {
+  const doneCount = tlDoneCount(store);
+  const balance = tlRewardBalance(store);
+  let html = `<div class="tl-badges-main">`;
+  html += `<div class="tl-badges-main-head">
+    <span class="tl-badges-main-title"><i data-lucide="award" class="lucide-icon" style="width:18px;height:18px;"></i> 徽章与奖励</span>
+  </div>`;
+  // 徽章收藏
+  html += `<div class="tl-badges-card">
+    <div class="tl-catalog-label">徽章收藏</div>
+    ${store.badges.length === 0
+      ? '<div class="tl-badge-empty">完成第一个任务即可获得首枚徽章</div>'
+      : `<div class="tl-badge-list tl-badges-big">${store.badges.slice().reverse().map(b => `
+          <div class="tl-badge" title="${escapeHtml(b.desc)}">
+            <div class="tl-badge-icon">${b.icon}</div>
+            <div class="tl-badge-name">${escapeHtml(b.name)}</div>
+            <div class="tl-badge-date">${(new Date(b.earnedAt)).toLocaleDateString('zh-CN')}</div>
+          </div>`).join('')}</div>`}
+  </div>`;
+  // 自定义奖励池
+  html += `<div class="tl-badges-card">
+    <div class="tl-catalog-label">自定义奖励池 <span class="tl-pool-hint">完成任务解锁自己的欲望清单</span></div>
+    <div class="tl-pool-balance">已完成任务 ${doneCount} 个｜可兑换额度 <b>${balance}</b></div>
+    <div class="tl-pool-form">
+      <input type="text" id="tlRewardName" placeholder="奖励名称，如：看一集剧 / 一杯奶茶">
+      <input type="number" id="tlRewardCost" placeholder="需完成任务数" style="width:110px;" min="1" value="1">
+      <button class="btn-add" onclick="tlSubmitReward()"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i>添加</button>
+    </div>
+    <div class="tl-pool-list">
+      ${store.rewards.length === 0
+        ? '<div class="tl-badge-empty">暂无自定义奖励，添加一个让自己有期待的目标吧</div>'
+        : store.rewards.map(r => `
+          <div class="tl-pool-item ${r.redeemed ? 'tl-pool-redeemed' : ''}">
+            <span class="tl-pool-icon">${r.icon}</span>
+            <span class="tl-pool-name">${escapeHtml(r.name)}</span>
+            <span class="tl-pool-cost">${r.redeemed ? '已兑换' : r.cost + ' 任务'}</span>
+            ${r.redeemed
+              ? `<button class="notes-undo-btn" onclick="tlDeleteReward(${r.id})" title="删除"><i data-lucide="trash-2" class="lucide-icon" style="width:12px;height:12px;"></i></button>`
+              : `<button class="notes-undo-btn tl-pool-redeem-btn" onclick="tlRedeemReward(${r.id})" title="兑换"><i data-lucide="gift" class="lucide-icon" style="width:12px;height:12px;"></i></button>
+                 <button class="notes-undo-btn" onclick="tlDeleteReward(${r.id})" title="删除"><i data-lucide="trash-2" class="lucide-icon" style="width:12px;height:12px;"></i></button>`}
+          </div>`).join('')}
+    </div>
+  </div>`;
+  html += `</div>`;
+  return html;
+}
+
+
+// ── 右侧侧边栏（hover 触发）/ 拖拽模式切换 / 节点拖动 ──
+let tlSidebarCloseTimer = null;
+const TL_SIDEBAR_HOVER_DELAY = 300;
+
+function openTlSidebar() {
+  if (tlSidebarCloseTimer) { clearTimeout(tlSidebarCloseTimer); tlSidebarCloseTimer = null; }
+  const sb = document.getElementById('tlSidebar');
+  if (sb) sb.classList.add('open');
+}
+function scheduleCloseTlSidebar() {
+  if (tlSidebarCloseTimer) clearTimeout(tlSidebarCloseTimer);
+  tlSidebarCloseTimer = setTimeout(function () {
+    const sb = document.getElementById('tlSidebar');
+    if (sb) sb.classList.remove('open');
+    tlSidebarCloseTimer = null;
+  }, TL_SIDEBAR_HOVER_DELAY);
+}
+function tlToggleSidebar() {
+  const sb = document.getElementById('tlSidebar');
+  if (!sb) return;
+  if (sb.classList.contains('open')) sb.classList.remove('open');
+  else sb.classList.add('open');
+}
+function initTlSidebarHover() {
+  const trigger = document.getElementById('tlSidebarHoverTrigger');
+  const sb = document.getElementById('tlSidebar');
+  if (!trigger || !sb) return;
+  trigger.addEventListener('mouseenter', openTlSidebar);
+  sb.addEventListener('mouseenter', openTlSidebar);
+  sb.addEventListener('mouseleave', scheduleCloseTlSidebar);
+}
 function tlToggleDragMode() {
   tlDragMode = !tlDragMode;
   renderTaskLine();
 }
-// 拖拽开始（仅拖拽模式下由节点 onmousedown 触发）
+
+// ── 任务图右键菜单（拖拽切换 / 添加任务 / 编辑章节 / 删除章节）──
+let tlGraphCtxLineId = null;
+// 右键位置相对画布 inner 的坐标（用于「添加任务」定位，pos 需减去 TL_PAD 偏移）
+let tlGraphCtxPos = null;
+function tlShowGraphContextMenu(ev, lineId) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  tlCloseQuestContextMenu(); // 任务级菜单已打开时，先关闭再显示图级菜单
+  const menu = document.getElementById('tlTaskContextMenu');
+  if (!menu) return;
+  tlGraphCtxLineId = lineId;
+  // 记录鼠标在画布 inner 内的位置（相对 inner 左上角，含平移偏移后的实际画布坐标）
+  const wrap = ev.currentTarget.closest('.tl-graph-wrap');
+  const inner = wrap ? wrap.querySelector('.tl-graph-inner') : null;
+  if (inner) {
+    const iRect = inner.getBoundingClientRect();
+    // 除以当前缩放：iRect 是 transform 后的视觉尺寸，需换算回画布绝对坐标
+    tlGraphCtxPos = { x: (ev.clientX - iRect.left) / tlGraphView.scale, y: (ev.clientY - iRect.top) / tlGraphView.scale };
+  } else {
+    tlGraphCtxPos = null;
+  }
+  // 同步当前拖拽模式状态
+  const dragItem = menu.querySelector('#tlCtxDragMode');
+  if (dragItem) {
+    dragItem.innerHTML = `<i data-lucide="${tlDragMode ? 'hand' : 'move'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> ${tlDragMode ? '关闭拖拽模式' : '开启拖拽模式'}`;
+  }
+  // 同步自动完成状态
+  const store = loadTaskLineStore();
+  const autoItem = menu.querySelector('#tlCtxAutoComplete');
+  if (autoItem) {
+    const on = store.toggle.autoComplete !== false;
+    autoItem.innerHTML = `<i data-lucide="${on ? 'check-circle' : 'circle'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> ${on ? '自动完成：开' : '自动完成：关'}`;
+  }
+  menu.style.left = ev.clientX + 'px';
+  menu.style.top = ev.clientY + 'px';
+  menu.classList.add('visible');
+  // 边界修正
+  const rect = menu.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (rect.right > vw) menu.style.left = Math.max(0, vw - rect.width - 6) + 'px';
+  if (rect.bottom > vh) menu.style.top = Math.max(0, vh - rect.height - 6) + 'px';
+  if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
+}
+function tlCloseGraphContextMenu() {
+  const menu = document.getElementById('tlTaskContextMenu');
+  if (menu) menu.classList.remove('visible');
+  tlGraphCtxLineId = null;
+}
+
+// ── 任务级右键菜单（跳过 / 确认 / 完成 / 编辑 / 删除）──
+let tlQuestCtxId = null;
+function tlShowQuestContextMenu(ev, questId) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  tlCloseGraphContextMenu(); // 图级菜单已打开时，先关闭再显示任务级菜单
+  const menu = document.getElementById('tlQuestContextMenu');
+  if (!menu) return;
+  tlQuestCtxId = questId;
+  const q = tlGetQuest(questId);
+  if (!q) return;
+  // 同步「确认任务 / 完成任务」按钮的显示状态
+  const confirmItem = document.getElementById('tlQCtxConfirm');
+  const doneItem = document.getElementById('tlQCtxDone');
+  const skipItem = document.getElementById('tlQCtxSkip');
+  if (confirmItem) confirmItem.style.display = q.status === 'draft' ? '' : 'none';
+  if (doneItem) doneItem.style.display = q.status === 'active' ? '' : 'none';
+  if (skipItem) skipItem.style.display = q.status === 'done' ? 'none' : '';
+  // 已完成的额外禁用删除？不，删除始终可用
+  menu.style.left = ev.clientX + 'px';
+  menu.style.top = ev.clientY + 'px';
+  menu.classList.add('visible');
+  const rect = menu.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (rect.right > vw) menu.style.left = Math.max(0, vw - rect.width - 6) + 'px';
+  if (rect.bottom > vh) menu.style.top = Math.max(0, vh - rect.height - 6) + 'px';
+  if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
+}
+function tlCloseQuestContextMenu() {
+  const menu = document.getElementById('tlQuestContextMenu');
+  if (menu) menu.classList.remove('visible');
+  tlQuestCtxId = null;
+}
+// 任务级菜单动作
+function tlQCtxSkip() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlSkipQuest(id);
+}
+function tlQCtxConfirm() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlActivateQuest(id);
+}
+function tlQCtxDone() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlCompleteQuest(id);
+}
+function tlQCtxEdit() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlEditQuestForm(id);
+}
+function tlQCtxDelete() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlDeleteQuestAsk(id);
+}
+// 右键菜单动作
+function tlCtxToggleDrag() {
+  tlCloseGraphContextMenu();
+  tlToggleDragMode();
+}
+function tlCtxAddQuest() {
+  const id = tlGraphCtxLineId;
+  const p = tlGraphCtxPos;
+  tlCloseGraphContextMenu();
+  if (id != null) tlOpenQuestForm(id, p);
+}
+function tlCtxEditLine() {
+  const id = tlGraphCtxLineId;
+  tlCloseGraphContextMenu();
+  if (id != null) tlOpenLineEditForm(id);
+}
+function tlCtxDeleteLine() {
+  const id = tlGraphCtxLineId;
+  tlCloseGraphContextMenu();
+  if (id != null) tlDeleteLineAsk(id);
+}
+// ── 画布平移（手型工具）──
+// 视口固定为主卡片区域（overflow hidden），拖动空白处平移 .tl-graph-inner 位置
+let tlGraphPan = null; // { startX, startY, origLeft, origTop }
+// 平移自由余量：内容允许完全拖出视口（露出的空白区域大小），防止拖到找不回
+const TL_PAN_MARGIN = 150;
+// 画布缩放范围：40% ~ 300%
+const TL_SCALE_MIN = 0.4, TL_SCALE_MAX = 3;
+// 画布视图状态：缩放比例 + 内容偏移（px）。重绘后由 tlApplyGraphView 恢复。
+let tlGraphView = { scale: 1, left: 0, top: 0 };
+// 视图状态钳制（内容不会完全拖出视口）
+function tlClampGraphView(inner, canvas) {
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const iw = inner.offsetWidth * tlGraphView.scale, ih = inner.offsetHeight * tlGraphView.scale;
+  const nl = Math.min(cw + TL_PAN_MARGIN, Math.max(-(iw + TL_PAN_MARGIN), tlGraphView.left));
+  const nt = Math.min(ch + TL_PAN_MARGIN, Math.max(-(ih + TL_PAN_MARGIN), tlGraphView.top));
+  tlGraphView.left = nl;
+  tlGraphView.top = nt;
+}
+// 重绘后恢复视图（切换章节 / 拖拽节点重绘后保留缩放与平移位置）
+function tlApplyGraphView() {
+  if (tlMainView !== 'graph') return;
+  const wrap = document.getElementById('tlGraphWrap');
+  const canvas = wrap ? wrap.querySelector('.tl-graph-canvas') : null;
+  const inner = canvas ? canvas.querySelector('.tl-graph-inner') : null;
+  if (!canvas || !inner) return;
+  tlClampGraphView(inner, canvas);
+  inner.style.left = tlGraphView.left + 'px';
+  inner.style.top = tlGraphView.top + 'px';
+  inner.style.transform = tlGraphView.scale === 1 ? '' : `scale(${tlGraphView.scale})`;
+  inner.style.transformOrigin = '0 0';
+  tlUpdateGraphZoomUI();
+}
+// 滚轮缩放（锚定鼠标位置：缩放后鼠标指向的内容保持不动）
+function tlGraphCanvasWheel(ev) {
+  ev.preventDefault();
+  ev.stopPropagation();
+  const canvas = ev.currentTarget;
+  const inner = canvas.querySelector('.tl-graph-inner');
+  if (!inner) return;
+  const rect = canvas.getBoundingClientRect();
+  const mx = ev.clientX - rect.left, my = ev.clientY - rect.top;
+  const factor = Math.exp(-ev.deltaY * 0.0015); // 平滑指数缩放
+  const ns = Math.min(TL_SCALE_MAX, Math.max(TL_SCALE_MIN, tlGraphView.scale * factor));
+  if (ns === tlGraphView.scale) return;
+  const k = ns / tlGraphView.scale;
+  tlGraphView.scale = ns;
+  tlGraphView.left = mx - (mx - tlGraphView.left) * k;
+  tlGraphView.top = my - (my - tlGraphView.top) * k;
+  tlClampGraphView(inner, canvas);
+  inner.style.transform = `scale(${tlGraphView.scale})`;
+  inner.style.transformOrigin = '0 0';
+  inner.style.left = tlGraphView.left + 'px';
+  inner.style.top = tlGraphView.top + 'px';
+  tlUpdateGraphZoomUI();
+}
+// 复位视图：恢复 100% 缩放与初始位置（快捷键 R）
+function tlResetGraphView() {
+  tlGraphView = { scale: 1, left: 0, top: 0 };
+  const canvas = document.getElementById('tlGraphWrap');
+  const inner = canvas ? canvas.querySelector('.tl-graph-inner') : null;
+  if (inner) {
+    inner.style.transform = '';
+    inner.style.left = '0px';
+    inner.style.top = '0px';
+  }
+  tlUpdateGraphZoomUI();
+}
+// 更新左下角缩放指示器
+function tlUpdateGraphZoomUI() {
+  const el = document.getElementById('tlZoomIndicator');
+  if (el) el.textContent = Math.round(tlGraphView.scale * 100) + '%';
+}
+function tlGraphCanvasDown(ev) {
+  // 点击到节点 / 浮动图例 / 缩放指示器 / 锁定横幅上时不平移（节点有自己的拖拽逻辑）
+  if (ev.target.closest('.tl-node') || ev.target.closest('.tl-graph-legend-float') || ev.target.closest('.tl-locked-banner-float') || ev.target.closest('.tl-zoom-indicator')) return;
+  const canvas = ev.currentTarget;
+  const inner = canvas.querySelector('.tl-graph-inner');
+  if (!inner) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const startX = ev.clientX, startY = ev.clientY;
+  const origLeft = tlGraphView.left;
+  const origTop = tlGraphView.top;
+  canvas.classList.add('tl-graph-panning');
+  tlGraphPan = { startX, startY, origLeft, origTop };
+  function onMove(e) {
+    if (!tlGraphPan) return;
+    const dx = e.clientX - tlGraphPan.startX;
+    const dy = e.clientY - tlGraphPan.startY;
+    // 自由平移：内容可拖出视口任意一侧（露出大块空白），仅在两侧保留 TL_PAN_MARGIN 余量避免完全丢失
+    tlGraphView.left = tlGraphPan.origLeft + dx;
+    tlGraphView.top = tlGraphPan.origTop + dy;
+    tlClampGraphView(inner, canvas);
+    inner.style.left = tlGraphView.left + 'px';
+    inner.style.top = tlGraphView.top + 'px';
+  }
+  function onUp() {
+    document.removeEventListener('mousemove', onMove);
+    document.removeEventListener('mouseup', onUp);
+    if (canvas) canvas.classList.remove('tl-graph-panning');
+    tlGraphPan = null;
+  }
+  document.addEventListener('mousemove', onMove);
+  document.addEventListener('mouseup', onUp);
+}
+
+function tlCtxToggleAuto() {
+  const id = tlGraphCtxLineId;
+  tlCloseGraphContextMenu();
+  if (id != null) {
+    const store = loadTaskLineStore();
+    const on = store.toggle.autoComplete !== false;
+    tlToggleAutoComplete(!on);
+  }
+}
+// 左键/右键点击任意菜单外部时，关闭任务线右键菜单（图级 + 任务级）
+function tlCloseAllContextMenus() {
+  tlCloseGraphContextMenu();
+  tlCloseQuestContextMenu();
+}
+// 快捷键：R 复位任务图视图（恢复 100% 缩放与初始位置）
+document.addEventListener('keydown', function (e) {
+  if (e.key !== 'r' && e.key !== 'R') return;
+  // 焦点在输入框/可编辑区域时不触发
+  const ae = document.activeElement;
+  if (ae && (ae.tagName === 'INPUT' || ae.tagName === 'TEXTAREA' || ae.tagName === 'SELECT' || ae.isContentEditable)) return;
+  // 仅当任务线章节画布可见时生效
+  const section = document.getElementById('section-taskline');
+  if (section && section.classList.contains('active') && document.getElementById('tlGraphWrap')) {
+    e.preventDefault();
+    tlResetGraphView();
+  }
+});
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('#tlTaskContextMenu') && !e.target.closest('#tlQuestContextMenu')) tlCloseAllContextMenus();
+});
+document.addEventListener('contextmenu', function (e) {
+  // 新右键菜单自身已 stopPropagation 不会冒泡到这里；此处捕获点击其它区域时关闭菜单
+  if (!e.target.closest('#tlTaskContextMenu') && !e.target.closest('#tlQuestContextMenu')) tlCloseAllContextMenus();
+});
+// 拖拽开始（节点 onmousedown 触发；tlDragMode 关闭时返回 true 放行点击）
 function tlNodeDragStart(ev, questId) {
+  // 右键（button 2）不启动节点拖拽，留给右键菜单
+  if (ev.button === 2) return true;
+  if (!tlDragMode) return true; // 拖拽关闭：不拦截，正常触发 onclick 打开详情
   ev.preventDefault();
   ev.stopPropagation();
   const el = ev.currentTarget;
@@ -901,20 +1327,23 @@ function tlNodeDragStart(ev, questId) {
   function onMove(e) {
     const dx = e.clientX - startX, dy = e.clientY - startY;
     moved.x = dx; moved.y = dy;
-    el.style.left = (origLeft + dx) + 'px';
-    el.style.top = (origTop + dy) + 'px';
+    // 屏幕像素差需除以当前缩放换算为画布坐标差
+    el.style.left = (origLeft + dx / tlGraphView.scale) + 'px';
+    el.style.top = (origTop + dy / tlGraphView.scale) + 'px';
     el.style.zIndex = 50;
     dragging = true;
   }
   function onUp() {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
-    if (!dragging) { tlOpenQuestDetail(questId); return; } // 未拖动 = 点击，打开详情
+    if (!dragging) return; // 未拖动 = 点击，onclick 会打开详情
+    tlSuppressClick = true; // 拖动过：抑制随后的 click 事件
+    setTimeout(function () { tlSuppressClick = false; }, 0);
     // 写入画布坐标（减去 TL_PAD，与手动布局坐标一致）
     const q = tlGetQuest(questId);
     if (q) {
-      const newX = Math.max(0, Math.round(origLeft + moved.x - TL_PAD));
-      const newY = Math.max(0, Math.round(origTop + moved.y - TL_PAD));
+      const newX = Math.max(0, Math.round(origLeft + moved.x / tlGraphView.scale - TL_PAD));
+      const newY = Math.max(0, Math.round(origTop + moved.y / tlGraphView.scale - TL_PAD));
       tlUpdateQuest(questId, { pos: { x: newX, y: newY } });
     }
     renderTaskLine(); // 重绘，重新计算连线
@@ -924,97 +1353,9 @@ function tlNodeDragStart(ev, questId) {
   return false; // 阻止默认拖拽/选中
 }
 
-// 章节目录浮窗（章节 / 徽章 / 奖励兑换 三个 tab）
-function tlOpenChapterPanel(tab) {
-  const body = document.getElementById('editModalBody');
-  const title = document.getElementById('editModalTitle');
-  title.innerHTML = '<i data-lucide="map" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 章节目录';
-  const store = loadTaskLineStore();
-  const mains = store.lines.filter(l => l.type === 'main').sort((a, b) => (a.sort || 0) - (b.sort || 0));
-  const quals = store.lines.filter(l => l.type === 'quality').sort((a, b) => (a.sort || 0) - (b.sort || 0));
-  const cur = tab || 'chapters';
-  let content = '';
-  if (cur === 'chapters') {
-    content = `<div class="tl-catalog">
-      <div class="tl-catalog-section">
-        <div class="tl-catalog-label">主线章节（顺序推进）</div>
-        ${mains.length === 0 ? '<div class="tl-catalog-empty">暂无主线章节</div>' : mains.map(l => {
-          const p = tlLineProgress(l);
-          const curMark = l.id === tlActiveLineId ? '<span class="tl-catalog-cur">当前</span>' : '';
-          const lockMark = p.locked ? ' <span class="tl-catalog-lock">🔒</span>' : '';
-          return `<div class="tl-catalog-item ${l.id === tlActiveLineId ? 'active' : ''}" onclick="tlSwitchLine(${l.id})">
-            <div class="tl-catalog-item-main">
-              <span class="tl-catalog-name">${escapeHtml(l.name)}</span>${curMark}${lockMark}
-              <span class="tl-catalog-progress">${p.done}/${p.total} · ${p.percent}%</span>
-            </div>
-          </div>`;
-        }).join('')}
-        <button class="tl-catalog-add" onclick="tlOpenLineForm('main')"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i>新建主线章节</button>
-      </div>
-      <div class="tl-catalog-section">
-        <div class="tl-catalog-label">素质线（并行成长）</div>
-        ${quals.length === 0 ? '<div class="tl-catalog-empty">暂无素质线</div>' : quals.map(l => {
-          const p = tlLineProgress(l);
-          const curMark = l.id === tlActiveLineId ? '<span class="tl-catalog-cur">当前</span>' : '';
-          return `<div class="tl-catalog-item ${l.id === tlActiveLineId ? 'active' : ''}" onclick="tlSwitchLine(${l.id})">
-            <div class="tl-catalog-item-main">
-              <span class="tl-catalog-name">${escapeHtml(l.name)}</span>${curMark}
-              <span class="tl-catalog-progress">${p.done}/${p.total} · ${p.percent}%</span>
-            </div>
-          </div>`;
-        }).join('')}
-        <button class="tl-catalog-add" onclick="tlOpenLineForm('quality')"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i>新建素质线</button>
-      </div>
-    </div>`;
-  } else if (cur === 'badges') {
-    content = `<div class="tl-catalog">
-      <div class="tl-catalog-label">徽章收藏</div>
-      <div class="tl-badge-list">
-        ${store.badges.length === 0 ? '<div class="tl-badge-empty">完成第一个任务即可获得首枚徽章</div>' : store.badges.slice().reverse().map(b => `
-          <div class="tl-badge" title="${escapeHtml(b.desc)}">
-            <div class="tl-badge-icon">${b.icon}</div>
-            <div class="tl-badge-name">${escapeHtml(b.name)}</div>
-            <div class="tl-badge-date">${(new Date(b.earnedAt)).toLocaleDateString('zh-CN')}</div>
-          </div>`).join('')}
-      </div>
-    </div>`;
-  } else if (cur === 'rewards') {
-    const doneCount = tlDoneCount(store);
-    const balance = tlRewardBalance(store);
-    content = `<div class="tl-catalog">
-      <div class="tl-catalog-label">自定义奖励池 <span class="tl-pool-hint">完成任务解锁自己的欲望清单</span></div>
-      <div class="tl-pool-balance">已完成任务 ${doneCount} 个｜可兑换额度 <b>${balance}</b></div>
-      <div class="tl-pool-form">
-        <input type="text" id="tlRewardName" placeholder="奖励名称，如：看一集剧 / 一杯奶茶">
-        <input type="number" id="tlRewardCost" placeholder="需完成任务数" style="width:110px;" min="1" value="1">
-        <button class="btn-add" onclick="tlSubmitReward()"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i>添加</button>
-      </div>
-      <div class="tl-pool-list">
-        ${store.rewards.length === 0 ? '<div class="tl-badge-empty">暂无自定义奖励，添加一个让自己有期待的目标吧</div>' : store.rewards.map(r => `
-          <div class="tl-pool-item ${r.redeemed ? 'tl-pool-redeemed' : ''}">
-            <span class="tl-pool-icon">${r.icon}</span>
-            <span class="tl-pool-name">${escapeHtml(r.name)}</span>
-            <span class="tl-pool-cost">${r.redeemed ? '已兑换' : r.cost + ' 任务'}</span>
-            ${r.redeemed
-              ? `<button class="notes-undo-btn" onclick="tlDeleteReward(${r.id})" title="删除"><i data-lucide="trash-2" class="lucide-icon" style="width:12px;height:12px;"></i></button>`
-              : `<button class="notes-undo-btn tl-pool-redeem-btn" onclick="tlRedeemReward(${r.id})" title="兑换"><i data-lucide="gift" class="lucide-icon" style="width:12px;height:12px;"></i></button>
-                 <button class="notes-undo-btn" onclick="tlDeleteReward(${r.id})" title="删除"><i data-lucide="trash-2" class="lucide-icon" style="width:12px;height:12px;"></i></button>`}
-          </div>`).join('')}
-      </div>
-    </div>`;
-  }
-  body.innerHTML = `
-    <div class="tl-catalog-tabs">
-      <button class="tl-catalog-tab ${cur === 'chapters' ? 'active' : ''}" onclick="tlOpenChapterPanel('chapters')"><i data-lucide="map" class="lucide-icon" style="width:13px;height:13px;"></i>章节</button>
-      <button class="tl-catalog-tab ${cur === 'badges' ? 'active' : ''}" onclick="tlOpenChapterPanel('badges')"><i data-lucide="award" class="lucide-icon" style="width:13px;height:13px;"></i>徽章${store.badges.length > 0 ? '(' + store.badges.length + ')' : ''}</button>
-      <button class="tl-catalog-tab ${cur === 'rewards' ? 'active' : ''}" onclick="tlOpenChapterPanel('rewards')"><i data-lucide="gift" class="lucide-icon" style="width:13px;height:13px;"></i>奖励兑换</button>
-    </div>
-    <div class="tl-catalog-body">${content}</div>`;
-  document.getElementById('editModal').classList.add('open');
-  if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
-}
 function tlSwitchLine(id) {
   tlActiveLineId = id;
+  tlMainView = 'graph'; // 从侧边栏选章节 → 回到章节画布视图
   closeEditModal();
   renderTaskLine();
 }
@@ -1070,10 +1411,15 @@ function tlSubmitLineForm(id) {
   renderTaskLine();
 }
 
-function tlOpenQuestForm(lineId) {
+let tlQuestFormPos = null; // 临时：右键添加任务时的画布位置（绝对坐标，已减 TL_PAD）
+function tlOpenQuestForm(lineId, canvasPos) {
   const store = loadTaskLineStore();
   const line = store.lines.find(l => l.id === lineId);
   if (!line) return;
+  // 从「相对 inner 左上角」的点击位置换算为任务画布绝对坐标（pos 需减去 TL_PAD 内边距）
+  tlQuestFormPos = canvasPos
+    ? { x: Math.max(0, Math.round(canvasPos.x - TL_PAD)), y: Math.max(0, Math.round(canvasPos.y - TL_PAD)) }
+    : null;
   const body = document.getElementById('editModalBody');
   const title = document.getElementById('editModalTitle');
   title.innerHTML = '<i data-lucide="swords" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 添加任务';
@@ -1107,14 +1453,17 @@ function tlSubmitQuestForm(lineId) {
     lineId,
     title,
     kind,
-    desc: document.getElementById('tlQuestDesc').value.trim()
+    desc: document.getElementById('tlQuestDesc').value.trim(),
+    pos: tlQuestFormPos
   });
+  tlQuestFormPos = null;
   closeEditModal();
   renderTaskLine();
 }
 
 // ─────────────────────── 任务详情浮层 ───────────────────────
 function tlOpenQuestDetail(id) {
+  if (tlSuppressClick) { tlSuppressClick = false; return; } // 拖动后抑制误开详情
   const store = loadTaskLineStore();
   const q = store.quests.find(x => x.id === id);
   if (!q) return;
@@ -1197,10 +1546,12 @@ function tlOpenQuestDetail(id) {
 function tlEditQuestForm(id) {
   const q = tlGetQuest(id);
   if (!q) return;
+  const store = loadTaskLineStore();
   const typeLabel = { todo: '📋 待办', note: '📝 笔记', timer: '⏱️ 计时', manual: '🖐️ 手动' };
   const body = document.getElementById('editModalBody');
   const title = document.getElementById('editModalTitle');
   title.innerHTML = '<i data-lucide="pencil" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 编辑任务';
+  const depOptions = tlRenderDepOptions(q.id);
   body.innerHTML = `
     <div style="display:flex;flex-direction:column;gap:10px;min-width:360px;">
       <label class="settings-label" style="margin:0;">任务类型</label>
@@ -1212,6 +1563,30 @@ function tlEditQuestForm(id) {
       <input type="text" id="tlQuestTitle" value="${escapeHtml(q.title)}" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);">
       <label class="settings-label" style="margin:0;">任务描述（一段文字，说明目标、意义与产出）</label>
       <textarea id="tlQuestDesc" rows="5" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);resize:vertical;line-height:1.6;">${escapeHtml(q.desc || '')}</textarea>
+      <div class="tl-ai-gen-row">
+        <input type="text" id="tlQuestAiHint" placeholder="可选：告诉 AI 生成方向，如「突出刷材料的步骤」" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);font-size:12px;flex:1;min-width:0;">
+        <button class="btn-add tl-edit-cond-btn" id="tlAiGenBtn" onclick="tlAiGenerateDesc(${q.id})" title="把任务标题、章节、前置/下游任务、完成条件发给 AI，按 GTNH 风格生成一段介绍并回填"><i data-lucide="sparkles" class="lucide-icon" style="width:13px;height:13px;"></i>AI 生成介绍</button>
+      </div>
+      <label class="settings-label" style="margin:0;">前置依赖（完成这些任务后本任务才解锁，可跨章节）</label>
+      <div class="tl-edit-conds">
+        <div id="tlEditDepList" class="tl-edit-cond-list">
+          ${(q.deps && q.deps.length > 0)
+            ? q.deps.map((did, i) => {
+                const d = store.quests.find(x => x.id === did);
+                const dLine = d ? store.lines.find(l => l.id === d.lineId) : null;
+                const crossTag = d && dLine && d.lineId !== q.lineId ? `<span class="tl-deps-line">${escapeHtml(dLine.name)}</span>` : '';
+                return `<div class="tl-edit-cond-item">
+                  <span>${d ? escapeHtml(d.title) : '（已删除）'}${crossTag}</span>
+                  <button class="notes-undo-btn tl-edit-cond-del" onclick="tlRemoveDep(${q.id}, ${i})" title="移除依赖"><i data-lucide="x" class="lucide-icon" style="width:12px;height:12px;"></i></button>
+                </div>`;
+              }).join('')
+            : '<div class="tl-badge-empty">暂无前置依赖（立即激活）</div>'}
+        </div>
+        <div class="tl-edit-cond-add">
+          <select id="tlDepSel" style="padding:6px 8px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);font-size:12px;flex:1;min-width:120px;">${depOptions}</select>
+          <button class="btn-add tl-edit-cond-btn" onclick="tlAddDep(${q.id})"><i data-lucide="plus" class="lucide-icon" style="width:12px;height:12px;"></i>添加</button>
+        </div>
+      </div>
       <label class="settings-label" style="margin:0;">完成条件</label>
       <div class="tl-edit-conds">
         <div id="tlEditCondList" class="tl-edit-cond-list">
@@ -1254,6 +1629,192 @@ function tlSubmitEditQuest(id) {
   });
   closeEditModal();
   renderTaskLine();
+}
+
+// ─────────────────────── AI 生成任务介绍 ───────────────────────
+// 收集任务上下文（任务本体 + 增强上下文 + 前置/下游任务 + 风格约束），
+// 发给当前 AI 对话，把回复回填到描述 textarea（不直接保存，用户可再改）。
+const TL_AI_STYLE = `像通关过的老玩家坐在旁边教你——第二人称「你」的向导口吻，短句+感叹号，轻松俏皮不端着。结构四段式：①钩子开场（"是时候...了"/"什么...?"/"你可能已经注意到..."）；②怎么做（具体路径，结合完成条件给出，不抄清单）；③意义/价值（"你将会..."，为什么重要，结合下游任务）；④收尾激励（"作为奖励..."/"祝你好运"）。禁止说明书腔（第一步/第二步）、学术腔（综上所述）、空洞口号（努力吧）和网络烂梗。内容可以硬核，语气永远轻松。`;
+// 构造发给 AI 的指令 prompt
+function tlBuildQuestDescPrompt(questId) {
+  const store = loadTaskLineStore();
+  const q = store.quests.find(x => x.id === questId);
+  if (!q) return '';
+  const line = store.lines.find(l => l.id === q.lineId);
+  const statusMap = { draft: '草稿', locked: '锁定', active: '进行中', done: '已完成', skipped: '已跳过' };
+  const kindMap = { main: '主线关键任务', side: '支线任务' };
+  const typeLabel = { todo: '完成待办', note: '撰写笔记', timer: '计时达标', manual: '手动打卡' };
+  // A组·任务本体：前置任务（标题+状态）
+  const deps = (q.deps || []).map(did => {
+    const d = store.quests.find(x => x.id === did);
+    return d ? `「${d.title}」（${kindMap[d.kind] || d.kind}·${statusMap[d.status] || d.status}）` : '（已删除）';
+  });
+  // B组·增强上下文：下游任务（依赖本任务的任务）
+  const dependents = store.quests.filter(x => (x.deps || []).includes(q.id));
+  const dependentStr = dependents.length
+    ? dependents.map(d => `「${d.title}」（${kindMap[d.kind] || d.kind}·${statusMap[d.status] || d.status}）`).join('、')
+    : '无';
+  // A组·完成条件（补关联待办/笔记实际标题）
+  const conds = (q.conditions || []).map(c => {
+    let extra = '';
+    if (c.type === 'todo') {
+      const t = (typeof findTodo === 'function') ? findTodo(c.todoId) : null;
+      if (t) extra = `（关联待办：${t.title}）`;
+    } else if (c.type === 'note') {
+      const n = (typeof notes !== 'undefined') ? notes.find(x => x.id === c.noteId && x.type === 'note') : null;
+      if (n) extra = `（关联笔记：${n.title}）`;
+    } else if (c.type === 'timer') {
+      extra = `（需计时 ${c.minutes || 0} 分钟）`;
+    }
+    return `${typeLabel[c.type] || c.type}「${c.label || ''}」${extra}`;
+  });
+  // B组·章节内其他任务标题（避免描述重复）
+  const sameLineQuests = store.quests.filter(x => x.lineId === q.lineId && x.id !== q.id).map(x => x.title);
+  // B组·已有描述（可参考/改写）
+  const existingDesc = q.desc ? `\n【已有描述（供参考或改写，不必保留）】\n${q.desc}\n` : '';
+  // B组·用户补充方向
+  const hintEl = document.getElementById('tlQuestAiHint');
+  const hint = hintEl ? hintEl.value.trim() : '';
+  const hintStr = hint ? `\n【用户补充要求】${hint}\n` : '';
+  const lineInfo = line
+    ? `${line.name}（${line.type === 'main' ? '主线' : '素质线'}${line.desc ? '：' + line.desc : ''}）`
+    : '未知章节';
+  return `请为任务线中的一个任务写一段介绍文字（即任务描述 desc）。只输出最终描述本身，不要任何解释、前缀或 markdown 代码块。
+
+【任务标题】${q.title}
+【任务类型】${kindMap[q.kind] || q.kind}
+【所属章节】${lineInfo}
+【当前状态】${statusMap[q.status] || q.status}
+【前置任务（本任务解锁前需完成的）】${deps.length ? deps.join('；') : '无'}
+【下游任务（本任务完成后将解锁/推动的）】${dependentStr}
+【完成条件】${conds.length ? conds.join('；') : '无（手动完成）'}
+【章节内其他任务】${sameLineQuests.length ? sameLineQuests.join('、') : '无'}${existingDesc}${hintStr}
+【风格要求】${TL_AI_STYLE}
+
+请写一段 80~200 字的介绍文字（第二人称，围绕完成条件给出具体路径、结合下游任务说明价值，四段式）。不要调用任何工具，直接输出文本。`;
+}
+// 点击「AI 生成介绍」：构造指令 → 独立调用 AI API（不进入任何对话）→ 回填描述框
+async function tlAiGenerateDesc(questId) {
+  const apiCfg = getEffectiveApiConfig();
+  if (!apiCfg.apiKey) { openSettingsModal(); return; }
+  const btn = document.getElementById('tlAiGenBtn');
+  if (btn) {
+    btn.disabled = true;
+    btn.innerHTML = '<i data-lucide="loader" class="lucide-icon" style="width:13px;height:13px;"></i>生成中…';
+    if (typeof lucide !== 'undefined') lucide.createIcons();
+  }
+  try {
+    const prompt = tlBuildQuestDescPrompt(questId);
+    if (!prompt) { showCustomConfirm('任务数据缺失，无法生成'); return; }
+    // 独立构造消息数组：系统提示（含任务线全局上下文）+ 生成指令。
+    // conv 传 null → 不写入任何对话历史、不记 rawLogs，消息不进入当前 AI 对话。
+    const systemPrompt = (typeof buildToolsSystemPrompt === 'function')
+      ? buildToolsSystemPrompt()
+      : '你是「我的学习桌面」的内置 AI 助手。';
+    const apiMessages = [
+      { role: 'system', content: systemPrompt },
+      { role: 'user', content: prompt }
+    ];
+    const { cleanText } = await callAiApi(apiMessages, apiCfg, null);
+    if (cleanText) {
+      // 去除可能的 markdown 代码块包裹和 <memory> 标签，取纯文本回填
+      let text = cleanText
+        .replace(/<memory>[\s\S]*?<\/memory>/g, '')
+        .replace(/^```[\s\S]*?\n/, '')
+        .replace(/\n```$/, '')
+        .trim();
+      const descEl = document.getElementById('tlQuestDesc');
+      if (descEl) {
+        descEl.value = text;
+        descEl.focus();
+      }
+    } else {
+      showCustomConfirm('AI 没有返回内容，请重试或检查 API 配置');
+    }
+  } catch (err) {
+    console.error('[tlAiGenerateDesc] 生成失败:', err);
+    showCustomConfirm('AI 生成失败：' + err.message);
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.innerHTML = '<i data-lucide="sparkles" class="lucide-icon" style="width:13px;height:13px;"></i>AI 生成介绍';
+      if (typeof lucide !== 'undefined') lucide.createIcons();
+    }
+  }
+}
+
+// ── 编辑表单：前置依赖管理（可跨章节） ──
+// 生成依赖选择器选项：按章节分组列出所有任务（排除自身与已在 deps 中的）
+function tlRenderDepOptions(questId) {
+  const store = loadTaskLineStore();
+  const q = store.quests.find(x => x.id === questId);
+  if (!q) return '';
+  const currentDeps = new Set(q.deps || []);
+  const lines = store.lines.slice().sort((a, b) => (a.sort || 0) - (b.sort || 0));
+  let opts = '';
+  for (const line of lines) {
+    const qs = store.quests.filter(x => x.lineId === line.id && x.id !== questId && !currentDeps.has(x.id));
+    if (qs.length === 0) continue;
+    opts += `<optgroup label="${escapeHtml(line.name)}">`;
+    opts += qs.map(x => `<option value="${x.id}">${escapeHtml(x.title.slice(0, 36))}</option>`).join('');
+    opts += `</optgroup>`;
+  }
+  if (!opts) opts = '<option value="">（没有可添加的任务）</option>';
+  return opts;
+}
+// 添加依赖（即时保存，局部刷新）
+function tlAddDep(questId) {
+  const sel = document.getElementById('tlDepSel');
+  if (!sel) return;
+  const depId = Number(sel.value);
+  if (!depId) { showCustomConfirm('请选择要添加的前置任务'); return; }
+  if (depId === questId) { showCustomConfirm('不能依赖自己'); return; }
+  const store = loadTaskLineStore();
+  const q = store.quests.find(x => x.id === questId);
+  if (!q) return;
+  q.deps = q.deps || [];
+  if (q.deps.includes(depId)) { showCustomConfirm('该任务已在依赖列表中'); return; }
+  q.deps.push(depId);
+  saveTaskLineStore(store);
+  // 依赖改变后刷新解锁状态
+  if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(questId);
+  tlRenderEditDepList(questId);
+}
+// 移除依赖（即时保存，局部刷新）
+function tlRemoveDep(questId, index) {
+  const store = loadTaskLineStore();
+  const q = store.quests.find(x => x.id === questId);
+  if (!q) return;
+  q.deps.splice(index, 1);
+  saveTaskLineStore(store);
+  if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(questId);
+  tlRenderEditDepList(questId);
+}
+// 局部刷新依赖列表 + 选择器（不重开表单，避免丢失未保存的标题/描述）
+function tlRenderEditDepList(questId) {
+  const listEl = document.getElementById('tlEditDepList');
+  const selEl = document.getElementById('tlDepSel');
+  if (!listEl && !selEl) return;
+  const q = tlGetQuest(questId);
+  if (!q) return;
+  const store = loadTaskLineStore();
+  if (listEl) {
+    listEl.innerHTML = (q.deps && q.deps.length > 0)
+      ? q.deps.map((did, i) => {
+          const d = store.quests.find(x => x.id === did);
+          const dLine = d ? store.lines.find(l => l.id === d.lineId) : null;
+          const crossTag = d && dLine && d.lineId !== q.lineId ? `<span class="tl-deps-line">${escapeHtml(dLine.name)}</span>` : '';
+          return `<div class="tl-edit-cond-item">
+            <span>${d ? escapeHtml(d.title) : '（已删除）'}${crossTag}</span>
+            <button class="notes-undo-btn tl-edit-cond-del" onclick="tlRemoveDep(${questId}, ${i})" title="移除依赖"><i data-lucide="x" class="lucide-icon" style="width:12px;height:12px;"></i></button>
+          </div>`;
+        }).join('')
+      : '<div class="tl-badge-empty">暂无前置依赖（立即激活）</div>';
+  }
+  if (selEl) {
+    selEl.innerHTML = tlRenderDepOptions(questId);
+  }
+  if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 // ── 编辑表单：完成条件管理 ──

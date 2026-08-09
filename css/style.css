@@ -2674,6 +2674,72 @@ body {
 .mf-progress { height: 3px; background: var(--hover-bg); }
 .mf-progress-fill { height: 100%; background: var(--primary); border-radius: 0 0 0 3px; transition: width 0.3s linear; }
 
+/* ── Timer Floating Window (右下角计时浮窗) ── */
+.timer-float {
+  position: fixed; right: 20px; bottom: 20px; z-index: 9998;
+  display: flex; flex-direction: column;
+  background: var(--card); border: 1px solid var(--border);
+  border-radius: 16px; box-shadow: 0 4px 20px rgba(0,0,0,0.15);
+  overflow: hidden; cursor: default; user-select: none;
+  min-width: 230px; max-width: 320px;
+  animation: mfSlideUp 0.3s ease;
+}
+.timer-float.dragging { transition: none !important; opacity: 0.85; }
+.tf-header {
+  display: flex; align-items: center; gap: 8px; padding: 8px 10px;
+  background: var(--hover-bg); cursor: grab; transition: var(--transition);
+}
+.tf-header:active { cursor: grabbing; }
+.tf-icon { font-size: 15px; flex-shrink: 0; }
+.tf-title { flex: 1; font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.tf-close {
+  width: 22px; height: 22px; border: none; border-radius: 50%;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  font-size: 12px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  transition: var(--transition); flex-shrink: 0;
+}
+.tf-close:hover { background: rgba(239,68,68,0.12); color: var(--danger); }
+.tf-body {
+  display: flex; align-items: stretch; gap: 12px;
+  padding: 10px 12px 6px; cursor: pointer; transition: var(--transition);
+}
+.tf-body:hover { background: var(--hover-bg); }
+/* 计时器时间：较大，占据左侧整列（跨关联任务/目标两行高度） */
+.tf-time {
+  flex-shrink: 0; align-self: stretch;
+  display: flex; align-items: center; justify-content: center;
+  font-size: 30px; font-weight: 700; text-align: center; color: var(--text);
+  font-variant-numeric: tabular-nums; letter-spacing: 1px;
+  font-family: 'SF Mono', Consolas, 'Courier New', monospace;
+  border-right: 1px solid var(--border); padding-right: 12px;
+}
+/* 右侧：关联任务 / 关联目标 上下两行 */
+.tf-targets {
+  flex: 1; min-width: 0;
+  display: flex; flex-direction: column; justify-content: center; gap: 3px;
+}
+.tf-target-row {
+  display: flex; align-items: center; gap: 6px; font-size: 12px;
+  color: var(--text); overflow: hidden; padding: 1px 0;
+}
+.tf-target-ico { flex-shrink: 0; font-size: 12px; }
+.tf-target-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.tf-empty { color: var(--text-secondary); font-size: 11px; }
+.tf-controls { display: flex; justify-content: center; gap: 10px; padding: 6px 12px 10px; }
+.tf-btn {
+  width: 36px; height: 36px; border: none; border-radius: 50%;
+  background: var(--hover-bg); color: var(--text); cursor: pointer;
+  font-size: 16px; line-height: 1; display: flex; align-items: center; justify-content: center;
+  transition: var(--transition); flex-shrink: 0;
+}
+.tf-btn:hover { background: var(--border); transform: scale(1.05); }
+.tf-start { background: var(--primary); color: #fff; }
+.tf-start:hover { background: var(--primary-hover); }
+.tf-pause { background: var(--primary); color: #fff; }
+.tf-pause:hover { background: var(--primary-hover); }
+.tf-stop { background: var(--danger); color: #fff; }
+.tf-stop:hover { background: var(--danger); filter: brightness(1.1); }
+
 /* ── Math formula rendering ── */
 /* KaTeX handles all formula styling; no custom math CSS needed. */
 
@@ -6574,7 +6640,8 @@ i[data-lucide] {
 
 /* 用户消息中的模式标记 */
 .cg-mode-badge {
-  display: inline-block; padding: 2px 8px; border-radius: 4px;
+  display: inline-block; align-self: flex-start; /* 防止被 flex 父容器拉伸到与气泡同宽 */
+  padding: 1px 4px; border-radius: 4px;
   font-size: 10px; font-weight: 600; margin-bottom: 4px;
 }
 .cg-mode-badge-plan { background: #e8f0fe; color: #1967d2; }
@@ -6595,6 +6662,91 @@ i[data-lucide] {
 .tl-empty p { max-width: 400px; margin: 0; }
 .tl-empty-big { padding: 48px 24px; }
 .tl-empty-actions { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; }
+
+/* ── 任务线：画布撑满 + 右侧 hover 触发侧边栏（仿左侧界面栏） ── */
+/* 隐藏任务线卡片头部的"任务线"标题文字（画布撑满整个卡片） */
+#section-taskline .section-header { display: none; }
+.tl-layout { position: relative; height: 100%; min-height: calc(100vh - 180px); display: flex; flex-direction: column; }
+.tl-main { min-width: 0; flex: 1; display: flex; flex-direction: column; }
+.tl-main .tl-graph-wrap {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px; flex: 1; display: flex; flex-direction: column; min-height: 0;
+}
+.tl-main .tl-graph-canvas { margin-top: 0; flex: 1; min-height: 420px; }
+.tl-main .tl-empty { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 40px 20px; min-height: 360px; justify-content: center; }
+
+/* 右侧 hover 触发条（fixed，仿 .sidebar-hover-trigger） */
+.tl-sidebar-hover-trigger {
+  position: fixed; right: 0; top: 0; bottom: 0;
+  width: 10px; z-index: 102; cursor: default;
+}
+
+/* 右侧侧边栏浮层（fixed，仿 .sidebar 滑入/滑出） */
+.tl-sidebar {
+  position: fixed; right: 0; top: 0; bottom: 0;
+  width: 280px; background: var(--sidebar-bg, var(--card));
+  box-shadow: var(--shadow-lg); z-index: 100;
+  transform: translateX(100%);
+  transition: transform 0.25s ease;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 14px 14px 18px; overflow-y: auto;
+}
+.tl-sidebar.open { transform: translateX(0); }
+.tl-side-bar-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 2px 2px 4px;
+}
+.tl-side-bar-title { font-size: 15px; font-weight: 700; color: var(--text); }
+.tl-side-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: var(--input-bg); cursor: pointer;
+  color: var(--text-secondary); padding: 5px 7px; border-radius: 8px; flex-shrink: 0;
+  transition: var(--transition);
+}
+.tl-side-toggle:hover { color: var(--primary); border-color: var(--primary); background: rgba(79,110,247,0.08); }
+.tl-side-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 12px 14px; display: flex; flex-direction: column; gap: 10px;
+}
+.tl-side-card-head { display: flex; align-items: center; gap: 8px; }
+.tl-side-card-head .tl-side-chapter { flex: 1; min-width: 0; }
+.tl-side-chapter { max-width: none; justify-content: flex-start; }
+.tl-sidebar-stats { display: flex; gap: 6px; }
+/* 侧边栏分组（无标题无框）+ 分隔线 + 徽章与奖励入口 */
+.tl-side-group { display: flex; flex-direction: column; gap: 6px; }
+.tl-side-sep { height: 1px; background: var(--border); margin: 2px 4px; }
+.tl-side-entry {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-radius: 10px; cursor: pointer;
+  border: 1px solid var(--border); background: var(--card);
+  color: var(--text); font-size: 13px; font-weight: 600; font-family: inherit;
+  transition: var(--transition);
+}
+.tl-side-entry:hover { border-color: var(--primary); color: var(--primary); }
+.tl-side-entry.active {
+  border-color: var(--primary); color: var(--primary); background: rgba(79,110,247,0.08);
+}
+/* 主区域-徽章与奖励界面（撑满整个主卡片） */
+.tl-badges-main { display: flex; flex-direction: column; gap: 12px; width: 100%; padding: 4px 2px; }
+.tl-badges-main-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 10px;
+  padding: 2px 2px 6px;
+}
+.tl-badges-main-title {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: 16px; font-weight: 700; color: var(--text);
+}
+.tl-badges-card {
+  background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+  padding: 14px 16px; display: flex; flex-direction: column; gap: 10px;
+}
+.tl-badges-big .tl-badge { width: 84px; padding: 12px 8px; }
+.tl-badges-big .tl-badge-icon { font-size: 28px; }
+.tl-side-progress { margin-left: 0; max-width: none; flex: none; }
+.tl-side-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.tl-side-actions .notes-undo-btn { display: inline-flex; align-items: center; gap: 5px; }
+.tl-side-auto { align-self: flex-start; }
+.tl-side-legend { margin-top: 0; padding-top: 0; border-top: none; flex-direction: column; align-items: flex-start; gap: 6px; }
 
 /* ── 顶部工具条 ── */
 .tl-toolbar {
@@ -6625,6 +6777,7 @@ i[data-lucide] {
 
 /* ── 任务图 ── */
 .tl-graph-wrap {
+  position: relative;
   background: var(--card); border: 1px solid var(--border); border-radius: 12px;
   padding: 14px 16px;
 }
@@ -6643,9 +6796,17 @@ i[data-lucide] {
 .tl-graph-actions { display: flex; gap: 4px; }
 .tl-graph-desc { margin-top: 8px; font-size: 12px; color: var(--text-secondary); line-height: 1.6; }
 
-/* 画布 */
-.tl-graph-canvas { margin-top: 14px; overflow: auto; border-radius: 10px; background: var(--input-bg); padding: 4px; }
-.tl-graph-inner { position: relative; }
+/* 画布：视口固定为主卡片区域（overflow hidden），用手型工具平移内容 */
+.tl-graph-canvas {
+  margin-top: 14px; overflow: hidden; border-radius: 10px;
+  background: var(--input-bg); padding: 0;
+  position: relative; cursor: grab;
+  touch-action: none;
+  flex: 1; min-height: 420px;
+}
+.tl-graph-canvas.tl-graph-panning { cursor: grabbing; }
+/* inner 绝对定位脱离文档流：不撑开画布高度，由 JS 控制 left/top 平移 */
+.tl-graph-inner { position: absolute; left: 0; top: 0; }
 .tl-graph-svg { position: absolute; left: 0; top: 0; pointer-events: none; }
 .tl-edge { stroke: var(--primary); stroke-width: 2; fill: none; opacity: 0.55; }
 .tl-edge-ext { stroke: var(--text-secondary); stroke-dasharray: 6 4; opacity: 0.7; }
@@ -6699,11 +6860,31 @@ i[data-lucide] {
   margin-top: 12px; padding-top: 10px; border-top: 1px dashed var(--border);
   font-size: 11px; color: var(--text-secondary);
 }
+/* 浮动图例：固定在画布右下角，不占布局 */
+.tl-graph-legend-float {
+  position: absolute; right: 14px; bottom: 12px; z-index: 3;
+  margin: 0; padding: 6px 10px; gap: 10px;
+  border-top: none; border: 1px solid var(--border);
+  border-radius: 8px; background: var(--card); box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+}
+/* 浮动锁定横幅：固定在画布顶部 */
+.tl-locked-banner-float {
+  position: absolute; left: 50%; transform: translateX(-50%); top: 12px; z-index: 3;
+}
 .tl-legend-item { display: inline-flex; align-items: center; gap: 5px; }
 .tl-legend-swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; }
 .tl-legend-main { background: rgba(245,158,11,0.4); border: 2px solid #f59e0b; }
 .tl-legend-side { background: rgba(59,130,246,0.25); border: 2px solid #3b82f6; }
 .tl-legend-ext { background: transparent; border: 2px dashed var(--text-secondary); }
+/* 缩放指示器：画布左下角浮动，显示当前缩放比例，点击复位视图 */
+.tl-zoom-indicator {
+  position: absolute; left: 14px; bottom: 12px; z-index: 3;
+  padding: 4px 10px; border-radius: 999px; cursor: pointer;
+  background: var(--card); border: 1px solid var(--border);
+  color: var(--text-secondary); font-size: 11px; line-height: 1;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.1); user-select: none; opacity: .85;
+}
+.tl-zoom-indicator:hover { opacity: 1; color: var(--text); }
 
 /* ── 奖励池（浮窗内） ── */
 .tl-pool-hint { font-size: 11px; color: var(--text-secondary); font-weight: 400; }
@@ -6836,6 +7017,9 @@ i[data-lucide] {
 .tl-edit-cond-item span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tl-edit-cond-del { flex-shrink: 0; }
 .tl-edit-cond-add { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tl-ai-gen-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.tl-ai-gen-row input { flex: 1; min-width: 0; }
+.tl-ai-gen-row button { flex-shrink: 0; }
 .tl-edit-cond-fields { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 150px; }
 .tl-edit-cond-btn { flex-shrink: 0; padding: 6px 12px !important; }
 .tl-cond-state.ok { color: #16a34a; font-weight: 600; }

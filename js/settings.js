@@ -2754,7 +2754,9 @@ function doDailyCheckin() {
 
 // Get or create the daily report conversation
 function getDailyReportConv() {
-  let conv = aiConvs.find(c => c._dailyReport);
+  // 优先按标记查找；若标记因历史保存降级清理而丢失，再按标题兜底（日报对话唯一，防止重复新建）
+  let conv = aiConvs.find(c => c._dailyReport)
+    || aiConvs.find(c => c.title === '📋 每日日报' || c.title === '☀️ 晨间日报');
   if (!conv) {
     conv = {
       id: genId(),
@@ -2767,10 +2769,16 @@ function getDailyReportConv() {
     if (typeof initTreeOnConv === 'function') initTreeOnConv(conv);
     aiConvs.push(conv);
     saveData('study_ai_convs', aiConvs);
-  } else if (conv.title !== '📋 每日日报') {
-    // Migrate old title
-    conv.title = '📋 每日日报';
-    saveData('study_ai_convs', aiConvs);
+  } else {
+    // 回填标记 + 统一标题（防止后续标记丢失或标题被自动生成覆盖），仅在确实有变化时保存
+    let changed = false;
+    if (!conv._dailyReport) { conv._dailyReport = true; changed = true; }
+    if (conv.title !== '📋 每日日报') {
+      conv.title = '📋 每日日报';
+      conv.autoTitled = true;
+      changed = true;
+    }
+    if (changed) saveData('study_ai_convs', aiConvs);
   }
   return conv;
 }

@@ -26,7 +26,8 @@ function safeSaveAiConvs() {
   } catch (e) {
     console.warn('[safeSaveAiConvs] JSON.stringify failed:', e.message, '— retrying after cleanup');
     try {
-      // Strip all _-prefixed fields (including _rawLogs) which may contain circular refs
+      // Strip _-prefixed fields which may contain circular refs (e.g. _rawLogs),
+      // but MUST keep _dailyReport / _hasUnread / _hasUnreadAuto so daily report marker survives
       const cleaned = aiConvs.map(c => {
         if (c && typeof c === 'object') {
           const copy = { messages: c.messages || [] };
@@ -38,6 +39,10 @@ function safeSaveAiConvs() {
           // 树状对话字段
           if (c.tree !== undefined) copy.tree = c.tree;
           if (c.activePath !== undefined) copy.activePath = c.activePath;
+          // 关键标记字段（保留，防止日报对话标记丢失导致重复新建）
+          if (c._dailyReport !== undefined) copy._dailyReport = c._dailyReport;
+          if (c._hasUnread !== undefined) copy._hasUnread = c._hasUnread;
+          if (c._hasUnreadAuto !== undefined) copy._hasUnreadAuto = c._hasUnreadAuto;
           return copy;
         }
         return c;

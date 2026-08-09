@@ -8,6 +8,21 @@ function handleAiFileSelect(event) {
   event.target.value = '';
 }
 
+// 非视觉模型（DeepSeek 等）允许的文本扩展名（发送时按纯文本 readAsText 读取）
+const TEXT_FILE_EXTS = [
+  '.txt', '.md', '.markdown', '.json', '.js', '.mjs', '.ts', '.jsx', '.tsx',
+  '.py', '.java', '.c', '.cpp', '.h', '.hpp', '.cs', '.go', '.rs', '.rb',
+  '.php', '.swift', '.kt', '.sql', '.html', '.htm', '.css', '.scss', '.less',
+  '.xml', '.yaml', '.yml', '.toml', '.ini', '.cfg', '.conf', '.log', '.csv',
+  '.tsv', '.diff', '.patch', '.sh', '.bat', '.ps1'
+];
+
+function isTextFile(file) {
+  const ext = (file.name.match(/\.([^.]+)$/) || [])[1];
+  if (!ext) return false;
+  return TEXT_FILE_EXTS.includes('.' + ext.toLowerCase());
+}
+
 // 将文件列表加入附件（供文件选择框与拖拽共用）
 function addAiAttachmentFiles(fileList) {
   const files = Array.from(fileList || []);
@@ -17,6 +32,11 @@ function addAiAttachmentFiles(fileList) {
   for (const file of files) {
     if (file.size > maxSize) {
       alert(`文件 "${file.name}" 超过 ${sizeLabel} 限制，已跳过`);
+      continue;
+    }
+    // 非视觉模型只接受文本类文件（发送时按纯文本读取，二进制会乱码）
+    if (!isKimiModel() && !isTextFile(file)) {
+      alert(`当前模型（${getEffectiveApiConfig().model || '未知'}）不支持 "${file.name}"，仅支持文本类文件（.txt / .md / .json / 代码文件等）`);
       continue;
     }
     const attach = { name: file.name, file: file, size: file.size };
@@ -123,8 +143,9 @@ function updateAiFileInput() {
     input.accept = '';
     placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF / Word / Excel / 图片 / 视频等文件)';
   } else {
-    input.accept = '.txt';
-    placeholder.placeholder = '输入你的问题，回车发送... (可上传 .txt 附件)';
+    // 非视觉模型（DeepSeek 等）：文本类文件按纯文本读取，支持常见文本格式
+    input.accept = TEXT_FILE_EXTS.join(',');
+    placeholder.placeholder = '输入你的问题，回车发送... (支持 .txt / .md / .json / 代码文件等文本附件)';
   }
 }
 

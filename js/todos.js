@@ -1432,6 +1432,37 @@ function todoCtxAddSub() {
   if (id != null) toggleSubInput(id);
 }
 
+// 右键：将待办添加至今日聚焦（与 AI set_focus_task 共用同一数据逻辑）
+function todoCtxAddFocus() {
+  var id = todoCtxTargetId;
+  closeTodoContextMenu();
+  if (id == null) return;
+  var todo = findTodo(id);
+  if (!todo) return;
+  var todayStr = typeof getTodayStr === 'function' ? getTodayStr() : new Date().toISOString().slice(0, 10);
+  var data = loadFocusData();
+  if (!data._date || data._date !== todayStr) {
+    data._date = todayStr;
+    data.items = [];
+  }
+  if (!data.items) data.items = [];
+  var maxFocus = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;
+  if (data.items.length >= maxFocus) {
+    if (typeof sendNotification === 'function') sendNotification('添加至聚焦失败', `今日聚焦最多 ${maxFocus} 个任务，请先在「今天」页面移除一些再添加`);
+    return;
+  }
+  if (data.items.some(function (i) { return i.todoId === id; })) {
+    if (typeof sendNotification === 'function') sendNotification('添加至聚焦失败', '该待办已是今日聚焦任务');
+    return;
+  }
+  data.items.push({ todoId: todo.id, text: todo.text, done: todo.done });
+  saveFocusData(data);
+  if (typeof sendNotification === 'function') sendNotification('已添加至今日聚焦', `「${todo.text}」（${data.items.length}/${maxFocus}）`);
+  // 刷新今日视图（聚焦列表）与待办列表
+  if (typeof renderToday === 'function') renderToday();
+  if (typeof renderTodos === 'function') renderTodos();
+}
+
 function todoCtxSort(mode) {
   var id = todoCtxTargetId;
   closeTodoContextMenu();
