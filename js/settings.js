@@ -1,6 +1,8 @@
 // ═══════════ Changelog Modal ═══════════
 function initChangelog() {
   const fullChangelog = [
+    { id: 24, time: '2026-08-10T20:00', content: '<b>v0.2.7</b> — 教材学习模块全面增强：摘要节点化、错题本、知识库构建重构：<br><br>📝 <b>摘要节点化</b> — AI 摘要改为分条要点，每个节点写清定义与判定标准（如"如何区分非陈述句和含变量的句子"），摘要导图页支持「重新生成摘要」「重新构建本章」<br>📚 <b>知识库构建重构</b> — 新增「仅构建本章」「重新构建知识库」按钮（构建前二次确认并提示费 token）；单选/多选章节构建更灵活<br>💻 <b>伪代码收集</b> — 编程相关书籍（AI 自动判断 + 手动开关）构建时顺带收集各章伪代码及其解释，在摘要导图页集中展示<br>📖 <b>错题本系统</b> — 每本书独立错题本：测验答错自动收录，按章节分组复习，支持标记已掌握、AI 讲解、删除与清空<br>🗂️ <b>侧栏可隐藏</b> — 书架/目录可独立隐藏（状态记忆），目录隐藏时出现上一章/下一章导航按钮<br>🔄 <b>学习位置记忆</b> — 打开教材自动恢复上次学习的章节与所在页签<br>💬 <b>讲解增强</b> — 讲解问答记录持久化（切换页面不丢失）；摘要/测验选中文字可右键「解释一下」「举个例子」或「讲解此题」发给 AI<br>✅ <b>测验优化</b> — 测验状态持久化、记录按章显示且可删除、全对鼓励弹窗、修复选项重复显示与判分框色<br>🔧 <b>其他修复</b> — v0.2.6 GitHub 更新说明乱码修复等' },
+    { id: 23, time: '2026-08-06T12:00', content: '<b>v0.2.6</b> — 任务图滚动缩放与自由平移、计时器浮窗、模式标签中文化、多项修复：<br><br>🗺️ <b>任务图滚动缩放</b> — 任务图支持鼠标滚轮缩放，自由调节视图大小<br>🖐️ <b>任务图自由平移</b> — 按住拖拽即可平移任务图，配合缩放方便查看大型 DAG<br>⏱️ <b>计时器浮窗</b> — 计时器支持浮窗模式，专注时随时可见<br>🏷️ <b>模式标签中文化</b> — AI 编程三模式（Craft / Plan / Ask）标签文案中文化，更直观<br>🔧 <b>多项修复</b> — 若干体验与稳定性修复' },
     { id: 22, time: '2026-08-05T22:00', content: '<b>v0.2.5</b> — 任务线系统（GTNH 式任务书）：<br><br>🗺️ <b>任务图</b> — GTNH 式平面任务图：<b>金色框</b>=主线关键任务、<b>蓝色框</b>=支线任务、<b>箭头连线</b>=前置依赖（完成 A 解锁 B），由 AI 设计任务线的样子，推进感拉满<br>📂 <b>章节目录浮窗</b> — 侧边栏顶部「章节」按钮展开目录（主线章节 / 素质线），徽章收藏与自定义奖励池收纳在浮窗 Tab 内<br>⚔️ <b>任务机制</b> — 任务带<b>三段式描述</b>（目标 / 意义 / 产出）、<b>前置依赖解锁</b>、<b>完成条件</b>（绑定待办完成 / 笔记撰写 / 专注计时达标 / 手动打卡，自动检测 + 手动双轨）<br>🎖️ <b>奖励</b> — 即时反馈（完成任务通知 + 自动结算）+ 徽章收藏墙（章节达成 / 累计完成）+ 自定义奖励池（完成任务计数兑换，自己填欲望清单）<br>🤖 <b>与对话 AI 深度适配</b> — 注册 <code>quest_get / quest_create / quest_create_line / quest_update / quest_link_todo / quest_link_note / quest_link_timer / quest_complete / quest_skip / quest_review</code> 等 12 个工具，AI 对话里说「给我英语线加任务」「我刚完成 XX」即可直接操作；AI 生成任务默认<b>草稿</b>状态待你确认；system prompt 自动注入当前任务线状态（主线章节 / 激活任务 / 进度 / 卡点）<br>☀️ <b>日报联动</b> — 晨间 / 晚间日报新增任务线板块（主线进度 / 激活任务 / 昨日完成任务），回顾与开启今天都带任务线视角' },
     { id: 20, time: '2026-08-05T01:00', content: '<b>v0.2.3</b> — AI 编程三模式 + 插件市场：<br><br>🧭 <b>AI 编程三模式</b> — AI 编程输入区新增模式选择器（类比 CodeBuddy）：<br>&emsp;• <b>Craft（开发）</b> — 全功能模式，可读写扩展目录，直接生成代码<br>&emsp;• <b>Plan（规划）</b> — 只读模式，AI 分析需求并给出详细实现方案和架构设计，不写文件<br>&emsp;• <b>Ask（问答）</b> — 只读模式，回答应用架构、API、扩展开发相关问题<br>&emsp;• 消息流中 plan/ask 模式用户消息带有模式标记<br>🛒 <b>插件市场</b> — 全新「插件市场」页面，基于 Supabase 的免费社区市场：<br>&emsp;• <b>浏览下载</b> — 浏览已上架扩展，支持名称/标签搜索，一键下载安装到本地<br>&emsp;• <b>上传发布</b> — 将本地扩展发布到市场，经审核后供其他用户下载<br>&emsp;• <b>评分系统</b> — 对已安装的扩展打分（1~5 星）<br>&emsp;• <b>ZIP 导入</b> — 支持从本地 ZIP 文件直接安装扩展<br>&emsp;• <b>配置</b> — 设置 → 插件市场：与好友系统共用 Supabase 项目，填入 URL + anon key 即可<br>⚠️ 使用前提：需在 Supabase 控制台执行 <code>supabase/schema.sql</code> 新增的插件市场建表语句，并创建 <code>plugin-store</code> Storage bucket' },
     { id: 19, time: '2026-08-05T10:00', content: '<b>v0.3.0</b> — 好友系统（Supabase 云端）：<br><br>👥 <b>真实联网好友</b> — 全新「好友」页面，基于 Supabase 云端服务，实现跨设备真实好友：<br>&emsp;• <b>账号系统</b> — 邮箱注册 / 登录 / 退出，会话持久化，自动恢复登录<br>&emsp;• <b>好友管理</b> — 按用户名 / 昵称搜索添加、好友请求收发（接受 / 拒绝 / 撤回）、删除好友、好友列表<br>&emsp;• <b>好友分组</b> — 创建 / 重命名 / 删除分组，好友自由归类（彩色标签）<br>&emsp;• <b>好友资料卡</b> — 头像、昵称、简介、在线状态、最近学习统计（7 日打卡 / 专注 / 完成数）<br>&emsp;• <b>学习动态流</b> — 好友的打卡、专注突破、任务完成、连续天数等动态实时推送<br>&emsp;• <b>实时聊天</b> — 与好友实时收发消息、未读红点、最近消息预览<br>🔒 <b>隐私安全</b> — 只同步聚合统计（打卡 / 专注时长 / 完成数量），绝不上传具体待办与笔记内容；所有云表启用行级安全（RLS），仅本人与好友可见<br>⚙️ <b>配置</b> — 设置 → 好友：填入 Supabase 项目 URL 与 anon key 即可启用；建表脚本见 <code>supabase/schema.sql</code>' },
@@ -469,15 +471,20 @@ function getEffectiveReportApiConfig() {
 // Build deep think request params based on model type
 // DeepSeek and Kimi both use thinking.type to control thinking mode
 // Both default to ENABLED, so we must explicitly send "disabled" to turn it off
+// 注意：本项目用 fetch 直连 REST API，thinking 必须是请求体「顶层字段」。
+// extra_body 只是 OpenAI SDK 的客户端包装参数，直连时服务端不识别会返回 400。
+// 另外 Kimi K3 / K2.7-code 等新模型不接受 thinking 字段（K3 用 reasoning_effort，K2.7-code 始终思考），需跳过。
 function buildDeepThinkParams(apiCfg) {
   const model = (apiCfg.model || '').toLowerCase();
   if (model.includes('kimi') || model.includes('deepseek')) {
+    // Kimi K3 / K2.7-code：不支持 thinking 字段，跳过避免 400
+    if (model.includes('k3') || model.includes('k2.7')) return {};
     if (apiCfg.deepThink === true) {
       // Explicitly enable deep thinking
-      return { extra_body: { thinking: { type: 'enabled' } } };
+      return { thinking: { type: 'enabled' } };
     } else {
       // Explicitly disable deep thinking (required because default is enabled)
-      return { extra_body: { thinking: { type: 'disabled' } } };
+      return { thinking: { type: 'disabled' } };
     }
   }
   return {};

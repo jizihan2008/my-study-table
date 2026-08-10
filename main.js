@@ -447,6 +447,85 @@ ipcMain.handle('read-audio-file', async (event, filePath) => {
   }
 });
 
+// ═══════════ Textbook Learning (教材学习) ═══════════
+// PDF 教材导入 + 正文缓存（正文不进 localStorage，缓存于 <userData>/books/<bookId>.json）
+const booksCacheDir = path.join(userDataPath, 'books');
+function ensureBooksCacheDir() {
+  if (!fs.existsSync(booksCacheDir)) fs.mkdirSync(booksCacheDir, { recursive: true });
+}
+
+// IPC: 打开 PDF 教材选择对话框
+ipcMain.handle('pdf:pick', async () => {
+  const result = await dialog.showOpenDialog(mainWindow, {
+    title: '选择教材 PDF',
+    filters: [
+      { name: 'PDF 文件', extensions: ['pdf'] },
+      { name: '所有文件', extensions: ['*'] }
+    ],
+    properties: ['openFile']
+  });
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) return null;
+  return result.filePaths[0];
+});
+
+// IPC: 读取 PDF 文件（校验 .pdf 扩展名），返回 Buffer
+ipcMain.handle('pdf:read', async (event, filePath) => {
+  try {
+    const ext = path.extname(String(filePath || '')).toLowerCase();
+    if (ext !== '.pdf') return null;
+    const buffer = await fs.promises.readFile(String(filePath));
+    return buffer;
+  } catch (err) {
+    console.error('Failed to read PDF file:', err);
+    return null;
+  }
+});
+
+// IPC: 保存教材正文缓存（<userData>/books/<bookId>.json，isPathInside 白名单校验）
+ipcMain.handle('books:text-save', async (event, { bookId, data }) => {
+  try {
+    ensureBooksCacheDir();
+    const safeId = String(bookId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeId) return { ok: false, reason: '非法 bookId' };
+    const target = path.join(booksCacheDir, safeId + '.json');
+    if (!isPathInside(booksCacheDir, target)) return { ok: false, reason: '非法路径' };
+    fs.writeFileSync(target, typeof data === 'string' ? data : JSON.stringify(data), 'utf-8');
+    return { ok: true, path: target };
+  } catch (err) {
+    return { ok: false, reason: String((err && err.message) || err) };
+  }
+});
+
+// IPC: 读取教材正文缓存
+ipcMain.handle('books:text-load', async (event, { bookId }) => {
+  try {
+    ensureBooksCacheDir();
+    const safeId = String(bookId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeId) return null;
+    const target = path.join(booksCacheDir, safeId + '.json');
+    if (!isPathInside(booksCacheDir, target)) return null;
+    if (!fs.existsSync(target)) return null;
+    return fs.readFileSync(target, 'utf-8');
+  } catch (err) {
+    return null;
+  }
+});
+
+// IPC: 删除教材正文缓存
+ipcMain.handle('books:text-delete', async (event, { bookId }) => {
+  try {
+    ensureBooksCacheDir();
+    const safeId = String(bookId || '').replace(/[^a-zA-Z0-9_-]/g, '');
+    if (!safeId) return { ok: false };
+    const target = path.join(booksCacheDir, safeId + '.json');
+    if (!isPathInside(booksCacheDir, target)) return { ok: false };
+    if (fs.existsSync(target)) fs.unlinkSync(target);
+    return { ok: true };
+  } catch (err) {
+    return { ok: false };
+  }
+});
+
 // ═══════════ Auto Updater ═══════════
 let autoUpdater = null;
 let updaterSupported = false;

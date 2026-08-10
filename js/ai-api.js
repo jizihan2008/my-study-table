@@ -13,13 +13,22 @@ async function callAiApi(apiMessages, apiCfg, conv) {
   const defaultMaxTokens = isKimiModel() ? 8192 : 2048;
   const maxTokens = apiCfg.maxTokens || defaultMaxTokens;
 
+  const modelLower = (apiCfg.model || '').toLowerCase();
   const requestBody = {
     model: apiCfg.model,
     messages: apiMessages,
-    temperature: apiCfg.temperature,
-    max_tokens: maxTokens,
     ...deepThinkParams
   };
+  // Kimi K3 及之后使用 max_completion_tokens（max_tokens 已弃用）；其余模型用 max_tokens
+  if (modelLower.includes('k3') || modelLower.includes('k2.7')) {
+    requestBody.max_completion_tokens = maxTokens;
+  } else {
+    requestBody.max_tokens = maxTokens;
+  }
+  // Kimi API 不支持 temperature（文档明确"请勿显式传入"，传了会 400），其它模型正常发送
+  if (!isKimiModel()) {
+    requestBody.temperature = apiCfg.temperature;
+  }
 
   // Kimi builtin web search (native $web_search tool)
   const activeConv = typeof getActiveConv === 'function' ? getActiveConv() : null;

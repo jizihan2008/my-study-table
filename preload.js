@@ -39,6 +39,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extTrashEmpty: () => ipcRenderer.invoke('ext:trash-empty'),
   extImport: (payload) => ipcRenderer.invoke('ext:import', payload),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  // ── Textbook Learning IPC ──
+  pickPdfFile: () => ipcRenderer.invoke('pdf:pick'),
+  readPdfFile: (filePath) => ipcRenderer.invoke('pdf:read', filePath),
+  booksTextSave: (payload) => ipcRenderer.invoke('books:text-save', payload),
+  booksTextLoad: (payload) => ipcRenderer.invoke('books:text-load', payload),
+  booksTextDelete: (payload) => ipcRenderer.invoke('books:text-delete', payload),
   srcList: () => ipcRenderer.invoke('src:list'),
   srcRead: (payload) => ipcRenderer.invoke('src:read', payload),
   // ── CodeBuddy CLI IPC ──

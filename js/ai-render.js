@@ -935,7 +935,7 @@ function formatMarkdownBase(text, extraProcessor) {
     const pad = Math.min(indent.length * 8, 120);
     return pad > 0 ? `<li style="padding-left:${pad}px">${content}</li>` : `<li>${content}</li>`;
   });
-  html = html.replace(/((?:<li>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
+  html = html.replace(/((?:<li[^>]*>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
 
   // Run extra processor before restoring protected blocks
   if (extraProcessor) {

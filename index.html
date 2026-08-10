@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>My Study Table</title>
-<link rel="stylesheet" href="css/style.css?v=20260808-r30">
+<link rel="stylesheet" href="css/style.css?v=20260810-r39">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -381,6 +381,15 @@
       </div>
       <div class="card-scroll" id="archiveContainer">
         <!-- rendered by renderArchive() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 教材学习 Section ── -->
+  <div class="section" id="section-books">
+    <div class="card" style="padding:0;overflow:hidden;border-radius:var(--radius);">
+      <div id="booksApp" class="bk-layout">
+        <!-- rendered by renderBooks() -->
       </div>
     </div>
   </div>
@@ -1189,7 +1198,7 @@
     <script src="js/ai-tree.js?v=20260804-r3"></script>
     <script src="js/ai-conv.js?v=20260803-r1"></script>
     <script src="js/ai-attach.js?v=20260807-r1"></script>
-    <script src="js/ai-render.js?v=20260805-r8"></script>
+    <script src="js/ai-render.js?v=20260810-r9"></script>
     <script src="js/ai-tools.js?v=20260808-r5"></script>
     <script src="js/ai-search.js"></script>
     <script src="js/ai-api.js?v=20260803-r1"></script>
@@ -1197,8 +1206,18 @@
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260803-r1"></script>
-    <script src="js/settings.js?v=20260807-r13"></script>
+    <script src="js/settings.js?v=20260810-r15"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
+    <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
+    <script type="module">
+      import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
+      window.pdfjsLib = pdfjsLib;
+      pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
+    </script>
+    <script src="js/books.js?v=20260810-r11"></script>
+    <script src="js/books-pdf.js?v=20260810-r3"></script>
+    <script src="js/books-kb.js?v=20260810-r9"></script>
+    <script src="js/books-ai.js?v=20260810-r22"></script>
     <script src="js/calendar.js?v=20260724-r7"></script>
     <script src="js/taskline.js?v=20260809-r26"></script>
     <script src="js/timer.js?v=20260809-r21"></script>
@@ -1338,6 +1357,17 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-item" onclick="saveAiSelectionAsNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 保存为笔记</div>
   <div class="context-menu-item" onclick="copyAiSelection()"><i data-lucide="copy" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 复制选中文字</div>
 </div>
+
+<!-- 教材术语：右键添加到术语表 / 移除术语标记 / 解释一下 / 举个例子 -->
+<div class="context-menu" id="bkTermContextMenu">
+  <div class="context-menu-item" id="bkTermCtxAdd" onclick="bkAddSelectedTermToGlossary()"><i data-lucide="bookmark-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到术语表</div>
+  <div class="context-menu-item" id="bkTermCtxRemove" style="display:none;" onclick="bkRemoveTermMark()"><i data-lucide="highlighter" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 移除术语标记</div>
+  <div class="context-menu-item" id="bkTermCtxExplain" style="display:none;" onclick="bkExplainSelection('explain')"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 解释一下</div>
+  <div class="context-menu-item" id="bkTermCtxExample" style="display:none;" onclick="bkExplainSelection('example')"><i data-lucide="lightbulb" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 举个例子</div>
+</div>
+
+<!-- 教材术语：悬停气泡 -->
+<div class="bk-term-tooltip" id="bkTermTooltip"></div>
 
 </body>
 </html>
