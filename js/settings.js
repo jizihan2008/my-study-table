@@ -525,7 +525,7 @@ function switchSettingsTab(tab) {
 }
 
 // ═══════════ 跨设备云同步面板（js/sync.js）═══════════
-function renderSyncPanel() {
+async function renderSyncPanel() {
   const enabledEl = document.getElementById('syncEnabled');
   const statusEl = document.getElementById('syncStatus');
   const infoEl = document.getElementById('syncAccountInfo');
@@ -533,7 +533,7 @@ function renderSyncPanel() {
     if (statusEl) statusEl.textContent = '同步模块未加载（js/sync.js）';
     return;
   }
-  const st = window.Sync.getStatus();
+  const st = await window.Sync.getStatus();
   if (enabledEl) enabledEl.checked = !!st.enabled;
   if (statusEl) {
     const loggedTxt = st.loggedIn ? '已登录' : '未登录';

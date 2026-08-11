@@ -131,12 +131,16 @@
   }
 
   // ── 登录状态 ─────────────────────────────────────────
-  function getSession() {
+  // supabase-js v2 的 auth.getSession() 在 session 已加载时同步返回对象，
+  // 在需要从 storage 异步恢复时返回 Promise。必须兼容两者，故统一 await。
+  async function getSession() {
     try {
       // 每次实时获取单例客户端，避免 init() 时配置未就绪导致 client 为 null
       const supabaseClient = (typeof getSupabaseClient === 'function') ? getSupabaseClient() : client;
       if (supabaseClient && supabaseClient.auth) {
-        const { data } = supabaseClient.auth.getSession();
+        let res = supabaseClient.auth.getSession();
+        if (res && typeof res.then === 'function') res = await res;
+        const data = res && res.data ? res.data : null;
         return data && data.session ? data.session : null;
       }
     } catch (e) { /* 忽略 */ }
@@ -154,7 +158,7 @@
 
   // ── 上传一个 key 到云端（UPSERT）─────────────────────
   async function _uploadKey(key) {
-    const session = getSession();
+    const session = await getSession();
     if (!session) return { ok: false, reason: 'not-logged-in' };
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
@@ -195,8 +199,8 @@
   }
 
   async function _flushOutbox() {
-    if (!client) return;
-    const session = getSession();
+    if (!_client()) return;
+    const session = await getSession();
     if (!session) return;
     const c = _client();
     if (!c) return;
@@ -225,7 +229,7 @@
   // 避免手机端首次同步时用空数据覆盖云端。
   async function _firstSync() {
     if (!enabled || !_client()) return;
-    const session = getSession();
+    const session = await getSession();
     if (!session) return;
     const c = _client();
     if (!c) return;
@@ -261,7 +265,7 @@
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
   async function _pullAll() {
     if (!enabled || !_client()) return;
-    const session = getSession();
+    const session = await getSession();
     if (!session) return;
     const c = _client();
     if (!c) return;
@@ -298,11 +302,11 @@
   }
 
   // ── Realtime 订阅远端变更 ───────────────────────────
-  function _subscribe() {
+  async function _subscribe() {
     const c = _client();
     if (!c || !enabled || !loggedIn) return;
     if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} }
-    const session = getSession();
+    const session = await getSession();
     if (!session) return;
     realtimeChannel = c
       .channel('mst-user-data')
@@ -322,19 +326,20 @@
   }
 
   // ── 状态通知 ────────────────────────────────────────
-  function _emitStatus() {
-    const status = getStatus();
+  async function _emitStatus() {
+    const status = await getStatus();
     listeners.forEach(fn => { try { fn(status); } catch (e) {} });
   }
   function onStatus(fn) {
     listeners.add(fn);
     return () => listeners.delete(fn);
   }
-  function getStatus() {
+  async function getStatus() {
     const cfg = getConfig();
     // 实时刷新登录态，避免依赖事件时序导致误判"未登录"
-    const sess = getSession();
+    const sess = await getSession();
     if (sess && !loggedIn) loggedIn = true;
+    if (!sess && loggedIn) loggedIn = false;
     return {
       enabled: enabled,
       loggedIn: !!sess,
@@ -380,11 +385,11 @@
   }
 
   // ── 初始化 ──────────────────────────────────────────
-  function _init() {
+  async function _init() {
     if (typeof getSupabaseClient !== 'function') { enabled = false; return; }
     client = getSupabaseClient();
     if (!client) { enabled = false; return; }
-    const session = getSession();
+    const session = await getSession();
     loggedIn = !!session;
     if (loggedIn) {
       _subscribe();
@@ -399,8 +404,8 @@
     _emitStatus();
   }
 
-  function _doSyncAfterLogin() {
-    if (!enabled || !loggedIn || !client) return;
+  async function _doSyncAfterLogin() {
+    if (!enabled || !loggedIn || !_client()) return;
     _subscribe();
     const ts = _getRemoteTs();
     const isFirst = Object.keys(ts).length === 0;
@@ -425,12 +430,22 @@
       try {
         client.auth.onAuthStateChange(function (event, session) {
           if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
-            const s = session || (client ? getSession() : null);
-            loggedIn = !!s;
-            if (loggedIn) {
+            if (session) {
+              loggedIn = true;
               _doSyncAfterLogin();
               clearTimeout(pullTimer);
               pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+            } else {
+              // 事件未带 session，异步获取确认
+              getSession().then(function (s) {
+                loggedIn = !!s;
+                if (loggedIn) {
+                  _doSyncAfterLogin();
+                  clearTimeout(pullTimer);
+                  pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+                }
+                _emitStatus();
+              });
             }
             _emitStatus();
           } else if (event === 'SIGNED_OUT') {
