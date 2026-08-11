@@ -542,15 +542,20 @@ async function renderSyncPanel() {
     statusEl.className = 'settings-status';
   }
   if (infoEl) {
-    let session = null;
-    try {
-      if (typeof getSupabaseClient === 'function' && getSupabaseClient() && getSupabaseClient().auth) {
-        const s = getSupabaseClient().auth.getSession();
-        session = s && s.data ? s.data.session : null;
-      }
-    } catch (e) { /* 忽略 */ }
-    if (session && session.user) {
-      infoEl.innerHTML = '<i data-lucide="user-check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 已登录：<b>' + escapeHtml(session.user.email || session.user.id) + '</b>';
+    // 复用 sync 层 getStatus 的登录态（已兼容 Promise 的 getSession）
+    const isLoggedIn = st.loggedIn;
+    if (isLoggedIn) {
+      let email = '';
+      try {
+        const supabaseClient = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+        if (supabaseClient && supabaseClient.auth) {
+          const r = supabaseClient.auth.getSession();
+          const s = r && typeof r.then === 'function' ? await r : r;
+          const sess = s && s.data ? s.data.session : null;
+          if (sess && sess.user) email = sess.user.email || sess.user.id || '';
+        }
+      } catch (e) { /* 忽略 */ }
+      infoEl.innerHTML = '<i data-lucide="user-check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 已登录：<b>' + escapeHtml(email || '已登录用户') + '</b>';
     } else {
       infoEl.textContent = '未检测到登录状态。请到「好友」页面登录，登录后此面板会自动同步。';
     }
