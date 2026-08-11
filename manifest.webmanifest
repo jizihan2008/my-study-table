@@ -1,0 +1,26 @@
+{
+  "name": "My Study Table",
+  "short_name": "Study Table",
+  "description": "你的学习助手 —— 待办、笔记、计时、习惯、日历、电子书与 AI 对话，跨设备同步。",
+  "lang": "zh-CN",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#F0F2F8",
+  "theme_color": "#4F6EF7",
+  "icons": [
+    {
+      "src": "icons/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "icons/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ]
+}

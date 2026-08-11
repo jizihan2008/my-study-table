@@ -7991,3 +7991,144 @@ i[data-lucide] {
   display: flex; gap: 4px; margin-top: 6px; justify-content: flex-end;
 }
 .inbox-mail-item .inbox-msg-subject { margin-top: 0; }
+
+/* ═══════════════════════════════════════════════════════════════
+   手机端 PWA 响应式布局（≤800px）
+   抽屉侧栏 / 底部 5 Tab 导航 / 单列卡片 / 全屏弹窗 / 长按菜单 / 44px 触控
+   ═══════════════════════════════════════════════════════════════ */
+
+/* 移动端汉堡按钮：默认隐藏 */
+.mobile-hamburger {
+  display: none; position: absolute; left: 4px; top: 4px;
+  width: 40px; height: 40px; border: none; border-radius: 50%;
+  background: var(--card); color: var(--text); cursor: pointer;
+  align-items: center; justify-content: center; z-index: 60;
+  box-shadow: var(--shadow); transition: var(--transition);
+}
+.mobile-hamburger:hover { color: var(--primary); }
+
+/* 抽屉遮罩 */
+.mobile-drawer-overlay {
+  display: none; position: fixed; inset: 0; z-index: 150;
+  background: rgba(0,0,0,0.45); opacity: 0; pointer-events: none;
+  transition: opacity 0.25s ease;
+}
+.mobile-drawer-overlay.open { opacity: 1; pointer-events: auto; }
+
+/* 底部 Tab 导航 */
+.mobile-tabbar {
+  display: none; position: fixed; left: 0; right: 0; bottom: 0;
+  z-index: 160; height: 58px;
+  background: var(--card); border-top: 1px solid var(--border);
+  box-shadow: 0 -2px 16px rgba(0,0,0,0.08);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+}
+.mobile-tab {
+  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 3px; border: none; background: transparent; color: var(--text-secondary);
+  font-size: 11px; font-weight: 500; cursor: pointer; min-height: 44px;
+  transition: color 0.15s ease, transform 0.1s ease; font-family: inherit;
+}
+.mobile-tab .lucide-icon { width: 22px; height: 22px; }
+.mobile-tab:active { transform: scale(0.94); }
+.mobile-tab.active { color: var(--primary); }
+.mobile-tab.active .lucide-icon { filter: drop-shadow(0 1px 4px rgba(79,110,247,0.4)); }
+
+/* 更多面板 */
+.mobile-more-panel {
+  display: none; position: fixed; right: 0; top: 0; bottom: 0; z-index: 170;
+  width: min(280px, 82vw); background: var(--card);
+  box-shadow: -6px 0 24px rgba(0,0,0,0.15); padding: 20px 12px 32px;
+  overflow-y: auto; transform: translateX(100%); transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
+}
+.mobile-more-panel.open { transform: translateX(0); }
+.mobile-more-item {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 13px 14px; border: none; background: transparent;
+  border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--text);
+  cursor: pointer; font-family: inherit; transition: var(--transition); min-height: 44px;
+}
+.mobile-more-item .lucide-icon { width: 18px; height: 18px; color: var(--text-secondary); }
+.mobile-more-item:hover { background: var(--hover-bg); }
+.mobile-more-sep { height: 1px; background: var(--border); margin: 8px 4px; }
+
+/* ── ≤800px：移动端布局 ── */
+@media (max-width: 800px) {
+  body { overflow-y: auto; -webkit-tap-highlight-color: transparent; }
+
+  /* 抽屉化侧栏 */
+  .sidebar { width: 260px; z-index: 180; }
+  .sidebar-hover-trigger { display: none !important; }
+  .mobile-hamburger { display: flex; }
+  .mobile-drawer-overlay { display: block; }
+
+  /* 底部导航 */
+  .mobile-tabbar { display: flex; }
+
+  /* 主容器为底部导航让位 */
+  .app {
+    max-width: 100%; height: auto; min-height: 100vh;
+    padding: 12px 12px 78px; overflow: visible;
+  }
+  .header { padding: 4px 36px 12px; text-align: center; }
+  .header h1 { font-size: 18px; }
+
+  /* 单列卡片 */
+  .card { padding: 14px; border-radius: 14px; }
+  .section-title { font-size: 15px; }
+  .section-title svg, .section-title .lucide-icon { width: 16px !important; height: 16px !important; }
+
+  /* 统计卡片单列 */
+  .stats-overview-cards { grid-template-columns: 1fr; }
+  .stats-charts-row { grid-template-columns: 1fr; }
+
+  /* 待办树：触屏友好 */
+  .todo-item { padding: 12px 10px; }
+  .todo-item .todo-text, .todo-text-area { font-size: 15px; }
+  .todo-grip { display: none; }
+  .todo-item:hover .todo-grip { opacity: 0; }
+  .todo-item .todo-check { width: 26px; height: 26px; }
+
+  /* 按钮触控目标 ≥44px */
+  .btn, button.btn, .notes-undo-btn, .cat-section-header button { min-height: 44px; }
+  .todo-add-row input, .todo-add-row button { min-height: 44px; }
+
+  /* 输入框全宽 */
+  .link-grid { grid-template-columns: 1fr; }
+  .modal { width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; border-radius: 0; }
+  .modal-content { max-height: 100%; }
+  .modal-row { flex-direction: column; gap: 12px; }
+
+  /* 笔记区：全宽流式 */
+  .notes-wrap, .notes-main { flex-direction: column; }
+  .notes-sidebar { max-height: none; }
+
+  /* 全屏弹窗（PDF / 电子书） */
+  .bk-pdf-panel { width: 100vw; height: 100vh; max-height: 100vh; border-radius: 0; }
+  .bk-original-panel { width: 96vw; max-height: 88vh; }
+
+  /* 日历网格适屏 */
+  .calendar-grid { grid-template-columns: repeat(7, 1fr); }
+  .cal-day { min-height: 44px; }
+
+  /* 任务线画布触屏滚动 */
+  .tl-graph-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
+
+  /* AI 对话全屏 */
+  .ai-chat-panel { height: calc(100vh - 58px); }
+
+  /* 关闭抽屉时回到正常滚动 */
+  body.mobile-drawer-open { overflow: hidden; }
+
+  /* 更多抽屉的遮罩 */
+  #mobileMoreOverlay.mobile-drawer-overlay { display: block; }
+}
+
+/* ── 长按菜单（触屏）：复用桌面右键上下文菜单，通过长按 500ms 触发 ── */
+@media (pointer: coarse), (max-width: 800px) {
+  .todo-item, .notes-item, .cal-day, .bk-summary-node,
+  .habit-item, .trash-item, .tl-node, .taskline-item {
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+}

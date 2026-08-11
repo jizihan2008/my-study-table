@@ -20,6 +20,10 @@ function saveExpandedTodoIds() {
 function saveData(key, data) {
   try {
     localStorage.setItem(key, JSON.stringify(data));
+    // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步）
+    if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
+      try { window.Sync.onLocalChange(key); } catch (e) { /* 同步层错误不影响主流程 */ }
+    }
   } catch (e) {
     console.error('[saveData] 序列化失败 (' + key + '):', e.message);
     // Fallback: try removing problematic _rawLogs and _ prefixed fields before retry
@@ -201,6 +205,118 @@ function switchTab(tab) {
   if (tab === 'store') { if (typeof window.Store !== 'undefined' && window.Store.renderStore) window.Store.renderStore(); }
   // Initialize Lucide icons for dynamically rendered content
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+  // 同步移动端底部导航激活态
+  updateMobileTabbar(tab);
+  // 移动端切换后关闭抽屉
+  closeMobileDrawer();
+}
+
+// ═══════════ 触屏长按 → 右键菜单（长按 500ms 触发 contextmenu）═══════════
+(function initLongPress() {
+  if (typeof window === 'undefined') return;
+  const LONG_PRESS_MS = 500;
+  let timer = null;
+  let pressTarget = null;
+  const startX = { x: 0, y: 0 };
+  const moving = { x: 0, y: 0 };
+
+  document.addEventListener('touchstart', function (e) {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    startX.x = moving.x = t.clientX;
+    startX.y = moving.y = t.clientY;
+    pressTarget = e.target;
+    clearTimeout(timer);
+    timer = setTimeout(function () {
+      if (!pressTarget) return;
+      const evt = new MouseEvent('contextmenu', {
+        bubbles: true, cancelable: true,
+        view: window,
+        clientX: moving.x, clientY: moving.y
+      });
+      pressTarget.dispatchEvent(evt);
+    }, LONG_PRESS_MS);
+  }, { passive: true });
+
+  function cancel() {
+    clearTimeout(timer); timer = null; pressTarget = null;
+  }
+  document.addEventListener('touchmove', function (e) {
+    if (e.touches.length !== 1) return;
+    const t = e.touches[0];
+    moving.x = t.clientX; moving.y = t.clientY;
+    // 位移过大视为滚动，取消长按
+    if (Math.abs(moving.x - startX.x) > 12 || Math.abs(moving.y - startX.y) > 12) {
+      cancel();
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', cancel);
+  document.addEventListener('touchcancel', cancel);
+})();
+
+// ═══════════ Mobile Navigation（PWA 手机端）═══════════
+// PWA 端隐藏的桌面专属导航入口（收件箱 / 编程 AI / 扩展等）
+function isMobileHiddenNav(id) {
+  if (typeof Env === 'undefined' || !Env.isPwa) return false;
+  return ['inbox', 'codegen', 'extensions'].indexOf(id) !== -1;
+}
+
+function updateMobileTabbar(tab) {
+  if (typeof Env === 'undefined' || !Env.isMobile) return;
+  const bar = document.getElementById('mobileTabbar');
+  if (!bar) return;
+  const tabs = bar.querySelectorAll('.mobile-tab');
+  const five = ['today', 'todo', 'notes', 'calendar', 'more'];
+  tabs.forEach(t => {
+    const key = t.dataset.tab;
+    const isActive = (key === tab) || (key === 'more' && five.indexOf(tab) === -1);
+    t.classList.toggle('active', !!isActive);
+  });
+}
+
+function openMobileDrawer() {
+  document.getElementById('sidebar').classList.add('open');
+  const ov = document.getElementById('mobileDrawerOverlay');
+  if (ov) ov.classList.add('open');
+  document.body.classList.add('mobile-drawer-open');
+}
+function closeMobileDrawer() {
+  if (!window.innerWidth || window.innerWidth > 800) return;
+  document.getElementById('sidebar').classList.remove('open');
+  const ov = document.getElementById('mobileDrawerOverlay');
+  if (ov) ov.classList.remove('open');
+  document.body.classList.remove('mobile-drawer-open');
+}
+
+function openMobileMore() {
+  const panel = document.getElementById('mobileMorePanel');
+  const ov = document.getElementById('mobileMoreOverlay');
+  if (!panel) return;
+  const cfg = loadNavConfig();
+  const all = getNavDisplayItems();
+  const order = cfg.order.concat(all.filter(n => !cfg.order.includes(n.id)).map(n => n.id));
+  panel.innerHTML = order.filter(id => !cfg.hidden.includes(id) && !isMobileHiddenNav(id)).map(id => {
+    const info = all.find(n => n.id === id);
+    if (!info) return '';
+    return `<button class="mobile-more-item" onclick="switchTab('${id}');closeMobileMore();">
+      <i data-lucide="${info.icon}" class="lucide-icon"></i><span>${info.label}</span>${info.badge ? `<span class="nav-badge">${info.badge}</span>` : ''}
+    </button>`;
+  }).join('') +
+    `<div class="mobile-more-sep"></div>` +
+    `<button class="mobile-more-item" onclick="closeMobileMore();openSettingsModal();"><i data-lucide="settings" class="lucide-icon"></i><span>设置</span></button>` +
+    `<button class="mobile-more-item" onclick="closeMobileMore();openHelpModal();"><i data-lucide="help-circle" class="lucide-icon"></i><span>帮助</span></button>` +
+    `<button class="mobile-more-item" onclick="closeMobileMore();openChangelogModal();"><i data-lucide="list" class="lucide-icon"></i><span>更新日志</span></button>`;
+  if (ov) ov.classList.add('open');
+  panel.classList.add('open');
+  document.body.classList.add('mobile-drawer-open');
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+function closeMobileMore() {
+  const panel = document.getElementById('mobileMorePanel');
+  const ov = document.getElementById('mobileMoreOverlay');
+  if (panel) panel.classList.remove('open');
+  if (ov) ov.classList.remove('open');
+  document.body.classList.remove('mobile-drawer-open');
 }
 
 // ═══════════ Navigation Management ═══════════
@@ -266,7 +382,7 @@ function renderSidebarNav() {
     const icon = info ? info.icon : dyn.icon;
     const label = info ? info.label : dyn.label;
     const badge = (info && info.badge) || (dyn && dyn.badge) || '';
-    const isHidden = cfg.hidden.includes(tabId);
+    const isHidden = cfg.hidden.includes(tabId) || isMobileHiddenNav(tabId);
     if (isHidden) return '';
     const keyHint = visibleIdx < 9 ? `<span class="nav-key-hint">Ctrl+${visibleIdx + 1}</span>` : '';
     visibleIdx++;

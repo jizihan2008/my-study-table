@@ -1637,9 +1637,15 @@ let _bkPdfTotal = 1;     // 总页数
 let _bkPdfPageNum = 1;   // 当前页
 
 // 打开 PDF 阅读器并定位到指定页（pageNum 为 1 起始的 PDF 物理页码）
-async function bkOpenPdfAtPage(pageNum, nodeName) {
-  const book = bkGetActiveBook();
-  if (!book || !book.filePath) {
+async function bkOpenPdfAtPage(pageNum, nodeName, bookOverride) {
+  // bookOverride 用于读取已传输到本机的 PDF（WebRTC），不依赖活动书籍
+  const book = bookOverride || bkGetActiveBook();
+  if (!book) {
+    alert('无法定位 PDF：本书不存在');
+    return;
+  }
+  const isPwaRead = (typeof Env !== 'undefined' && Env.isPwa && !!bookOverride);
+  if (!bookOverride && !book.filePath) {
     alert('无法定位 PDF：本书缺少文件路径，请重新导入');
     return;
   }
@@ -1676,29 +1682,43 @@ async function bkOpenPdfAtPage(pageNum, nodeName) {
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
 
   try {
+    // PWA / 浏览器环境下：优先从 IndexedDB（WebRTC 接收的 PDF）读取
+    const isPwaEnv = (typeof Env !== 'undefined' && Env.isPwa);
+    if (isPwaEnv && window.BookPdfStore && typeof window.BookPdfStore.read === 'function') {
+      const stored = await window.BookPdfStore.read(book.id);
+      if (stored) {
+        await _bkLoadPdfBuffer(stored);
+        return;
+      }
+      throw new Error('未找到已传输的 PDF（请先在「教材 → 从桌面传输」拉取此书）');
+    }
     if (!window.electronAPI || typeof window.electronAPI.readPdfFile !== 'function') {
       throw new Error('当前环境不支持读取本地 PDF 文件');
     }
     const buffer = await window.electronAPI.readPdfFile(book.filePath);
     if (!buffer) throw new Error('无法读取 PDF 文件（文件可能已被移动或删除）');
-    const pdfjsLib = window.pdfjsLib || (await ensurePdfJs());
-    if (!pdfjsLib) throw new Error('PDF 引擎未加载，请重启应用');
-    // 兼容 IPC 序列化后的 Buffer 结构 { type:'Buffer', data:[...] }
-    let data = buffer;
-    if (buffer instanceof Uint8Array) data = buffer;
-    else if (buffer && buffer.data && typeof buffer.type === 'string') data = new Uint8Array(buffer.data);
-    _bkPdfDoc = await pdfjsLib.getDocument({ data: data }).promise;
-    _bkPdfTotal = _bkPdfDoc.numPages;
-    _bkPdfPageNum = Math.min(Math.max(1, _bkPdfPageNum), _bkPdfTotal);
-    const totalEl = document.getElementById('bkPdfTotal');
-    if (totalEl) totalEl.textContent = '/ ' + _bkPdfTotal + ' 页';
-    const inputEl = document.getElementById('bkPdfPageInput');
-    if (inputEl) inputEl.value = _bkPdfPageNum;
-    await _bkPdfRenderPage();
+    await _bkLoadPdfBuffer(buffer);
   } catch (err) {
     const wrap = document.getElementById('bkPdfPageWrap');
     if (wrap) wrap.innerHTML = '<div class="bk-pdf-loading" style="color:var(--danger);">' + escapeHtml('打开 PDF 失败：' + String((err && err.message) || err)) + '</div>';
   }
+}
+
+// 将 PDF 数据载入 _bkPdfDoc 并渲染当前页（Electron Buffer / Uint8Array 通用）
+async function _bkLoadPdfBuffer(buffer) {
+  const pdfjsLib = window.pdfjsLib || (await ensurePdfJs());
+  if (!pdfjsLib) throw new Error('PDF 引擎未加载，请重启应用');
+  let data = buffer;
+  if (buffer instanceof Uint8Array) data = buffer;
+  else if (buffer && buffer.data && typeof buffer.type === 'string') data = new Uint8Array(buffer.data);
+  _bkPdfDoc = await pdfjsLib.getDocument({ data: data }).promise;
+  _bkPdfTotal = _bkPdfDoc.numPages;
+  _bkPdfPageNum = Math.min(Math.max(1, _bkPdfPageNum), _bkPdfTotal);
+  const totalEl = document.getElementById('bkPdfTotal');
+  if (totalEl) totalEl.textContent = '/ ' + _bkPdfTotal + ' 页';
+  const inputEl = document.getElementById('bkPdfPageInput');
+  if (inputEl) inputEl.value = _bkPdfPageNum;
+  await _bkPdfRenderPage();
 }
 
 // 渲染当前页到 canvas（适配容器宽度）

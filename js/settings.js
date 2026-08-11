@@ -518,6 +518,69 @@ function switchSettingsTab(tab) {
   if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
     loadSupabaseSettings();
   }
+  // Render sync panel
+  if (tab === 'sync' && typeof renderSyncPanel === 'function') {
+    renderSyncPanel();
+  }
+}
+
+// ═══════════ 跨设备云同步面板（js/sync.js）═══════════
+function renderSyncPanel() {
+  const enabledEl = document.getElementById('syncEnabled');
+  const statusEl = document.getElementById('syncStatus');
+  const infoEl = document.getElementById('syncAccountInfo');
+  if (typeof window.Sync === 'undefined') {
+    if (statusEl) statusEl.textContent = '同步模块未加载（js/sync.js）';
+    return;
+  }
+  const st = window.Sync.getStatus();
+  if (enabledEl) enabledEl.checked = !!st.enabled;
+  if (statusEl) {
+    const loggedTxt = st.loggedIn ? '已登录' : '未登录';
+    const pendingTxt = st.pendingCount > 0 ? '，待上传 ' + st.pendingCount + ' 项' : '';
+    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt : '已关闭');
+    statusEl.className = 'settings-status';
+  }
+  if (infoEl) {
+    let session = null;
+    try {
+      if (typeof getSupabaseClient === 'function' && getSupabaseClient() && getSupabaseClient().auth) {
+        const s = getSupabaseClient().auth.getSession();
+        session = s && s.data ? s.data.session : null;
+      }
+    } catch (e) { /* 忽略 */ }
+    if (session && session.user) {
+      infoEl.innerHTML = '<i data-lucide="user-check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 已登录：<b>' + escapeHtml(session.user.email || session.user.id) + '</b>';
+    } else {
+      infoEl.textContent = '未检测到登录状态。请到「好友」页面登录，登录后此面板会自动同步。';
+    }
+    if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+  }
+}
+
+function toggleSyncEnabled() {
+  const enabledEl = document.getElementById('syncEnabled');
+  if (!enabledEl || typeof window.Sync === 'undefined') return;
+  window.Sync.setEnabled(enabledEl.checked);
+  renderSyncPanel();
+}
+
+async function syncManualSync() {
+  const stEl = document.getElementById('syncStatus');
+  if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
+  if (stEl) { stEl.textContent = '正在同步…'; stEl.className = 'settings-status'; }
+  const res = await window.Sync.manualSync();
+  if (stEl) stEl.textContent = '同步完成。';
+  renderSyncPanel();
+}
+
+async function syncUploadAll() {
+  const stEl = document.getElementById('syncStatus');
+  if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
+  if (stEl) { stEl.textContent = '正在上传全部数据…'; stEl.className = 'settings-status'; }
+  const res = await window.Sync.uploadAll();
+  if (stEl) stEl.textContent = '上传完成。';
+  renderSyncPanel();
 }
 
 // ═══════════ Extension Management ═══════════

@@ -129,7 +129,8 @@ function renderBooks() {
       <div class="bk-shelf-header">
         <span class="bk-shelf-title"><i data-lucide="library" class="lucide-icon" style="width:15px;height:15px;"></i> 书架</span>
         <div class="bk-shelf-actions">
-          <button class="bk-add-book-btn" onclick="bkImportBook()" title="导入 PDF 教材"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i>导入</button>
+          ${(typeof Env !== 'undefined' && Env.isPwa) ? `<button class="bk-add-book-btn" onclick="bkReceiveFromPhone()" title="从桌面端传输 PDF（WebRTC 局域网）"><i data-lucide="download" class="lucide-icon" style="width:13px;height:13px;"></i>从桌面传输</button>` : ''}
+          ${(typeof Env !== 'undefined' && Env.isPwa) ? `<button class="bk-add-book-btn" onclick="bkShowReceivedPdfs()" title="本机已传输的 PDF"><i data-lucide="folder-open" class="lucide-icon" style="width:13px;height:13px;"></i>本机</button>` : `<button class="bk-add-book-btn" onclick="bkImportBook()" title="导入 PDF 教材"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i>导入</button>`}
           <button class="bk-pane-toggle" onclick="bkToggleShelf()" title="隐藏书架"><i data-lucide="panel-left-close" class="lucide-icon" style="width:13px;height:13px;"></i></button>
         </div>
       </div>
@@ -191,6 +192,7 @@ function bkRenderShelfList() {
         </div>
         <span class="bk-book-kb-badge ${badgeCls}">${badgeText}</span>
         <div class="bk-book-actions">
+          ${(typeof Env !== 'undefined' && Env.isElectron) ? `<button class="bk-book-del-btn" onclick="event.stopPropagation();bkSendToPhone(${b.id})" title="发送到手机（WebRTC 局域网传输）"><i data-lucide="send" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
           <button class="bk-book-del-btn" onclick="event.stopPropagation();bkReimportBook(${b.id})" title="重新导入（重新解析 PDF）"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i></button>
           <button class="bk-book-del-btn" onclick="event.stopPropagation();bkDeleteBook(${b.id})" title="删除教材"><i data-lucide="trash-2" class="lucide-icon" style="width:12px;height:12px;"></i></button>
         </div>
@@ -634,6 +636,200 @@ function bkAskChapterGranularity(outline) {
     renderTree();
     if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
   });
+}
+
+// ═══════════ WebRTC：发送 PDF 到手机（桌面端）═══════════
+// 弹窗展示配对码，等待手机端「从桌面传输」输入并连接，然后发送当前书 PDF
+function bkSendToPhone(bookId) {
+  if (typeof window.WebRtcSend === 'undefined') { alert('WebRTC 发送模块未加载'); return; }
+  const book = booksData.find(b => String(b.id) === String(bookId));
+  if (!book) { alert('未找到该教材'); return; }
+  if (!window.electronAPI || !window.electronAPI.readPdfFile) { alert('当前环境无法读取本地 PDF'); return; }
+
+  const code = window.WebRtcSend.generateCode();
+  let pairStarted = false;
+
+  // 构建弹窗
+  const overlay = document.createElement('div');
+  overlay.className = 'bk-original-overlay';
+  overlay.innerHTML = `
+    <div class="bk-original-panel" style="max-width:520px;">
+      <div class="bk-original-head">
+        <span class="bk-original-title"><i data-lucide="send" class="lucide-icon" style="width:15px;height:15px;"></i> 发送「${escapeHtml(book.title)}」到手机</span>
+        <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="bk-original-body" id="bkSendPhoneBody" style="text-align:center;">
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px;">请在手机端「教材 → 从桌面传输」输入以下配对码：</div>
+        <div style="font-size:38px;font-weight:800;letter-spacing:8px;color:var(--primary);font-family:monospace;margin:8px 0;">${code}</div>
+        <div id="bkSendPhoneStatus" style="font-size:13px;color:var(--text-secondary);margin-top:8px;">等待手机连接…</div>
+        <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;">
+          <button class="btn-save-settings" style="background:#ef4444;width:auto;" onclick="this.closest('.bk-original-overlay').querySelector('.bk-original-close').click()">取消</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+
+  const statusEl = overlay.querySelector('#bkSendPhoneStatus');
+  const setStatus = (msg, cls) => {
+    statusEl.textContent = msg;
+    if (cls) statusEl.style.color = cls === 'err' ? 'var(--danger)' : 'var(--primary)';
+    else statusEl.style.color = 'var(--text-secondary)';
+  };
+
+  const onStatus = (st) => {
+    if (st.phase === 'connecting') setStatus('已检测到手机，正在建立连接…', '');
+    else if (st.phase === 'connected') {
+      setStatus('连接已建立，正在读取并发送 PDF…', '');
+      sendFile();
+    } else if (st.phase === 'transfer') {
+      setStatus('发送中：' + (st.progress || 0) + '%', '');
+    } else if (st.phase === 'done') {
+      setStatus('✅ 发送完成！', '');
+      setTimeout(() => overlay.remove(), 1200);
+    } else if (st.phase === 'error') {
+      setStatus('⚠️ ' + st.message, 'err');
+      window.WebRtcSend.stopPair();
+    }
+  };
+
+  async function sendFile() {
+    try {
+      const buffer = await window.electronAPI.readPdfFile(book.filePath);
+      if (!buffer) { setStatus('⚠️ 无法读取 PDF 文件', 'err'); return; }
+      await window.WebRtcSend.sendPdf(buffer, book.id, book.fileName || (book.title + '.pdf'), function (p) {
+        setStatus('发送中：' + p + '%', '');
+      });
+    } catch (e) {
+      setStatus('⚠️ 读取文件失败：' + String(e), 'err');
+    }
+  }
+
+  // 启动配对
+  window.WebRtcSend.startPair({ onStatus: onStatus });
+
+  // 关闭时清理
+  overlay.querySelector('.bk-original-close').addEventListener('click', function () {
+    window.WebRtcSend.stopPair();
+  });
+}
+
+// ═══════════ WebRTC：从桌面接收 PDF（手机端 PWA）═══════
+function bkReceiveFromPhone() {
+  if (typeof window.WebRtcRecv === 'undefined') { alert('WebRTC 接收模块未加载'); return; }
+
+  const overlay = document.createElement('div');
+  overlay.className = 'bk-original-overlay';
+  overlay.innerHTML = `
+    <div class="bk-original-panel" style="max-width:520px;">
+      <div class="bk-original-head">
+        <span class="bk-original-title"><i data-lucide="download" class="lucide-icon" style="width:15px;height:15px;"></i> 从桌面端传输 PDF</span>
+        <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="bk-original-body" style="text-align:center;">
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">请在电脑端「教材 → 发送到手机」生成配对码，然后在此输入 6 位配对码：</div>
+        <input id="bkRecvCodeInput" value="" placeholder="6 位配对码" maxlength="6"
+          style="width:200px;height:46px;font-size:22px;font-family:monospace;letter-spacing:6px;text-align:center;
+                 border:2px solid var(--border);border-radius:10px;background:var(--input-bg);color:var(--text);outline:none;"
+          oninput="this.value=this.value.replace(/\\D/g,'')">
+        <div id="bkRecvStatus" style="font-size:13px;color:var(--text-secondary);margin-top:12px;min-height:20px;">请输入配对码</div>
+        <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;">
+          <button class="btn-save-settings" style="background:var(--primary);width:auto;min-width:120px;" onclick="bkRecvConnect()">开始接收</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+  const codeInput = overlay.querySelector('#bkRecvCodeInput');
+  setTimeout(() => codeInput.focus(), 100);
+
+  overlay.querySelector('.bk-original-close').addEventListener('click', function () {
+    window.WebRtcRecv.stopReceive();
+  });
+
+  window._bkRecvOverlay = overlay;
+  window._bkRecvStatusEl = overlay.querySelector('#bkRecvStatus');
+}
+
+function bkRecvConnect() {
+  if (typeof window.WebRtcRecv === 'undefined') return;
+  const input = document.querySelector('#bkRecvCodeInput');
+  const code = input ? input.value : '';
+  if (code.length !== 6) {
+    const s = window._bkRecvStatusEl;
+    if (s) { s.textContent = '请输入 6 位配对码'; s.style.color = 'var(--danger)'; }
+    return;
+  }
+  window.WebRtcRecv.startReceive(code, {
+    onStatus: function (st) {
+      const s = window._bkRecvStatusEl;
+      if (!s) return;
+      s.style.color = 'var(--text-secondary)';
+      if (st.phase === 'waiting') s.textContent = '等待桌面端连接…（' + st.message + '）';
+      else if (st.phase === 'connecting') s.textContent = '连接建立中…';
+      else if (st.phase === 'transfer') s.textContent = st.progress !== undefined ? '接收中：' + st.progress + '%' : st.message;
+      else if (st.phase === 'done') {
+        s.textContent = '✅ ' + st.message;
+        s.style.color = 'var(--done)';
+        setTimeout(() => { if (window._bkRecvOverlay) window._bkRecvOverlay.remove(); }, 1500);
+      } else if (st.phase === 'error') { s.textContent = '⚠️ ' + st.message; s.style.color = 'var(--danger)'; }
+    }
+  });
+}
+
+// 查看本机已通过 WebRTC 传输的 PDF
+function bkShowReceivedPdfs() {
+  if (typeof window.BookPdfStore === 'undefined') { alert('PDF 存储模块未加载'); return; }
+  window.BookPdfStore.list().then(function (items) {
+    let html = '';
+    if (items.length === 0) {
+      html = '<div class="bk-kb-empty">本机暂无已传输的 PDF。请先在电脑端「发送到手机」，再在手机端「从桌面传输」拉取。</div>';
+    } else {
+      html = items.map(function (it) {
+        return `<div class="bk-kb-card" style="display:flex;align-items:center;gap:10px;margin-bottom:8px;padding:12px 14px;">
+          <i data-lucide="file-text" class="lucide-icon" style="width:18px;height:18px;color:var(--primary);"></i>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(it.fileName || ('Book ' + it.bookId))}</div>
+            <div style="font-size:11px;color:var(--text-secondary);">${(it.size / 1024 / 1024).toFixed(1)} MB · ${new Date(it.savedAt).toLocaleString()}</div>
+          </div>
+          <button class="bk-quiz-btn primary" style="padding:6px 12px;font-size:12px;" onclick="bkOpenReceivedPdf('${it.bookId}')">阅读</button>
+          <button class="bk-quiz-btn" style="padding:6px 10px;font-size:12px;background:transparent;border-color:var(--border);" onclick="bkDeleteReceivedPdf('${it.bookId}')">删除</button>
+        </div>`;
+      }).join('');
+    }
+    const overlay = document.createElement('div');
+    overlay.className = 'bk-original-overlay';
+    overlay.innerHTML = `
+      <div class="bk-original-panel" style="max-width:560px;">
+        <div class="bk-original-head">
+          <span class="bk-original-title"><i data-lucide="folder-open" class="lucide-icon" style="width:15px;height:15px;"></i> 本机已传输的 PDF</span>
+          <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+        </div>
+        <div class="bk-original-body">${html}</div>
+      </div>`;
+    document.body.appendChild(overlay);
+    if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+  });
+}
+
+// 打开已传输的 PDF（读 IndexedDB 后用 pdf.js 渲染）
+function bkOpenReceivedPdf(bookId) {
+  window.BookPdfStore.read(bookId).then(function (data) {
+    if (!data) { alert('未找到该 PDF 数据'); return; }
+    // 构造一个虚拟 book 对象，复用 bkOpenPdfAtPage 的数据源分流
+    const fakeBook = { id: bookId, title: '已传输 PDF', filePath: '' };
+    if (typeof bkOpenPdfAtPage === 'function') {
+      bkOpenPdfAtPage(null, null, fakeBook);
+    } else {
+      alert('PDF 阅读模块未加载');
+    }
+  });
+}
+
+async function bkDeleteReceivedPdf(bookId) {
+  if (!confirm('确定删除本机上的这份 PDF 吗？')) return;
+  await window.BookPdfStore.remove(bookId);
+  bkShowReceivedPdfs();
 }
 
 // ═══════════ 导入流程 ═══════════

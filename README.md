@@ -2,9 +2,9 @@
 
 ![License](https://img.shields.io/badge/License-Custom%20License-blue)
 
-**版本**: v0.2.1  
-**技术栈**: 纯前端 HTML + CSS + JavaScript（Electron 可选）  
-**数据存储**: localStorage（Electron 环境额外支持文件系统备份）  
+**版本**: v0.3.0  
+**技术栈**: 纯前端 HTML + CSS + JavaScript（Electron 可选 / 手机端 PWA）  
+**数据存储**: localStorage + Supabase 云同步（跨设备）  
 **自动更新**: electron-updater（GitHub Releases 发布）  
 
 My Study Table 是一款面向学习者的多功能桌面管理工具，集成了待办管理、笔记系统、日程追踪、AI 助手、计时器、习惯追踪、音乐播放器等功能，帮助你高效规划学习、记录知识、追踪进度。
@@ -29,6 +29,7 @@ My Study Table 是一款面向学习者的多功能桌面管理工具，集成�
 14. [技术架构](#14-技术架构)
 15. [自动更新](#15-自动更新)
 16. [扩展系统与 AI 编程助手](#16-扩展系统与-ai-编程助手)
+17. [手机端 PWA（跨设备）](#17-手机端-pwa跨设备)
 
 ---
 
@@ -625,6 +626,38 @@ npm start
   "createdAt": "2026-08-04T00:00:00.000Z"
 }
 ```
+
+---
+
+## 17. 📱 手机端 PWA（跨设备）
+
+手机端采用 **PWA（渐进式 Web 应用）**，复用同一套前端代码，改造为响应式移动布局，部署到云端后手机浏览器可直接访问，并支持「添加到主屏幕」获得类原生体验。手机端与桌面端共用同一套学习数据，通过 **Supabase 双向云同步**保持一致；PDF 电子书原文通过 **WebRTC 局域网传输**（类似 LocalSend）。
+
+### 一、部署
+
+将项目静态文件（`index.html`、`css/`、`js/`、`lib/`、`manifest.webmanifest`、`service-worker.js`、`icons/`）部署到任意静态托管平台（EdgeOne Pages / CloudBase / GitHub Pages / Vercel 等）。要求 **HTTPS**（Service Worker 与添加到主屏幕需要）。
+
+### 二、云同步设置
+
+1. 手机端与桌面端都使用「好友」系统的 Supabase 账号登录。
+2. 在「设置 → 同步」面板开启云同步。
+3. 首次同步：桌面端（本地已有数据）自动上传，手机端（新设备）自动拉取，之后双端变更实时互通（Realtime）。
+
+**同步范围**：待办、笔记、计时记录、习惯、任务线、电子书元数据（含章节摘要）、日历、统计等学习数据。
+
+**绝不上传**：AI 对话 API Key、Supabase 配置、邮箱授权码等敏感凭据（仅存各自本地）。手机端 AI 对话可独立配置自己的 API Key。
+
+### 三、WebRTC 传输 PDF
+
+1. **桌面端**：打开「教材 → 书架」，点书籍上的「发送到手机」按钮，得到 6 位配对码。
+2. **手机端**：打开「教材 → 从桌面传输」，输入配对码点「开始接收」。
+3. 双方通过 Supabase Realtime 配对信令 + WebRTC DataChannel（64KB 分片）局域网直连传输，手机端保存到本机（IndexedDB），之后可**离线阅读**，并支持章节摘要页码跳转。
+
+> 注意：WebRTC 依赖双方处于同一局域网（或 NAT 可直连）；PDF 文件不出本地网络，不占云存储空间。
+
+### 四、桌面专属功能
+
+收件箱（IMAP）、编程 AI（CodeBuddy CLI / 扩展系统）、长截图等依赖 Electron 专属能力的功能，在手机端 **隐藏入口**，不提供支持。
 
 ### extAPI 接口（插件可用的白名单能力）
 

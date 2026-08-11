@@ -423,6 +423,34 @@ create trigger trg_plugin_rating_update
   for each row execute function public.update_plugin_avg_rating();
 
 -- ═══════════════════════════════════════════════════════════════════
+-- 手机端 PWA：跨设备数据同步（v0.4.0）
+-- 通用键值表，存储待办/笔记/计时/习惯/任务线/电子书元数据等学习数据，
+-- 每行一个 localStorage key（value 为 JSON），per-key updated_at 后写者胜。
+-- ═══════════════════════════════════════════════════════════════════
+create table if not exists public.user_data (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  key text not null,
+  value jsonb not null default '{}'::jsonb,
+  updated_at timestamptz not null default now(),
+  constraint user_data_unique_key unique (user_id, key)
+);
+create index if not exists idx_user_data_user on public.user_data (user_id, updated_at desc);
+alter table public.user_data enable row level security;
+
+-- RLS：仅本人可读可写
+drop policy if exists "user_data_self_all" on public.user_data;
+create policy "user_data_self_all" on public.user_data
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- 授权 Data API 角色
+grant all on table public.user_data to anon, authenticated, service_role;
+
+-- 启用 Realtime（远端变更实时推送）
+do $$ begin alter publication supabase_realtime add table public.user_data; exception when duplicate_object then null; end $$;
+
+-- ═══════════════════════════════════════════════════════════════════
 -- Storage 配置说明（需在 Supabase 控制台手动操作）
 -- ═══════════════════════════════════════════════════════════════════
 -- 1. 创建 bucket：名称 plugin-store，勾选 Public bucket
