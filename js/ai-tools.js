@@ -136,6 +136,10 @@ const AI_TOOLS = {
     description: '联网搜索互联网信息。当用户询问实时信息、新闻、最新知识或你需要获取外部资料时使用。支持 Brave / Tavily / Exa / SearchAPI 等搜索引擎。返回搜索结果摘要。注意：当前时间：' + new Date().toISOString().slice(0, 10),
     params: { query: '搜索关键词（string，必填）', max_results: '返回结果数量，最多10个，默认5（number，可选）' }
   },
+  read_webpage: {
+    description: '抓取并阅读指定网页的正文内容。当用户粘贴一个链接、或明确要求阅读/总结/分析某个网页时使用（无需用户开启网络搜索开关）。采用真实浏览器渲染，能读取普通网页及 JS 动态渲染页面。注意：需登录或需点击交互才显示内容的页面可能读不到正文',
+    params: { url: '网页URL（string，必填）', maxChars: '最多返回的正文字符数（number，可选，默认6000）' }
+  },
   quest_get: {
     description: '查看任务线系统全貌：主线章节（人生阶段）、素质线（并行成长）、任务状态、进度、徽章、奖励池。可指定章节或任务查看详情。注意：当前数据快照中已包含任务线状态摘要，如需全部任务详情才调用本工具',
     params: { lineId: '章节ID（number，可选，只看该章节的任务）', questId: '任务ID（number，可选，看单个任务详情）' }
@@ -262,6 +266,7 @@ function buildToolsSystemPrompt() {
   prompt += '    - batch_add_todos 返回 ✅ 批量创建成功（已列出所有创建的待办名称和数量）→ 直接回复用户，不要 delete_todo 删除后重新创建\n';
   prompt += '    - update_todo 返回 ✅ 更新成功 → 任务已经更新好了，不要再去 list_todos 验证\n';
   prompt += '    - 工具结果中已经包含了足够的信息（名称、ID、数量等），相信它。\n';
+  prompt += '12. 🌐 阅读网页：当用户消息中包含 http(s):// 链接、或明确要求「阅读/总结/分析某个网页」时，请主动调用 read_webpage 工具获取网页正文后再回答。此工具不依赖「网络搜索」开关，只要用户给出 URL 或表达阅读网页的意图即可使用。若 read_webpage 返回 ❌ 错误（如需登录、渲染超时），如实告知用户原因。\n';
 
   // ── 注入当前 AI 身份 ──
   const currentCfg = getEffectiveApiConfig();
@@ -1460,6 +1465,28 @@ async function executeToolCall(action, params) {
       const result = await performWebSearch(query, maxResults);
       if (!result) return `🌐 未找到"${query}"的相关搜索结果`;
       return `🌐 网络搜索结果（"${query}"）：\n\n${result}`;
+    }
+    case 'read_webpage': {
+      const url = params.url || '';
+      if (!url) return '❌ 读取失败：缺少网页 URL';
+      if (typeof window === 'undefined' || !window.electronAPI || typeof window.electronAPI.webRead !== 'function') {
+        return '❌ 当前环境不支持读取网页（缺少 electronAPI.webRead，请完全重启应用后重试）';
+      }
+      const maxChars = Math.max(Number(params.maxChars) || 6000, 500);
+      try {
+        const res = await window.electronAPI.webRead({ url, maxChars });
+        if (!res || res.ok !== true) {
+          return '❌ 读取网页失败：' + ((res && res.error) || '未知错误');
+        }
+        let text = (res.text || '').trim();
+        if (!text) return '❌ 未能提取到该网页的正文内容';
+        if (text.length > maxChars) {
+          text = text.slice(0, maxChars) + '\n\n[内容过长，已截断...]';
+        }
+        return `📄 网页阅读成功\n🔗 来源：${res.finalUrl || url}\n📌 标题：${res.title || '(无标题)'}\n\n${text}`;
+      } catch (err) {
+        return '❌ 读取网页失败：' + String((err && err.message) || err);
+      }
     }
     // ── 任务线系统（GTNH 式任务书） ──
     case 'quest_get': {

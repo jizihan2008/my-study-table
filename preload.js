@@ -63,5 +63,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('codebuddy:install-output', listener);
     return () => ipcRenderer.removeListener('codebuddy:install-output', listener);
-  }
+  },
+  // ── Inbox Assistant IPC ──
+  inboxMailTest: (cfg) => ipcRenderer.invoke('mail:test', cfg),
+  inboxMailFetch: (cfg) => ipcRenderer.invoke('mail:fetch', cfg),
+  captureListWindows: () => ipcRenderer.invoke('capture:list-windows'),
+  captureLongShot: (payload) => ipcRenderer.invoke('capture:long-shot', payload),
+  captureListFiles: (payload) => ipcRenderer.invoke('capture:list-files', payload),
+  capturePickDir: () => ipcRenderer.invoke('capture:pick-dir'),
+  captureSaveImage: (payload) => ipcRenderer.invoke('capture:save-image', payload),
+  captureReadImage: (filePath) => ipcRenderer.invoke('capture:read-image', filePath),
+  captureReadFileText: (filePath) => ipcRenderer.invoke('capture:read-file-text', filePath),
+  // ── Web Page Reader IPC (AI 阅读网页) ──
+  webRead: (payload) => ipcRenderer.invoke('web:read', payload)
 });

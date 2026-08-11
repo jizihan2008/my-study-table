@@ -304,6 +304,15 @@
     </div>
   </div>
 
+  <!-- ── Inbox Section（消息收件箱：邮箱 / 微信 / QQ / 文件）── -->
+  <div class="section" id="section-inbox">
+    <div class="card" style="padding:0;overflow:hidden;border-radius:var(--radius);">
+      <div id="inboxApp" class="inbox-app-root">
+        <!-- rendered by window.Inbox.render() -->
+      </div>
+    </div>
+  </div>
+
   <!-- ── AI Assistant Section ── -->
   <div class="section" id="section-ai">
     <div class="card" style="padding: 0; overflow: hidden; border-radius: var(--radius);">
@@ -1187,7 +1196,7 @@
 
 <script src="lib/katex/katex.min.js"></script>
 <script src="js/liquid-glass.js?v=20260722-r23"></script>
-<script src="js/core.js?v=20260807-r12"></script>
+<script src="js/core.js?v=20260811-r1"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260807-r14"></script>
     <script src="js/notes.js?v=20260805-r12"></script>
@@ -1199,15 +1208,17 @@
     <script src="js/ai-conv.js?v=20260803-r1"></script>
     <script src="js/ai-attach.js?v=20260807-r1"></script>
     <script src="js/ai-render.js?v=20260810-r9"></script>
-    <script src="js/ai-tools.js?v=20260808-r5"></script>
+    <script src="js/ai-tools.js?v=20260811-r2"></script>
     <script src="js/ai-search.js"></script>
     <script src="js/ai-api.js?v=20260803-r1"></script>
     <script src="js/ai-send.js?v=20260804-r3"></script>
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260803-r1"></script>
-    <script src="js/settings.js?v=20260810-r15"></script>
+    <script src="js/settings.js?v=20260810-r16"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
+    <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
+    <script src="js/inbox.js?v=20260811-r1"></script>
     <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
     <script type="module">
       import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
@@ -1215,9 +1226,9 @@
       pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
     </script>
     <script src="js/books.js?v=20260810-r11"></script>
-    <script src="js/books-pdf.js?v=20260810-r3"></script>
-    <script src="js/books-kb.js?v=20260810-r9"></script>
-    <script src="js/books-ai.js?v=20260810-r22"></script>
+    <script src="js/books-pdf.js?v=20260811-r1"></script>
+    <script src="js/books-kb.js?v=20260811-r7"></script>
+    <script src="js/books-ai.js?v=20260811-r6"></script>
     <script src="js/calendar.js?v=20260724-r7"></script>
     <script src="js/taskline.js?v=20260809-r26"></script>
     <script src="js/timer.js?v=20260809-r21"></script>
@@ -1364,6 +1375,7 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-item" id="bkTermCtxRemove" style="display:none;" onclick="bkRemoveTermMark()"><i data-lucide="highlighter" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 移除术语标记</div>
   <div class="context-menu-item" id="bkTermCtxExplain" style="display:none;" onclick="bkExplainSelection('explain')"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 解释一下</div>
   <div class="context-menu-item" id="bkTermCtxExample" style="display:none;" onclick="bkExplainSelection('example')"><i data-lucide="lightbulb" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 举个例子</div>
+  <div class="context-menu-item" id="bkTermCtxOriginal" style="display:none;" onclick="bkShowOriginalText()"><i data-lucide="book-open" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 显示原书原文</div>
 </div>
 
 <!-- 教材术语：悬停气泡 -->

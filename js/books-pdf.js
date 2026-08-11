@@ -372,3 +372,28 @@ async function getChapterText(cache, chapter) {
   }
   return parts.join('\n\n');
 }
+
+// 带页码标记的章节文本：每页文本前插入「〔第 N 页〕」，供知识库构建时让 AI 输出摘要节点对应的 PDF 页码。
+// 与 getChapterText 不同：不读 chapterTexts 缓存（缓存为纯文本无页码），始终按 pages 重建。
+async function getChapterTextWithPages(cache, chapter) {
+  if (!cache || !chapter) return '';
+  const pages = cache.pages || [];
+  const start = Math.max(1, chapter.startPage || 1);
+  const end = Math.min(pages.length, chapter.endPage || pages.length);
+  const parts = [];
+  for (let i = start; i <= end; i++) {
+    const t = pages[i - 1];
+    if (t && t.trim()) parts.push('〔第 ' + i + ' 页〕' + t.trim());
+  }
+  return parts.join('\n\n');
+}
+
+// books.js 风格包装：基于当前活动书的内存缓存，返回带页码标记的章节文本
+async function bkGetChapterTextWithPages(chapter) {
+  const cache = await bkEnsureTextCache();
+  if (!cache) return '';
+  if (cache.pages && cache.pages.length && typeof getChapterTextWithPages === 'function') {
+    try { return await getChapterTextWithPages(cache, chapter); } catch (e) { return ''; }
+  }
+  return '';
+}

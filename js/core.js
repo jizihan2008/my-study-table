@@ -191,6 +191,7 @@ function switchTab(tab) {
   if (tab === 'calendar') renderCalendar();
   if (tab === 'timer') renderTimer();
   if (tab === 'habits') renderHabits();
+  if (tab === 'inbox') { if (typeof window.Inbox !== 'undefined' && window.Inbox.render) window.Inbox.render(); }
   if (tab === 'friends') { if (typeof renderFriends === 'function') renderFriends(); }
   if (tab === 'trash') { if (typeof renderTrash === 'function') renderTrash(); }
   if (tab === 'archive') { if (typeof renderArchive === 'function') renderArchive(); }
@@ -211,6 +212,7 @@ const ALL_NAV_ITEMS = [
   { id: 'today',     icon: 'calendar-check',label: '今天' },
   { id: 'calendar',  icon: 'calendar',      label: '日历' },
   { id: 'timer',     icon: 'timer',         label: '计时器' },
+  { id: 'inbox',     icon: 'inbox',         label: '收件箱', badge: '测试' },
   { id: 'friends',   icon: 'users',         label: '好友' },
   { id: 'habits',    icon: 'target',        label: '习惯' },
   { id: 'ai',        icon: 'bot',           label: 'AI 助手' },
@@ -263,12 +265,13 @@ function renderSidebarNav() {
     if (!info && !dyn) return '';
     const icon = info ? info.icon : dyn.icon;
     const label = info ? info.label : dyn.label;
+    const badge = (info && info.badge) || (dyn && dyn.badge) || '';
     const isHidden = cfg.hidden.includes(tabId);
     if (isHidden) return '';
     const keyHint = visibleIdx < 9 ? `<span class="nav-key-hint">Ctrl+${visibleIdx + 1}</span>` : '';
     visibleIdx++;
     return `<button class="sidebar-nav-item" onclick="switchTab('${tabId}')" id="nav-${tabId}">
-      <i data-lucide="${icon}" class="lucide-icon"></i>${label}${keyHint}
+      <i data-lucide="${icon}" class="lucide-icon"></i>${label}${badge ? `<span class="nav-badge">${badge}</span>` : ''}${keyHint}
     </button>`;
   }).join('');
   // Mark active tab

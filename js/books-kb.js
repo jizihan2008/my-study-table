@@ -149,13 +149,14 @@ async function _bkBuildChapterCore(ch, cfg, collectPseudocode) {
   bkRenderToc();
 
   let chapterText = '';
-  try { chapterText = await bkGetChapterText(ch); } catch (e) { chapterText = ''; }
+  try { chapterText = await bkGetChapterTextWithPages(ch); } catch (e) { chapterText = ''; }
 
   try {
     const kb = await bkBuildChapterKb(ch, chapterText, cfg, collectPseudocode);
     if (kb) {
       ch.kb.status = 'done';
       ch.kb.summary = kb.summary || '';
+      ch.kb.summaryNodes = Array.isArray(kb.summaryNodes) ? kb.summaryNodes : [];
       ch.kb.terms = Array.isArray(kb.terms) ? kb.terms : [];
       ch.kb.keyPoints = Array.isArray(kb.keyPoints) ? kb.keyPoints : [];
       ch.kb.mindmap = kb.mindmap || null;
@@ -233,9 +234,8 @@ async function bkJudgeProgrammingBook(book, cfg) {
       { role: 'user', content: `书名：${book.title}\n章节目录：${titles}` }
     ], cfg, null);
     const raw = (res && (res.cleanText || res.rawReply)) || '';
-    const m = raw.match(/\{[\s\S]*\}/);
-    const obj = JSON.parse(m ? m[0] : raw);
-    return obj.isProgramming === true;
+    const obj = bkSafeParseJson(raw);
+    return !!(obj && obj.isProgramming === true);
   } catch (err) {
     console.error('编程书判断失败:', err);
     return false;
@@ -310,21 +310,26 @@ async function bkBuildChapterKb(chapter, chapterText, cfg, collectPseudocode) {
   const systemPrompt = '你是「学习导师」，负责为教材章节建立知识库。请基于给出的章节原文，输出结构化知识卡片。'
     + '\n规则：'
     + '\n1. 只输出 JSON，不要任何解释，不要用 Markdown 代码块包裹。'
-    + '\n2. 输出格式：'
-    + '{"summary":"250-450 字中文摘要（按节点分条）","terms":[{"term":"术语/概念","def":"一句话定义"}],"keyPoints":["重点1","重点2","重点3"],"mindmap":{"name":"章节标题","children":[{"name":"子主题","children":[{"name":"更细节"}]}]},' + pseudoField + '}'
-    + '\n3. terms 给出 5-12 个关键术语；keyPoints 给出 4-8 条重点。'
-    + '\n4. mindmap 为知识结构树（2-4 层），name 用中文。'
-    + '\n5. summary 的节点化输出规范：\n' + BK_SUMMARY_NODE_RULE
+    + '\n2. JSON 规范：整个 JSON 只输出一行；字符串值内禁止使用 ASCII 双引号（引用或强调一律用中文引号「」），禁止在字符串值内出现真实换行；反斜杠、制表符等特殊字符按 JSON 规范转义（如字符串内换行写 \\n）。'
+    + '\n3. 输出格式：'
+    + '{"summary":"250-450 字中文摘要（按节点分条）","summaryNodes":[{"text":"- **节点名**：说明","src":"12"}],"terms":[{"term":"术语/概念","def":"一句话定义"}],"keyPoints":["重点1","重点2","重点3"],"mindmap":{"name":"章节标题","children":[{"name":"子主题","children":[{"name":"更细节"}]}]},' + pseudoField + '}'
+    + '\n4. terms 给出 5-12 个关键术语；keyPoints 给出 4-8 条重点。'
+    + '\n5. mindmap 为知识结构树（2-4 层），name 用中文。'
+    + '\n6. summary 的节点化输出规范：\n' + BK_SUMMARY_NODE_RULE
+    + '\n7. ⚠️ summary 是核心交付物，必须保持 250-450 字、完整详细、覆盖全部重要细节；summaryNodes 只是 summary 的结构化副本，禁止为了生成 summaryNodes 或其他字段而压缩、简化 summary。'
+    + '\n8. summaryNodes 与 summary 同源一致：每条 text 就是 summary 中的一条节点（text 为完整一行节点，形如「- **节点名**：定义与判定说明」）。章节原文中「〔第 N 页〕」是页码标记，其后的内容属于 PDF 第 N 页。每条 src 输出该节点核心知识点所属的 PDF 页码（纯数字，1 起始的 PDF 页号；节点内容跨页时取起始页；依据最近的〔第 N 页〕标记判断，无法确定页码时输出空字符串 ""，禁止臆造页码）。'
     + (collectPseudocode
-      ? '\n6. pseudocode：提取本章出现的所有伪代码/算法/程序片段，每条含 title（算法或片段名称）、code（原文，保留缩进换行）、explanation（中文解释，说明作用/输入输出/关键步骤）。若本章无伪代码，输出 []。'
+      ? '\n9. pseudocode：提取本章出现的所有伪代码/算法/程序片段，每条含 title（算法或片段名称）、code（原文，保留缩进换行）、explanation（中文解释，说明作用/输入输出/关键步骤）。若本章无伪代码，输出 []。'
       : '');
 
+  // 知识库构建是长输出任务（summary+summaryNodes+terms+keyPoints+mindmap+伪代码），提高输出上限避免压缩摘要质量
+  const kbCfg = { ...c, maxTokens: Math.max(c.maxTokens || 0, 8192) };
   const res = await callAiApi(
     [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `章节标题：${chapter.title}\n\n章节原文：\n${content}` }
     ],
-    c,
+    kbCfg,
     null
   );
   const raw = (res && (res.cleanText || res.rawReply)) || '';
@@ -347,56 +352,159 @@ async function bkBuildChapterSummary(chapter, chapterText, cfg) {
   const systemPrompt = '你是「学习导师」，负责为教材章节撰写摘要。请基于给出的章节原文，按节点分条输出章节摘要。'
     + '\n规则：'
     + '\n1. 只输出 JSON，不要任何解释，不要用 Markdown 代码块包裹。'
-    + '\n2. 输出格式：{"summary":"250-450 字中文摘要（按节点分条）"}'
-    + '\n3. summary 的节点化输出规范：\n' + BK_SUMMARY_NODE_RULE;
+    + '\n2. JSON 规范：整个 JSON 只输出一行；字符串值内禁止使用 ASCII 双引号（引用或强调一律用中文引号「」），禁止在字符串值内出现真实换行；反斜杠、制表符等特殊字符按 JSON 规范转义。'
+    + '\n3. 输出格式：{"summary":"250-450 字中文摘要（按节点分条）","summaryNodes":[{"text":"- **节点名**：说明","src":"12"}]}'
+    + '\n4. summary 的节点化输出规范：\n' + BK_SUMMARY_NODE_RULE
+    + '\n5. ⚠️ summary 是核心交付物，必须保持 250-450 字、完整详细、覆盖全部重要细节；禁止为了生成 summaryNodes 而压缩、简化 summary。'
+    + '\n6. summaryNodes 与 summary 同源一致：每条 text 就是 summary 中的一条节点。章节原文中「〔第 N 页〕」是页码标记，其后的内容属于 PDF 第 N 页。每条 src 输出该节点核心知识点所属的 PDF 页码（纯数字，1 起始的 PDF 页号；节点内容跨页时取起始页；依据最近的〔第 N 页〕标记判断，无法确定页码时输出空字符串 ""，禁止臆造页码）。';
 
+  // 摘要+summaryNodes 为长输出，提高输出上限避免压缩摘要质量
+  const kbCfg = { ...c, maxTokens: Math.max(c.maxTokens || 0, 8192) };
   const res = await callAiApi(
     [
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `章节标题：${chapter.title}\n\n章节原文：\n${content}` }
     ],
-    c,
+    kbCfg,
     null
   );
   const raw = (res && (res.cleanText || res.rawReply)) || '';
   const obj = bkParseKbJson(raw);
-  const summary = (obj && obj.summary) ? obj.summary.trim() : '';
-  return summary || null;
+  if (!obj) return null;
+  return {
+    summary: (obj.summary || '').trim(),
+    summaryNodes: Array.isArray(obj.summaryNodes) ? obj.summaryNodes : []
+  };
 }
 
-// 从 AI 回复中提取知识库 JSON
-function bkParseKbJson(raw) {
-  if (!raw) return null;
-  const text = String(raw);
-  // 去除可能的代码块围栏
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  let jsonStr = fenced ? fenced[1] : text;
-  // 尝试从第一个 { 到最后一个 } 截取
-  const first = jsonStr.indexOf('{');
-  const last = jsonStr.lastIndexOf('}');
-  if (first >= 0 && last > first) jsonStr = jsonStr.slice(first, last + 1);
-  try {
-    const obj = JSON.parse(jsonStr);
-    if (!obj || typeof obj !== 'object') return null;
-    return {
-      summary: String(obj.summary || '').trim(),
-      terms: Array.isArray(obj.terms) ? obj.terms.slice(0, 15) : [],
-      keyPoints: Array.isArray(obj.keyPoints) ? obj.keyPoints.slice(0, 10) : [],
-      mindmap: (obj.mindmap && typeof obj.mindmap === 'object') ? obj.mindmap : null,
-      pseudocode: Array.isArray(obj.pseudocode)
-        ? obj.pseudocode
-            .filter(p => p && typeof p === 'object')
-            .map(p => ({
-              title: String(p.title || '').trim(),
-              code: String(p.code || '').trim(),
-              explanation: String(p.explanation || '').trim()
-            }))
-            .filter(p => p.title || p.code)
-            .slice(0, 30)
-        : []
-    };
-  } catch (e) {
-    console.error('知识库 JSON 解析失败:', e, jsonStr.slice(0, 300));
-    return null;
+// ═══════════ AI 输出 JSON 容错解析（状态机提取 + 裸引号/换行修复） ═══════════
+// AI 常在字符串值内输出未转义的 ASCII 双引号（如 "向左"扭""）或真实换行，导致 JSON.parse 崩溃。
+// 三级容错：① 状态机精确提取最外层 JSON 区间；② 修复字符串内裸引号/换行/控制字符后再解析；③ 截断兜底。
+// 本组函数放 books-kb.js 顶部，books-ai.js（其后加载）可复用。
+
+// 状态机提取最外层 JSON 对象/数组区间：正确处理字符串值内的 { } [ ] 与引号转义
+function bkExtractJsonBlock(text) {
+  let inStr = false, esc = false, depth = 0, start = -1;
+  for (let i = 0; i < text.length; i++) {
+    const ch = text[i];
+    if (inStr) {
+      if (esc) { esc = false; }
+      else if (ch === '\\') { esc = true; }
+      else if (ch === '"') { inStr = false; }
+      continue;
+    }
+    if (ch === '"') { inStr = true; if (start < 0) start = i; continue; }
+    if (start < 0) {
+      if (ch === '{' || ch === '[') { start = i; depth = 1; }
+      continue;
+    }
+    if (ch === '{' || ch === '[') depth++;
+    else if (ch === '}' || ch === ']') {
+      depth--;
+      if (depth === 0) return text.slice(start, i + 1);
+    }
   }
+  // 未找到配对括号（可能因字符串内裸引号误判），退回从起始括号到末尾
+  return start >= 0 ? text.slice(start) : null;
+}
+
+// 修复字符串值内的非法字符：真实换行/控制字符 → \n；字符串内容中的裸 ASCII 双引号 → 中文左引号「“」
+// 启发式：字符串态中遇到 " 且其后（跳过空白）不是 , } ] : 或 EOF，视为内容中的裸引号而非闭合引号
+function bkRepairJsonStrings(jsonStr) {
+  if (typeof jsonStr !== 'string') return jsonStr;
+  let out = '';
+  let inStr = false, esc = false;
+  for (let i = 0; i < jsonStr.length; i++) {
+    const ch = jsonStr[i];
+    if (inStr) {
+      if (esc) { out += ch; esc = false; continue; }
+      if (ch === '\\') { out += ch; esc = true; continue; }
+      if (ch === '"') {
+        let j = i + 1;
+        while (j < jsonStr.length && /\s/.test(jsonStr[j])) j++;
+        const next = jsonStr[j];
+        if (j >= jsonStr.length || next === ',' || next === '}' || next === ']' || next === ':') {
+          out += ch; inStr = false; continue; // 合法闭合引号
+        }
+        out += '“'; continue; // 字符串内容中的裸引号 → 中文左引号
+      }
+      if (ch === '\n' || ch === '\r') { out += '\\n'; continue; }
+      if (ch === '\t') { out += '\\t'; continue; }
+      if (ch.charCodeAt(0) < 0x20) { out += '\\u' + ch.charCodeAt(0).toString(16).padStart(4, '0'); continue; }
+      out += ch; continue;
+    }
+    if (ch === '"') { out += ch; inStr = true; continue; }
+    out += ch;
+  }
+  return out;
+}
+
+// 安全解析 AI 回复中的 JSON：剥离围栏 → 提取区间 → 标准解析 → 修复后重试 → 截断兜底
+// 成功返回对象，失败返回 null（不抛异常）
+function bkSafeParseJson(raw) {
+  if (!raw) return null;
+  let text = String(raw).trim();
+  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+  if (fenced) text = fenced[1].trim();
+  const first = text.indexOf('{');
+  if (first < 0) return null;
+  text = text.slice(first);
+
+  const block = bkExtractJsonBlock(text) || text;
+  let obj = null;
+  try { obj = JSON.parse(block); } catch (e) {}
+  if (obj && typeof obj === 'object') return obj;
+
+  const repaired = bkRepairJsonStrings(block);
+  try { obj = JSON.parse(repaired); } catch (e) {}
+  if (obj && typeof obj === 'object') return obj;
+
+  try {
+    const last = repaired.lastIndexOf('}');
+    if (last > 0) {
+      obj = JSON.parse(repaired.slice(0, last + 1));
+      if (obj && typeof obj === 'object') return obj;
+    }
+  } catch (e2) {}
+  return null;
+}
+
+// 从 AI 回复中提取知识库 JSON（容错：bkSafeParseJson）
+function bkParseKbJson(raw) {
+  const obj = bkSafeParseJson(raw);
+  if (!obj || typeof obj !== 'object') return null;
+  // summaryNodes：摘要节点化结构 [{ text: '- **节点名**：说明', src: '逐字摘录' }]
+  const summaryNodes = Array.isArray(obj.summaryNodes)
+    ? obj.summaryNodes
+        .filter(n => n && typeof n === 'object' && n.text)
+        .map(n => ({
+          text: String(n.text).trim(),
+          src: String(n.src || '').trim()
+        }))
+        .filter(n => n.text)
+        .slice(0, 30)
+    : [];
+  let summary = String(obj.summary || '').trim();
+  // summary 为空时用 summaryNodes 的 text 拼接兜底（保持纯文本可用性）
+  if (!summary && summaryNodes.length) {
+    summary = summaryNodes.map(n => n.text).join('\n');
+  }
+  return {
+    summary: summary,
+    summaryNodes: summaryNodes,
+    terms: Array.isArray(obj.terms) ? obj.terms.slice(0, 15) : [],
+    keyPoints: Array.isArray(obj.keyPoints) ? obj.keyPoints.slice(0, 10) : [],
+    mindmap: (obj.mindmap && typeof obj.mindmap === 'object') ? obj.mindmap : null,
+    pseudocode: Array.isArray(obj.pseudocode)
+      ? obj.pseudocode
+          .filter(p => p && typeof p === 'object')
+          .map(p => ({
+            title: String(p.title || '').trim(),
+            code: String(p.code || '').trim(),
+            explanation: String(p.explanation || '').trim()
+          }))
+          .filter(p => p.title || p.code)
+          .slice(0, 30)
+      : []
+  };
 }

@@ -685,26 +685,15 @@ async function bkGenerateQuiz() {
 }
 
 function bkParseQuizJson(raw) {
-  if (!raw) return null;
-  const text = String(raw);
-  const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-  let jsonStr = fenced ? fenced[1] : text;
-  const first = jsonStr.indexOf('{');
-  const last = jsonStr.lastIndexOf('}');
-  if (first >= 0 && last > first) jsonStr = jsonStr.slice(first, last + 1);
-  try {
-    const obj = JSON.parse(jsonStr);
-    if (!obj.questions || !Array.isArray(obj.questions)) return null;
-    return obj.questions.map((q, i) => ({
-      type: q.type === 'short' ? 'short' : 'choice',
-      text: String(q.text || ('第 ' + (i + 1) + ' 题')).trim(),
-      options: Array.isArray(q.options) ? q.options.map(o => String(o).trim()) : [],
-      answer: String(q.answer || '').trim(),
-      explain: String(q.explain || '').trim()
-    })).filter(q => q.text && q.answer);
-  } catch (e) {
-    return null;
-  }
+  const obj = bkSafeParseJson(raw);
+  if (!obj || !obj.questions || !Array.isArray(obj.questions)) return null;
+  return obj.questions.map((q, i) => ({
+    type: q.type === 'short' ? 'short' : 'choice',
+    text: String(q.text || ('第 ' + (i + 1) + ' 题')).trim(),
+    options: Array.isArray(q.options) ? q.options.map(o => String(o).trim()) : [],
+    answer: String(q.answer || '').trim(),
+    explain: String(q.explain || '').trim()
+  })).filter(q => q.text && q.answer);
 }
 
 // 解析选择题选项：提取前缀字母与正文。
@@ -972,6 +961,21 @@ function bkParseGradeJson(raw, count) {
 }
 
 // ═══════════ 摘要导图 tab ═══════════
+// 章节摘要 HTML：summaryNodes 存在时渲染为可右键节点列表（右键显示原书原文），否则回退纯文本
+function bkSummaryNodesHtml(kb) {
+  const nodes = Array.isArray(kb.summaryNodes) && kb.summaryNodes.length ? kb.summaryNodes : [];
+  if (!nodes.length) {
+    return `<div class="bk-kb-summary-text">${_bkRenderMd(kb.summary || '（暂无摘要）')}</div>`;
+  }
+  const items = nodes.map(n => {
+    const text = String(n.text || '').trim();
+    if (!text) return '';
+    const src = String(n.src || '').trim();
+    return `<div class="bk-summary-node" data-name="${escapeHtml(text)}" data-src="${escapeHtml(src)}">${_bkRenderMd(text)}</div>`;
+  }).join('');
+  return `<div class="bk-summary-nodes">${items}</div>`;
+}
+
 function bkRenderSummaryTab(book, chapter) {
   const body = document.getElementById('bkMainBody');
   if (!body) return;
@@ -1026,6 +1030,7 @@ function bkRenderSummaryTab(book, chapter) {
         <div class="bk-term-list">${kb.terms.map(t => `<span class="bk-term-chip"><b>${escapeHtml(t.term)}</b> ${escapeHtml(t.def || '')}<button class="bk-term-chip-del" title="从术语表移除" onclick="bkDeleteTermFromGlossary('${escapeHtml(String(t.term).replace(/'/g, "\\'"))}')"><i data-lucide="x" class="lucide-icon" style="width:11px;height:11px;"></i></button></span>`).join('')}</div>
       </div>` : '';
 
+  const hasSummaryNodes = Array.isArray(kb.summaryNodes) && kb.summaryNodes.length > 0;
   const keyPointsHtml = (kb.keyPoints && kb.keyPoints.length)
     ? `<div class="bk-kb-card">
         <div class="bk-kb-card-title"><i data-lucide="list-checks" class="lucide-icon" style="width:14px;height:14px;"></i> 重点提纲</div>
@@ -1042,8 +1047,8 @@ function bkRenderSummaryTab(book, chapter) {
     ${pseudoToggleHtml}
     <div class="bk-summary-grid">
       <div class="bk-kb-card">
-        <div class="bk-kb-card-title"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;"></i> 章节摘要</div>
-        <div class="bk-kb-summary-text">${_bkRenderMd(kb.summary || '（暂无摘要）')}</div>
+        <div class="bk-kb-card-title"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;"></i> 章节摘要<span style="font-weight:400;font-size:11px;color:var(--text-secondary);">（${hasSummaryNodes ? '节点可右键显示原书原文' : '重新生成摘要后，节点可右键显示原书原文'}）</span></div>
+        ${bkSummaryNodesHtml(kb)}
         <div style="margin-top:10px;display:flex;gap:6px;flex-wrap:wrap;">
           <button class="bk-msg-action" onclick="bkSaveSummaryAsNote()"><i data-lucide="save" class="lucide-icon" style="width:12px;height:12px;"></i> 存为笔记</button>
           <button class="bk-msg-action" id="bkRegenSummaryBtn" onclick="bkRegenerateSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i> 重新生成摘要</button>
@@ -1061,7 +1066,7 @@ function bkRenderSummaryTab(book, chapter) {
   _bkLoadTermDismissed(book && book.id);
   const termMap = bkBuildBookTermMap(book);
   if (termMap.size > 0) {
-    body.querySelectorAll('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl')
+    body.querySelectorAll('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl, .bk-summary-node')
       .forEach(el => bkHighlightTermsInElement(el, termMap));
   }
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
@@ -1115,11 +1120,12 @@ async function bkRegenerateSummary() {
 
   try {
     let chapterText = '';
-    try { chapterText = await bkGetChapterText(chapter); } catch (e) { chapterText = ''; }
-    const summary = await bkBuildChapterSummary(chapter, chapterText, cfg);
-    if (!summary) throw new Error('AI 未返回有效摘要');
+    try { chapterText = await bkGetChapterTextWithPages(chapter); } catch (e) { chapterText = ''; }
+    const result = await bkBuildChapterSummary(chapter, chapterText, cfg);
+    if (!result || !result.summary) throw new Error('AI 未返回有效摘要');
     chapter.kb = chapter.kb || { status: 'pending', summary: '', terms: [], keyPoints: [], mindmap: null };
-    chapter.kb.summary = summary;
+    chapter.kb.summary = result.summary;
+    chapter.kb.summaryNodes = Array.isArray(result.summaryNodes) ? result.summaryNodes : [];
     chapter.kb.status = 'done';
     book.updatedAt = new Date().toISOString();
     bkSaveBooks();
@@ -1350,6 +1356,8 @@ if (typeof window._bkTermHoverInited === 'undefined') {
 //  (b) 右键选中文字（非标黄术语）→ 显示「添加到术语表」
 let _bkCtxTermSelection = ''; // 模式(b)：选中文字
 let _bkCtxTerm = '';          // 模式(a)：被右键的标黄术语
+let _bkCtxNodeName = '';      // 模式(c)：被右键的摘要节点名
+let _bkCtxNodeSrc = '';       // 模式(c)：该节点的原文 src 索引
 
 // 记录被用户移除标记的术语（持久化，按书籍区分，刷新后不恢复标黄）
 let _bkTermDismissed = new Set();
@@ -1377,8 +1385,8 @@ function _bkSaveTermDismissed(bookId) {
 function bkShowTermContextMenu(e) {
   const body = document.getElementById('bkMainBody');
   if (!body || !body.contains(e.target)) return;
-  // 仅在摘要导图各栏目内触发（摘要/重点提纲/知识导图/伪代码标题与解释/术语表）
-  if (!e.target.closest('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl, .bk-term-list')) return;
+  // 仅在摘要导图各栏目内触发（摘要/摘要节点/重点提纲/知识导图/伪代码标题与解释/术语表）
+  if (!e.target.closest('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl, .bk-term-list, .bk-summary-node')) return;
   const menu = document.getElementById('bkTermContextMenu');
   if (!menu) return;
 
@@ -1403,22 +1411,41 @@ function bkShowTermContextMenu(e) {
 
   // 模式(b)：选中文字 → 添加到术语表 / 解释一下 / 举个例子
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed) return;
-  const text = sel.toString().trim();
-  if (!text) return;
-  if (!body.contains(sel.anchorNode) || !body.contains(sel.focusNode)) return;
-  e.preventDefault();
-  _bkCtxTerm = '';
-  _bkCtxTermSelection = text;
-  const isTerm = text.length <= 50; // 过长的文字不适合作术语，但仍可解释/举例
-  document.getElementById('bkTermCtxAdd').style.display = isTerm ? '' : 'none';
-  document.getElementById('bkTermCtxRemove').style.display = 'none';
-  document.getElementById('bkTermCtxExplain').style.display = '';
-  document.getElementById('bkTermCtxExample').style.display = '';
-  const menuW = 200, menuH = 170;
-  menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
-  menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
-  menu.classList.add('visible');
+  if (sel && !sel.isCollapsed) {
+    const text = sel.toString().trim();
+    if (text && body.contains(sel.anchorNode) && body.contains(sel.focusNode)) {
+      e.preventDefault();
+      _bkCtxTerm = '';
+      _bkCtxTermSelection = text;
+      const isTerm = text.length <= 50; // 过长的文字不适合作术语，但仍可解释/举例
+      document.getElementById('bkTermCtxAdd').style.display = isTerm ? '' : 'none';
+      document.getElementById('bkTermCtxRemove').style.display = 'none';
+      document.getElementById('bkTermCtxExplain').style.display = '';
+      document.getElementById('bkTermCtxExample').style.display = '';
+      const menuW = 200, menuH = 170;
+      menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
+      menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
+      menu.classList.add('visible');
+      return;
+    }
+  }
+
+  // 模式(c)：右键摘要节点（无选中文字）→ 显示原书原文
+  const sn = e.target.closest ? e.target.closest('.bk-summary-node') : null;
+  if (sn) {
+    e.preventDefault();
+    _bkCtxNodeName = sn.dataset.name || '';
+    _bkCtxNodeSrc = sn.dataset.src || '';
+    document.getElementById('bkTermCtxAdd').style.display = 'none';
+    document.getElementById('bkTermCtxRemove').style.display = 'none';
+    document.getElementById('bkTermCtxExplain').style.display = 'none';
+    document.getElementById('bkTermCtxExample').style.display = 'none';
+    document.getElementById('bkTermCtxOriginal').style.display = '';
+    const menuW = 200, menuH = 40;
+    menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
+    menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
+    menu.classList.add('visible');
+  }
 }
 
 // 右键「解释一下 / 举个例子」：把选中文字交给章节讲解 AI 详细解释或举例
@@ -1437,12 +1464,14 @@ function bkCloseTermContextMenu() {
   if (menu) menu.classList.remove('visible');
   _bkCtxTermSelection = '';
   _bkCtxTerm = '';
+  _bkCtxNodeName = '';
+  _bkCtxNodeSrc = '';
 }
 // 全局右键监听：仅在摘要导图各栏目内接管
 function bkInitTermContextMenu() {
   document.addEventListener('contextmenu', function(e) {
     const body = document.getElementById('bkMainBody');
-    if (body && body.contains(e.target) && e.target.closest && e.target.closest('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl, .bk-term-list')) {
+    if (body && body.contains(e.target) && e.target.closest && e.target.closest('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl, .bk-term-list, .bk-summary-node')) {
       bkShowTermContextMenu(e);
     } else {
       bkCloseTermContextMenu();
@@ -1452,12 +1481,278 @@ function bkInitTermContextMenu() {
     if (!e.target.closest('#bkTermContextMenu')) bkCloseTermContextMenu();
   });
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape') bkCloseTermContextMenu();
+    if (e.key === 'Escape') {
+      bkCloseTermContextMenu();
+      if (typeof bkCloseOriginalOverlay === 'function') bkCloseOriginalOverlay();
+      if (typeof bkClosePdfReader === 'function') bkClosePdfReader();
+    }
   });
 }
 if (typeof window._bkTermCtxInited === 'undefined') {
   window._bkTermCtxInited = true;
   bkInitTermContextMenu();
+}
+
+// ═══════════ 摘要节点 → 显示原书原文 ═══════════
+// 用 AI 生成的 src 索引在章节原文中模糊定位，命中展示上下文并高亮原句，未命中回退整章原文
+
+// 文本归一化：去空白、常见标点、转小写，用于模糊匹配
+function _bkNormText(s) {
+  return String(s || '')
+    .replace(/\s+/g, '')
+    .replace(/[，。；：、（）()「」《》“”"'，．！？、；：`·—…\[\]{}<>/\\|=+_\-*&^%$#@!~,.:;?!]/g, '')
+    .toLowerCase();
+}
+
+// 取命中位置前后各约 400 字符作为上下文
+function _bkCtxAround(full, pos, len) {
+  const start = Math.max(0, pos - 400);
+  const end = Math.min(full.length, pos + (len || 12) + 400);
+  return full.slice(start, end).trim();
+}
+
+// 用 src 在章节原文 fullText 中定位：返回 { context, match } 或 null
+// 三级匹配：①原文原样包含 ②归一化整体包含（按长度比例还原位置）③逐段最长公共前缀
+function bkLocateOriginalText(fullText, src) {
+  const s = String(src || '').trim();
+  const ns = _bkNormText(s);
+  const full = String(fullText || '');
+  if (!s || ns.length < 6 || !full) return null;
+
+  // ① 原文原样包含
+  const idx = full.indexOf(s);
+  if (idx >= 0) return { context: _bkCtxAround(full, idx, s.length), match: s };
+
+  // ② 归一化整体包含（段落级）
+  const nfull = _bkNormText(full);
+  const nidx = nfull.indexOf(ns);
+  if (nidx >= 0) {
+    const ratio = full.length / Math.max(nfull.length, 1);
+    const pos = Math.min(Math.floor(nidx * ratio), Math.max(0, full.length - 1));
+    return { context: _bkCtxAround(full, pos, Math.max(s.length, 12)), match: s };
+  }
+
+  // ③ 逐段最长公共前缀
+  const paras = full.split(/\n{2,}|\n/).filter(p => p.trim());
+  let best = null, bestLen = 0;
+  for (const p of paras) {
+    const np = _bkNormText(p);
+    if (!np) continue;
+    let lcp = 0;
+    const maxL = Math.min(np.length, ns.length);
+    while (lcp < maxL && np[lcp] === ns[lcp]) lcp++;
+    if (lcp > bestLen) { bestLen = lcp; best = p; }
+  }
+  if (best && bestLen >= Math.max(8, ns.length * 0.5)) {
+    return { context: best.trim(), match: best.trim() };
+  }
+  return null;
+}
+
+// 从完整节点行「- **节点名**：说明」中提取短节点名用于浮层标题
+function _bkTrimNodeName(s) {
+  let t = String(s || '').trim().replace(/^-\s*/, '').replace(/^\*{2}/, '');
+  const m = t.match(/^([^*]+?)\*\*/);
+  if (m && m[1]) t = m[1].trim();
+  const idx = t.indexOf('：');
+  if (idx > 0 && idx <= 24) t = t.slice(0, idx);
+  const max = 24;
+  return t.length > max ? t.slice(0, max) + '…' : t;
+}
+
+// 显示原书原文：src 为 PDF 页码（纯数字，新数据）→ 打开内嵌 PDF 阅读器并跳页；
+// src 为原文摘录（旧数据）或空 → 文本定位浮层
+async function bkShowOriginalText() {
+  const nodeName = _bkCtxNodeName || '';
+  const nodeSrc = _bkCtxNodeSrc || '';
+  bkCloseTermContextMenu();
+  const chapter = bkGetActiveChapter();
+  if (!chapter) return;
+  if (/^\d+$/.test(nodeSrc)) {
+    bkOpenPdfAtPage(parseInt(nodeSrc, 10), nodeName);
+    return;
+  }
+  const title = chapter.title || '';
+
+  let overlay = document.getElementById('bkOriginalOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'bkOriginalOverlay';
+    overlay.className = 'bk-original-overlay';
+    overlay.addEventListener('click', function(ev) {
+      if (ev.target === overlay) bkCloseOriginalOverlay();
+    });
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div class="bk-original-panel">
+      <div class="bk-original-head">
+        <span class="bk-original-title"><i data-lucide="book-open" class="lucide-icon" style="width:15px;height:15px;vertical-align:-2px;"></i> 原书原文 — ${escapeHtml(title)}${nodeName ? ' · ' + escapeHtml(_bkTrimNodeName(nodeName)) : ''}</span>
+        <button class="bk-original-close" onclick="bkCloseOriginalOverlay()" title="关闭 (Esc)"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="bk-original-body bk-original-loading"><i data-lucide="loader" class="lucide-icon bk-spinner" style="width:14px;height:14px;animation:bk-spin 0.8s linear infinite;"></i> 正在加载原书原文…</div>
+    </div>`;
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+
+  let chapterText = '';
+  try { chapterText = await bkGetChapterText(chapter); } catch (e) { chapterText = ''; }
+  const body = overlay.querySelector('.bk-original-body');
+  if (!body) return;
+
+  if (!String(chapterText || '').trim()) {
+    body.className = 'bk-original-body bk-original-empty';
+    body.innerHTML = '本章尚未生成正文缓存，无法显示原书原文。<br><small>请先在「教材学习」中为本书构建正文文本缓存后再试。</small>';
+    return;
+  }
+
+  const hit = nodeSrc ? bkLocateOriginalText(chapterText, nodeSrc) : null;
+  if (hit) {
+    body.className = 'bk-original-body';
+    const escCtx = escapeHtml(hit.context);
+    const escMatch = escapeHtml(hit.match);
+    const mi = escCtx.indexOf(escMatch);
+    const html = mi >= 0
+      ? escCtx.slice(0, mi) + '<mark class="bk-original-hl">' + escMatch + '</mark>' + escCtx.slice(mi + escMatch.length)
+      : escCtx;
+    body.innerHTML = html;
+  } else {
+    body.className = 'bk-original-body';
+    body.innerHTML = '<div class="bk-original-hint">该节点暂无精确原文索引，已显示整章原文。<br><small>重新构建本章知识库或「重新生成摘要」后，右键节点即可精确定位。</small></div>'
+      + '<hr style="border:none;border-top:1px solid var(--border);margin:10px 0;">'
+      + escapeHtml(chapterText);
+  }
+}
+
+// 关闭原书原文浮层并清空节点状态
+function bkCloseOriginalOverlay() {
+  const overlay = document.getElementById('bkOriginalOverlay');
+  if (overlay) overlay.remove();
+  _bkCtxNodeName = '';
+  _bkCtxNodeSrc = '';
+}
+
+// ═══════════ 内嵌 PDF 阅读器（点击「显示原书原文」时打开并跳到指定 PDF 页码） ═══════════
+let _bkPdfDoc = null;    // pdf.js 文档对象
+let _bkPdfTotal = 1;     // 总页数
+let _bkPdfPageNum = 1;   // 当前页
+
+// 打开 PDF 阅读器并定位到指定页（pageNum 为 1 起始的 PDF 物理页码）
+async function bkOpenPdfAtPage(pageNum, nodeName) {
+  const book = bkGetActiveBook();
+  if (!book || !book.filePath) {
+    alert('无法定位 PDF：本书缺少文件路径，请重新导入');
+    return;
+  }
+  const chapter = bkGetActiveChapter();
+  const chapterTitle = (chapter && chapter.title) || '';
+  _bkPdfPageNum = Math.max(1, Math.round(Number(pageNum) || 1));
+
+  let overlay = document.getElementById('bkPdfReaderOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'bkPdfReaderOverlay';
+    overlay.className = 'bk-original-overlay';
+    overlay.addEventListener('click', function(ev) {
+      if (ev.target === overlay) bkClosePdfReader();
+    });
+    document.body.appendChild(overlay);
+  }
+  overlay.innerHTML = `
+    <div class="bk-pdf-panel">
+      <div class="bk-pdf-head">
+        <span class="bk-pdf-title"><i data-lucide="file-text" class="lucide-icon" style="width:15px;height:15px;vertical-align:-2px;"></i> PDF 原文 — ${escapeHtml(book.title || '')}${chapterTitle ? ' · ' + escapeHtml(chapterTitle) : ''}${nodeName ? ' · ' + escapeHtml(_bkTrimNodeName(nodeName)) : ''}</span>
+        <div class="bk-pdf-controls">
+          <button class="bk-pdf-btn" onclick="bkPdfPrev()" title="上一页"><i data-lucide="chevron-left" class="lucide-icon" style="width:15px;height:15px;"></i></button>
+          <input class="bk-pdf-page-input" id="bkPdfPageInput" type="number" min="1" value="${_bkPdfPageNum}" onchange="bkPdfJump()" onkeydown="if(event.key==='Enter'){this.blur();bkPdfJump();}" title="输入页码后回车跳转">
+          <span class="bk-pdf-total" id="bkPdfTotal">/ 加载中…</span>
+          <button class="bk-pdf-btn" onclick="bkPdfNext()" title="下一页"><i data-lucide="chevron-right" class="lucide-icon" style="width:15px;height:15px;"></i></button>
+        </div>
+        <button class="bk-original-close" onclick="bkClosePdfReader()" title="关闭 (Esc)"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="bk-pdf-body">
+        <div class="bk-pdf-page-wrap" id="bkPdfPageWrap"><div class="bk-pdf-loading"><i data-lucide="loader" class="lucide-icon bk-spinner" style="width:14px;height:14px;animation:bk-spin 0.8s linear infinite;"></i> 正在加载 PDF…</div></div>
+      </div>
+    </div>`;
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+
+  try {
+    if (!window.electronAPI || typeof window.electronAPI.readPdfFile !== 'function') {
+      throw new Error('当前环境不支持读取本地 PDF 文件');
+    }
+    const buffer = await window.electronAPI.readPdfFile(book.filePath);
+    if (!buffer) throw new Error('无法读取 PDF 文件（文件可能已被移动或删除）');
+    const pdfjsLib = window.pdfjsLib || (await ensurePdfJs());
+    if (!pdfjsLib) throw new Error('PDF 引擎未加载，请重启应用');
+    // 兼容 IPC 序列化后的 Buffer 结构 { type:'Buffer', data:[...] }
+    let data = buffer;
+    if (buffer instanceof Uint8Array) data = buffer;
+    else if (buffer && buffer.data && typeof buffer.type === 'string') data = new Uint8Array(buffer.data);
+    _bkPdfDoc = await pdfjsLib.getDocument({ data: data }).promise;
+    _bkPdfTotal = _bkPdfDoc.numPages;
+    _bkPdfPageNum = Math.min(Math.max(1, _bkPdfPageNum), _bkPdfTotal);
+    const totalEl = document.getElementById('bkPdfTotal');
+    if (totalEl) totalEl.textContent = '/ ' + _bkPdfTotal + ' 页';
+    const inputEl = document.getElementById('bkPdfPageInput');
+    if (inputEl) inputEl.value = _bkPdfPageNum;
+    await _bkPdfRenderPage();
+  } catch (err) {
+    const wrap = document.getElementById('bkPdfPageWrap');
+    if (wrap) wrap.innerHTML = '<div class="bk-pdf-loading" style="color:var(--danger);">' + escapeHtml('打开 PDF 失败：' + String((err && err.message) || err)) + '</div>';
+  }
+}
+
+// 渲染当前页到 canvas（适配容器宽度）
+async function _bkPdfRenderPage() {
+  if (!_bkPdfDoc) return;
+  const wrap = document.getElementById('bkPdfPageWrap');
+  if (!wrap) return;
+  wrap.innerHTML = '<div class="bk-pdf-loading">正在渲染第 ' + _bkPdfPageNum + ' 页…</div>';
+  try {
+    const page = await _bkPdfDoc.getPage(_bkPdfPageNum);
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    const containerWidth = wrap.clientWidth || 720;
+    const base = page.getViewport({ scale: 1 });
+    const scale = Math.min(containerWidth / base.width, 2.5);
+    const viewport = page.getViewport({ scale });
+    canvas.width = Math.floor(viewport.width);
+    canvas.height = Math.floor(viewport.height);
+    canvas.style.width = canvas.width + 'px';
+    canvas.style.height = canvas.height + 'px';
+    canvas.className = 'bk-pdf-canvas';
+    wrap.innerHTML = '';
+    wrap.appendChild(canvas);
+    await page.render({ canvasContext: ctx, viewport: viewport }).promise;
+  } catch (err) {
+    wrap.innerHTML = '<div class="bk-pdf-loading" style="color:var(--danger);">' + escapeHtml('渲染失败：' + String((err && err.message) || err)) + '</div>';
+  }
+  const inputEl = document.getElementById('bkPdfPageInput');
+  if (inputEl) inputEl.value = _bkPdfPageNum;
+  const totalEl = document.getElementById('bkPdfTotal');
+  if (totalEl) totalEl.textContent = '/ ' + _bkPdfTotal + ' 页';
+}
+
+function bkPdfPrev() {
+  if (_bkPdfPageNum > 1) { _bkPdfPageNum--; _bkPdfRenderPage(); }
+}
+function bkPdfNext() {
+  if (_bkPdfPageNum < _bkPdfTotal) { _bkPdfPageNum++; _bkPdfRenderPage(); }
+}
+function bkPdfJump() {
+  const inputEl = document.getElementById('bkPdfPageInput');
+  if (!inputEl) return;
+  const n = parseInt(inputEl.value, 10);
+  if (!n || n < 1 || n > _bkPdfTotal) { inputEl.value = _bkPdfPageNum; return; }
+  _bkPdfPageNum = n;
+  _bkPdfRenderPage();
+}
+function bkClosePdfReader() {
+  const overlay = document.getElementById('bkPdfReaderOverlay');
+  if (overlay) overlay.remove();
+  if (_bkPdfDoc && typeof _bkPdfDoc.destroy === 'function') { try { _bkPdfDoc.destroy(); } catch (e) {} }
+  _bkPdfDoc = null;
+  _bkCtxNodeName = '';
+  _bkCtxNodeSrc = '';
 }
 
 // 移除术语标记：仅取消高亮（术语仍留在术语表），记录并持久化后重渲染
