@@ -32,6 +32,18 @@ try {
 } catch (e) {}
 let bkTextCache = null;      // 当前书籍的正文缓存 { bookId, pages, chapterTexts }
 
+// ── 移动端三级导航状态（仅 ≤800px 或移动设备生效）──
+// bkMobileView: 'shelf'（书架）| 'toc'（目录）| 'main'（章节内容）
+let bkMobileView = 'shelf';
+function bkIsMobileView() {
+  return (typeof Env !== 'undefined' && Env.isMobile) ||
+    (typeof Env !== 'undefined' && Env.isPwa && window.innerWidth <= 800) ||
+    (!(typeof Env !== 'undefined' && Env.isMobile) && !(typeof Env !== 'undefined' && Env.isPwa) && window.innerWidth <= 800);
+}
+// 移动端进入对应视图
+function bkGoShelf() { if (!bkIsMobileView()) return; bkMobileView = 'shelf'; const a = document.getElementById('booksApp'); if (a) a.dataset.bkview = 'shelf'; }
+function bkGoToc() { if (!bkIsMobileView()) return; bkMobileView = 'toc'; const a = document.getElementById('booksApp'); if (a) a.dataset.bkview = 'toc'; }
+
 // ── 查询辅助 ──
 // id 宽松比较（localStorage 读出为字符串，而 id 为数字，避免类型失配导致找不到书/章）
 function bkGetBookById(id) { return booksData.find(b => String(b.id) === String(id)) || null; }
@@ -103,14 +115,24 @@ function bkToggleToc() { _bkTocHidden = !_bkTocHidden; bkApplyPanes(); }
 function renderBooks() {
   const app = document.getElementById('booksApp');
   if (!app) return;
+  if (bkIsMobileView()) app.dataset.bkview = bkMobileView || 'shelf';
   if (booksData.length === 0) {
+    // 手机端空态：提供「从桌面传输 / 本机」入口（PWA 无法本地选文件）
+    const emptyActions = bkIsMobileView() && (typeof Env !== 'undefined' && Env.isPwa) ? `
+      <button class="bk-quiz-btn primary" onclick="bkReceiveFromPhone()" style="padding:10px 20px;font-size:13.5px;">
+        <i data-lucide="download" class="lucide-icon" style="width:15px;height:15px;"></i> 从桌面传输 PDF
+      </button>
+      <button class="bk-quiz-btn" onclick="bkShowReceivedPdfs()" style="padding:10px 20px;font-size:13.5px;margin-top:8px;">
+        <i data-lucide="folder-open" class="lucide-icon" style="width:15px;height:15px;"></i> 本机已传输的 PDF
+      </button>` : `
+      <button class="bk-quiz-btn primary" onclick="bkImportBook()" style="padding:10px 20px;font-size:13.5px;">
+        <i data-lucide="plus" class="lucide-icon" style="width:15px;height:15px;"></i> 导入 PDF 教材
+      </button>`;
     app.innerHTML = `
       <div class="bk-empty-hint" style="height:100%;">
         <i data-lucide="library" class="lucide-icon" style="width:64px;height:64px;"></i>
-        <p><b>书架还是空的</b><br>导入一本 PDF 教材，让 AI 帮你建立章节知识库<br>支持讲解、问答、测验与摘要导图</p>
-        <button class="bk-quiz-btn primary" onclick="bkImportBook()" style="padding:10px 20px;font-size:13.5px;">
-          <i data-lucide="plus" class="lucide-icon" style="width:15px;height:15px;"></i> 导入 PDF 教材
-        </button>
+        <p><b>书架还是空的</b><br>${bkIsMobileView() ? '在电脑端用「发送到手机」把教材传过来<br>或导入 PDF，让 AI 帮你建立章节知识库' : '导入一本 PDF 教材，让 AI 帮你建立章节知识库<br>支持讲解、问答、测验与摘要导图'}</p>
+        <div style="display:flex;flex-direction:column;align-items:center;gap:0;">${emptyActions}</div>
       </div>`;
     if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
     return;
@@ -124,8 +146,38 @@ function renderBooks() {
   }
   bkTextCache = null; // 切换书籍时惰性加载正文缓存
 
+  // 移动端书架导航头：标题 + 传输入口（桌面端三栏布局下这些元素被 CSS 隐藏）
+  const mobileShelfNav = bkIsMobileView() ? `
+    <div class="bk-mob-navbar bk-mob-navbar-shelf">
+      <span class="bk-mob-navbar-title"><i data-lucide="library" class="lucide-icon" style="width:16px;height:16px;"></i> 教材书架</span>
+      <div class="bk-mob-navbar-actions">
+        ${(typeof Env !== 'undefined' && Env.isPwa) ? `<button class="bk-add-book-btn" onclick="bkReceiveFromPhone()" title="从桌面端传输 PDF"><i data-lucide="download" class="lucide-icon" style="width:15px;height:15px;"></i><span>从桌面传输</span></button>` : ''}
+        ${(typeof Env !== 'undefined' && Env.isPwa) ? `<button class="bk-add-book-btn" onclick="bkShowReceivedPdfs()" title="本机已传输的 PDF"><i data-lucide="folder-open" class="lucide-icon" style="width:15px;height:15px;"></i><span>本机</span></button>` : ''}
+      </div>
+    </div>` : '';
+
+  const activeBook = bkGetActiveBook();
+  const mobBookName = activeBook ? activeBook.title : '';
+  // 移动端目录导航头：返回书架 + 书名
+  const mobileTocNav = bkIsMobileView() ? `
+    <div class="bk-mob-navbar bk-mob-navbar-toc">
+      <button class="bk-mob-back" onclick="bkGoShelf()" title="返回书架"><i data-lucide="chevron-left" class="lucide-icon"></i></button>
+      <span class="bk-mob-navbar-title bk-mob-navbar-bookname" title="${escapeHtml(mobBookName)}">${escapeHtml(mobBookName)}</span>
+    </div>` : '';
+  // 移动端内容导航头：返回目录 + 面包屑（书名/章节名）
+  const mobChapter = bkGetActiveChapter();
+  const mobileMainNav = bkIsMobileView() ? `
+    <div class="bk-mob-navbar bk-mob-navbar-main">
+      <button class="bk-mob-back" onclick="bkGoToc()" title="返回目录"><i data-lucide="chevron-left" class="lucide-icon"></i></button>
+      <div class="bk-mob-navbar-breadcrumb">
+        <span class="bk-mob-bc-book" title="${escapeHtml(mobBookName)}">${escapeHtml(mobBookName)}</span>
+        ${mobChapter ? `<span class="bk-mob-bc-sep">/</span><span class="bk-mob-bc-chapter" title="${escapeHtml(mobChapter.title)}">${escapeHtml(mobChapter.title)}</span>` : ''}
+      </div>
+    </div>` : '';
+
   app.innerHTML = `
     <div class="bk-shelf" id="bkShelf">
+      ${mobileShelfNav}
       <div class="bk-shelf-header">
         <span class="bk-shelf-title"><i data-lucide="library" class="lucide-icon" style="width:15px;height:15px;"></i> 书架</span>
         <div class="bk-shelf-actions">
@@ -140,6 +192,7 @@ function renderBooks() {
       <button onclick="bkToggleShelf()"><i data-lucide="panel-left-open" class="lucide-icon" style="width:14px;height:14px;"></i><span>书架</span></button>
     </div>
     <div class="bk-toc" id="bkToc">
+      ${mobileTocNav}
       <div class="bk-toc-header">
         <div class="bk-toc-title">
           <i data-lucide="list-tree" class="lucide-icon" style="width:15px;height:15px;"></i> <span id="bkTocTitle">章节目录</span>
@@ -158,6 +211,7 @@ function renderBooks() {
       <button onclick="bkToggleToc()"><i data-lucide="panel-left-open" class="lucide-icon" style="width:14px;height:14px;"></i><span>目录</span></button>
     </div>
     <div class="bk-main">
+      ${mobileMainNav}
       <div class="bk-main-head" id="bkMainHead"></div>
       <div class="bk-main-tabs" id="bkMainTabs"></div>
       <div class="bk-main-body" id="bkMainBody"></div>
@@ -183,6 +237,11 @@ function bkRenderShelfList() {
     const badgeText = st.status === 'done' ? '已建库'
       : st.status === 'building' ? '构建中'
       : st.status === 'partial' ? st.doneCount + '/' + st.total : '未建库';
+    // 移动端：书架卡片右下角提供删除入口（隐藏桌面行内操作区）
+    const mobileDel = bkIsMobileView() ? `
+      <button class="bk-book-del-btn bk-book-del-mobile" onclick="event.stopPropagation();bkDeleteBook(${b.id})" title="删除教材">
+        <i data-lucide="trash-2" class="lucide-icon" style="width:16px;height:16px;"></i>
+      </button>` : '';
     return `
       <div class="bk-book-item ${active ? 'active' : ''}" onclick="bkSelectBook(${b.id})" title="${escapeHtml(b.title)}">
         <div class="bk-book-cover"><i data-lucide="book-open" class="lucide-icon"></i></div>
@@ -191,6 +250,7 @@ function bkRenderShelfList() {
           <div class="bk-book-sub">${(b.chapters || []).length} 章 · ${b.pageCount || 0} 页</div>
         </div>
         <span class="bk-book-kb-badge ${badgeCls}">${badgeText}</span>
+        ${mobileDel}
         <div class="bk-book-actions">
           ${(typeof Env !== 'undefined' && Env.isElectron) ? `<button class="bk-book-del-btn" onclick="event.stopPropagation();bkSendToPhone(${b.id})" title="发送到手机（WebRTC 局域网传输）"><i data-lucide="send" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
           <button class="bk-book-del-btn" onclick="event.stopPropagation();bkReimportBook(${b.id})" title="重新导入（重新解析 PDF）"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i></button>
@@ -208,6 +268,7 @@ function bkSelectBook(id) {
   _bkPersistNav();
   bkTextCache = null;
   bkSaveBooks();
+  if (bkIsMobileView()) { bkMobileView = 'toc'; renderBooks(); return; }
   renderBooks();
 }
 
@@ -449,6 +510,7 @@ function bkSelectChapter(id) {
   const ch = bkGetActiveChapter();
   bkActiveTab = (ch && ch.kb && ch.kb.status === 'done') ? 'summary' : 'explain';
   _bkPersistNav();
+  if (bkIsMobileView()) { bkMobileView = 'main'; renderBooks(); return; }
   bkRenderToc();
   bkRenderMain();
 }

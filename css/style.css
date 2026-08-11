@@ -8122,6 +8122,123 @@ i[data-lucide] {
 
   /* 更多抽屉的遮罩 */
   #mobileMoreOverlay.mobile-drawer-overlay { display: block; }
+
+  /* ── 教材模块：手机端三级页面导航（书架→目录→章节内容）── */
+  #booksApp.bk-layout {
+    flex-direction: column;
+    height: calc(100vh - 148px);
+    min-height: 0;
+    overflow: hidden;
+  }
+  /* 三级页面全屏单栏，默认只显示书架页 */
+  #booksApp.bk-layout > .bk-shelf,
+  #booksApp.bk-layout > .bk-toc,
+  #booksApp.bk-layout > .bk-main {
+    width: 100%; flex-shrink: 0; border-right: none;
+    height: 100%; min-height: 0;
+  }
+  /* data-bkview 控制显示哪一页（其余隐藏） */
+  #booksApp[data-bkview="shelf"] .bk-toc,
+  #booksApp[data-bkview="shelf"] .bk-main { display: none; }
+  #booksApp[data-bkview="toc"] .bk-shelf,
+  #booksApp[data-bkview="toc"] .bk-main { display: none; }
+  #booksApp[data-bkview="main"] .bk-shelf,
+  #booksApp[data-bkview="main"] .bk-toc { display: none; }
+
+  /* 隐藏桌面端隐藏/恢复把手（移动端用返回按钮替代） */
+  #booksApp .bk-pane-toggle,
+  #booksApp .bk-pane-restore { display: none !important; }
+
+  /* 移动端导航头 */
+  #booksApp .bk-mob-navbar {
+    display: flex; align-items: center; gap: 8px;
+    padding: 12px 12px 10px;
+    border-bottom: 1px solid var(--border);
+    background: var(--card);
+    flex-shrink: 0;
+    min-height: 52px;
+  }
+  #booksApp .bk-mob-navbar-title {
+    font-size: 15px; font-weight: 600; color: var(--text);
+    display: flex; align-items: center; gap: 7px; flex: 1; min-width: 0;
+    white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  }
+  #booksApp .bk-mob-navbar-actions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+  #booksApp .bk-mob-navbar-actions .bk-add-book-btn {
+    min-height: 44px; display: inline-flex; align-items: center; gap: 5px;
+    padding: 0 12px; border-radius: 9px;
+  }
+  #booksApp .bk-mob-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 42px; height: 42px; flex-shrink: 0;
+    border: none; background: var(--input-bg); color: var(--text);
+    border-radius: 11px; cursor: pointer;
+  }
+  #booksApp .bk-mob-back .lucide-icon { width: 20px; height: 20px; }
+  #booksApp .bk-mob-back:active { background: var(--hover-bg); }
+  #booksApp .bk-mob-navbar-bookname { flex: 1; }
+  /* 内容页面包屑 */
+  #booksApp .bk-mob-navbar-breadcrumb {
+    flex: 1; min-width: 0;
+    display: flex; align-items: center; gap: 6px;
+    white-space: nowrap; overflow: hidden;
+  }
+  #booksApp .bk-mob-bc-book { color: var(--text-secondary); font-size: 13px; font-weight: 500; }
+  #booksApp .bk-mob-bc-book, #booksApp .bk-mob-bc-chapter {
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+  #booksApp .bk-mob-bc-sep { color: var(--text-secondary); opacity: 0.6; flex-shrink: 0; }
+  #booksApp .bk-mob-bc-chapter { color: var(--text); font-size: 13px; font-weight: 600; }
+
+  /* 书架列表：卡片式，触控行高 */
+  #booksApp .bk-shelf-header { display: none; }
+  #booksApp .bk-shelf-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; padding: 8px; }
+  #booksApp .bk-book-item {
+    min-height: 60px; padding: 12px; border-radius: 12px;
+    border: 1px solid var(--border); margin-bottom: 10px;
+    align-items: center; gap: 12px;
+  }
+  #booksApp .bk-book-item.active {
+    border-color: var(--primary); background: var(--primary-soft, rgba(79,70,229,0.08));
+  }
+  #booksApp .bk-book-cover { width: 42px; height: 42px; border-radius: 10px; flex-shrink: 0; }
+  #booksApp .bk-book-cover .lucide-icon { width: 22px; height: 22px; }
+  #booksApp .bk-book-meta { flex: 1; min-width: 0; }
+  #booksApp .bk-book-name { font-size: 14.5px; font-weight: 600; }
+  #booksApp .bk-book-sub { font-size: 12px; margin-top: 2px; }
+  #booksApp .bk-book-kb-badge { flex-shrink: 0; }
+  #booksApp .bk-book-actions { display: none; } /* 移动端隐藏行内操作按钮，触控更清爽 */
+  /* 移动端单独显示的精简删除按钮 */
+  #booksApp .bk-book-del-mobile {
+    flex-shrink: 0; width: 40px; height: 40px; border-radius: 10px;
+    border: 1px solid var(--border); background: var(--input-bg);
+    color: var(--text-secondary); display: inline-flex; align-items: center; justify-content: center;
+    cursor: pointer; margin-left: 2px;
+  }
+  #booksApp .bk-book-del-mobile:active { background: var(--hover-bg); color: var(--danger); }
+
+  /* 目录页 */
+  #booksApp .bk-toc-header { padding: 10px 12px 8px; }
+  #booksApp .bk-toc-list { flex: 1; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+  #booksApp .bk-chapter,
+  #booksApp .bk-chapter-group {
+    min-height: 48px; padding-top: 12px; padding-bottom: 12px;
+    display: flex; align-items: center; gap: 6px;
+    font-size: 14px;
+  }
+  #booksApp .bk-toc-toolbar { flex-wrap: nowrap; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+
+  /* 内容页 */
+  #booksApp .bk-main-head { padding: 10px 12px 8px; min-height: 0; }
+  /* 导航头已显示完整书名，隐藏 head 内重复的书名标题 */
+  #booksApp .bk-main-head .bk-main-title { display: none; }
+  #booksApp .bk-main-tabs {
+    padding: 8px 8px 0;
+    overflow-x: auto; -webkit-overflow-scrolling: touch;
+    flex-wrap: nowrap; justify-content: flex-start;
+  }
+  #booksApp .bk-main-tabs .bk-tab-btn { flex-shrink: 0; min-height: 44px; white-space: nowrap; }
+  #booksApp .bk-main-body { padding: 14px 14px 20px; }
 }
 
 /* ── 长按菜单（触屏）：复用桌面右键上下文菜单，通过长按 500ms 触发 ── */
