@@ -312,9 +312,12 @@
   }
   function getStatus() {
     const cfg = getConfig();
+    // 实时刷新登录态，避免依赖事件时序导致误判"未登录"
+    const sess = getSession();
+    if (sess && !loggedIn) loggedIn = true;
     return {
       enabled: enabled,
-      loggedIn: loggedIn,
+      loggedIn: !!sess,
       pendingCount: dirtyKeys.size,
       lastPull: cfg.lastPull || 0
     };
