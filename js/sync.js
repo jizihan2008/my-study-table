@@ -133,22 +133,35 @@
   // ── 登录状态 ─────────────────────────────────────────
   function getSession() {
     try {
-      if (client && client.auth) {
-        const { data } = client.auth.getSession();
+      // 每次实时获取单例客户端，避免 init() 时配置未就绪导致 client 为 null
+      const supabaseClient = (typeof getSupabaseClient === 'function') ? getSupabaseClient() : client;
+      if (supabaseClient && supabaseClient.auth) {
+        const { data } = supabaseClient.auth.getSession();
         return data && data.session ? data.session : null;
       }
     } catch (e) { /* 忽略 */ }
     return null;
   }
 
+  // 实时获取 Supabase 单例客户端（避免 init() 时序问题）
+  function _client() {
+    if (typeof getSupabaseClient === 'function') {
+      const c = getSupabaseClient();
+      if (c) { client = c; return c; }
+    }
+    return client;
+  }
+
   // ── 上传一个 key 到云端（UPSERT）─────────────────────
   async function _uploadKey(key) {
     const session = getSession();
     if (!session) return { ok: false, reason: 'not-logged-in' };
+    const c = _client();
+    if (!c) return { ok: false, reason: 'no-client' };
     const value = localStorage.getItem(key);
     const payload = value ? JSON.parse(value) : null;
     const updatedAt = new Date().toISOString();
-    const { error } = await client.from('user_data')
+    const { error } = await c.from('user_data')
       .upsert({ user_id: session.user.id, key, value: payload, updated_at: updatedAt },
         { onConflict: 'user_id,key' });
     if (error) return { ok: false, reason: error.message };
@@ -159,7 +172,7 @@
 
   // ── 批量上传所有脏 key ──────────────────────────────
   async function _flush() {
-    if (!enabled || !loggedIn || !client) return;
+    if (!enabled || !loggedIn || !_client()) return;
     if (dirtyKeys.size === 0) {
       // 处理离线队列
       await _flushOutbox();
@@ -185,9 +198,11 @@
     if (!client) return;
     const session = getSession();
     if (!session) return;
+    const c = _client();
+    if (!c) return;
     const items = await _outboxGetAll();
     for (const item of items) {
-      const { error } = await client.from('user_data')
+      const { error } = await c.from('user_data')
         .upsert({ user_id: session.user.id, key: item.key, value: item.value, updated_at: item.updatedAt },
           { onConflict: 'user_id,key' });
       if (!error) await _outboxRemove(item.key);
@@ -209,15 +224,17 @@
   // ── 首次同步：本地有数据则上传（桌面→云），本地缺失则拉取（云→手机）──
   // 避免手机端首次同步时用空数据覆盖云端。
   async function _firstSync() {
-    if (!enabled || !client) return;
+    if (!enabled || !_client()) return;
     const session = getSession();
     if (!session) return;
+    const c = _client();
+    if (!c) return;
 
     // 1. 拉取云端现有 key 集合
     let remoteRows = [];
     applyingRemote = true;
     try {
-      const { data, error } = await client.from('user_data')
+      const { data, error } = await c.from('user_data')
         .select('key,value,updated_at')
         .eq('user_id', session.user.id);
       if (!error && data) remoteRows = data;
@@ -243,12 +260,14 @@
 
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
   async function _pullAll() {
-    if (!enabled || !client) return;
+    if (!enabled || !_client()) return;
     const session = getSession();
     if (!session) return;
+    const c = _client();
+    if (!c) return;
     applyingRemote = true;
     try {
-      const { data, error } = await client.from('user_data')
+      const { data, error } = await c.from('user_data')
         .select('key,value,updated_at')
         .eq('user_id', session.user.id);
       if (error) { console.warn('[sync] 拉取失败:', error.message); return; }
@@ -280,11 +299,12 @@
 
   // ── Realtime 订阅远端变更 ───────────────────────────
   function _subscribe() {
-    if (!client || !enabled || !loggedIn) return;
+    const c = _client();
+    if (!c || !enabled || !loggedIn) return;
     if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} }
     const session = getSession();
     if (!session) return;
-    realtimeChannel = client
+    realtimeChannel = c
       .channel('mst-user-data')
       .on('postgres_changes',
         { event: 'INSERT', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
