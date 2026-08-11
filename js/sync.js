@@ -376,27 +376,47 @@
     _emitStatus();
   }
 
+  function _doSyncAfterLogin() {
+    if (!enabled || !loggedIn || !client) return;
+    _subscribe();
+    const ts = _getRemoteTs();
+    const isFirst = Object.keys(ts).length === 0;
+    if (isFirst) _firstSync();
+    else _pullAll();
+  }
+
   function init() {
     const cfg = getConfig();
     enabled = !!cfg.enabled;
     if (enabled) {
       setTimeout(_init, 1500);   // 等 friends.js 客户端就绪
     }
-    // 监听登录状态变化（好友系统登录/退出）
-    if (typeof document !== 'undefined') {
-      document.addEventListener('fr-auth-change', function () {
-        if (typeof getSupabaseClient === 'function') client = getSupabaseClient();
-        const session = getSession();
-        loggedIn = !!session;
-        if (enabled && loggedIn) {
-          _subscribe();
-          const ts = _getRemoteTs();
-          const isFirst = Object.keys(ts).length === 0;
-          if (isFirst) _firstSync();
-          else _pullAll();
-        }
-        _emitStatus();
-      });
+    // 监听登录状态变化：使用 Supabase 官方 onAuthStateChange（friends.js 同款），
+    // 不依赖可能未派发的 fr-auth-change 自定义事件。
+    try {
+      if (typeof getSupabaseClient === 'function') {
+        client = getSupabaseClient();
+      }
+    } catch (e) { /* 忽略 */ }
+    if (client && client.auth && typeof client.auth.onAuthStateChange === 'function') {
+      try {
+        client.auth.onAuthStateChange(function (event, session) {
+          if (event === 'SIGNED_IN' || event === 'TOKEN_REFRESHED' || event === 'INITIAL_SESSION') {
+            const s = session || (client ? getSession() : null);
+            loggedIn = !!s;
+            if (loggedIn) {
+              _doSyncAfterLogin();
+              clearTimeout(pullTimer);
+              pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+            }
+            _emitStatus();
+          } else if (event === 'SIGNED_OUT') {
+            loggedIn = false;
+            if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} realtimeChannel = null; }
+            _emitStatus();
+          }
+        });
+      } catch (e) { /* 忽略订阅失败 */ }
     }
   }
 
