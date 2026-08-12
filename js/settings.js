@@ -2497,11 +2497,24 @@ function updateWebSearchKeyFieldVisibility() {
 }
 
 // ── Data migration ──
+// 备份/导出/导入共用此列表。v2 补全：纳入所有核心业务数据（与云同步 SYNC_KEYS 对齐），
+// 此前缺失了计时、任务线、习惯、教材、日历、统计、长期目标、快捷访问、AI 长期记忆、
+// 教材日志/测验、待办完成日志、旧版数据，导致备份不完整（AI 记忆甚至从未被备份）。
 const MIGRATION_KEYS = [
-  'study_todos_v2', 'study_links_v3', 'study_notes_v2', 'study_notes_folders',
-  'study_changelog', 'study_ai_convs', 'study_active_note', 'study_sidebar_open',
-  'study_theme', 'study_active_conv', 'study_api_keys', 'study_active_api_key_id',
-  'study_developer_mode', 'study_debug_mode', 'study_checkin', 'study_today_focus',
+  // 待办 / 笔记
+  'study_todos_v2', 'study_todos', 'study_notes_v2', 'study_notes', 'study_notes_folders',
+  'study_todo_completed_log',
+  // 计时 / 习惯 / 任务线
+  'study_timer_records', 'study_habits', 'study_habits_v1', 'study_taskline_v1',
+  // 教材
+  'study_books_v1', 'study_books_meta', 'study_bk_explain_logs_v1', 'study_bk_quiz_state_v1',
+  // 日历 / 统计 / 目标
+  'study_calendar_events', 'study_stats', 'study_longterm_goals', 'study_quick_access',
+  // 打卡 / 今日 / 链接 / AI
+  'study_checkin', 'study_today_focus', 'study_links_v3', 'study_ai_convs', 'study_ai_memory',
+  // UI/状态/敏感（仅本地备份，不同步）
+  'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv',
+  'study_api_keys', 'study_active_api_key_id', 'study_developer_mode', 'study_debug_mode',
   'study_automations'
 ];
 
@@ -2627,6 +2640,20 @@ async function performAutoBackup() {
     }
   }
 
+  // 手机端（浏览器/PWA）：优先存 IndexedDB（容量大，可存含大 AI 对话/记忆的完整备份，
+  // 类似电脑文件备份）；IndexedDB 不可用时降级到 localStorage。
+  if (typeof BackupIDB !== 'undefined' && BackupIDB.save) {
+    try {
+      await BackupIDB.save(data);
+      await BackupIDB.cleanup(maxFiles);
+      localStorage.setItem('study_last_backup_time', Date.now().toString());
+      updateBackupHints();
+      return;
+    } catch (e) {
+      console.warn('[Backup] IndexedDB backup failed, falling back to localStorage:', e);
+    }
+  }
+
   // Fallback: store in localStorage (browser mode)
   const backups = JSON.parse(localStorage.getItem('study_backups') || '[]');
   backups.push({ time: new Date().toISOString(), data: data });
@@ -2660,8 +2687,15 @@ async function updateBackupHints() {
       fileCount = files.length;
     } catch (e) {}
   } else {
-    const localBackups = JSON.parse(localStorage.getItem('study_backups') || '[]');
-    fileCount = localBackups.length;
+    // 手机端优先统计 IndexedDB 完整备份，其次 localStorage 降级备份
+    if (typeof BackupIDB !== 'undefined' && BackupIDB.count) {
+      try { fileCount = await BackupIDB.count(); }
+      catch (e) { fileCount = 0; }
+    }
+    if (fileCount === 0) {
+      const localBackups = JSON.parse(localStorage.getItem('study_backups') || '[]');
+      fileCount = localBackups.length;
+    }
   }
 
   if (lastTime) {
@@ -2673,7 +2707,7 @@ async function updateBackupHints() {
 }
 
 // ═══════════ Backup Export & Directory ═══════════
-function exportAllBackups() {
+async function exportAllBackups() {
   // In Electron: use file-based backups
   if (window.electronAPI && window.electronAPI.listBackups) {
     // Just trigger a manual backup now and show the directory
@@ -2684,7 +2718,25 @@ function exportAllBackups() {
     return;
   }
 
-  // Browser fallback: export localStorage backups as JSON
+  // Browser/PWA fallback：优先导出 IndexedDB 完整备份（含大 AI 对话/记忆），
+  // 无 IndexedDB 备份时降级导出 localStorage 备份
+  if (typeof BackupIDB !== 'undefined' && BackupIDB.list) {
+    try {
+      const idbList = await BackupIDB.list();
+      if (idbList.length > 0) {
+        const backups = [];
+        for (const item of idbList) {
+          const dataItem = await BackupIDB.read(item.time);
+          backups.push({ time: item.time, data: dataItem });
+        }
+        const out = { exportedAt: new Date().toISOString(), backups, source: 'idb' };
+        const fname = 'study-table-all-backups-' + new Date().toISOString().slice(0, 10) + '.json';
+        downloadJsonFile(out, fname);
+        showMigrateMsg('✅ 已导出 ' + backups.length + ' 份本地备份', '#10b981');
+        return;
+      }
+    } catch (e) { console.warn('[Backup] IDB export failed:', e); }
+  }
   const backupsStr = localStorage.getItem('study_backups');
   if (!backupsStr) {
     showMigrateMsg('❌ 没有备份记录', '#ef4444');
@@ -2705,9 +2757,77 @@ async function openBackupDirectory() {
     } catch (e) {
       showMigrateMsg('❌ 无法打开备份目录：' + e.message, '#ef4444');
     }
-  } else {
-    showMigrateMsg('💡 请在 Electron 环境中使用此功能', '#f59e0b');
+    return;
   }
+  // 手机端（PWA）：列出并管理 IndexedDB 本地完整备份（类似电脑备份目录）
+  try {
+    if (typeof BackupIDB === 'undefined' || !BackupIDB.list) {
+      showMigrateMsg('💡 当前环境不支持本地备份', '#f59e0b');
+      return;
+    }
+    const list = await BackupIDB.list();
+    if (!list.length) {
+      showMigrateMsg('📭 还没有本地备份，点「立即备份」创建第一份', '#f59e0b');
+      return;
+    }
+    const fmtTime = (t) => { const d = new Date(t); return d.toLocaleString('zh-CN'); };
+    const fmtSize = (s) => s > 1048576 ? (s / 1048576).toFixed(1) + ' MB' : Math.max(1, Math.round(s / 1024)) + ' KB';
+    const rows = list.map((item) => `
+      <div style="display:flex;align-items:center;gap:8px;padding:9px 10px;border:1px solid var(--border);border-radius:9px;margin-bottom:6px;background:var(--input-bg);">
+        <i data-lucide="archive" class="lucide-icon" style="width:15px;height:15px;color:var(--primary);flex-shrink:0;"></i>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:12.5px;color:var(--text);">${fmtTime(item.time)}</div>
+          <div style="font-size:11px;color:var(--text-secondary);">${fmtSize(item.size)}</div>
+        </div>
+        <button onclick="restoreIdbBackup('${item.time}')" style="border:none;background:var(--primary);color:#fff;border-radius:7px;padding:5px 12px;font-size:12px;cursor:pointer;flex-shrink:0;">恢复</button>
+        <button onclick="deleteIdbBackup('${item.time}')" style="border:none;background:transparent;color:var(--text-secondary);border-radius:7px;padding:5px;font-size:12px;cursor:pointer;flex-shrink:0;opacity:.7;">删除</button>
+      </div>`).join('');
+    const overlay = document.createElement('div');
+    overlay.id = 'bkLocalBackupsOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+    overlay.innerHTML = `
+      <div style="background:var(--bg);border:1px solid var(--border);border-radius:14px;max-width:460px;width:100%;max-height:70vh;display:flex;flex-direction:column;">
+        <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 16px;border-bottom:1px solid var(--border);">
+          <span style="font-weight:600;color:var(--text);"><i data-lucide="archive" class="lucide-icon" style="width:15px;height:15px;vertical-align:middle;"></i> 本地备份（${list.length} 份）</span>
+          <button onclick="document.getElementById('bkLocalBackupsOverlay').remove()" style="border:none;background:transparent;color:var(--text-secondary);font-size:18px;cursor:pointer;">×</button>
+        </div>
+        <div style="padding:12px 16px;overflow-y:auto;flex:1;">${rows}
+          <div style="font-size:11px;color:var(--text-secondary);margin-top:6px;">恢复会覆盖当前同名数据，请谨慎操作。</div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+  } catch (e) {
+    showMigrateMsg('❌ 无法读取本地备份：' + e.message, '#ef4444');
+  }
+}
+
+// 手机端：恢复某份 IndexedDB 本地备份
+async function restoreIdbBackup(time) {
+  if (!confirm('确定用这份备份覆盖当前数据吗？此操作会覆盖本地同名数据。')) return;
+  try {
+    if (typeof BackupIDB === 'undefined' || !BackupIDB.read) return;
+    const data = await BackupIDB.read(time);
+    if (!data) { showMigrateMsg('❌ 备份读取失败', '#ef4444'); return; }
+    let restored = 0;
+    for (const key of Object.keys(data)) {
+      const val = data[key];
+      if (val !== undefined && val !== null) { localStorage.setItem(key, val); restored++; }
+    }
+    showMigrateMsg('✅ 已恢复备份（' + restored + ' 项），刷新页面生效', '#10b981');
+  } catch (e) {
+    showMigrateMsg('❌ 恢复失败：' + e.message, '#ef4444');
+  }
+}
+
+// 手机端：删除某份 IndexedDB 本地备份
+async function deleteIdbBackup(time) {
+  if (!confirm('删除这份备份？')) return;
+  try {
+    if (typeof BackupIDB !== 'undefined' && BackupIDB.remove) await BackupIDB.remove(time);
+    showMigrateMsg('🗑 已删除', '#f59e0b');
+    openBackupDirectory(); // 刷新列表
+  } catch (e) {}
 }
 
 // Initialize backup on page load

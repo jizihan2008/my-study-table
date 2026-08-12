@@ -1161,13 +1161,6 @@ function checkDailyIntegration() {
   }
 }
 
-// Add to MIGRATION_KEYS for backup compatibility
-if (typeof MIGRATION_KEYS !== 'undefined' && Array.isArray(MIGRATION_KEYS)) {
-  if (!MIGRATION_KEYS.includes('study_ai_memory')) {
-    MIGRATION_KEYS.push('study_ai_memory');
-  }
-}
-
 // Expose to global scope
 window.loadAiMemory = loadAiMemory;
 window.saveAiMemory = saveAiMemory;
