@@ -101,16 +101,103 @@
   let rcvBuf = null;             // 接收重组缓冲 {chunks:[...], received, total, meta}
   let rcvRcvdBytes = 0;
   let rcvOnStatus = null;
+  // 本地信令（局域网）状态
+  let rcvSigBase = null;         // http://<桌面IP>:<port>
+  let rcvPollTimer = null;       // 轮询定时器
+  let rcvLastSeq = 0;            // 已拉取到的最大 seq
+  let rcvPolling = false;
 
   function _emitStatus(status) {
     if (rcvOnStatus) { try { rcvOnStatus(status); } catch (e) {} }
   }
 
-  // ── 开始接收：输入配对码，等待桌面端发起 ──────────────
+  // ── 本地信令：POST 一条信令到桌面端服务器 ──
+  async function _rcvSigPost(event, payload) {
+    if (!rcvSigBase) return;
+    try {
+      const res = await fetch(rcvSigBase + '/signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: rcvSigCode, event: event, payload: payload || {}, from: 'recv' })
+      });
+      return res.ok;
+    } catch (e) { console.warn('[webrtc-recv] 信令发送失败:', e); return false; }
+  }
+
+  let rcvSigCode = null;
+  let rcvConnFailCount = 0;    // 连续连接失败计数（用于判断是否地址错误）
+  let rcvStartedOffer = false; // 是否已收到 offer 并建立 peer
+  // ── 本地信令：轮询拉取桌面端发来的信令（offer/ice）──
+  function _startSigPolling() {
+    if (rcvPollTimer) { clearTimeout(rcvPollTimer); rcvPollTimer = null; }
+    rcvPolling = false;
+    const tick = async function () {
+      if (!rcvSigBase) return;
+      try {
+        const res = await fetch(rcvSigBase + '/signal/' + rcvSigCode + '?since=' + rcvLastSeq);
+        if (res.ok) {
+          rcvConnFailCount = 0;   // 连接正常，重置失败计数
+          const data = await res.json();
+          if (data && Array.isArray(data.items)) {
+            for (const it of data.items) {
+              rcvLastSeq = Math.max(rcvLastSeq, it.seq);
+              console.log('[webrtc-recv] 本地信令收到:', it.event);
+              if (it.event === 'offer') { rcvStartedOffer = true; _onOffer(it.payload || {}); }
+              else if (it.event === 'ice') { _onIce(it.payload || {}); }
+            }
+          }
+        } else {
+          rcvConnFailCount++;
+        }
+      } catch (e) {
+        rcvConnFailCount++;
+        // CORS/网络失败：连续失败提示地址可能不对
+        if (rcvConnFailCount === 3) {
+          _emitStatus({ phase: 'error', message: '无法连接桌面端信令服务器。请确认：① 电脑端使用的是 Electron 桌面版（不是网页版），并已重启；② IP/端口填写的是电脑弹窗中显示的局域网 IP；③ 手机和电脑在同一网络。' });
+        }
+      }
+      // 已建立 P2P 连接后停止轮询，避免无用请求
+      if (rcvConnected) { _stopSigPolling(); return; }
+      rcvPollTimer = setTimeout(tick, 400);
+    };
+    rcvPollTimer = setTimeout(tick, 200);
+  }
+  function _stopSigPolling() {
+    if (rcvPollTimer) { clearTimeout(rcvPollTimer); rcvPollTimer = null; }
+    rcvPolling = false;
+  }
+
+  // ── 开始接收：输入配对码 + 桌面端 IP，等待桌面端发起 ──────────────
   function startReceive(code, opts) {
     opts = opts || {};
     rcvOnStatus = opts.onStatus || null;
-    if (typeof getSupabaseClient !== 'function') { _emitStatus({ phase: 'error', message: '未配置 Supabase，无法配对' }); return; }
+    // 优先使用本地信令：需要桌面端 IP（同 WiFi，纯局域网）
+    if (opts.ip) {
+      code = String(code || '').replace(/\D/g, '');
+      if (code.length !== 6) { _emitStatus({ phase: 'error', message: '配对码应为 6 位数字' }); return; }
+      const ip = String(opts.ip).trim();
+      const port = Number(opts.port) || 0;
+      if (!ip || !port) { _emitStatus({ phase: 'error', message: '请填写桌面端 IP 与端口' }); return; }
+      rcvSigCode = code;
+      rcvSigBase = 'http://' + ip + ':' + port;
+      rcvConnFailCount = 0;
+      rcvStartedOffer = false;
+      _emitStatus({ phase: 'waiting', message: '正在连接桌面端 ' + ip + ':' + port + '（配对码 ' + code + '）…' });
+      // 通知桌面端已就绪，并开始轮询桌面端发来的信令
+      _rcvSigPost('ready', {}).then((ok) => {
+        if (!ok) {
+          _emitStatus({ phase: 'error', message: '无法连接桌面端信令服务器 ' + ip + ':' + port + '（被拒绝或 CORS 拦截）。请确认：① 电脑端使用 Electron 桌面版并已重启；② IP/端口是电脑弹窗显示的真实局域网地址（如 192.168.x.x）；③ 手机与电脑在同一网络。' });
+          return;
+        }
+        _startSigPolling();
+      }).catch((e) => {
+        _emitStatus({ phase: 'error', message: '无法连接桌面端信令服务器：' + String(e) });
+      });
+      return;
+    }
+
+    // 降级：无 IP 时回退到 Supabase Realtime 信令
+    if (typeof getSupabaseClient !== 'function') { _emitStatus({ phase: 'error', message: '未配置信令通道，无法配对' }); return; }
     rcvClient = getSupabaseClient();
     if (!rcvClient) { _emitStatus({ phase: 'error', message: 'Supabase 客户端不可用' }); return; }
 
@@ -124,11 +211,13 @@
       rcvChannel = rcvClient.channel('pdf-transfer-' + code, {
         config: { broadcast: { self: false } }
       });
-      rcvChannel.on('broadcast', { event: 'offer' }, (payload) => _onOffer(payload));
-      rcvChannel.on('broadcast', { event: 'ice' }, (payload) => _onIce(payload));
+      rcvChannel.on('broadcast', { event: 'offer' }, (p) => { console.log('[webrtc-recv] 收到 offer'); _onOffer(p); });
+      rcvChannel.on('broadcast', { event: 'ice' }, (p) => { console.log('[webrtc-recv] 收到 ice'); _onIce(p); });
       rcvChannel.subscribe((status, err) => {
+        console.log('[webrtc-recv] channel subscribe:', status, err);
         if (status === 'SUBSCRIBED') {
           // 通知桌面端手机已就绪
+          console.log('[webrtc-recv] 发送 ready');
           rcvChannel.send({ type: 'broadcast', event: 'ready', payload: {} });
         } else if (err) {
           _emitStatus({ phase: 'error', message: '配对频道订阅失败：' + String(err && err.message || err) });
@@ -145,11 +234,30 @@
     _emitStatus({ phase: 'connecting', message: '收到桌面端连接请求，正在建立…' });
 
     rcvPeer = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        // 腾讯云免费 STUN，国内网络更稳（替代可能被墙的 Google/Twilio STUN）
+        { urls: 'stun:stun.qq.com:3478' }
+      ],
+      iceCandidatePoolSize: 4
     });
     rcvPeer.onicecandidate = function (e) {
-      if (e.candidate && rcvChannel) {
+      if (!e.candidate) return;
+      if (rcvSigBase) {
+        _rcvSigPost('ice', { candidate: e.candidate.toJSON() });
+      } else if (rcvChannel) {
         rcvChannel.send({ type: 'broadcast', event: 'ice', payload: { candidate: e.candidate.toJSON() } });
+      }
+    };
+    // 监控 ICE 连接状态，避免「无限等待」且无提示
+    rcvPeer.oniceconnectionstatechange = function () {
+      const st = rcvPeer ? rcvPeer.iceConnectionState : 'closed';
+      if (st === 'connected' || st === 'completed') {
+        _emitStatus({ phase: 'connecting', message: '连接已建立，正在接收…' });
+      } else if (st === 'failed' || st === 'disconnected') {
+        console.warn('[webrtc-recv] ICE 连接失败:', st);
+        _emitStatus({ phase: 'waiting', message: '无法建立 P2P 直连（' + st + '）。请确认两台设备在同一网络，且路由器未开启「AP 隔离」；跨网络传输需要配置 TURN 服务器。' });
       }
     };
     rcvPeer.ondatachannel = function (ev) {
@@ -161,7 +269,9 @@
       await rcvPeer.setRemoteDescription({ type: 'offer', sdp: sdp });
       const answer = await rcvPeer.createAnswer();
       await rcvPeer.setLocalDescription(answer);
-      if (rcvChannel) {
+      if (rcvSigBase) {
+        _rcvSigPost('answer', { sdp: rcvPeer.localDescription.sdp });
+      } else if (rcvChannel) {
         rcvChannel.send({ type: 'broadcast', event: 'answer', payload: { sdp: rcvPeer.localDescription.sdp } });
       }
     } catch (e) {

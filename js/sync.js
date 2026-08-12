@@ -16,6 +16,16 @@
 (function (global) {
   'use strict';
 
+  // 单条同步数据大小上限（字节）。超过则不参与云端同步（本地保留），
+  // 防止超大 value（如 AI 聊天记录可到几十 MB）导致 user_data 查询/写入 statement timeout。
+  // 用 JSON.stringify 长度近似（UTF-8 中文约 3 字节，取 0.8MB 字符串长度≈2MB 实际 → 保守）
+  const MAX_SYNC_VALUE_LEN = 800 * 1024; // 字符串长度≈800K（中文时实际字节数约×2~3）
+  function _valueTooLarge(value) {
+    if (value == null) return false;
+    try { return String(value).length > MAX_SYNC_VALUE_LEN; }
+    catch (e) { return false; }
+  }
+
   // ── 同步白名单：仅这些 key 参与云同步（不含任何敏感凭据）──────────
   const SYNC_KEYS = [
     'study_todos_v2',          // 待办事项（当前版）
@@ -218,6 +228,12 @@
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
     const value = localStorage.getItem(key);
+    if (value != null && _valueTooLarge(value)) {
+      // 超大 value 不上传，避免云端 user_data 超时；本地数据保留，仅警告。
+      console.warn('[sync] 跳过上传超大 key:', key, '(len=' + value.length + ')');
+      _setLocalTs(key, new Date().toISOString());  // 标记为「已处理」，避免反复重试上传
+      return { ok: true, skipped: true, reason: 'too-large' };
+    }
     const payload = value ? JSON.parse(value) : null;
     const updatedAt = new Date().toISOString();
     const { error } = await c.from('user_data')
@@ -311,34 +327,51 @@
   // 避免手机端首次同步时用空数据覆盖云端。
   async function _firstSync() {
     if (!enabled || !_client()) return;
+    if (applyingRemote) return;   // 上一次同步仍在执行 → 跳过本次，避免并发
     const session = await getSession();
     if (!session) return;
     const c = _client();
     if (!c) return;
 
-    // 1. 拉取云端现有 key 集合
-    let remoteRows = [];
+    // 1. 先拉取云端 key 的轻量元信息（不含 value，避免超大 value 导致 statement timeout）
+    let remoteMeta = [];
     applyingRemote = true;
     try {
       const { data, error } = await c.from('user_data')
-        .select('key,value,updated_at')
+        .select('key,updated_at')
         .eq('user_id', session.user.id);
-      if (!error && data) remoteRows = data;
+      if (!error && data) remoteMeta = data;
     } catch (e) { /* 忽略 */ }
+    const remoteMetaMap = {};
+    remoteMeta.forEach(r => { remoteMetaMap[r.key] = r; });
 
-    // 2. 合并策略：云端有非空数据且本地为空 → 拉取云端；
-    //    本地有真实数据 → 上传；本地与云端都空 → 跳过（不产生空占位覆盖）
+    // 2. 找出「本地空 且 云端有数据」的 key，按需拉取其 value（避免全量拉取）
     const firstKeys = SYNC_KEYS.filter(k => isSyncKey(k));
+    const needValueKeys = firstKeys.filter(k => _isEmptyLocalValue(k) && remoteMetaMap[k]);
+    const valueMap = {};
+    if (needValueKeys.length) {
+      try {
+        const { data: vals, error: vErr } = await c.from('user_data')
+          .select('key,value,updated_at')
+          .eq('user_id', session.user.id)
+          .in('key', needValueKeys);
+        if (!vErr && vals) vals.forEach(v => { valueMap[v.key] = v; });
+      } catch (e) { /* 忽略 */ }
+    }
+
+    // 3. 合并策略：云端有非空数据且本地为空 → 拉取云端；
+    //    本地有真实数据 → 上传；本地与云端都空 → 跳过（不产生空占位覆盖）
     const firstTotal = firstKeys.length || 1;
     let firstDone = 0;
     for (const key of firstKeys) {
       firstDone++;
       _emitProgress({ active: true, phase: 'first', current: firstDone, total: firstTotal, key: key, label: SYNC_LABELS[key] || key });
       const localEmpty = _isEmptyLocalValue(key);
-      const remoteRow = remoteRows.find(r => r.key === key);
+      const remoteRow = valueMap[key] || null;
       const remoteHasData = remoteRow && remoteRow.value !== null &&
         !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
-        !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0);
+        !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0) &&
+        !_valueTooLarge(JSON.stringify(remoteRow.value));
 
       if (localEmpty && remoteHasData) {
         // 本地空、云端有数据 → 拉取云端（避免用本地空数组覆盖云端真实笔记）
@@ -346,7 +379,7 @@
         _setRemoteTs(key, remoteRow.updated_at);
         _setLocalTs(key, remoteRow.updated_at);
       } else if (!localEmpty) {
-        // 本地有真实数据 → 上传到云（覆盖云端旧值）
+        // 本地有真实数据 → 上传到云（覆盖云端旧值，_uploadKey 内部会跳过超大 value）
         await _uploadKey(key);
       }
       // 本地空 且 云端也空/无记录 → 跳过（不产生任何写入）
@@ -359,66 +392,93 @@
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
   async function _pullAll() {
     if (!enabled || !_client()) return;
+    if (applyingRemote) return;   // 上一次同步仍在执行（可能因云端慢/超时阻塞）→ 跳过本次，避免并发刷屏
     const session = await getSession();
     if (!session) return;
     const c = _client();
     if (!c) return;
     applyingRemote = true;
     try {
-      const { data, error } = await c.from('user_data')
-        .select('key,value,updated_at')
+      // 两阶段拉取，避免一次性把超大 value（如 AI 聊天记录）全部拉回导致 statement timeout：
+      // ① 先只取轻量的 key/updated_at 判断差异；② 仅对「确实需要 value」的 key 单独取 value。
+      const { data: meta, error } = await c.from('user_data')
+        .select('key,updated_at')
         .eq('user_id', session.user.id);
       if (error) { console.warn('[sync] 拉取失败:', error.message); return; }
-      if (!data) return;
+      if (!meta) return;
       _conflictQueue = [];
-      const syncRows = data.filter(r => isSyncKey(r.key));
+      const syncRows = meta.filter(r => isSyncKey(r.key));
       const pullTotal = syncRows.length || 1;
       let pullDone = 0;
+      // 先逐 key 用元信息（updated_at）判定「是否真正需要云端 value」：
+      //   - 本地缺失（localEmpty）→ 需要 value 拉取
+      //   - 云端比本地新（remoteTs > localTs，两端都有时间戳）→ 需要 value 拉取
+      //   - 其余情况（本地有真实数据且更新/无本地时间戳保护）→ 保留本地，只需上传，无需拉 value
+      const needValueKeys = [];
       for (const row of syncRows) {
         pullDone++;
-        _emitProgress({ active: true, phase: 'pull', current: pullDone, total: pullTotal, key: row.key, label: SYNC_LABELS[row.key] || row.key });
-        // Steam 云存档式合并：「谁新用谁」。
-        // 云端比本地新（或本地缺失）→ 拉取覆盖本地；云端比本地旧 → 保留本地（等待本地上传）。
-        // 若两端「在上次同步后都改过」（真冲突），则收集起来交由用户选择（见 _resolveConflicts）。
-        const localTs = _getLocalTs()[row.key];          // 本地最后修改时间（ISO，可能为空）
-        const remoteTs = row.updated_at;                  // 云端更新时间（ISO）
-        const localEmpty = _isEmptyLocalValue(row.key);   // 本地缺失或为空占位（如 []）
-        const remoteEmpty = row.value === null ||
-          (Array.isArray(row.value) && row.value.length === 0) ||
-          (row.value && typeof row.value === 'object' && !Array.isArray(row.value) && Object.keys(row.value).length === 0);
+        const localTs = _getLocalTs()[row.key];
+        const remoteTs = row.updated_at;
+        const localEmpty = _isEmptyLocalValue(row.key);
+        if (localEmpty) {
+          needValueKeys.push(row.key);   // 本地缺失 → 拉
+        } else if (localTs && remoteTs && new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
+          needValueKeys.push(row.key);   // 云端明确更新 → 拉
+        } else if (!localTs && remoteTs) {
+          // 本地有真实数据但无本地时间戳（备份恢复保护）→ 不上传拉取，保留本地并上传
+          dirtyKeys.add(row.key);
+        }
+      }
+      // ② 一次性批量取「需要 value」的 key（仍可能含大 value，但只拉必要项，避免全量）
+      const valueMap = {};
+      if (needValueKeys.length) {
+        const { data: vals, error: vErr } = await c.from('user_data')
+          .select('key,value,updated_at')
+          .eq('user_id', session.user.id)
+          .in('key', needValueKeys);
+        if (!vErr && vals) {
+          vals.forEach(v => { valueMap[v.key] = v; });
+        }
+      }
+      // ③ 合并应用
+      for (const row of syncRows) {
+        const remoteRow = valueMap[row.key];
+        const localTs = _getLocalTs()[row.key];
+        const remoteTs = remoteRow ? remoteRow.updated_at : row.updated_at;
+        const localEmpty = _isEmptyLocalValue(row.key);
+        const remoteEmpty = !remoteRow || remoteRow.value === null ||
+          (Array.isArray(remoteRow.value) && remoteRow.value.length === 0) ||
+          (remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0);
         const remoteHasData = !remoteEmpty;
 
         if (localEmpty && remoteHasData) {
           // 本地空 + 云端有数据 → 拉取云端
-          saveData(row.key, row.value);
-          _setRemoteTs(row.key, row.updated_at);
-          _setLocalTs(row.key, row.updated_at);
+          saveData(row.key, remoteRow.value);
+          _setRemoteTs(row.key, remoteRow.updated_at);
+          _setLocalTs(row.key, remoteRow.updated_at);
         } else if (!localEmpty && !remoteHasData) {
           // 本地有真实数据 + 云端空 → 保留本地，并确保稍后上传到云端
           dirtyKeys.add(row.key);
         } else if (!localEmpty && remoteHasData) {
           // 两端都有真实数据 → 谁新用谁。关键安全规则：
-          // 本地有真实数据但「无本地时间戳」（如从备份恢复，study_sync_local_ts 不含该 key）时，
-          // 绝不盲目用云端覆盖——视为「本地待保护」，优先上传本地，避免云端旧/空数据清空本地。
+          // 本地有真实数据但「无本地时间戳」（如从备份恢复）→ 绝不覆盖，上传本地保护。
           if (localTs && remoteTs) {
             if (new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
               // 云端明确更新 → 拉取覆盖
-              saveData(row.key, row.value);
-              _setRemoteTs(row.key, row.updated_at);
-              _setLocalTs(row.key, row.updated_at);
+              saveData(row.key, remoteRow.value);
+              _setRemoteTs(row.key, remoteRow.updated_at);
+              _setLocalTs(row.key, remoteRow.updated_at);
             } else {
-              // 本地更新或相同 → 保留本地并上传
-              dirtyKeys.add(row.key);
+              dirtyKeys.add(row.key);   // 本地更新或相同 → 上传本地
             }
           } else if (!localTs && remoteTs) {
-            // 本地有真实数据但无本地时间戳（恢复备份场景）→ 保护本地，上传覆盖云端
-            dirtyKeys.add(row.key);
+            dirtyKeys.add(row.key);     // 本地有数据无时间戳 → 保护本地，上传
           } else {
-            // 两端都无时间戳等边缘情况 → 保留本地并上传
-            dirtyKeys.add(row.key);
+            dirtyKeys.add(row.key);     // 边缘情况 → 上传本地
           }
         }
         // 本地空 + 云端空 → 跳过
+        _emitProgress({ active: true, phase: 'pull', current: pullDone, total: pullTotal, key: row.key, label: SYNC_LABELS[row.key] || row.key });
       }
       // 拉取完成，若存在冲突则提示用户选择（异步，不阻塞后续）
       if (_conflictQueue.length) _resolveConflicts();

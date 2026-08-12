@@ -20,6 +20,11 @@
   let sndBusy = false;
   let sndOnStatus = null;
   let sndCancel = false;
+  // 本地信令（局域网）状态
+  let sndLanIp = null;
+  let sndLanPort = null;
+  let sndUnsubIncoming = null;
+  let sndSigBase = null;      // http://<ip>:<port>，用于桌面自身 POST 信令
 
   function _emitStatus(status) {
     if (sndOnStatus) { try { sndOnStatus(status); } catch (e) {} }
@@ -32,30 +37,80 @@
     return code;
   }
 
-  // ── 开始配对：生成配对码并订阅频道，等待手机端就绪 ────
+  // ── 向本地信令服务器提交一条信令（POST /signal）──
+  async function _sigPost(code, event, payload) {
+    try {
+      await fetch(sndSigBase + '/signal', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code: code, event: event, payload: payload || {}, from: 'send' })
+      });
+    } catch (e) {
+      console.warn('[webrtc-send] 本地信令发送失败:', e);
+    }
+  }
+
+  // ── 开始配对：启动本地信令服务器，生成配对码，等待手机端就绪 ────
   function startPair(opts) {
     opts = opts || {};
     sndOnStatus = opts.onStatus || null;
     sndCancel = false;
-    if (typeof getSupabaseClient !== 'function') { _emitStatus({ phase: 'error', message: '未配置 Supabase，无法配对' }); return null; }
+    // 优先用外部传入的 code（如 UI 已生成并展示给用户的配对码），保证与信令频道一致
+    sndCode = (opts.code && String(opts.code).replace(/\D/g, '') || '');
+    if (sndCode.length !== 6) sndCode = generateCode();
+
+    // 优先用本地信令服务器（Electron 桌面端），彻底摆脱对 Supabase Realtime 的依赖
+    if (window.electronAPI && typeof window.electronAPI.webrtcSignalStart === 'function') {
+      window.electronAPI.webrtcSignalStart().then((res) => {
+        if (!res || !res.ok) {
+          _emitStatus({ phase: 'error', message: '启动本地信令服务器失败：' + ((res && res.reason) || '未知错误') });
+          return;
+        }
+        sndLanIp = (res.ips && res.ips[0]) || '127.0.0.1';
+        sndLanPort = res.port;
+        sndSigBase = 'http://' + (res.ips && res.ips[0] ? res.ips[0] : '127.0.0.1') + ':' + res.port;
+        // 监听手机端通过主进程推送来的信令（ready/answer/ice）
+        if (sndUnsubIncoming) { try { sndUnsubIncoming(); } catch (e) {} }
+        sndUnsubIncoming = window.electronAPI.onWebrtcSignalIncoming(({ code, event, payload }) => {
+          if (code !== sndCode) return;
+          console.log('[webrtc-send] 本地信令收到:', event);
+          if (event === 'ready') {
+            sndReady = true;
+            _emitStatus({ phase: 'connecting', code: sndCode, message: '已检测到手机端，正在建立连接…' });
+            _createOffer();
+          } else if (event === 'answer') { _onAnswer(payload); }
+          else if (event === 'ice') { _onIce(payload); }
+        });
+        _emitStatus({ phase: 'pairing', code: sndCode, ip: sndLanIp, port: sndLanPort, message: '配对码已生成：' + sndCode + '（本机 IP：' + sndLanIp + '）' });
+      }).catch((e) => {
+        _emitStatus({ phase: 'error', message: '启动本地信令服务器出错：' + String(e) });
+      });
+      return sndCode;
+    }
+
+    // 降级：非 Electron（如网页版）回退到 Supabase Realtime 信令
+    if (typeof getSupabaseClient !== 'function') { _emitStatus({ phase: 'error', message: '未配置信令通道，无法配对' }); return null; }
     sndClient = getSupabaseClient();
     if (!sndClient) { _emitStatus({ phase: 'error', message: 'Supabase 客户端不可用' }); return null; }
 
-    sndCode = generateCode();
     _emitStatus({ phase: 'pairing', code: sndCode, message: '配对码已生成：' + sndCode });
 
     try {
       sndChannel = sndClient.channel('pdf-transfer-' + sndCode, {
         config: { broadcast: { self: false } }
       });
-      sndChannel.on('broadcast', { event: 'ready' }, () => {
+      sndChannel.on('broadcast', { event: 'ready' }, (p) => {
+        console.log('[webrtc-send] 收到手机端 ready', p);
         sndReady = true;
         _emitStatus({ phase: 'connecting', code: sndCode, message: '已检测到手机端，正在建立连接…' });
         _createOffer();
       });
-      sndChannel.on('broadcast', { event: 'answer' }, (payload) => _onAnswer(payload));
-      sndChannel.on('broadcast', { event: 'ice' }, (payload) => _onIce(payload));
-      sndChannel.subscribe();
+      sndChannel.on('broadcast', { event: 'answer' }, (p) => { console.log('[webrtc-send] 收到 answer'); _onAnswer(p); });
+      sndChannel.on('broadcast', { event: 'ice' }, (p) => { console.log('[webrtc-send] 收到 ice'); _onIce(p); });
+      sndChannel.subscribe((status, err) => {
+        console.log('[webrtc-send] channel subscribe:', status, err);
+        if (err) _emitStatus({ phase: 'error', message: '配对频道订阅失败：' + String(err && err.message || err) });
+      });
     } catch (e) {
       _emitStatus({ phase: 'error', message: '配对频道创建失败：' + String(e) });
     }
@@ -64,11 +119,30 @@
 
   async function _createOffer() {
     sndPeer = new RTCPeerConnection({
-      iceServers: [{ urls: 'stun:stun.l.google.com:19302' }, { urls: 'stun:global.stun.twilio.com:3478' }]
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' },
+        // 腾讯云免费 STUN，国内网络更稳（替代可能被墙的 Google/Twilio STUN）
+        { urls: 'stun:stun.qq.com:3478' }
+      ],
+      iceCandidatePoolSize: 4
     });
     sndPeer.onicecandidate = function (e) {
-      if (e.candidate && sndChannel) {
+      if (!e.candidate) return;
+      if (sndSigBase) {
+        _sigPost(sndCode, 'ice', { candidate: e.candidate.toJSON() });
+      } else if (sndChannel) {
         sndChannel.send({ type: 'broadcast', event: 'ice', payload: { candidate: e.candidate.toJSON() } });
+      }
+    };
+    // 监控 ICE 连接状态，避免「无限等待」且无提示
+    sndPeer.oniceconnectionstatechange = function () {
+      const st = sndPeer ? sndPeer.iceConnectionState : 'closed';
+      if (st === 'connected' || st === 'completed') {
+        _emitStatus({ phase: 'connecting', message: '连接已建立，开始传输…' });
+      } else if (st === 'failed' || st === 'disconnected') {
+        console.warn('[webrtc-send] ICE 连接失败:', st);
+        _emitStatus({ phase: 'waiting', message: '无法建立 P2P 直连（' + st + '）。请确认两台设备在同一网络，且路由器未开启「AP 隔离」；跨网络传输需要配置 TURN 服务器。' });
       }
     };
     sndDataChannel = sndPeer.createDataChannel('pdf', { ordered: true });
@@ -77,7 +151,9 @@
     try {
       const offer = await sndPeer.createOffer();
       await sndPeer.setLocalDescription(offer);
-      if (sndChannel) {
+      if (sndSigBase) {
+        _sigPost(sndCode, 'offer', { sdp: sndPeer.localDescription.sdp });
+      } else if (sndChannel) {
         sndChannel.send({ type: 'broadcast', event: 'offer', payload: { sdp: sndPeer.localDescription.sdp } });
       }
     } catch (e) {

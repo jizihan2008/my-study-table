@@ -732,6 +732,7 @@ function bkSendToPhone(bookId) {
       <div class="bk-original-body" id="bkSendPhoneBody" style="text-align:center;">
         <div style="font-size:13px;color:var(--text-secondary);margin-bottom:6px;">请在手机端「教材 → 从桌面传输」输入以下配对码：</div>
         <div style="font-size:38px;font-weight:800;letter-spacing:8px;color:var(--primary);font-family:monospace;margin:8px 0;">${code}</div>
+        <div id="bkSendPhoneIp" style="font-size:13px;color:var(--text-secondary);margin-bottom:4px;display:none;">检测局域网 IP…</div>
         <div id="bkSendPhoneStatus" style="font-size:13px;color:var(--text-secondary);margin-top:8px;">等待手机连接…</div>
         <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;">
           <button class="btn-save-settings" style="background:#ef4444;width:auto;" onclick="this.closest('.bk-original-overlay').querySelector('.bk-original-close').click()">取消</button>
@@ -742,6 +743,7 @@ function bkSendToPhone(bookId) {
   if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
 
   const statusEl = overlay.querySelector('#bkSendPhoneStatus');
+  const ipEl = overlay.querySelector('#bkSendPhoneIp');
   const setStatus = (msg, cls) => {
     statusEl.textContent = msg;
     if (cls) statusEl.style.color = cls === 'err' ? 'var(--danger)' : 'var(--primary)';
@@ -749,6 +751,11 @@ function bkSendToPhone(bookId) {
   };
 
   const onStatus = (st) => {
+    if (st.phase === 'pairing' && st.ip && st.port) {
+      // 显示本机 IP + 端口，供手机端填入
+      ipEl.style.display = 'block';
+      ipEl.textContent = '请在手机端填写桌面端 IP：' + st.ip + '  端口：' + st.port;
+    }
     if (st.phase === 'connecting') setStatus('已检测到手机，正在建立连接…', '');
     else if (st.phase === 'connected') {
       setStatus('连接已建立，正在读取并发送 PDF…', '');
@@ -776,8 +783,8 @@ function bkSendToPhone(bookId) {
     }
   }
 
-  // 启动配对
-  window.WebRtcSend.startPair({ onStatus: onStatus });
+  // 启动配对（传入弹窗已显示的 code，确保与信令频道 code 一致）
+  window.WebRtcSend.startPair({ code: code, onStatus: onStatus });
 
   // 关闭时清理
   overlay.querySelector('.bk-original-close').addEventListener('click', function () {
@@ -798,12 +805,16 @@ function bkReceiveFromPhone() {
         <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
       </div>
       <div class="bk-original-body" style="text-align:center;">
-        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">请在电脑端「教材 → 发送到手机」生成配对码，然后在此输入 6 位配对码：</div>
+        <div style="font-size:13px;color:var(--text-secondary);margin-bottom:8px;">请在电脑端「教材 → 发送到手机」查看配对码、桌面端 IP 和端口，然后在此填写：</div>
         <input id="bkRecvCodeInput" value="" placeholder="6 位配对码" maxlength="6"
           style="width:200px;height:46px;font-size:22px;font-family:monospace;letter-spacing:6px;text-align:center;
-                 border:2px solid var(--border);border-radius:10px;background:var(--input-bg);color:var(--text);outline:none;"
+                 border:2px solid var(--border);border-radius:10px;background:var(--input-bg);color:var(--text);outline:none;margin-bottom:10px;"
           oninput="this.value=this.value.replace(/\\D/g,'')">
-        <div id="bkRecvStatus" style="font-size:13px;color:var(--text-secondary);margin-top:12px;min-height:20px;">请输入配对码</div>
+        <div style="display:flex;gap:8px;justify-content:center;margin-bottom:4px;">
+          <input id="bkRecvIpInput" value="" placeholder="桌面端 IP（如 192.168.1.100）" style="width:180px;height:40px;font-size:15px;text-align:center;border:2px solid var(--border);border-radius:10px;background:var(--input-bg);color:var(--text);outline:none;box-sizing:border-box;">
+          <input id="bkRecvPortInput" value="" placeholder="端口" inputmode="numeric" style="width:86px;height:40px;font-size:15px;text-align:center;border:2px solid var(--border);border-radius:10px;background:var(--input-bg);color:var(--text);outline:none;box-sizing:border-box;" oninput="this.value=this.value.replace(/\\D/g,'')">
+        </div>
+        <div id="bkRecvStatus" style="font-size:13px;color:var(--text-secondary);margin-top:12px;min-height:20px;">请输入配对码、桌面端 IP 与端口</div>
         <div style="margin-top:14px;display:flex;gap:8px;justify-content:center;">
           <button class="btn-save-settings" style="background:var(--primary);width:auto;min-width:120px;" onclick="bkRecvConnect()">开始接收</button>
         </div>
@@ -826,12 +837,22 @@ function bkRecvConnect() {
   if (typeof window.WebRtcRecv === 'undefined') return;
   const input = document.querySelector('#bkRecvCodeInput');
   const code = input ? input.value : '';
+  const ipInput = document.querySelector('#bkRecvIpInput');
+  const portInput = document.querySelector('#bkRecvPortInput');
+  const ip = ipInput ? ipInput.value.trim() : '';
+  const port = portInput ? portInput.value.trim() : '';
+  const s = window._bkRecvStatusEl;
   if (code.length !== 6) {
-    const s = window._bkRecvStatusEl;
     if (s) { s.textContent = '请输入 6 位配对码'; s.style.color = 'var(--danger)'; }
     return;
   }
+  if (!ip || !port) {
+    if (s) { s.textContent = '请填写桌面端 IP 和端口（在电脑端弹窗中可见）'; s.style.color = 'var(--danger)'; }
+    return;
+  }
   window.WebRtcRecv.startReceive(code, {
+    ip: ip,
+    port: Number(port) || 0,
     onStatus: function (st) {
       const s = window._bkRecvStatusEl;
       if (!s) return;
