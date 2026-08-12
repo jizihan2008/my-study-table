@@ -305,6 +305,7 @@ function openMobileMore() {
     `<div class="mobile-more-sep"></div>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openSettingsModal();"><i data-lucide="settings" class="lucide-icon"></i><span>设置</span></button>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openHelpModal();"><i data-lucide="help-circle" class="lucide-icon"></i><span>帮助</span></button>` +
+    `<button class="mobile-more-item" onclick="closeMobileMore();openNavSettings();"><i data-lucide="sliders-horizontal" class="lucide-icon"></i><span>编辑界面栏</span></button>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openChangelogModal();"><i data-lucide="list" class="lucide-icon"></i><span>更新日志</span></button>`;
   if (ov) ov.classList.add('open');
   panel.classList.add('open');
