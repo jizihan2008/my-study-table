@@ -462,43 +462,61 @@
         }
       }
       // ③ 合并应用
+      // 说明：遍历的 syncRows 是云端所有匹配 key 的元信息，云端存在该记录。
+      // valueMap[row.key] 只有 needValueKeys（本地空 / 云端明确更新）的 key 才有 value。
+      // 对「本地不晚于云端」的 key，未拉 value（remoteRow undefined），此时不能误判为云端空
+      // 而反复上传；应基于时间戳直接判定：两端一致→跳过，本地更新→上传。
       for (const row of syncRows) {
-        const remoteRow = valueMap[row.key];
+        const remoteRow = valueMap[row.key];   // 可能 undefined（非 needValueKeys）
         const localTs = _getLocalTs()[row.key];
         const remoteTs = remoteRow ? remoteRow.updated_at : row.updated_at;
         const localEmpty = _isEmptyLocalValue(row.key);
-        const remoteEmpty = !remoteRow || remoteRow.value === null ||
-          (Array.isArray(remoteRow.value) && remoteRow.value.length === 0) ||
-          (remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0);
-        const remoteHasData = !remoteEmpty;
 
-        if (localEmpty && remoteHasData) {
-          // 本地空 + 云端有数据 → 拉取云端
-          saveData(row.key, remoteRow.value);
-          _setRemoteTs(row.key, remoteRow.updated_at);
-          _setLocalTs(row.key, remoteRow.updated_at);
-        } else if (!localEmpty && !remoteHasData) {
-          // 本地有真实数据 + 云端空 → 保留本地，并确保稍后上传到云端
-          dirtyKeys.add(row.key);
-        } else if (!localEmpty && remoteHasData) {
-          // 两端都有真实数据 → 谁新用谁。关键安全规则：
-          // 本地有真实数据但「无本地时间戳」（如从备份恢复）→ 绝不覆盖，上传本地保护。
-          if (localTs && remoteTs) {
-            if (new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
-              // 云端明确更新 → 拉取覆盖
-              saveData(row.key, remoteRow.value);
-              _setRemoteTs(row.key, remoteRow.updated_at);
-              _setLocalTs(row.key, remoteRow.updated_at);
+        if (localEmpty) {
+          // 本地空：云端有真实数据（需拉 value 的 key 才有 remoteRow）→ 拉取；
+          // 云端也空/无记录 → 跳过（不产生空占位）。未拉 value 的 key 不会走进这里。
+          if (remoteRow && remoteRow.value !== null &&
+            !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
+            !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0)) {
+            saveData(row.key, remoteRow.value);
+            _setRemoteTs(row.key, remoteRow.updated_at);
+            _setLocalTs(row.key, remoteRow.updated_at);
+          }
+        } else {
+          // 本地有真实数据。
+          if (remoteRow) {
+            // 拉到了云端 value：云端有真实数据 → 谁新用谁；云端空 → 上传本地。
+            const remoteHasData = remoteRow.value !== null &&
+              !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
+              !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0);
+            if (remoteHasData && localTs && remoteTs) {
+              const localMs = new Date(localTs).getTime();
+              const remoteMs = new Date(remoteTs).getTime();
+              if (remoteMs > localMs) {
+                // 云端明确更新 → 拉取覆盖
+                saveData(row.key, remoteRow.value);
+                _setRemoteTs(row.key, remoteRow.updated_at);
+                _setLocalTs(row.key, remoteRow.updated_at);
+              } else if (localMs > remoteMs) {
+                dirtyKeys.add(row.key);   // 本地明确更新 → 上传本地
+              }
+              // localMs === remoteMs：两端时间戳相同 → 数据已一致，跳过（避免反复上传）
             } else {
-              dirtyKeys.add(row.key);   // 本地更新或相同 → 上传本地
+              // 云端空，或本地无时间戳（备份恢复保护），或边缘情况 → 上传本地保护
+              dirtyKeys.add(row.key);
             }
-          } else if (!localTs && remoteTs) {
-            dirtyKeys.add(row.key);     // 本地有数据无时间戳 → 保护本地，上传
           } else {
-            dirtyKeys.add(row.key);     // 边缘情况 → 上传本地
+            // 未拉 value：仅当本地时间戳早于云端时间戳才可能进 needValueKeys，但这里 remoteRow undefined
+            // 说明该 key 不满足「本地空 / 云端明确更新」，即本地不早于云端。
+            // 判定：本地明确更新 → 上传；否则（一致）→ 跳过，避免反复上传。
+            if (localTs && remoteTs && new Date(localTs).getTime() > new Date(remoteTs).getTime()) {
+              dirtyKeys.add(row.key);   // 本地更新 → 上传
+            } else if (!localTs && remoteTs) {
+              dirtyKeys.add(row.key);   // 本地有数据无时间戳 → 保护本地，上传
+            }
+            // localTs >= remoteTs（含相等）→ 数据一致或本地不更新，跳过
           }
         }
-        // 本地空 + 云端空 → 跳过
         _emitProgress({ active: true, phase: 'pull', current: pullDone, total: pullTotal, key: row.key, label: SYNC_LABELS[row.key] || row.key });
       }
       // 拉取完成，若存在冲突则提示用户选择（异步，不阻塞后续）
