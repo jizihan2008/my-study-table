@@ -100,6 +100,15 @@ function bkApplyPanes() {
   const toc = document.getElementById('bkToc');
   const shelfRestore = document.getElementById('bkShelfRestore');
   const tocRestore = document.getElementById('bkTocRestore');
+  // 移动端三级导航：不应用桌面端「隐藏书架/目录」状态，强制移除 hidden，
+  // 否则若用户在桌面端隐藏过目录栏（_bkTocHidden=true），移动端点书后目录被误隐藏而空白。
+  if (bkIsMobileView()) {
+    if (shelf) shelf.classList.remove('hidden');
+    if (toc) toc.classList.remove('hidden');
+    if (shelfRestore) shelfRestore.classList.remove('show');
+    if (tocRestore) tocRestore.classList.remove('show');
+    return;
+  }
   if (shelf) shelf.classList.toggle('hidden', _bkShelfHidden);
   if (toc) toc.classList.toggle('hidden', _bkTocHidden);
   if (shelfRestore) shelfRestore.classList.toggle('show', _bkShelfHidden);
