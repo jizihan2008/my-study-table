@@ -155,6 +155,18 @@ drop policy if exists "profiles_self_update" on public.profiles;
 create policy "profiles_self_update" on public.profiles
   for update using (auth.uid() = id);
 
+-- profiles_public：未登录用户也能读的「最小公开视图」，仅暴露昵称/用户名，供插件市场展示作者名。
+-- 不暴露头像URL、简介、在线状态、last_seen 等隐私字段；真正的敏感资料仍需登录后经 profiles 表读取。
+-- 授权给 anon（未登录）与 authenticated（已登录）角色。
+-- 注意：视图默认 security_definer（以 owner=postgres 权限读基表），这样才能让 anon 通过视图读到
+-- 昵称/用户名（基表 profiles 的 RLS 对 anon 是拒绝的，若用 security_invoker 则 anon 读视图会空）。
+drop view if exists public.profiles_public;
+create view public.profiles_public as
+  select id, nickname, username
+  from public.profiles;
+revoke all on public.profiles_public from anon, authenticated;
+grant select on public.profiles_public to anon, authenticated;
+
 -- friend_groups：仅本人
 drop policy if exists "groups_self_all" on public.friend_groups;
 create policy "groups_self_all" on public.friend_groups

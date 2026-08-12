@@ -1,0 +1,283 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Supabase 测试脚本</title>
+<style>
+  body { margin: 0; padding: 16px; font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; background: #f5f6fa; color: #1f2937; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #6b7280; font-size: 12px; margin-bottom: 14px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  .card h3 { margin: 0 0 10px; font-size: 14px; display: flex; align-items: center; gap: 6px; }
+  .step { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; flex-wrap: wrap; }
+  .step .name { flex: 1; min-width: 180px; font-weight: 500; }
+  .step .btn { flex-shrink: 0; }
+  button { padding: 7px 14px; border-radius: 8px; border: 1px solid #d1d5db; background: #fff; cursor: pointer; font-size: 13px; }
+  button.primary { background: #4f46e5; color: #fff; border-color: #4f46e5; }
+  button.danger { background: #ef4444; color: #fff; border-color: #ef4444; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  input { padding: 6px 10px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 13px; }
+  .out { background: #111827; color: #34d399; border-radius: 8px; padding: 10px 12px; font: 12px/1.5 monospace; margin-top: 10px; max-height: 300px; overflow: auto; white-space: pre-wrap; }
+  .ok { color: #10b981; }
+  .err { color: #ef4444; }
+  .warn { color: #f59e0b; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; }
+  td, th { border: 1px solid #e5e7eb; padding: 4px 8px; text-align: left; }
+</style>
+</head>
+<body>
+<h1>🔌 Supabase 连接测试</h1>
+<div class="sub">测试项目 URL 与 anon key、RLS 策略、注册/登录、云同步读写、Realtime 订阅。结果实时输出到下方控制台。</div>
+
+<div class="card">
+  <h3>⚙️ 连接配置（默认用内置值）</h3>
+  <div class="step"><span class="name">Project URL</span><input id="cfgUrl" style="flex:2;min-width:200px"></div>
+  <div class="step"><span class="name">Anon Public Key</span><input id="cfgKey" style="flex:2;min-width:200px" type="text"></div>
+  <button id="btnApply" class="primary">应用配置并初始化客户端</button>
+</div>
+
+<div class="card">
+  <h3>🧪 1. 连接与 RLS 测试</h3>
+  <div class="step"><span class="name">匿名读取 profiles（收紧后应被 RLS 拦截，返回 0 行）</span><button id="btnAnonRead" class="btn">测试</button></div>
+  <div class="step"><span class="name">匿名读取 plugin_store_items（approved 应可见）</span><button id="btnAnonPlugins" class="btn">测试</button></div>
+  <div class="step"><span class="name">匿名读取 profiles_public（最小公开视图，应能看到昵称/用户名，且无隐私字段）</span><button id="btnAnonPub" class="btn">测试</button></div>
+</div>
+
+<div class="card">
+  <h3>👤 2. 注册 / 登录测试</h3>
+  <div class="step"><span class="name">用户名</span><input id="regUser" placeholder="username"></div>
+  <div class="step"><span class="name">邮箱</span><input id="regEmail" placeholder="test@example.com"></div>
+  <div class="step"><span class="name">密码（≥6位）</span><input id="regPass" placeholder="password" type="password"></div>
+  <div class="step">
+    <button id="btnRegister" class="primary">注册</button>
+    <button id="btnLogin" class="btn">登录</button>
+    <button id="btnLogout" class="danger">退出</button>
+  </div>
+  <div class="step"><span class="name">当前登录状态</span><span id="authStatus">未登录</span></div>
+</div>
+
+<div class="card">
+  <h3>📦 3. 云同步数据读写（user_data 表）</h3>
+  <div class="step"><span class="name">登录后写入一条测试数据 (key: _test_sync)</span><button id="btnWrite" class="btn">写入</button></div>
+  <div class="step"><span class="name">读取该 key（应仅本人可见）</span><button id="btnRead" class="btn">读取</button></div>
+  <div class="step"><span class="name">清理测试数据</span><button id="btnCleanup" class="btn">删除</button></div>
+</div>
+
+<div class="card">
+  <h3>🔄 4. Realtime 实时订阅测试</h3>
+  <div class="step"><span class="name">订阅 user_data 变更（验证修复后不再报 postgres_changes 错误）</span><button id="btnRealtime" class="btn">订阅/取消订阅</button></div>
+</div>
+
+<div class="card">
+  <h3>📋 输出控制台</h3>
+  <div class="out" id="log">(等待操作…)</div>
+</div>
+
+<script src="lib/supabase/supabase.js"></script>
+<script>
+(function () {
+  'use strict';
+  const BUILTIN_URL = 'https://taujqtysezmmxhkxxjce.supabase.co';
+  const BUILTIN_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhdWpxdHlzZXptbXhoa3h4amNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzA4OTEsImV4cCI6MjEwMTQwNjg5MX0.2AxQ4F7pYXTWHFxjdlDMt7OhnIPJihEcEw8HhOOP9Y8';
+
+  let client = null;
+  let channel = null;
+  const logEl = document.getElementById('log');
+  const lines = [];
+  function log(msg, cls) {
+    const ts = new Date().toTimeString().slice(0, 8);
+    lines.push(`[${ts}] ${msg}`);
+    while (lines.length > 300) lines.shift();
+    logEl.innerHTML = lines.map(l => {
+      const clsMatch = l.match(/^(\[.*\] )(✅|⚠️|❌|ℹ️|🔄)/);
+      let cls2 = '';
+      if (clsMatch && clsMatch[2] === '✅') cls2 = 'ok';
+      else if (clsMatch && clsMatch[2] === '❌') cls2 = 'err';
+      else if (clsMatch && clsMatch[2] === '⚠️') cls2 = 'warn';
+      return `<span class="${cls2}">${l}</span>`;
+    }).join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  function ok(m) { log('✅ ' + m); }
+  function err(m) { log('❌ ' + m); }
+  function warn(m) { log('⚠️ ' + m); }
+  function info(m) { log('ℹ️ ' + m); }
+
+  // 初始化配置
+  document.getElementById('cfgUrl').value = BUILTIN_URL;
+  document.getElementById('cfgKey').value = BUILTIN_KEY;
+
+  document.getElementById('btnApply').onclick = function () {
+    const url = document.getElementById('cfgUrl').value.trim();
+    const key = document.getElementById('cfgKey').value.trim();
+    if (!url || !key) { err('请填写 URL 和 anon key'); return; }
+    if (typeof window.supabase === 'undefined') { err('supabase.js 未加载'); return; }
+    client = window.supabase.createClient(url, key);
+    ok('客户端已初始化: ' + url);
+    checkAuth();
+  };
+
+  async function checkAuth() {
+    if (!client) { warn('先应用配置'); return; }
+    try {
+      const { data: { user } } = await client.auth.getUser();
+      document.getElementById('authStatus').textContent = user ? '已登录: ' + (user.email || user.id) : '未登录';
+    } catch (e) {
+      document.getElementById('authStatus').textContent = '获取失败';
+    }
+  }
+
+  // 1. RLS 测试
+  document.getElementById('btnAnonRead').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    info('以匿名身份读取 profiles…');
+    const { data, error } = await client.from('profiles').select('username,nickname').limit(10);
+    if (error) { err('匿名读取 profiles 出错: ' + error.message + ' (code: ' + error.code + ')'); return; }
+    if (data && data.length > 0) {
+      warn('⚠️ 匿名读到了 ' + data.length + ' 条用户资料！RLS 收紧未生效，应重新执行 schema.sql');
+    } else {
+      ok('匿名读取 profiles 返回 0 行（RLS 收紧生效，符合预期）');
+    }
+  };
+  document.getElementById('btnAnonPlugins').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    info('以匿名身份读取 plugin_store_items (approved)…');
+    const { data, error } = await client.from('plugin_store_items').select('id,name').limit(10);
+    if (error) { err('匿名读取插件出错: ' + error.message); return; }
+    ok('插件读取成功，返回 ' + (data ? data.length : 0) + ' 条（approved 公开，符合预期）');
+  };
+  document.getElementById('btnAnonPub').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    info('以匿名身份读取 profiles_public（最小公开视图）…');
+    const { data, error } = await client.from('profiles_public').select('id,nickname,username').limit(5);
+    if (error) { err('读取 profiles_public 出错: ' + error.message + ' (code: ' + error.code + ')'); return; }
+    if (data && data.length > 0) {
+      ok('profiles_public 读到 ' + data.length + ' 行，作者名可用（方案2生效）：' +
+         data.slice(0, 2).map(p => p.nickname || p.username).join(', ') + ' …');
+    } else {
+      warn('profiles_public 返回 0 行——未登录读不到作者名，需检查视图权限/security_definer 设置');
+    }
+  };
+
+  // 2. 注册/登录
+  document.getElementById('btnRegister').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    const email = document.getElementById('regEmail').value.trim();
+    const pass = document.getElementById('regPass').value;
+    const user = document.getElementById('regUser').value.trim();
+    if (!email || !pass || !user) { err('请填邮箱、密码、用户名'); return; }
+    if (pass.length < 6) { err('密码至少 6 位'); return; }
+    info('注册: ' + email);
+    const { data, error } = await client.auth.signUp({
+      email, password: pass,
+      options: { data: { username: user, nickname: user } }
+    });
+    if (error) { err('注册失败: ' + error.message); return; }
+    ok('注册成功！user=' + (data.user ? data.user.id : '?') + (data.session ? '（已自动登录）' : '（需确认邮箱/登录）'));
+    // 注册后触发器应创建 profile
+    setTimeout(checkProfileCreated, 800);
+  };
+  document.getElementById('btnLogin').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    const email = document.getElementById('regEmail').value.trim();
+    const pass = document.getElementById('regPass').value;
+    if (!email || !pass) { err('请填邮箱、密码'); return; }
+    info('登录: ' + email);
+    const { data, error } = await client.auth.signInWithPassword({ email, password: pass });
+    if (error) { err('登录失败: ' + error.message); return; }
+    ok('登录成功！user=' + (data.user ? data.user.id : ''));
+    setTimeout(checkProfileCreated, 500);
+    checkAuth();
+  };
+  document.getElementById('btnLogout').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    await client.auth.signOut();
+    ok('已退出登录');
+    if (channel) { try { channel.unsubscribe(); } catch (e) {} channel = null; }
+    checkAuth();
+  };
+
+  async function checkProfileCreated() {
+    if (!client) return;
+    try {
+      const { data: { user } } = await client.auth.getUser();
+      if (!user) return;
+      const { data, error } = await client.from('profiles').select('username,nickname').eq('id', user.id).maybeSingle();
+      if (error) { err('读取自己的 profile 出错: ' + error.message); return; }
+      if (data) ok('触发器已自动创建 profile: ' + data.username + ' / ' + data.nickname);
+      else err('⚠️ 未找到自己的 profile（handle_new_user 触发器可能未建）');
+    } catch (e) { err('检查 profile 异常: ' + e); }
+  }
+
+  // 3. 云同步读写
+  async function getUserId() {
+    try {
+      const { data: { user } } = await client.auth.getUser();
+      return user ? user.id : null;
+    } catch (e) { return null; }
+  }
+  document.getElementById('btnWrite').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    const uid = await getUserId();
+    if (!uid) { err('请先登录'); return; }
+    const val = { hello: 'world', ts: Date.now() };
+    info('写入 user_data key=_test_sync …');
+    const { error } = await client.from('user_data')
+      .upsert({ user_id: uid, key: '_test_sync', value: val, updated_at: new Date().toISOString() },
+        { onConflict: 'user_id,key' });
+    if (error) { err('写入失败: ' + error.message); return; }
+    ok('写入成功: ' + JSON.stringify(val));
+  };
+  document.getElementById('btnRead').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    const uid = await getUserId();
+    if (!uid) { err('请先登录'); return; }
+    const { data, error } = await client.from('user_data').select('key,value').eq('user_id', uid).eq('key', '_test_sync').maybeSingle();
+    if (error) { err('读取失败: ' + error.message); return; }
+    if (data) ok('读取到: key=' + data.key + ' value=' + JSON.stringify(data.value));
+    else info('未找到 _test_sync 数据');
+  };
+  document.getElementById('btnCleanup').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    const uid = await getUserId();
+    if (!uid) { err('请先登录'); return; }
+    const { error } = await client.from('user_data').delete().eq('user_id', uid).eq('key', '_test_sync');
+    if (error) { err('删除失败: ' + error.message); return; }
+    ok('已删除测试数据 _test_sync');
+  };
+
+  // 4. Realtime 订阅
+  document.getElementById('btnRealtime').onclick = async function () {
+    if (!client) { warn('先应用配置'); return; }
+    const uid = await getUserId();
+    if (!uid) { err('请先登录（Realtime 需要登录态）'); return; }
+    if (channel) {
+      try { await client.removeChannel(channel); } catch (e) {}
+      channel = null;
+      info('已取消订阅');
+      return;
+    }
+    info('创建 Realtime 订阅 mst-user-data …');
+    try {
+      channel = client.channel('mst-user-data');
+      channel
+        .on('postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + uid },
+          (payload) => ok('Realtime INSERT 收到: key=' + (payload.new && payload.new.key)))
+        .on('postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + uid },
+          (payload) => ok('Realtime UPDATE 收到: key=' + (payload.new && payload.new.key)))
+        .subscribe((status, err2) => {
+          if (status === 'SUBSCRIBED') ok('Realtime 订阅成功（无 postgres_changes 报错）');
+          else if (err2) err('Realtime 订阅出错: ' + err2.message);
+        });
+      info('订阅已发起，点上方「写入」可观察实时推送');
+    } catch (e) {
+      err('Realtime 创建出错: ' + e.message);
+    }
+  };
+})();
+</script>
+</body>
+</html>

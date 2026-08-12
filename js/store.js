@@ -136,6 +136,8 @@ window.Store = (function () {
   }
 
   // 给插件列表补充作者展示名（昵称/用户名，替代上传时存的邮箱）
+  // 通过 profiles_public 最小公开视图查询，未登录用户也能读到作者名（仅昵称/用户名），
+  // 不涉及在线状态、简介等隐私字段（profiles 表 RLS 收紧为仅登录可读）。
   async function _enrichAuthorNames(list) {
     if (!list || !list.length) return;
     const sb = getSupabaseClient();
@@ -143,7 +145,7 @@ window.Store = (function () {
     const ids = [...new Set(list.map(p => p.author_id).filter(Boolean))];
     if (!ids.length) return;
     try {
-      const { data: profs } = await sb.from('profiles').select('id,nickname,username').in('id', ids);
+      const { data: profs } = await sb.from('profiles_public').select('id,nickname,username').in('id', ids);
       const map = {};
       (profs || []).forEach(p => { map[p.id] = (p.nickname || p.username || '').trim() || ''; });
       list.forEach(p => { if (map[p.author_id]) p.author_name = map[p.author_id]; });
