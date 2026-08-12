@@ -302,21 +302,36 @@
   }
 
   // ── Realtime 订阅远端变更 ───────────────────────────
+  let _subscribing = false;   // 并发锁：防止 _subscribe 被重复触发导致 channel 冲突
   async function _subscribe() {
     const c = _client();
     if (!c || !enabled || !loggedIn) return;
-    if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} }
-    const session = await getSession();
-    if (!session) return;
-    realtimeChannel = c
-      .channel('mst-user-data')
-      .on('postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
-        () => _debouncedPull())
-      .on('postgres_changes',
-        { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
-        () => _debouncedPull())
-      .subscribe();
+    if (_subscribing) return;             // 已在订阅中，忽略重复调用
+    _subscribing = true;
+    try {
+      const session = await getSession();
+      if (!session) return;
+      // 彻底移除旧 channel（不能只 unsubscribe，否则 c.channel('mst-user-data') 会复用
+      // 已 subscribe 的同名 channel，再次 .on('postgres_changes') 即报错）
+      if (realtimeChannel) {
+        try { await c.removeChannel(realtimeChannel); } catch (e) {}
+        realtimeChannel = null;
+      }
+      const channel = c.channel('mst-user-data')
+        .on('postgres_changes',
+          { event: 'INSERT', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
+          () => _debouncedPull())
+        .on('postgres_changes',
+          { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
+          () => _debouncedPull());
+      channel.subscribe();
+      realtimeChannel = channel;
+    } catch (e) {
+      // 订阅失败不影响主流程，仅日志
+      if (typeof console !== 'undefined') console.error('[Sync] _subscribe error:', e);
+    } finally {
+      _subscribing = false;
+    }
   }
 
   let pullDebounceTimer = null;

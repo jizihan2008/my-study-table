@@ -8130,12 +8130,14 @@ i[data-lucide] {
     min-height: 0;
     overflow: hidden;
   }
-  /* 三级页面全屏单栏，默认只显示书架页 */
+  /* 三级页面全屏单栏，默认只显示书架页。
+     注意：flex column 布局下子项用 height:100% 会因三个子项叠加而撑爆被 overflow 裁剪，
+     必须用 flex:1 + min-height:0 让「当前显示的那一项」自动撑满剩余空间，隐藏项 display:none 不占位。 */
   #booksApp.bk-layout > .bk-shelf,
   #booksApp.bk-layout > .bk-toc,
   #booksApp.bk-layout > .bk-main {
-    width: 100%; flex-shrink: 0; border-right: none;
-    height: 100%; min-height: 0;
+    width: 100%; flex-shrink: 1; border-right: none;
+    flex: 1 1 auto; min-height: 0;
   }
   /* data-bkview 控制显示哪一页（其余隐藏） */
   #booksApp[data-bkview="shelf"] .bk-toc,
