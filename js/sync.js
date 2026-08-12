@@ -18,23 +18,29 @@
 
   // ── 同步白名单：仅这些 key 参与云同步（不含任何敏感凭据）──────────
   const SYNC_KEYS = [
-    'study_todos_v2',
-    'study_todos',
-    'study_notes_v2',
-    'study_notes',
-    'study_timer_records',
-    'study_taskline_v1',
-    'study_habits',
-    'study_habits_v1',
-    'study_books_v1',
-    'study_books_meta',
-    'study_calendar_events',
-    'study_checkin',
-    'study_stats',
-    'study_focus',
-    'study_goals',
-    'study_links_v3',
-    'study_quick_access'
+    'study_todos_v2',          // 待办事项（当前版）
+    'study_todos',             // 待办（旧版备份）
+    'study_notes_v2',          // 笔记（当前版）
+    'study_notes',             // 笔记（旧版备份）
+    'study_notes_folders',     // 笔记文件夹结构
+    'study_timer_records',     // 专注计时记录
+    'study_taskline_v1',       // 任务线（学习任务进度）
+    'study_habits',            // 习惯打卡（当前版）
+    'study_habits_v1',         // 习惯打卡（旧版）
+    'study_books_v1',          // 教材书架
+    'study_books_meta',        // 教材元数据
+    'study_calendar_events',   // 日历事件
+    'study_checkin',           // 打卡记录
+    'study_stats',             // 学习统计
+    'study_today_focus',       // 今日聚焦（实际存储 key）
+    'study_longterm_goals',    // 长期目标（实际存储 key）
+    'study_links_v3',          // 快捷链接
+    'study_quick_access',      // 快捷访问
+    'study_ai_convs',          // AI 助手聊天记录（跨设备查看历史对话）
+    'study_ai_memory',         // AI 记忆画像
+    'study_bk_explain_logs_v1',// 教材章节讲解日志
+    'study_bk_quiz_state_v1',  // 教材测验状态
+    'study_todo_completed_log' // 待办完成日志（历史完成记录）
   ];
 
   // 明确排除的敏感 key（即使误加入也强制不进白名单）
@@ -48,6 +54,33 @@
     'study_mail_config',
     'study_inbox_config'
   ];
+
+  // 同步数据在冲突弹窗中显示的可读名称
+  const SYNC_LABELS = {
+    'study_todos_v2': '待办事项',
+    'study_todos': '待办事项（旧版）',
+    'study_notes_v2': '笔记',
+    'study_notes': '笔记（旧版）',
+    'study_notes_folders': '笔记文件夹',
+    'study_timer_records': '计时记录',
+    'study_taskline_v1': '任务线',
+    'study_habits': '习惯打卡',
+    'study_habits_v1': '习惯打卡（旧版）',
+    'study_books_v1': '教材书架',
+    'study_books_meta': '教材元数据',
+    'study_calendar_events': '日历事件',
+    'study_checkin': '打卡记录',
+    'study_stats': '学习统计',
+    'study_today_focus': '今日聚焦',
+    'study_longterm_goals': '长期目标',
+    'study_links_v3': '快捷链接',
+    'study_quick_access': '快捷访问',
+    'study_ai_convs': 'AI 助手聊天记录',
+    'study_ai_memory': 'AI 记忆画像',
+    'study_bk_explain_logs_v1': '教材讲解日志',
+    'study_bk_quiz_state_v1': '教材测验状态',
+    'study_todo_completed_log': '待办完成日志'
+  };
 
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
   const IDB_NAME = 'mst-sync';
@@ -123,8 +156,12 @@
 
   // ── 配置读取/写入 ────────────────────────────────────
   function getConfig() {
-    try { return JSON.parse(localStorage.getItem(CFG_KEY)) || { enabled: false }; }
-    catch (e) { return { enabled: false }; }
+    try {
+      const cfg = JSON.parse(localStorage.getItem(CFG_KEY)) || {};
+      // 默认开启云同步：新用户开箱即用（登录后自动同步）。未显式设置过开关时视为开启。
+      if (typeof cfg.enabled !== 'boolean') cfg.enabled = true;
+      return cfg;
+    } catch (e) { return { enabled: true }; }
   }
   function setConfig(cfg) {
     localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
@@ -171,6 +208,9 @@
     if (error) return { ok: false, reason: error.message };
     // 成功上传后清掉对应 outbox
     await _outboxRemove(key);
+    // 同步本地与云端时间戳，标记该 key 本地已是最新（避免 _pullAll 误判云端旧而反复上传）
+    _setRemoteTs(key, updatedAt);
+    _setLocalTs(key, updatedAt);
     return { ok: true, updatedAt };
   }
 
@@ -224,6 +264,25 @@
     map[key] = iso;
     localStorage.setItem(TS_KEY, JSON.stringify(map));
   }
+  // ── 本地修改时间戳（Steam 云存档式「谁新用谁」合并用）──
+  // { [key]: ISO 本地最后修改时间 }
+  const LOCAL_TS_KEY = 'study_sync_local_ts';
+  function _getLocalTs() {
+    try { return JSON.parse(localStorage.getItem(LOCAL_TS_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function _setLocalTs(key, iso) {
+    const map = _getLocalTs();
+    map[key] = iso;
+    localStorage.setItem(LOCAL_TS_KEY, JSON.stringify(map));
+  }
+  function _delLocalTs(key) {
+    const map = _getLocalTs();
+    if (key in map) { delete map[key]; localStorage.setItem(LOCAL_TS_KEY, JSON.stringify(map)); }
+  }
+  // 冲突队列：本次拉取中「两端都改过」的 key（Steam 式用户决策）
+  let _conflictQueue = [];
+  let _resolvingConflict = false;   // 弹窗互斥锁，避免多个冲突弹窗叠加
 
   // ── 首次同步：本地有数据则上传（桌面→云），本地缺失则拉取（云→手机）──
   // 避免手机端首次同步时用空数据覆盖云端。
@@ -276,14 +335,32 @@
         .eq('user_id', session.user.id);
       if (error) { console.warn('[sync] 拉取失败:', error.message); return; }
       if (!data) return;
+      _conflictQueue = [];
       for (const row of data) {
         if (!isSyncKey(row.key)) continue;
-        // 仅本地缺失时拉取远端，已有本地数据以本地为准（本地编辑优先）
-        if (localStorage.getItem(row.key) === null && row.value !== null) {
+        // Steam 云存档式合并：「谁新用谁」。
+        // 云端比本地新（或本地缺失）→ 拉取覆盖本地；云端比本地旧 → 保留本地（等待本地上传）。
+        // 若两端「在上次同步后都改过」（真冲突），则收集起来交由用户选择（见 _resolveConflicts）。
+        const localTs = _getLocalTs()[row.key];          // 本地最后修改时间（ISO，可能为空）
+        const remoteTs = row.updated_at;                  // 云端更新时间（ISO）
+        const localMissing = localStorage.getItem(row.key) === null;
+        const remoteNewer = !!remoteTs && (!localTs || new Date(remoteTs).getTime() >= new Date(localTs).getTime());
+        const lastSync = _getRemoteTs()[row.key];         // 上次成功同步基线
+        const conflict = !!localTs && !!remoteTs && !!lastSync &&
+          new Date(localTs).getTime() > new Date(lastSync).getTime() &&
+          new Date(remoteTs).getTime() > new Date(lastSync).getTime();
+        if (row.value !== null && conflict) {
+          // 真冲突：收集起来，等待用户决定用本地版还是云端版
+          _conflictQueue.push(row.key);
+        } else if (row.value !== null && (localMissing || remoteNewer)) {
           saveData(row.key, row.value);
           _setRemoteTs(row.key, row.updated_at);
+          // 以云端为准后，本地修改时间对齐（避免后续又被判为本地新而重复上传旧数据）
+          _setLocalTs(row.key, row.updated_at);
         }
       }
+      // 拉取完成，若存在冲突则提示用户选择（异步，不阻塞后续）
+      if (_conflictQueue.length) _resolveConflicts();
     } catch (e) {
       console.warn('[sync] 拉取异常:', e);
     } finally {
@@ -291,11 +368,72 @@
     }
   }
 
+  // ── 冲突解决：弹窗让用户选择本地版 / 云端版（Steam 云存档式）────────
+  function _resolveConflicts() {
+    if (_resolvingConflict) return;   // 已在弹窗中，避免叠加
+    _resolvingConflict = true;
+    (async () => {
+      const client2 = _client();
+      const session = await getSession();
+      while (_conflictQueue.length) {
+        const key = _conflictQueue.shift();
+        let ok;
+        try { ok = await _askConflictChoice(key); } catch (e) { ok = null; }
+        if (ok === null) { continue; }
+        if (ok === 'local') {
+          // 用本地版：上传本地覆盖云端，并同步时间戳
+          if (client2 && session) await _uploadKey(key);
+          else dirtyKeys.add(key);
+        } else {
+          // 用云端版：拉取云端覆盖本地
+          if (client2 && session) {
+            const { data } = await client2.from('user_data')
+              .select('key,value,updated_at').eq('user_id', session.user.id).eq('key', key).maybeSingle();
+            if (data && data.value !== null) {
+              saveData(data.key, data.value);
+              _setRemoteTs(data.key, data.updated_at);
+              _setLocalTs(data.key, data.updated_at);
+            }
+          }
+        }
+      }
+      _resolvingConflict = false;
+    })();
+  }
+
+  // 冲突弹窗：返回 'local' | 'remote' | null（null 表示用户关闭/跳过）
+  function _askConflictChoice(key) {
+    return new Promise((resolve) => {
+      const overlay = document.getElementById('syncConflictOverlay');
+      const body = document.getElementById('syncConflictBody');
+      if (!overlay || !body) { resolve('remote'); return; }   // 无弹窗时默认用云端
+      const label = SYNC_LABELS && SYNC_LABELS[key] ? SYNC_LABELS[key] : key;
+      body.innerHTML = `“<b>${escapeHtml(label)}</b>”在本地与云端都做了修改，无法自动合并。<br>请选择保留哪个版本：<br><span style="font-size:11px;opacity:.7">本地 ${new Date(_getLocalTs()[key]||'').toLocaleString()} ｜ 云端 ${new Date(_getRemoteTs()[key]||'').toLocaleString()}</span>`;
+      overlay.style.display = 'flex';
+      if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+      const done = (val) => {
+        overlay.style.display = 'none';
+        const l = document.getElementById('syncConflictLocal');
+        const r = document.getElementById('syncConflictRemote');
+        if (l) l.onclick = null;
+        if (r) r.onclick = null;
+        resolve(val);
+      };
+      const l = document.getElementById('syncConflictLocal');
+      const r = document.getElementById('syncConflictRemote');
+      if (l) l.onclick = function() { done('local'); };
+      if (r) r.onclick = function() { done('remote'); };
+      // 若用户未点选（如切换页面），不清除 resolve，避免悬空 Promise
+    });
+  }
+
   // ── 变更上报（saveData 钩子调用）─────────────────────
   function onLocalChange(key) {
-    if (!enabled || !loggedIn || !client) return;
-    if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
     if (!isSyncKey(key)) return;
+    if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
+    // 无论是否登录都记录本地修改时间（Steam 云存档式合并需要；未登录时修改也会在登录后正确对比）
+    _setLocalTs(key, new Date().toISOString());
+    if (!enabled || !loggedIn || !client) return;
     dirtyKeys.add(key);
     clearTimeout(uploadTimer);
     uploadTimer = setTimeout(_flush, UPLOAD_DEBOUNCE);

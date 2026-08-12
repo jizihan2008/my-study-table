@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260812-r48">
+<link rel="stylesheet" href="css/style.css?v=20260812-r52">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -38,24 +38,8 @@
 <!-- 移动端：抽屉遮罩 -->
 <div class="mobile-drawer-overlay" id="mobileDrawerOverlay" onclick="closeMobileDrawer()"></div>
 
-<!-- 移动端：底部导航栏 -->
-<nav class="mobile-tabbar" id="mobileTabbar">
-  <button class="mobile-tab active" data-tab="today" onclick="switchTab('today')">
-    <i data-lucide="calendar-check" class="lucide-icon"></i><span>今天</span>
-  </button>
-  <button class="mobile-tab" data-tab="todo" onclick="switchTab('todo')">
-    <i data-lucide="check-square" class="lucide-icon"></i><span>待办</span>
-  </button>
-  <button class="mobile-tab" data-tab="notes" onclick="switchTab('notes')">
-    <i data-lucide="file-text" class="lucide-icon"></i><span>笔记</span>
-  </button>
-  <button class="mobile-tab" data-tab="calendar" onclick="switchTab('calendar')">
-    <i data-lucide="calendar" class="lucide-icon"></i><span>日历</span>
-  </button>
-  <button class="mobile-tab" data-tab="more" onclick="openMobileMore()">
-    <i data-lucide="layout-grid" class="lucide-icon"></i><span>更多</span>
-  </button>
-</nav>
+<!-- 移动端：底部导航栏（由 renderMobileTabbar() 动态渲染，随「编辑界面栏」配置变化） -->
+<nav class="mobile-tabbar" id="mobileTabbar"></nav>
 
 <!-- 移动端：更多抽屉 -->
 <div class="mobile-drawer-overlay" id="mobileMoreOverlay" onclick="closeMobileMore()"></div>
@@ -1206,6 +1190,19 @@
       <button class="confirm-btn confirm-btn-ok" id="confirmOk">确定</button>
     </div>
   </div>
+
+<!-- 云同步冲突解决弹窗（Steam 云存档式：用户选择用本地版/云端版） -->
+<div class="confirm-overlay" id="syncConflictOverlay" style="display:none;">
+  <div class="confirm-dialog">
+    <div class="confirm-icon"><i data-lucide="git-merge" class="lucide-icon" style="width:40px;height:40px;color:var(--warn, #f59e0b);"></i></div>
+    <div class="confirm-msg" style="font-weight:600;">同步冲突</div>
+    <div id="syncConflictBody" style="font-size:13px;color:var(--text-secondary);margin:8px 0;text-align:left;"></div>
+    <div class="confirm-actions" style="flex-direction:column;gap:6px;">
+      <button class="confirm-btn confirm-btn-ok" id="syncConflictLocal" style="width:100%;">使用本地版本</button>
+      <button class="confirm-btn" id="syncConflictRemote" style="width:100%;border-color:var(--primary);color:var(--primary);">使用云端版本</button>
+    </div>
+  </div>
+</div>
 </div>
 
 <!-- Custom Prompt Dialog (for Electron compatibility) -->
@@ -1257,7 +1254,7 @@
 <script src="lib/katex/katex.min.js"></script>
 <script src="js/env.js?v=20260811-r1"></script>
 <script src="js/liquid-glass.js?v=20260722-r23"></script>
-<script src="js/core.js?v=20260812-r3"></script>
+<script src="js/core.js?v=20260812-r7"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260807-r14"></script>
     <script src="js/notes.js?v=20260805-r12"></script>
@@ -1308,7 +1305,7 @@
     <script src="js/codegen.js?v=20260808-r14"></script>
     <script src="js/store.js?v=20260812-r15"></script>
     <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-    <script src="js/sync.js?v=20260812-r2"></script>
+    <script src="js/sync.js?v=20260812-r7"></script>
     <script src="js/webrtc-send.js?v=20260811-r1"></script>
     <script src="js/webrtc-recv.js?v=20260811-r1"></script>
 <script>

@@ -163,6 +163,8 @@ function toggleTheme() {
 // ── Apply theme on init ──
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(getTheme());
+  // 移动端底部导航栏为动态渲染，DOM 就绪后确保首次渲染（含桌面窗口 resize 到移动宽度时）
+  if (typeof renderMobileTabbar === 'function') renderMobileTabbar('');
 });
 
 // ═══════════ Tab Switching ═══════════
@@ -261,15 +263,51 @@ function isMobileHiddenNav(id) {
   return ['inbox', 'codegen', 'extensions'].indexOf(id) !== -1;
 }
 
+// 移动端底部导航固定模块 id（不含「更多」，more 始终在最右）
+function getMobileBottomTabs() {
+  const cfg = loadNavConfig();
+  const display = getNavDisplayItems();
+  // 过滤：排除已隐藏、移动端不可见（PWA 收件箱/AI编程/扩展）、不在导航里的
+  const base = cfg.bottomTabs.filter(id =>
+    display.some(n => n.id === id) &&
+    !cfg.hidden.includes(id) &&
+    !isMobileHiddenNav(id)
+  );
+  // 确保至少 1 个（避免全部隐藏导致底部只剩「更多」），不足时用「今天」兜底
+  if (base.length === 0) base.push('today');
+  // 最多 4 个模块 Tab（加「更多」共 5 个，避免过挤）
+  return base.slice(0, 4);
+}
+
+// 动态渲染移动端底部导航栏（由「编辑界面栏」的底部导航配置驱动）
+function renderMobileTabbar(activeTab) {
+  const bar = document.getElementById('mobileTabbar');
+  if (!bar) return;
+  const ids = getMobileBottomTabs();
+  const display = getNavDisplayItems();
+  const mkTab = (id) => {
+    const info = display.find(n => n.id === id);
+    if (!info) return '';
+    return `<button class="mobile-tab ${activeTab === id ? 'active' : ''}" data-tab="${id}" onclick="switchTab('${id}')">
+      <i data-lucide="${info.icon}" class="lucide-icon"></i><span>${info.label}</span>
+    </button>`;
+  };
+  bar.innerHTML = ids.map(mkTab).join('') + `
+    <button class="mobile-tab ${ids.indexOf(activeTab) === -1 ? 'active' : ''}" data-tab="more" onclick="openMobileMore()">
+      <i data-lucide="layout-grid" class="lucide-icon"></i><span>更多</span>
+    </button>`;
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+
 function updateMobileTabbar(tab) {
   if (typeof Env === 'undefined' || !Env.isMobile) return;
   const bar = document.getElementById('mobileTabbar');
   if (!bar) return;
+  const ids = getMobileBottomTabs();
   const tabs = bar.querySelectorAll('.mobile-tab');
-  const five = ['today', 'todo', 'notes', 'calendar', 'more'];
   tabs.forEach(t => {
     const key = t.dataset.tab;
-    const isActive = (key === tab) || (key === 'more' && five.indexOf(tab) === -1);
+    const isActive = (key === tab) || (key === 'more' && ids.indexOf(tab) === -1);
     t.classList.toggle('active', !!isActive);
   });
 }
@@ -356,6 +394,10 @@ function loadNavConfig() {
   const newIds = allIds.filter(id => !cfg.order.includes(id));
   cfg.order = [...cfg.order.filter(id => allIds.includes(id)), ...newIds];
   if (!Array.isArray(cfg.hidden)) cfg.hidden = [];
+  // 底部导航固定模块（移动端），默认 today/todo/notes/calendar + 「更多」固定在最右
+  if (!Array.isArray(cfg.bottomTabs)) cfg.bottomTabs = ['today', 'todo', 'notes', 'calendar'];
+  // 过滤掉已隐藏或移动端不显示、或不在导航里的底部 Tab
+  cfg.bottomTabs = cfg.bottomTabs.filter(id => id !== 'more' && allIds.includes(id));
   return cfg;
 }
 
@@ -399,6 +441,8 @@ function renderSidebarNav() {
     if (activeBtn) activeBtn.classList.add('active');
   }
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+  // 同步刷新移动端底部导航（配置变更后底部 Tab 也即时更新）
+  if (typeof renderMobileTabbar === 'function') renderMobileTabbar(activeSection ? activeSection.id.replace('section-', '') : '');
 }
 
 // 全部导航项（核心 + 动态扩展项），供编辑界面栏使用
@@ -423,9 +467,13 @@ function openNavSettings() {
       <select id="navHomeSelect" onchange="onNavHomeChange()">${homeOptions}</select>
     </div>
     <div id="navSortList" style="display:flex;flex-direction:column;gap:4px;"></div>
+    <div class="nav-bottom-title">📱 底部导航栏（手机端固定，最多 4 个）</div>
+    <div class="hint" style="margin-bottom:8px;">下方已固定模块可<b>拖拽排序</b>或点击 ✕ 移除；勾选下方模块可添加到手机底部（「更多」始终在最右，其余从「更多」抽屉进入）。</div>
+    <div id="navBottomTabs" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;"></div>
     <button class="btn-save-modal" onclick="saveNavSettings()" style="margin-top:10px;">💾 保存</button>
   `;
   renderNavSortList(cfg);
+  renderNavBottomTabs();
   editModalOpen = true;
   document.getElementById('editModal').classList.add('open');
   setTimeout(() => document.getElementById('editModal').focus(), 100);
@@ -455,6 +503,10 @@ function renderNavSortList(cfg) {
       <i data-lucide="${info.icon}" class="lucide-icon" style="width:16px;height:16px;"></i>
       <span class="nav-sort-label">${info.label}</span>
       ${shortcut}
+      <span class="nav-sort-move" style="display:inline-flex;gap:4px;align-items:center;margin-left:auto;">
+        <button class="nav-sort-arrow" onclick="moveNavItem('${tabId}',-1)" title="上移"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="m18 15-6-6-6 6"/></svg></button>
+        <button class="nav-sort-arrow" onclick="moveNavItem('${tabId}',1)" title="下移"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="m6 9 6 6 6-6"/></svg></button>
+      </span>
       <label class="nav-sort-toggle">
         <input type="checkbox" ${isHidden ? '' : 'checked'} onchange="toggleNavItemVisibility('${tabId}')">
         <span class="nav-sort-toggle-slider"></span>
@@ -463,6 +515,21 @@ function renderNavSortList(cfg) {
   }).join('');
   initNavSortDrag();
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+
+// 移动端排序替代：上移/下移按钮（触屏友好，桌面上箭头按钮隐藏）
+function moveNavItem(id, dir) {
+  const cfg = loadNavConfig();
+  const idx = cfg.order.indexOf(id);
+  if (idx < 0) return;
+  const to = idx + dir;
+  if (to < 0 || to >= cfg.order.length) return;
+  const tmp = cfg.order[idx];
+  cfg.order[idx] = cfg.order[to];
+  cfg.order[to] = tmp;
+  saveNavConfig(cfg);
+  renderNavSortList(cfg);
+  renderSidebarNav();
 }
 
 function toggleNavItemVisibility(tabId) {
@@ -474,6 +541,156 @@ function toggleNavItemVisibility(tabId) {
   // Re-render the sort list so shortcut numbers update for visible-only items
   renderNavSortList(cfg);
   // 立即刷新侧边栏，让显示/隐藏即时生效
+  renderSidebarNav();
+}
+
+// 底部导航栏编辑区：已固定模块可拖拽排序，可选模块点击添加（最多 4 个，「更多」始终在最右）
+function renderNavBottomTabs() {
+  const wrap = document.getElementById('navBottomTabs');
+  if (!wrap) return;
+  const cfg = loadNavConfig();
+  const display = getNavDisplayItems();
+  const byId = {};
+  display.forEach(function(n) { byId[n.id] = n; });
+  // 已固定的底部模块（保持 bottomTabs 顺序）
+  const fixed = cfg.bottomTabs.filter(function(id) { return byId[id] && !cfg.hidden.includes(id); });
+  // 可选的底部模块：未隐藏、非移动端隐藏、非 more、且未固定
+  const options = display.filter(function(n) {
+    return n.id !== 'more' && !cfg.hidden.includes(n.id) && !isMobileHiddenNav(n.id) && fixed.indexOf(n.id) === -1;
+  });
+  wrap.innerHTML = `
+    <div id="navBottomSortList" class="nav-bottom-sort-list" style="display:flex;flex-direction:column;gap:6px;margin-bottom:10px;">
+      ${fixed.length ? fixed.map(function(id) {
+        const n = byId[id];
+        return `<div class="nav-bottom-sort-item" data-id="${id}">
+          <span class="nav-sort-grip nav-bottom-grip" draggable="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
+          </span>
+          <i data-lucide="${n.icon}" class="lucide-icon" style="width:15px;height:15px;"></i>
+          <span class="nav-bottom-label">${n.label}</span>
+          <button class="nav-bottom-remove" onclick="removeNavBottomTab('${id}')" title="移除">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
+          </button>
+        </div>`;
+      }).join('') : '<div class="hint" style="font-size:12px;">尚未固定任何模块（手机底部将只显示「更多」）</div>'}
+    </div>
+    <div class="nav-bottom-addlist" style="display:flex;flex-wrap:wrap;gap:8px;">
+      ${options.length ? options.map(function(n) {
+        return `<label class="nav-bottom-chip">
+          <input type="checkbox" onchange="addNavBottomTab('${n.id}')">
+          <i data-lucide="${n.icon}" class="lucide-icon" style="width:13px;height:13px;"></i>
+          <span>${n.label}</span>
+        </label>`;
+      }).join('') : '<span class="hint" style="font-size:12px;">已无更多可选模块</span>'}
+    </div>`;
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+  initNavBottomSort(listifyNavBottom);
+}
+
+// 触屏/鼠标拖拽后从 DOM 顺序回写 bottomTabs
+function listifyNavBottom() {
+  const list = document.getElementById('navBottomSortList');
+  if (!list) return;
+  const cfg = loadNavConfig();
+  cfg.bottomTabs = Array.from(list.children).map(function(c) { return c.dataset.id; }).filter(Boolean);
+  saveNavConfig(cfg);
+}
+
+// 为底部排序列表初始化拖拽（鼠标 + 触屏）
+function initNavBottomSort(onChange) {
+  const list = document.getElementById('navBottomSortList');
+  if (!list) return;
+  // 鼠标：HTML5 拖拽
+  list.querySelectorAll('.nav-bottom-sort-item').forEach(function(el) {
+    el.draggable = true;
+    el.addEventListener('dragstart', function() {
+      el.classList.add('dragging');
+      _navDragId = el.dataset.id;
+    });
+    el.addEventListener('dragend', function() {
+      el.classList.remove('dragging');
+      _navDragId = null;
+      if (onChange) onChange();
+      renderSidebarNav();
+    });
+    el.addEventListener('dragover', function(e) { e.preventDefault(); });
+    el.addEventListener('drop', function(e) {
+      e.preventDefault();
+      if (!_navDragId || this.dataset.id === _navDragId) return;
+      const from = document.querySelector('.nav-bottom-sort-item[data-id="' + _navDragId + '"]');
+      const to = this;
+      if (from && to && from !== to) {
+        const idx = Array.from(list.children).indexOf(to);
+        if (idx >= 0) {
+          if (from.parentNode) from.parentNode.removeChild(from);
+          if (idx >= list.children.length) list.appendChild(from);
+          else list.insertBefore(from, list.children[idx]);
+        }
+      }
+    });
+  });
+  // 触屏：长按拖动
+  list.querySelectorAll('.nav-bottom-sort-item').forEach(function(el) {
+    let longPress = false, touchId = null, startY = 0;
+    el.addEventListener('touchstart', function(e) {
+      if (e.target.closest('.nav-bottom-remove')) return;
+      const t = e.changedTouches[0];
+      touchId = t.identifier; startY = t.clientY; longPress = false;
+      clearTimeout(_navTouchTimer);
+      _navTouchTimer = setTimeout(function() {
+        longPress = true; _navDragId = el.dataset.id;
+        el.classList.add('touch-dragging');
+      }, 250);
+    });
+    el.addEventListener('touchmove', function(e) {
+      if (!longPress) return;
+      e.preventDefault();
+      const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
+      if (!t) return;
+      const y = t.clientY;
+      Array.from(list.children).forEach(function(i) {
+        if (i === el) return;
+        const r = i.getBoundingClientRect();
+        const before = y < (r.top + r.height / 2);
+        if (before) { if (el.previousElementSibling !== i) list.insertBefore(el, i); }
+        else { if (el.nextElementSibling !== i) list.insertBefore(el, i.nextElementSibling); }
+      });
+    }, { passive: false });
+    el.addEventListener('touchend', function() {
+      clearTimeout(_navTouchTimer);
+      if (longPress) {
+        longPress = false; el.classList.remove('touch-dragging'); _navDragId = null;
+        if (onChange) onChange();
+        renderSidebarNav();
+      }
+      touchId = null;
+    });
+    el.addEventListener('touchcancel', function() {
+      clearTimeout(_navTouchTimer); longPress = false; el.classList.remove('touch-dragging'); _navDragId = null; touchId = null;
+    });
+  });
+}
+
+function addNavBottomTab(tabId) {
+  const cfg = loadNavConfig();
+  if (cfg.bottomTabs.length >= 4) {
+    if (typeof showToast === 'function') showToast('底部导航最多固定 4 个模块');
+    else alert('底部导航最多固定 4 个模块');
+    renderNavBottomTabs();
+    return;
+  }
+  cfg.bottomTabs.push(tabId);
+  saveNavConfig(cfg);
+  renderNavBottomTabs();
+  renderSidebarNav();
+}
+
+function removeNavBottomTab(tabId) {
+  const cfg = loadNavConfig();
+  const idx = cfg.bottomTabs.indexOf(tabId);
+  if (idx >= 0) cfg.bottomTabs.splice(idx, 1);
+  saveNavConfig(cfg);
+  renderNavBottomTabs();
   renderSidebarNav();
 }
 
@@ -526,6 +743,82 @@ function initNavSortDrag() {
           else parent.insertBefore(from, parent.children[idx]);
         }
       }
+    });
+  });
+  initNavSortTouch(list);
+}
+
+// ── 触屏拖拽排序（手机长按 + 拖动）──
+let _navTouchTimer = null;
+function initNavSortTouch(list) {
+  if (!list) return;
+  list.querySelectorAll('.nav-sort-item').forEach(el => {
+    let longPress = false;
+    let startY = 0;
+    let touchId = null;
+
+    el.addEventListener('touchstart', function(e) {
+      // 点击上移/下移按钮时不触发拖拽
+      if (e.target.closest('.nav-sort-arrow') || e.target.closest('.nav-sort-toggle')) return;
+      const t = e.changedTouches[0];
+      touchId = t.identifier;
+      startY = t.clientY;
+      longPress = false;
+      clearTimeout(_navTouchTimer);
+      _navTouchTimer = setTimeout(function() {
+        longPress = true;
+        _navDragId = el.dataset.id;
+        el.classList.add('dragging');
+        el.classList.add('touch-dragging');
+        // 通知列表项让出空间
+        document.querySelectorAll('.nav-sort-item').forEach(function(i) { if (i !== el) i.classList.add('drag-over'); });
+        try { el.scrollIntoView({ block: 'nearest' }); } catch (err) {}
+      }, 250);
+    });
+
+    el.addEventListener('touchmove', function(e) {
+      if (!longPress) return;
+      e.preventDefault();
+      const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
+      if (!t) return;
+      const y = t.clientY;
+      const items = Array.from(list.children);
+      const self = el;
+      items.forEach(function(i) {
+        if (i === self) return;
+        const r = i.getBoundingClientRect();
+        const before = y < (r.top + r.height / 2);
+        const already = (self.nextElementSibling === i && !before) || (self.previousElementSibling === i && before);
+        if (already) return;
+        if (before) { if (self.previousElementSibling !== i) list.insertBefore(self, i); }
+        else { if (self.nextElementSibling !== i) list.insertBefore(self, i.nextElementSibling); }
+      });
+    }, { passive: false });
+
+    el.addEventListener('touchend', function(e) {
+      clearTimeout(_navTouchTimer);
+      const changed = e.changedTouches;
+      const t = Array.from(changed).find(function(x) { return x.identifier === touchId; });
+      if (longPress) {
+        longPress = false;
+        el.classList.remove('dragging');
+        el.classList.remove('touch-dragging');
+        document.querySelectorAll('.nav-sort-item').forEach(function(i) { i.classList.remove('drag-over'); });
+        _navDragId = null;
+        if (t && Math.abs(t.clientY - startY) < 5) {
+          // 长按但没移动：视为普通点击，不排序
+        }
+      }
+      touchId = null;
+    });
+    el.addEventListener('touchcancel', function() {
+      clearTimeout(_navTouchTimer);
+      longPress = false;
+      el.classList.remove('dragging');
+      el.classList.remove('touch-dragging');
+      document.querySelectorAll('.nav-sort-item').forEach(function(i) { i.classList.remove('drag-over'); });
+      _navDragId = null;
+      touchId = null;
     });
   });
 }
