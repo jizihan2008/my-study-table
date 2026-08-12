@@ -836,7 +836,7 @@ function bkAskImportMode(defaultTitle) {
               style="width:100%;height:38px;font-size:14px;padding:0 10px;border:2px solid var(--border);border-radius:8px;background:var(--input-bg);color:var(--text);outline:none;box-sizing:border-box;margin-top:4px;">
           </div>
           ${candidates.length ? `<div style="text-align:left;margin-bottom:8px;">
-            <label style="font-size:12px;color:var(--text-secondary);">检测到可能已有的书目，选择「匹配」会更新该书目（保留学习进度）：</label>
+            <label style="font-size:12px;color:var(--text-secondary);">检测到可能已有的书目，选择「匹配」会沿用该书目的章节与学习进度（不重新解析）：</label>
           </div>` : ''}
           ${candidates.map((c, i) => `
             <button class="bk-quiz-btn" data-match-id="${c.book.id}" style="width:100%;justify-content:flex-start;gap:8px;margin-bottom:6px;padding:10px 12px;text-align:left;">
@@ -898,6 +898,31 @@ async function bkImportBook() {
 
     const title = fileName.replace(/\.pdf$/i, '').trim() || '未命名教材';
 
+    // 询问用户：新建书目 or 匹配已有书目（放在解析之前，匹配则无需重新解析）
+    const importChoice = await bkAskImportMode(fileName);
+    if (!importChoice) return; // 用户取消导入
+    const finalTitle = importChoice.title || title;
+    const isPwaImport = !window.electronAPI || !window.electronAPI.readPdfFile;
+
+    // 匹配已有书目：沿用旧书的章节与正文缓存，保留学习进度，不重新解析
+    if (importChoice.mode === 'match') {
+      const book = bkGetBookById(importChoice.bookId);
+      if (!book) { alert('未找到要匹配的书目'); return; }
+      book.title = finalTitle;
+      book.fileName = fileName;
+      book.updatedAt = new Date().toISOString();
+      bkSaveBooks();
+      bkActiveBookId = book.id;
+      bkActiveChapterId = book.chapters && book.chapters.length ? book.chapters[0].id : null;
+      bkActiveTab = 'summary';
+      _bkPersistNav();
+      bkTextCache = null;
+      renderBooks();
+      bkRenderMain();
+      return;
+    }
+
+    // ── 新建书目：才需要解析 PDF ──
     const onProgress = (p) => {
       bkShowOverlay(`<div class="bk-import-box">
         <div class="bk-spinner" style="width:26px;height:26px;"></div>
@@ -945,40 +970,20 @@ async function bkImportBook() {
       chapters = [{ id: genId(), title: title, level: 0, startPage: 1, endPage: parsed.pageCount, kb: { status: 'pending', summary: '', terms: [], keyPoints: [], mindmap: null } }];
     }
 
-    // 询问用户：新建书目 or 匹配已有书目
-    bkHideOverlay();
-    const importChoice = await bkAskImportMode(fileName);
-    if (!importChoice) return; // 用户取消导入
-    const finalTitle = importChoice.title || title;
-
-    // 构造书籍对象（PWA 无 filePath，标记为「本机导入」，PDF 原始字节存 IndexedDB）
-    const isPwaImport = !window.electronAPI || !window.electronAPI.readPdfFile;
-    let book = null;
-    if (importChoice.mode === 'match') {
-      // 匹配已有书目：更新该书的章节、页码、PDF、正文缓存，保留原学习进度/测验
-      book = bkGetBookById(importChoice.bookId);
-      if (!book) { alert('未找到要匹配的书目'); return; }
-      book.title = finalTitle;
-      book.fileName = fileName;
-      book.pageCount = parsed.pageCount;
-      book.chapters = chapters;
-      book.updatedAt = new Date().toISOString();
-    } else {
-      // 新建书目
-      book = {
-        id: genId(),
-        title: finalTitle,
-        fileName: fileName,
-        filePath: isPwaImport ? null : filePath,
-        importedLocally: isPwaImport ? true : false,
-        pageCount: parsed.pageCount,
-        chapters: chapters,
-        quizRecords: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      };
-      booksData.push(book);
-    }
+    // 新建书目
+    const book = {
+      id: genId(),
+      title: finalTitle,
+      fileName: fileName,
+      filePath: isPwaImport ? null : filePath,
+      importedLocally: isPwaImport ? true : false,
+      pageCount: parsed.pageCount,
+      chapters: chapters,
+      quizRecords: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+    booksData.push(book);
     // PWA：把 PDF 原始字节存入 IndexedDB（供阅读时 bkOpenPdfAtPage 现场解析）
     if (isPwaImport && typeof BookPdfStore !== 'undefined') {
       await BookPdfStore.put(book.id, pdfData, fileName);
