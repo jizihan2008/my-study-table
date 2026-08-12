@@ -99,6 +99,10 @@ function loadAiMemory() {
 function saveAiMemory(memory) {
   try {
     localStorage.setItem(MEMORY_KEY, JSON.stringify(memory));
+    // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步），否则 AI 长期记忆不会上传
+    if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
+      try { window.Sync.onLocalChange(MEMORY_KEY); } catch (e) { /* 同步层错误不影响主流程 */ }
+    }
   } catch (e) {
     console.warn('[Memory] Failed to save:', e);
   }

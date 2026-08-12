@@ -30,6 +30,19 @@
 <script>
 (function () {
   'use strict';
+
+  // UTC 时间转本地时区显示（如 2026-08-12 15:31:15 → 23:31:15，UTC+8）
+  function fmtUtc(iso) {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      if (isNaN(d.getTime())) return String(iso);
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}:${p(d.getSeconds())}`;
+    } catch (e) {
+      return String(iso);
+    }
+  }
   const BUILTIN_URL = 'https://taujqtysezmmxhkxxjce.supabase.co';
   const BUILTIN_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhdWpxdHlzZXptbXhoa3h4amNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzA4OTEsImV4cCI6MjEwMTQwNjg5MX0.2AxQ4F7pYXTWHFxjdlDMt7OhnIPJihEcEw8HhOOP9Y8';
 
@@ -96,7 +109,7 @@
         if (Array.isArray(v)) desc = 'array[' + v.length + ']';
         else if (v && typeof v === 'object') desc = 'obj{' + Object.keys(v).length + '}';
         else if (v !== null) desc = String(v).slice(0, 40);
-        rows += `<tr><td>${r.key}</td><td>${desc}</td><td>${(r.updated_at||'').slice(0,19).replace('T',' ')}</td></tr>`;
+        rows += `<tr><td>${r.key}</td><td>${desc}</td><td>${fmtUtc(r.updated_at)}</td></tr>`;
         if (want.includes(r.key)) {
           const cnt = Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : '?');
           if (Array.isArray(v)) {

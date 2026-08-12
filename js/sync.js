@@ -117,19 +117,34 @@
     return SYNC_KEYS.indexOf(key) !== -1;
   }
 
-  // 判断本地存储值是否为「空」：空数组 / 空对象 / 空字符串 / null。
-  // 用于防止「本地是空占位（如 []）」时误上传覆盖云端的真实数据。
+  // 判断本地存储值是否为「空」：空数组 / 空对象 / 空字符串 / null，
+  // 以及「空壳对象」（对象键存在但所有值均为空，如 AI 记忆的空结构）。
+  // 用于防止「本地是空占位」时误上传覆盖云端的真实数据，也防止空壳阻挡云端真实数据拉取。
+  function _isEmptyValue(v) {
+    if (v === null || v === undefined) return true;
+    if (Array.isArray(v)) return v.length === 0;
+    if (typeof v === 'object') {
+      // 空对象 → 空
+      if (Object.keys(v).length === 0) return true;
+      // 空壳对象：所有值均为空（递归）才视为空，避免误判有配置的正常对象
+      return Object.keys(v).every(k => _isEmptyValue(v[k]));
+    }
+    return String(v).trim() === '';
+  }
   function _isEmptyLocalValue(key) {
     const raw = localStorage.getItem(key);
     if (raw === null) return true;
     const trimmed = raw.trim();
-    if (trimmed === '' ) return true;
+    if (trimmed === '') return true;
     try {
       const v = JSON.parse(trimmed);
-      if (v === null) return true;
-      if (Array.isArray(v)) return v.length === 0;
-      if (typeof v === 'object') return Object.keys(v).length === 0;
-      return String(v).trim() === '';
+      // AI 长期记忆特殊判定：只看核心数据字段是否为空，忽略 lastDailyIntegration/dailySummaryDate 等元数据标记，
+      // 否则一个「空记忆壳」（含日期标记但无实际内容）会被误判为非空而阻挡云端真实记忆拉取。
+      if (key === 'study_ai_memory' && v && typeof v === 'object') {
+        return _isEmptyValue(v.profileText) && _isEmptyValue(v.autoFacts) && _isEmptyValue(v.manualNotes) &&
+          _isEmptyValue(v.convSummaries) && _isEmptyValue(v.dailySummary);
+      }
+      return _isEmptyValue(v);
     } catch (e) {
       return trimmed === '';
     }
