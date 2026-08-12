@@ -251,33 +251,51 @@
     return { ok: true, updatedAt };
   }
 
-  // ── 批量上传所有脏 key ──────────────────────────────
-  async function _flush() {
-    if (!enabled || !loggedIn || !_client()) return;
-    if (dirtyKeys.size === 0) {
-      // 处理离线队列
-      await _flushOutbox();
-      return;
-    }
-    const keys = Array.from(dirtyKeys);
-    dirtyKeys.clear();
-    let okCount = 0;
-    const total = keys.filter(k => isSyncKey(k)).length || 1;
-    let done = 0;
-    for (const key of keys) {
-      if (!isSyncKey(key)) continue;
-      _emitProgress({ active: true, phase: 'upload', current: done + 1, total: total, key: key, label: SYNC_LABELS[key] || key });
-      const res = await _uploadKey(key);
-      if (res.ok) okCount++;
-      else {
-        // 上传失败（可能离线）：写入 outbox 等待恢复后重传
-        const value = localStorage.getItem(key);
-        await _outboxPut(key, value ? JSON.parse(value) : null, res.updatedAt || new Date().toISOString());
+  // ── 批量上传所有脏 key（队列：串行排队，同时只允许一个上传进程） ──
+  // 用 Promise 链实现队列：所有 _flush 请求追加到队列尾部，逐个串行执行，不丢失任何请求
+  let uploadChain = Promise.resolve();
+  let queuePending = 0;        // 队列中等待执行的任务数（用于可视化）
+  const MAX_QUEUE = 20;        // 队列长度上限，防止极端情况下无限堆积
+
+  function _flush() {
+    // 已积压大量任务时丢弃最旧的积压，避免队列无限增长
+    if (queuePending > MAX_QUEUE) return uploadChain;
+    queuePending++;
+    _emitProgress({ active: true, phase: 'upload', current: 0, total: 0, key: '', label: '', queuePending: queuePending });
+    uploadChain = uploadChain.then(async () => {
+      queuePending--;
+      if (!enabled || !loggedIn || !_client()) return;
+      // 优先处理离线队列（网络恢复后自动补传）
+      if (dirtyKeys.size === 0) {
+        await _flushOutbox();
+        return;
       }
-      done++;
-    }
-    if (okCount > 0) _emitStatus();
-    _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
+      // 取出当前所有脏 key 作为本次批次；本地变更/其他触发在本次执行期间新加入的 key
+      // 会留在 dirtyKeys，由后续入队任务处理，不会丢失
+      const keys = Array.from(dirtyKeys);
+      dirtyKeys.clear();
+      let okCount = 0;
+      const total = keys.filter(k => isSyncKey(k)).length || 1;
+      let done = 0;
+      for (const key of keys) {
+        if (!isSyncKey(key)) continue;
+        _emitProgress({ active: true, phase: 'upload', current: done + 1, total: total, key: key, label: SYNC_LABELS[key] || key, queuePending: queuePending });
+        const res = await _uploadKey(key);
+        if (res.ok) okCount++;
+        else {
+          // 上传失败（可能离线）：写入 outbox 等待恢复后重传
+          const value = localStorage.getItem(key);
+          await _outboxPut(key, value ? JSON.parse(value) : null, res.updatedAt || new Date().toISOString());
+        }
+        done++;
+      }
+      if (okCount > 0) _emitStatus();
+    }).catch(() => {})
+      .finally(() => {
+        // 队列已全部处理完时才显示空闲；否则保持等待（下一个任务会继续更新）
+        if (queuePending <= 0) _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '', queuePending: 0 });
+      });
+    return uploadChain;
   }
 
   async function _flushOutbox() {

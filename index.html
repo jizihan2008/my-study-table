@@ -1022,8 +1022,11 @@
         </div>
         <div id="syncStatus" class="settings-status" style="display:block;margin-top:8px;">同步状态：加载中…</div>
         <div id="syncProgressWrap" style="display:none;margin-top:12px;">
-          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:5px;">
-            <span id="syncProgressLabel">同步中…</span>
+          <div style="display:flex;justify-content:space-between;align-items:center;font-size:12px;color:var(--text-secondary);margin-bottom:5px;">
+            <span style="display:flex;align-items:center;gap:6px;">
+              <span id="syncProgressLabel">同步中…</span>
+              <span id="syncQueueBadge" style="display:none;font-size:11px;color:var(--primary);background:color-mix(in srgb,var(--primary) 12%,transparent);padding:1px 7px;border-radius:999px;font-weight:600;"></span>
+            </span>
             <span id="syncProgressPct">0%</span>
           </div>
           <div style="height:8px;background:var(--todo-bg);border-radius:4px;overflow:hidden;border:1px solid var(--border);">
@@ -1304,7 +1307,7 @@
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260812-r3"></script>
-    <script src="js/settings.js?v=20260812-r18"></script>
+    <script src="js/settings.js?v=20260812-r19"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
     <script src="js/inbox.js?v=20260811-r1"></script>
@@ -1337,7 +1340,7 @@
     <script src="js/codegen.js?v=20260808-r14"></script>
     <script src="js/store.js?v=20260812-r15"></script>
     <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-    <script src="js/sync.js?v=20260812-r13"></script>
+    <script src="js/sync.js?v=20260812-r16"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
 setTimeout(async function() {

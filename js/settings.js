@@ -581,7 +581,14 @@ function _updateSyncProgressUI(state) {
   const bar = document.getElementById('syncProgressBar');
   const label = document.getElementById('syncProgressLabel');
   const pctEl = document.getElementById('syncProgressPct');
+  const queueEl = document.getElementById('syncQueueBadge');
   if (!wrap || !bar || !label || !pctEl) return;
+  // 队列徽标：显示排队中的上传任务数
+  if (queueEl) {
+    const q = state && state.queuePending != null ? state.queuePending : 0;
+    if (q > 0) { queueEl.style.display = 'inline-flex'; queueEl.textContent = '队列 ' + q; }
+    else queueEl.style.display = 'none';
+  }
   if (!state || !state.active || !state.total) {
     // 空闲 → 隐藏进度条
     wrap.style.display = 'none';
