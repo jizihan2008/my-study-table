@@ -14,12 +14,10 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260810-r40',
+  './css/style.css?v=20260812-r59',
   './js/env.js?v=20260811-r1',
   './js/core.js?v=20260811-r2',
   './js/sync.js?v=20260811-r1',
-  './js/webrtc-send.js?v=20260811-r1',
-  './js/webrtc-recv.js?v=20260811-r1',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

@@ -790,6 +790,86 @@ function _bkPickPdfFileBrowser() {
   });
 }
 
+// 计算两个书名的相似度（0~1），用于导入时匹配已有书目
+function _bkTitleSimilarity(a, b) {
+  const norm = (s) => String(s || '').toLowerCase().replace(/\s+/g, '').replace(/[_\-—]+/g, '');
+  const x = norm(a), y = norm(b);
+  if (!x || !y) return 0;
+  if (x === y) return 1;
+  if (x.includes(y) || y.includes(x)) return 0.8;
+  // 简单公共子串比例
+  let common = 0;
+  for (let i = 0; i < Math.min(x.length, y.length); i++) { if (x[i] === y[i]) common++; else break; }
+  const prefix = common / Math.max(x.length, y.length);
+  return Math.min(0.7, prefix);
+}
+
+// 导入时询问用户：新建书目 or 匹配已有书目
+// 返回 Promise<{ mode:'new'|'match', title, bookId? }>；用户取消返回 null
+function bkAskImportMode(defaultTitle) {
+  return new Promise((resolve) => {
+    // 计算匹配候选（按文件名/标题相似度）
+    const normTitle = String(defaultTitle || '').replace(/\.pdf$/i, '');
+    const candidates = (booksData || []).map((b) => ({
+      book: b,
+      sim: Math.max(
+        _bkTitleSimilarity(normTitle, b.title),
+        _bkTitleSimilarity(normTitle, b.fileName),
+        _bkTitleSimilarity(b.fileName, normTitle)
+      )
+    })).filter((c) => c.sim >= 0.5)
+      .sort((a, b) => b.sim - a.sim)
+      .slice(0, 5);
+
+    const overlay = document.createElement('div');
+    overlay.className = 'bk-original-overlay';
+    overlay.innerHTML = `
+      <div class="bk-original-panel" style="max-width:540px;">
+        <div class="bk-original-head">
+          <span class="bk-original-title"><i data-lucide="book-open" class="lucide-icon" style="width:15px;height:15px;"></i> 选择导入方式</span>
+          <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove();window._bkImportModeResolve(null)"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+        </div>
+        <div class="bk-original-body" style="text-align:center;">
+          <div style="text-align:left;margin-bottom:10px;">
+            <label style="font-size:12px;color:var(--text-secondary);">书名（可修改）：</label>
+            <input id="bkImportTitleInput" value="${escapeHtml(defaultTitle || '')}" placeholder="输入书名"
+              style="width:100%;height:38px;font-size:14px;padding:0 10px;border:2px solid var(--border);border-radius:8px;background:var(--input-bg);color:var(--text);outline:none;box-sizing:border-box;margin-top:4px;">
+          </div>
+          ${candidates.length ? `<div style="text-align:left;margin-bottom:8px;">
+            <label style="font-size:12px;color:var(--text-secondary);">检测到可能已有的书目，选择「匹配」会更新该书目（保留学习进度）：</label>
+          </div>` : ''}
+          ${candidates.map((c, i) => `
+            <button class="bk-quiz-btn" data-match-id="${c.book.id}" style="width:100%;justify-content:flex-start;gap:8px;margin-bottom:6px;padding:10px 12px;text-align:left;">
+              <i data-lucide="git-merge" class="lucide-icon" style="width:15px;height:15px;color:var(--primary);flex-shrink:0;"></i>
+              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;">匹配「${escapeHtml(c.book.title)}」</span>
+              <span style="margin-left:auto;font-size:11px;color:var(--text-secondary);flex-shrink:0;">${Math.round(c.sim * 100)}%</span>
+            </button>`).join('')}
+          <button class="bk-quiz-btn primary" data-mode-new style="width:100%;margin-top:${candidates.length ? '10px' : '0'};padding:11px 12px;">
+            <i data-lucide="plus" class="lucide-icon" style="width:15px;height:15px;"></i> 新建书目
+          </button>
+          <div style="margin-top:6px;font-size:11px;color:var(--text-secondary);">新建书目将创建一本全新教材；匹配已有书目会把 PDF 与章节合并进选中的那本书。</div>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+    if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+    const titleInput = overlay.querySelector('#bkImportTitleInput');
+    setTimeout(() => titleInput && titleInput.focus(), 100);
+
+    const finish = (mode, bookId) => {
+      const t = titleInput ? titleInput.value.trim() : '';
+      const resolved = { mode: mode, title: t || String(defaultTitle || '').replace(/\.pdf$/i, '') };
+      if (mode === 'match') resolved.bookId = bookId;
+      overlay.remove();
+      window._bkImportModeResolve(resolved);
+    };
+    overlay.querySelectorAll('[data-match-id]').forEach((btn) => {
+      btn.addEventListener('click', () => finish('match', btn.getAttribute('data-match-id')));
+    });
+    overlay.querySelector('[data-mode-new]').addEventListener('click', () => finish('new'));
+    window._bkImportModeResolve = resolve;
+  });
+}
+
 async function bkImportBook() {
   if (typeof parsePdfFile !== 'function') {
     alert('PDF 解析模块未加载，请重启应用');
@@ -865,25 +945,44 @@ async function bkImportBook() {
       chapters = [{ id: genId(), title: title, level: 0, startPage: 1, endPage: parsed.pageCount, kb: { status: 'pending', summary: '', terms: [], keyPoints: [], mindmap: null } }];
     }
 
+    // 询问用户：新建书目 or 匹配已有书目
+    bkHideOverlay();
+    const importChoice = await bkAskImportMode(fileName);
+    if (!importChoice) return; // 用户取消导入
+    const finalTitle = importChoice.title || title;
+
     // 构造书籍对象（PWA 无 filePath，标记为「本机导入」，PDF 原始字节存 IndexedDB）
     const isPwaImport = !window.electronAPI || !window.electronAPI.readPdfFile;
-    const book = {
-      id: genId(),
-      title: title,
-      fileName: fileName,
-      filePath: isPwaImport ? null : filePath,
-      importedLocally: isPwaImport ? true : false,
-      pageCount: parsed.pageCount,
-      chapters: chapters,
-      quizRecords: [],
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString()
-    };
+    let book = null;
+    if (importChoice.mode === 'match') {
+      // 匹配已有书目：更新该书的章节、页码、PDF、正文缓存，保留原学习进度/测验
+      book = bkGetBookById(importChoice.bookId);
+      if (!book) { alert('未找到要匹配的书目'); return; }
+      book.title = finalTitle;
+      book.fileName = fileName;
+      book.pageCount = parsed.pageCount;
+      book.chapters = chapters;
+      book.updatedAt = new Date().toISOString();
+    } else {
+      // 新建书目
+      book = {
+        id: genId(),
+        title: finalTitle,
+        fileName: fileName,
+        filePath: isPwaImport ? null : filePath,
+        importedLocally: isPwaImport ? true : false,
+        pageCount: parsed.pageCount,
+        chapters: chapters,
+        quizRecords: [],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString()
+      };
+      booksData.push(book);
+    }
     // PWA：把 PDF 原始字节存入 IndexedDB（供阅读时 bkOpenPdfAtPage 现场解析）
     if (isPwaImport && typeof BookPdfStore !== 'undefined') {
       await BookPdfStore.put(book.id, pdfData, fileName);
     }
-    booksData.push(book);
     bkActiveBookId = book.id;
     bkActiveChapterId = book.chapters && book.chapters.length ? book.chapters[0].id : null;
     bkActiveTab = 'summary';
