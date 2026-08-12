@@ -163,6 +163,8 @@ function toggleTheme() {
 // ── Apply theme on init ──
 document.addEventListener('DOMContentLoaded', () => {
   applyTheme(getTheme());
+  // 页面缩放（手机端界面大小）应用到 .app
+  if (typeof applyUiZoom === 'function') applyUiZoom();
   // 移动端底部导航栏为动态渲染，DOM 就绪后确保首次渲染（含桌面窗口 resize 到移动宽度时）
   if (typeof renderMobileTabbar === 'function') renderMobileTabbar('');
 });

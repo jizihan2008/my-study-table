@@ -8,19 +8,17 @@ function renderAiChat() {
   if (!layout) return;
   const hasApiKey = !!(loadApiKeys().length > 0);
 
-  if (!hasApiKey) {
-    layout.innerHTML = `
-      <div class="ai-no-key">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
-          <path d="M12 2a4 4 0 014 4c0 1.1-.5 2.1-1.2 2.8l3.4 6.5A3 3 0 0115.5 19H8.5a3 3 0 01-2.7-3.7l3.4-6.5A4 4 0 0112 2z"/>
-          <circle cx="12" cy="8" r="2"/><path d="M12 22v-2"/>
-        </svg>
-        <p>尚未配置 AI API Key，请在设置中配置后使用</p>
-        <button class="btn-setup" onclick="openSettingsModal()">去设置 <i data-lucide="settings" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i></button>
-      </div>
-    `;
-    return;
-  }
+  // 无 API Key 时也正常渲染界面（可查看历史聊天记录），仅禁用发送并在顶部提示。
+  // 不再整页替换为「未配置 Key」提示页，避免看不到已有对话。
+  const noKey = !hasApiKey;
+  const noKeyBanner = noKey ? `
+    <div class="ai-no-key-banner">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16">
+        <path d="M12 2a4 4 0 014 4c0 1.1-.5 2.1-1.2 2.8l3.4 6.5A3 3 0 0115.5 19H8.5a3 3 0 01-2.7-3.7l3.4-6.5A4 4 0 0112 2z"/><circle cx="12" cy="8" r="2"/><path d="M12 22v-2"/>
+      </svg>
+      <span>尚未配置 AI API Key，当前仅可查看历史聊天记录。发送消息需先在设置中配置。</span>
+      <button class="ai-no-key-setup" onclick="openSettingsModal()">去设置</button>
+    </div>` : '';
 
   const conv = getActiveConv();
   if (!conv) return;
@@ -59,6 +57,7 @@ function renderAiChat() {
     ${hasSystemPrompt ? `<div class="ai-chat-header" style="background:var(--path-bg);">
       <span class="ai-chat-header-title" style="font-size:12px;color:var(--text-secondary);">💡 提示词：${escapeHtml(conv.systemPrompt.length > 60 ? conv.systemPrompt.slice(0,60)+'…' : conv.systemPrompt)}</span>
     </div>` : ''}
+    ${noKeyBanner}
     <div class="ai-chat-messages" id="aiMessages"></div>
     <div class="ai-attach-preview-wrap" id="aiAttachPreview" style="display:none;"></div>
     <!-- Toolbar: API Key selector + toggles + quick actions -->
@@ -90,14 +89,15 @@ function renderAiChat() {
       </div>
     </div>
     <div class="ai-chat-input-wrap">
-      <textarea id="aiInput" placeholder="输入你的问题，回车发送... (可上传 .txt 附件)" rows="1"
+      <textarea id="aiInput" placeholder="${noKey ? '未配置 AI Key，仅可查看历史记录' : '输入你的问题，回车发送... (可上传 .txt 附件)'}" rows="1"
+                ${noKey ? 'disabled' : ''}
                 onkeydown="handleAiInputKey(event)"
                 oninput="autoResizeAiInput()"></textarea>
       <input type="file" id="aiFileInput" accept=".txt" multiple style="display:none;" onchange="handleAiFileSelect(event)">
-      <button class="ai-attach-btn" id="aiAttachBtn" onclick="document.getElementById('aiFileInput').click()" title="上传附件">
+      <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
       </button>
-      <button class="ai-chat-send-btn" id="aiSendBtn" onclick="handleAiSendOrStop()" title="发送">
+      <button class="ai-chat-send-btn" id="aiSendBtn" ${noKey ? 'disabled' : ''} onclick="handleAiSendOrStop()" title="发送">
         <svg id="aiSendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
       </button>
     </div>
@@ -107,6 +107,15 @@ function renderAiChat() {
   updateAiFileInput(); // Update file input based on current model
   // Restore loading state after DOM rebuild: toggle send/stop button
   updateAiSendButton();
+  // 无 API Key 时强制禁用发送/上传/输入（覆盖 updateAiSendButton 可能的 enabled）
+  if (noKey) {
+    const _inp = document.getElementById('aiInput');
+    const _send = document.getElementById('aiSendBtn');
+    const _at = document.getElementById('aiAttachBtn');
+    if (_inp) _inp.disabled = true;
+    if (_send) _send.disabled = true;
+    if (_at) _at.disabled = true;
+  }
   setTimeout(() => {
     const msgs = document.getElementById('aiMessages');
     if (msgs) msgs.scrollTop = msgs.scrollHeight;

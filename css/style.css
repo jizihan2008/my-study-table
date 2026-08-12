@@ -866,6 +866,8 @@ body {
   padding: 8px 14px; border-top: 1px solid var(--border);
   font-size: 12px; color: var(--text-secondary);
 }
+/* 移动端返回按钮 / 右下角视图切换：桌面端隐藏，移动端（@media）显示 */
+.notes-mobile-back, .notes-mobile-views { display: none; }
 .notes-editor-footer span:first-child { margin-right: auto; }
 
 /* ── Notes: summary panel ── */
@@ -6746,6 +6748,8 @@ i[data-lucide] {
   position: fixed; right: 0; top: 0; bottom: 0;
   width: 10px; z-index: 102; cursor: default;
 }
+/* 手机端「章节」按钮：桌面端隐藏，移动端（@media）显示 */
+.tl-mobile-side-btn { display: none; }
 
 /* 右侧侧边栏浮层（fixed，仿 .sidebar 滑入/滑出） */
 .tl-sidebar {
@@ -8125,11 +8129,22 @@ i[data-lucide] {
   /* 底部导航 */
   .mobile-tabbar { display: flex; }
 
-  /* 主容器为底部导航让位：顶部 12px 留白与底部留白（12px）视觉对称，
-     底部额外 58px 用于避开固定底部导航栏 + 8px 安全边距。 */
+  /* 主容器：上下左右不留白（贴边撑满），仅底部为底部导航栏让位（正好 58px）。 */
   .app {
     max-width: 100%; height: auto; min-height: 100vh;
-    padding: 12px 12px 78px; overflow: visible;
+    padding: 0 0 58px; overflow: visible;
+  }
+  /* 主卡片贴边后去圆角（直角满屏）：
+     覆盖 .card 及各类卡片容器（stats-* / store / music / today-* / todo / tl 等），
+     !important 强制覆盖各独立 class 的 border-radius，按钮等小元素不受影响。 */
+  .card,
+  [class*="-card"],
+  [class*="-panel"],
+  [class*="-oc"],
+  .music-player,
+  .tl-graph-wrap,
+  #section-books .card {
+    border-radius: 0 !important;
   }
   /* 手机端隐藏顶部标题栏（My Study Table / 副标题），让内容撑满屏幕；
      移动端用底部导航 + 「更多」抽屉导航，无需左侧侧边栏与汉堡按钮。 */
@@ -8180,8 +8195,86 @@ i[data-lucide] {
   .calendar-grid { grid-template-columns: repeat(7, 1fr); }
   .cal-day { min-height: 44px; }
 
-  /* 任务线画布触屏滚动 */
+  /* 无 AI Key 时的顶部提示条（保留历史记录可查看） */
+.ai-no-key-banner {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 12px; margin: 0 12px 8px;
+  background: rgba(245,158,11,0.12); border: 1px solid rgba(245,158,11,0.4);
+  border-radius: 8px; color: var(--text); font-size: 12.5px;
+}
+.ai-no-key-banner svg { flex-shrink: 0; color: var(--warn, #f59e0b); }
+.ai-no-key-banner .ai-no-key-setup {
+  margin-left: auto; padding: 4px 10px; border: none; border-radius: 6px;
+  background: var(--primary); color: #fff; font-size: 12px; cursor: pointer; white-space: nowrap;
+}
+.ai-no-key-banner .ai-no-key-setup:active { opacity: 0.8; }
+/* 无 key 时禁用输入/按钮的弱化样式 */
+#aiInput:disabled, .ai-chat-send-btn:disabled, .ai-attach-btn:disabled {
+  opacity: 0.5; cursor: not-allowed;
+}
+
+/* 任务线画布触屏滚动 */
   .tl-graph-wrap { overflow: auto; -webkit-overflow-scrolling: touch; }
+
+  /* 任务线手机端：隐藏 hover 触发条，用「章节」按钮打开右侧侧边栏 */
+  .tl-sidebar-hover-trigger { display: none; }
+  .tl-mobile-side-btn {
+    display: inline-flex; align-items: center; gap: 6px;
+    position: fixed; right: 12px; bottom: 74px; z-index: 99;
+    padding: 10px 16px; border-radius: 22px; border: none;
+    background: var(--primary); color: #fff; font-size: 13.5px; font-weight: 600;
+    box-shadow: 0 4px 14px rgba(79,70,229,0.35); cursor: pointer;
+  }
+  .tl-mobile-side-btn:active { transform: scale(0.96); }
+  .tl-mobile-side-btn .lucide-icon { width: 16px; height: 16px; }
+  /* 右侧侧边栏手机宽度（接近全宽抽屉） */
+  .tl-sidebar { width: min(300px, 86vw); }
+
+  /* ── 笔记手机端：两级导航（目录 → 正文） ── */
+  .notes-layout { margin-top: 0; }
+  /* 正文页返回按钮（移动端显示） */
+  .notes-mobile-back {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 38px; height: 38px; border: none; background: transparent;
+    color: var(--text); cursor: pointer; flex-shrink: 0; margin-right: 4px;
+  }
+  .notes-mobile-views { display: block; }
+  .notes-mobile-back .lucide-icon { width: 22px; height: 22px; }
+  .notes-mobile-back:active { background: var(--hover-bg); border-radius: 8px; }
+  /* 两级切换：目录页 / 正文页 */
+  #section-notes[data-notesview="toc"] .notes-sidebar-wrap { display: flex; width: 100%; }
+  #section-notes[data-notesview="toc"] .notes-editor { display: none; }
+  #section-notes[data-notesview="main"] .notes-sidebar-wrap { display: none; }
+  #section-notes[data-notesview="main"] .notes-editor { display: flex; width: 100%; }
+  /* 目录页全宽 */
+  #section-notes .notes-sidebar-wrap .notes-sidebar { width: 100%; border-right: none; }
+  #section-notes .notes-list { height: 100%; max-height: calc(100vh - 140px); }
+  /* 隐藏桌面端视图切换按钮（移到右下角浮动菜单） */
+  #section-notes .notes-view-toggle { display: none; }
+
+  /* 右下角视图切换浮动按钮 + 菜单 */
+  .notes-mobile-views { position: fixed; right: 12px; bottom: 74px; z-index: 99; }
+  .notes-mv-fab {
+    display: inline-flex; align-items: center; justify-content: center;
+    width: 48px; height: 48px; border: none; border-radius: 50%;
+    background: var(--primary); color: #fff; cursor: pointer;
+    box-shadow: 0 4px 14px rgba(79,70,229,0.35);
+  }
+  .notes-mv-fab:active { transform: scale(0.94); }
+  .notes-mv-fab .lucide-icon { width: 20px; height: 20px; }
+  .notes-mv-menu {
+    position: absolute; right: 0; bottom: 56px;
+    background: var(--card); border: 1px solid var(--border); border-radius: 12px;
+    box-shadow: 0 6px 20px rgba(0,0,0,0.15); padding: 6px; min-width: 120px;
+  }
+  .notes-mv-menu button {
+    display: flex; align-items: center; gap: 8px; width: 100%;
+    padding: 10px 12px; border: none; background: transparent;
+    font-size: 13.5px; color: var(--text); cursor: pointer; border-radius: 8px;
+  }
+  .notes-mv-menu button:active { background: var(--hover-bg); }
+  .notes-mv-menu button.active { color: var(--primary); font-weight: 600; }
+  .notes-mv-menu .lucide-icon { width: 16px; height: 16px; }
 
   /* AI 对话全屏 */
   .ai-chat-panel { height: calc(100vh - 58px); }

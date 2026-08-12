@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260812-r52">
+<link rel="stylesheet" href="css/style.css?v=20260812-r59">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@latest"></script>
 </head>
@@ -162,6 +162,9 @@
         </div>
         <div class="notes-editor">
           <div class="notes-editor-header">
+            <button class="notes-mobile-back" onclick="notesGoToc()" title="返回笔记列表">
+              <i data-lucide="chevron-left" class="lucide-icon"></i>
+            </button>
             <input type="text" class="notes-editor-title-input" id="noteTitleInput"
                    placeholder="笔记标题..." oninput="onNoteTitleChange()">
             <div class="notes-view-toggle">
@@ -203,6 +206,17 @@
             <span id="notesStatus">已保存</span>
             <button class="notes-undo-btn" id="notesUndoBtn" onclick="undoNote()" title="撤销 (Ctrl+Z)" disabled><i data-lucide="undo" class="lucide-icon" style="width:14px;height:14px;"></i></button>
             <button class="notes-undo-btn" id="notesRedoBtn" onclick="redoNote()" title="恢复 (Ctrl+Y)" disabled><i data-lucide="redo" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          </div>
+        </div>
+        <!-- 移动端右下角：视图切换（预览/编辑/摘要） -->
+        <div class="notes-mobile-views" id="notesMobileViews">
+          <button class="notes-mv-fab" onclick="toggleNotesMobileViewMenu()" title="切换视图">
+            <i data-lucide="layout-panel-left" class="lucide-icon" id="notesMvFabIcon"></i>
+          </button>
+          <div class="notes-mv-menu" id="notesMvMenu" style="display:none;">
+            <button onclick="switchNoteView('preview');hideNotesMobileViewMenu()"><i data-lucide="eye" class="lucide-icon"></i>预览</button>
+            <button onclick="switchNoteView('edit');hideNotesMobileViewMenu()"><i data-lucide="square-pen" class="lucide-icon"></i>编辑</button>
+            <button onclick="switchNoteView('summary');hideNotesMobileViewMenu()"><i data-lucide="sparkles" class="lucide-icon"></i>摘要</button>
           </div>
         </div>
       </div>
@@ -1254,10 +1268,10 @@
 <script src="lib/katex/katex.min.js"></script>
 <script src="js/env.js?v=20260811-r1"></script>
 <script src="js/liquid-glass.js?v=20260722-r23"></script>
-<script src="js/core.js?v=20260812-r7"></script>
+<script src="js/core.js?v=20260812-r8"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260807-r14"></script>
-    <script src="js/notes.js?v=20260805-r12"></script>
+    <script src="js/notes.js?v=20260812-r13"></script>
     <script src="js/links.js?v=20260805-r7"></script>
     <script src="js/today.js?v=20260723-r1"></script>
     <!-- AI 模块（按依赖顺序加载） -->
@@ -1265,14 +1279,14 @@
     <script src="js/ai-tree.js?v=20260804-r3"></script>
     <script src="js/ai-conv.js?v=20260803-r1"></script>
     <script src="js/ai-attach.js?v=20260807-r1"></script>
-    <script src="js/ai-render.js?v=20260810-r9"></script>
+    <script src="js/ai-render.js?v=20260812-r10"></script>
     <script src="js/ai-tools.js?v=20260811-r2"></script>
     <script src="js/ai-search.js"></script>
     <script src="js/ai-api.js?v=20260803-r1"></script>
     <script src="js/ai-send.js?v=20260804-r3"></script>
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
-    <script src="js/appearance.js?v=20260803-r1"></script>
+    <script src="js/appearance.js?v=20260812-r2"></script>
     <script src="js/settings.js?v=20260810-r16"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
@@ -1288,7 +1302,7 @@
     <script src="js/books-kb.js?v=20260811-r7"></script>
     <script src="js/books-ai.js?v=20260811-r6"></script>
     <script src="js/calendar.js?v=20260724-r7"></script>
-    <script src="js/taskline.js?v=20260809-r26"></script>
+    <script src="js/taskline.js?v=20260812-r27"></script>
     <script src="js/timer.js?v=20260809-r21"></script>
     <script src="js/habits.js?v=20260724-r1"></script>
     <script src="js/stats.js?v=20260724-r1"></script>

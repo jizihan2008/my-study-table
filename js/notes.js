@@ -105,10 +105,51 @@ function confirmDeleteNote(id, e) {
   });
 }
 
+// ── 笔记移动端两级导航（目录 → 正文），类似教材界面 ──
+let notesMobileView = 'toc';   // 'toc' | 'main'
+function notesIsMobile() {
+  return (typeof Env !== 'undefined' && Env.isMobile) ||
+    (typeof window !== 'undefined' && window.innerWidth <= 800);
+}
+function notesApplyMobileView() {
+  const sec = document.getElementById('section-notes');
+  if (!sec) return;
+  if (notesIsMobile()) sec.dataset.notesview = notesMobileView || 'toc';
+  else delete sec.dataset.notesview;
+}
+function notesGoToc() { if (!notesIsMobile()) return; notesMobileView = 'toc'; notesApplyMobileView(); }
+function notesGoMain() { if (!notesIsMobile()) return; notesMobileView = 'main'; notesApplyMobileView(); }
+
+// 移动端右下角视图切换菜单（预览/编辑/摘要）
+function toggleNotesMobileViewMenu() {
+  const menu = document.getElementById('notesMvMenu');
+  if (!menu) return;
+  const show = menu.style.display !== 'block';
+  menu.style.display = show ? 'block' : 'none';
+  // 标记菜单里当前激活的视图
+  if (show) {
+    const btns = menu.querySelectorAll('button');
+    const active = ['preview', 'edit', 'summary'].indexOf(noteViewMode);
+    btns.forEach(function(b, i) { b.classList.toggle('active', i === active); });
+  }
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+function hideNotesMobileViewMenu() {
+  const menu = document.getElementById('notesMvMenu');
+  if (menu) menu.style.display = 'none';
+}
+// 点击浮层外关闭菜单
+document.addEventListener('click', function(e) {
+  const wrap = document.getElementById('notesMobileViews');
+  const menu = document.getElementById('notesMvMenu');
+  if (wrap && menu && menu.style.display === 'block' && !wrap.contains(e.target)) menu.style.display = 'none';
+});
+
 function selectNote(id) {
   checkAndUpdateSummary();
   activeNoteId = id;
   localStorage.setItem('study_active_note', activeNoteId);
+  if (notesIsMobile()) notesMobileView = 'main';   // 移动端选中笔记 → 进入正文页
   renderNotes();
   renderNotesTagInput();
   applyTagFilterBar();
@@ -792,6 +833,7 @@ function renderNotes(){
   renderNoteSummary();
   renderNotesTagInput();
   applyTagFilterBar();
+  notesApplyMobileView();
 }
 
 // ═══════════ Notes: Markdown Formatting ═══════════

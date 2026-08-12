@@ -352,6 +352,22 @@ function switchToCustomMode(cfg) {
   return cfg;
 }
 
+// ── 页面缩放（手机端为主，全端可用） ──
+const UI_ZOOM_KEY = 'study_ui_zoom';
+function getUiZoom() {
+  try { const v = parseFloat(localStorage.getItem(UI_ZOOM_KEY)); if (v >= 0.7 && v <= 1.5) return v; } catch (e) {}
+  return 1;
+}
+function setUiZoom(v) {
+  v = Math.min(1.5, Math.max(0.7, Math.round(v * 100) / 100));
+  localStorage.setItem(UI_ZOOM_KEY, String(v));
+  applyUiZoom();
+}
+function applyUiZoom() {
+  const app = document.querySelector('.app');
+  if (app) app.style.zoom = String(getUiZoom());
+}
+
 // ── Render Appearance Panel ──
 
 function renderAppearancePanel() {
@@ -360,6 +376,19 @@ function renderAppearancePanel() {
 
   const cfg = loadCustomTheme();
   const mode = isDarkTheme() ? 'dark' : 'light';
+
+  // 页面缩放设置（手机端调节界面大小）
+  const zoomVal = Math.round(getUiZoom() * 100);
+  const zoomBlock = `
+    <div class="theme-card" style="margin-bottom:14px;">
+      <div style="font-weight:600;font-size:14px;margin-bottom:8px;">🔍 页面缩放</div>
+      <div style="display:flex;align-items:center;gap:12px;">
+        <span style="font-size:12px;color:var(--text-secondary);width:52px;flex-shrink:0;">${zoomVal}%</span>
+        <input type="range" min="70" max="150" step="5" value="${zoomVal}"
+               style="flex:1;" oninput="setUiZoom(this.value/100);this.previousElementSibling.textContent=this.value+'%'">
+      </div>
+      <div style="font-size:11px;color:var(--text-secondary);margin-top:6px;">调整整个应用界面大小（70% ~ 150%），手机端可放大缩小。</div>
+    </div>`;
 
   // Resolve preset mode data once for reuse
   const allPresets = getAllPresets();
@@ -494,6 +523,7 @@ function renderAppearancePanel() {
     </div>`;
 
   container.innerHTML = `
+    ${zoomBlock}
     <div class="settings-section">
       <h3><i data-lucide="shapes" class="lucide-icon" style="width:14px;height:14px"></i> 主题预设</h3>
       <div class="theme-presets">${presetCards}</div>

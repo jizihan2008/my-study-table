@@ -786,6 +786,10 @@ function renderTaskLine() {
   html += `</div>`;
   // 右侧 hover 触发条（仿左侧界面栏）
   html += `<div class="tl-sidebar-hover-trigger" id="tlSidebarHoverTrigger" title="展开任务线侧边栏"></div>`;
+  // 手机端「章节」按钮（无 hover，手机用按钮打开右侧侧边栏）
+  html += `<button class="tl-mobile-side-btn" onclick="tlToggleSidebar()" title="章节 / 徽章与奖励">
+    <i data-lucide="layout-list" class="lucide-icon"></i><span>章节</span>
+  </button>`;
   html += `</div>`;
   // 右侧侧边栏：fixed 浮层，hover 滑入
   html += tlRenderSidebar(store, line);
@@ -835,6 +839,7 @@ function tlRenderGraph(store, line) {
       style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;"
       data-qid="${q.id}"
       onmousedown="return tlNodeDragStart(event, ${q.id})"
+      ontouchstart="return tlNodeDragTouchStart(event, ${q.id})"
       onclick="tlOpenQuestDetail(${q.id})"
       oncontextmenu="tlShowQuestContextMenu(event, ${q.id})"
       title="${escapeHtml(q.title)}">
@@ -893,7 +898,7 @@ function tlRenderGraph(store, line) {
   </div>`;
   const lockedBanner = isLocked ? `<div class="tl-locked-banner tl-locked-banner-float"><i data-lucide="lock" class="lucide-icon" style="width:14px;height:14px;"></i> 前置章节未完成，本章节任务已锁定</div>` : '';
   return `<div class="tl-graph-wrap" id="tlGraphWrap" oncontextmenu="tlShowGraphContextMenu(event, ${line.id})">
-    <div class="tl-graph-canvas" onmousedown="tlGraphCanvasDown(event)" onwheel="tlGraphCanvasWheel(event)">
+    <div class="tl-graph-canvas" onmousedown="tlGraphCanvasDown(event)" ontouchstart="tlGraphCanvasTouchStart(event)" onwheel="tlGraphCanvasWheel(event)">
       <div class="tl-graph-inner" style="width:${layout.width}px;height:${layout.height}px;">
         <svg class="tl-graph-svg" width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}">
           <defs><marker id="tlArrow" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="var(--primary)"/></marker></defs>
@@ -1278,6 +1283,45 @@ function tlGraphCanvasDown(ev) {
   document.addEventListener('mouseup', onUp);
 }
 
+// 触屏版画布平移（手机：单指拖动平移任务图画布）
+function tlGraphCanvasTouchStart(ev) {
+  if (ev.target.closest('.tl-node') || ev.target.closest('.tl-graph-legend-float') || ev.target.closest('.tl-locked-banner-float') || ev.target.closest('.tl-zoom-indicator')) return;
+  const canvas = ev.currentTarget;
+  const inner = canvas ? canvas.querySelector('.tl-graph-inner') : null;
+  if (!inner || ev.touches.length !== 1) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const touch = ev.touches[0];
+  const startX = touch.clientX, startY = touch.clientY;
+  const origLeft = tlGraphView.left;
+  const origTop = tlGraphView.top;
+  canvas.classList.add('tl-graph-panning');
+  tlGraphPan = { startX, startY, origLeft, origTop };
+  let touchId = touch.identifier;
+  function onMove(e) {
+    if (!tlGraphPan) return;
+    const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
+    if (!t) return;
+    const dx = t.clientX - tlGraphPan.startX;
+    const dy = t.clientY - tlGraphPan.startY;
+    tlGraphView.left = tlGraphPan.origLeft + dx;
+    tlGraphView.top = tlGraphPan.origTop + dy;
+    tlClampGraphView(inner, canvas);
+    inner.style.left = tlGraphView.left + 'px';
+    inner.style.top = tlGraphView.top + 'px';
+  }
+  function onUp(e) {
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+    document.removeEventListener('touchcancel', onUp);
+    if (canvas) canvas.classList.remove('tl-graph-panning');
+    tlGraphPan = null;
+  }
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onUp);
+  document.addEventListener('touchcancel', onUp);
+}
+
 function tlCtxToggleAuto() {
   const id = tlGraphCtxLineId;
   tlCloseGraphContextMenu();
@@ -1351,6 +1395,54 @@ function tlNodeDragStart(ev, questId) {
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
   return false; // 阻止默认拖拽/选中
+}
+
+// 触屏版节点拖拽（手机：长按拖动节点调整画布位置）
+function tlNodeDragTouchStart(ev, questId) {
+  if (!tlDragMode) return true; // 拖拽关闭：放行，正常触击打开详情
+  ev.preventDefault();
+  ev.stopPropagation();
+  const el = ev.currentTarget;
+  if (ev.touches.length !== 1) return false;
+  const touch = ev.touches[0];
+  const startX = touch.clientX, startY = touch.clientY;
+  const origLeft = el.offsetLeft, origTop = el.offsetTop;
+  const moved = { x: 0, y: 0 };
+  let dragging = false;
+  let touchId = touch.identifier;
+  // 触屏先等待 200ms 长按判定，避免误触发（画布平移与节点点击）
+  let longPress = false;
+  const longTimer = setTimeout(function() { longPress = true; }, 200);
+  function onMove(e) {
+    const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
+    if (!t || !longPress) return;
+    const dx = t.clientX - startX, dy = t.clientY - startY;
+    moved.x = dx; moved.y = dy;
+    el.style.left = (origLeft + dx / tlGraphView.scale) + 'px';
+    el.style.top = (origTop + dy / tlGraphView.scale) + 'px';
+    el.style.zIndex = 50;
+    dragging = true;
+  }
+  function onUp() {
+    clearTimeout(longTimer);
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onUp);
+    document.removeEventListener('touchcancel', onUp);
+    if (!dragging) return; // 未拖动 = 点击，onclick 打开详情
+    tlSuppressClick = true;
+    setTimeout(function() { tlSuppressClick = false; }, 0);
+    const q = tlGetQuest(questId);
+    if (q) {
+      const newX = Math.max(0, Math.round(origLeft + moved.x / tlGraphView.scale - TL_PAD));
+      const newY = Math.max(0, Math.round(origTop + moved.y / tlGraphView.scale - TL_PAD));
+      tlUpdateQuest(questId, { pos: { x: newX, y: newY } });
+    }
+    renderTaskLine();
+  }
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onUp);
+  document.addEventListener('touchcancel', onUp);
+  return false;
 }
 
 function tlSwitchLine(id) {
