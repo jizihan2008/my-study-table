@@ -342,21 +342,72 @@ async function aiSplitChapters(pages, onMsg) {
   }
 }
 
-// ═══════════ 正文缓存读写（<userData>/books/<bookId>.json） ═══════════
+// ═══════════ 正文缓存读写（Electron 存 <userData>/books/<bookId>.json；PWA 存 IndexedDB） ═══════════
+const _bookTextIDB = { name: 'mst-booktext', store: 'texts' };
+function _bookTextOpenDB() {
+  return new Promise((resolve, reject) => {
+    if (typeof indexedDB === 'undefined') { reject(new Error('no-idb')); return; }
+    const req = indexedDB.open(_bookTextIDB.name, 1);
+    req.onupgradeneeded = function () {
+      const db = req.result;
+      if (!db.objectStoreNames.contains(_bookTextIDB.store)) db.createObjectStore(_bookTextIDB.store, { keyPath: 'bookId' });
+    };
+    req.onsuccess = function () { resolve(req.result); };
+    req.onerror = function () { reject(req.error); };
+  });
+}
 async function saveBookTextCache(bookId, cacheObj) {
-  if (!window.electronAPI || !window.electronAPI.booksTextSave) return { ok: false, reason: '环境不支持' };
-  const res = await window.electronAPI.booksTextSave({ bookId, data: JSON.stringify(cacheObj) });
-  return res || { ok: false };
+  if (window.electronAPI && window.electronAPI.booksTextSave) {
+    const res = await window.electronAPI.booksTextSave({ bookId, data: JSON.stringify(cacheObj) });
+    return res || { ok: false };
+  }
+  // PWA：存 IndexedDB
+  try {
+    const db = await _bookTextOpenDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(_bookTextIDB.store, 'readwrite');
+      tx.objectStore(_bookTextIDB.store).put({ bookId: String(bookId), data: JSON.stringify(cacheObj), savedAt: Date.now() });
+      tx.oncomplete = function () { db.close(); resolve({ ok: true }); };
+      tx.onerror = function () { db.close(); resolve({ ok: false }); };
+    });
+  } catch (e) { return { ok: false }; }
 }
 async function loadBookTextCache(bookId) {
-  if (!window.electronAPI || !window.electronAPI.booksTextLoad) return null;
-  const str = await window.electronAPI.booksTextLoad({ bookId });
-  if (!str) return null;
-  try { return JSON.parse(str); } catch (e) { return null; }
+  if (window.electronAPI && window.electronAPI.booksTextLoad) {
+    const str = await window.electronAPI.booksTextLoad({ bookId });
+    if (!str) return null;
+    try { return JSON.parse(str); } catch (e) { return null; }
+  }
+  // PWA：从 IndexedDB 读
+  try {
+    const db = await _bookTextOpenDB();
+    return await new Promise((resolve) => {
+      const req = db.transaction(_bookTextIDB.store, 'readonly').objectStore(_bookTextIDB.store).get(String(bookId));
+      req.onsuccess = function () {
+        db.close();
+        const rec = req.result;
+        if (!rec || !rec.data) { resolve(null); return; }
+        try { resolve(JSON.parse(rec.data)); } catch (e) { resolve(null); }
+      };
+      req.onerror = function () { db.close(); resolve(null); };
+    });
+  } catch (e) { return null; }
 }
 async function deleteBookTextCache(bookId) {
-  if (!window.electronAPI || !window.electronAPI.booksTextDelete) return;
-  try { await window.electronAPI.booksTextDelete({ bookId }); } catch (e) {}
+  if (window.electronAPI && window.electronAPI.booksTextDelete) {
+    try { await window.electronAPI.booksTextDelete({ bookId }); } catch (e) {}
+    return;
+  }
+  // PWA：从 IndexedDB 删除
+  try {
+    const db = await _bookTextOpenDB();
+    return await new Promise((resolve) => {
+      const tx = db.transaction(_bookTextIDB.store, 'readwrite');
+      tx.objectStore(_bookTextIDB.store).delete(String(bookId));
+      tx.oncomplete = function () { db.close(); resolve(); };
+      tx.onerror = function () { db.close(); resolve(); };
+    });
+  } catch (e) {}
 }
 // 从缓存重建章节文本（缓存中 chapterTexts 缺失时兜底）
 async function getChapterText(cache, chapter) {

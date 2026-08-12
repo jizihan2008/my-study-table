@@ -75,14 +75,5 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureReadImage: (filePath) => ipcRenderer.invoke('capture:read-image', filePath),
   captureReadFileText: (filePath) => ipcRenderer.invoke('capture:read-file-text', filePath),
   // ── Web Page Reader IPC (AI 阅读网页) ──
-  webRead: (payload) => ipcRenderer.invoke('web:read', payload),
-  // ── 本地 WebRTC 信令服务器（局域网 PDF 传输）──
-  webrtcSignalStart: (preferredPort) => ipcRenderer.invoke('webrtc:signal-start', preferredPort),
-  webrtcSignalState: () => ipcRenderer.invoke('webrtc:signal-state'),
-  webrtcSignalStop: () => ipcRenderer.invoke('webrtc:signal-stop'),
-  onWebrtcSignalIncoming: (callback) => {
-    const listener = (_event, payload) => callback(payload);
-    ipcRenderer.on('webrtc:signal-incoming', listener);
-    return () => ipcRenderer.removeListener('webrtc:signal-incoming', listener);
-  }
+  webRead: (payload) => ipcRenderer.invoke('web:read', payload)
 });

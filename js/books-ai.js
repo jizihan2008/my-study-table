@@ -1682,17 +1682,17 @@ async function bkOpenPdfAtPage(pageNum, nodeName, bookOverride) {
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
 
   try {
-    // PWA / 浏览器环境下：优先从 IndexedDB（WebRTC 接收的 PDF）读取
-    const isPwaEnv = (typeof Env !== 'undefined' && Env.isPwa);
-    if (isPwaEnv && window.BookPdfStore && typeof window.BookPdfStore.read === 'function') {
+    // 浏览器 / PWA 环境（无 Electron）：优先从 IndexedDB（手动导入的 PDF）读取
+    const noElectron = !window.electronAPI || typeof window.electronAPI.readPdfFile !== 'function';
+    if (noElectron && window.BookPdfStore && typeof window.BookPdfStore.read === 'function') {
       const stored = await window.BookPdfStore.read(book.id);
       if (stored) {
         await _bkLoadPdfBuffer(stored);
         return;
       }
-      throw new Error('未找到已传输的 PDF（请先在「教材 → 从桌面传输」拉取此书）');
+      throw new Error('未找到此教材的 PDF（请先在「教材 → 导入 PDF」选择该文件）');
     }
-    if (!window.electronAPI || typeof window.electronAPI.readPdfFile !== 'function') {
+    if (noElectron) {
       throw new Error('当前环境不支持读取本地 PDF 文件');
     }
     const buffer = await window.electronAPI.readPdfFile(book.filePath);

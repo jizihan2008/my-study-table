@@ -601,7 +601,7 @@
   let pullDebounceTimer = null;
   function _debouncedPull() {
     clearTimeout(pullDebounceTimer);
-    pullDebounceTimer = setTimeout(_pullAll, 800);
+    pullDebounceTimer = setTimeout(() => { if (enabled) _pullAll(); }, 800);
   }
 
   // ── 拉取后刷新界面 ─────────────────────────────────
@@ -674,9 +674,21 @@
     if (enabled) {
       _init();
     } else {
-      if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} realtimeChannel = null; }
+      // 彻底关闭：移除 Realtime 订阅 + 清理所有定时器 + 清空待上传队列，避免关闭后仍持续上传/拉取
+      if (realtimeChannel) {
+        try {
+          if (_client() && typeof _client().removeChannel === 'function') _client().removeChannel(realtimeChannel);
+          else realtimeChannel.unsubscribe();
+        } catch (e) {}
+        realtimeChannel = null;
+      }
       clearTimeout(uploadTimer);
       clearTimeout(pullTimer);
+      clearTimeout(pullDebounceTimer);
+      pullDebounceTimer = null;
+      dirtyKeys.clear();
+      // 复位进度条（避免界面一直显示「上传中」）
+      _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
     }
     _emitStatus();
   }
