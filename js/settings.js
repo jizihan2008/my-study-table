@@ -561,6 +561,36 @@ async function renderSyncPanel() {
     }
     if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
   }
+  ensureSyncProgressListener();
+}
+
+// ── 同步进度条（上传/拉取）────────────────────────
+let _syncProgressBound = false;
+function ensureSyncProgressListener() {
+  if (typeof window.Sync === 'undefined' || _syncProgressBound) return;
+  if (typeof window.Sync.onProgress !== 'function') return;
+  _syncProgressBound = true;
+  window.Sync.onProgress(_updateSyncProgressUI);
+}
+
+function _updateSyncProgressUI(state) {
+  const wrap = document.getElementById('syncProgressWrap');
+  const bar = document.getElementById('syncProgressBar');
+  const label = document.getElementById('syncProgressLabel');
+  const pctEl = document.getElementById('syncProgressPct');
+  if (!wrap || !bar || !label || !pctEl) return;
+  if (!state || !state.active || !state.total) {
+    // 空闲 → 隐藏进度条
+    wrap.style.display = 'none';
+    return;
+  }
+  const pct = Math.min(100, Math.round(state.current / state.total * 100));
+  wrap.style.display = 'block';
+  bar.style.width = pct + '%';
+  pctEl.textContent = pct + '%';
+  const phase = state.phase === 'upload' ? '上传' : (state.phase === 'first' ? '首次同步' : '拉取');
+  const keyName = state.label || state.key || '';
+  label.textContent = phase + '中：' + keyName + '（' + state.current + '/' + state.total + '）';
 }
 
 function toggleSyncEnabled() {
@@ -574,18 +604,49 @@ async function syncManualSync() {
   const stEl = document.getElementById('syncStatus');
   if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
   if (stEl) { stEl.textContent = '正在同步…'; stEl.className = 'settings-status'; }
-  const res = await window.Sync.manualSync();
-  if (stEl) stEl.textContent = '同步完成。';
-  renderSyncPanel();
+  _showSyncProgress('同步', 0);   // 立即显示进度条（防抖闪烁）
+  try {
+    const res = await window.Sync.manualSync();
+    if (stEl) stEl.textContent = '同步完成。';
+  } catch (e) {
+    if (stEl) stEl.textContent = '同步出错：' + (e && e.message || e);
+  } finally {
+    _hideSyncProgress();
+    renderSyncPanel();
+  }
 }
 
 async function syncUploadAll() {
   const stEl = document.getElementById('syncStatus');
   if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
   if (stEl) { stEl.textContent = '正在上传全部数据…'; stEl.className = 'settings-status'; }
-  const res = await window.Sync.uploadAll();
-  if (stEl) stEl.textContent = '上传完成。';
-  renderSyncPanel();
+  _showSyncProgress('上传', 0);
+  try {
+    const res = await window.Sync.uploadAll();
+    if (stEl) stEl.textContent = '上传完成。';
+  } catch (e) {
+    if (stEl) stEl.textContent = '上传出错：' + (e && e.message || e);
+  } finally {
+    _hideSyncProgress();
+    renderSyncPanel();
+  }
+}
+
+function _showSyncProgress(phase, pct) {
+  const wrap = document.getElementById('syncProgressWrap');
+  const bar = document.getElementById('syncProgressBar');
+  const label = document.getElementById('syncProgressLabel');
+  const pctEl = document.getElementById('syncProgressPct');
+  if (!wrap) return;
+  wrap.style.display = 'block';
+  if (bar) bar.style.width = (pct || 0) + '%';
+  if (pctEl) pctEl.textContent = (pct || 0) + '%';
+  if (label) label.textContent = phase + '中…';
+}
+
+function _hideSyncProgress() {
+  const wrap = document.getElementById('syncProgressWrap');
+  if (wrap) wrap.style.display = 'none';
 }
 
 // ═══════════ Extension Management ═══════════

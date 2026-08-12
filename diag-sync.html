@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>同步诊断</title>
+<style>
+  body { margin: 0; padding: 16px; font: 14px/1.6 -apple-system, "Segoe UI", sans-serif; background: #f5f6fa; color: #1f2937; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  .sub { color: #6b7280; font-size: 12px; margin-bottom: 14px; }
+  .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 10px; padding: 14px 16px; margin-bottom: 12px; }
+  button { padding: 8px 16px; border-radius: 8px; border: none; background: #4f46e5; color: #fff; cursor: pointer; font-size: 13px; }
+  button:disabled { opacity: .5; cursor: not-allowed; }
+  .out { background: #111827; color: #34d399; border-radius: 8px; padding: 10px 12px; font: 12px/1.5 monospace; margin-top: 10px; max-height: 400px; overflow: auto; white-space: pre-wrap; }
+  .ok { color: #10b981; } .err { color: #ef4444; } .warn { color: #f59e0b; }
+  table { border-collapse: collapse; width: 100%; font-size: 12px; margin-top: 8px; }
+  td, th { border: 1px solid #e5e7eb; padding: 4px 8px; text-align: left; word-break: break-all; }
+</style>
+</head>
+<body>
+<h1>🔍 同步数据诊断</h1>
+<div class="sub">复用主应用的 Supabase 登录 session，直接查询云端 user_data。用于排查"笔记/待办不同步"问题。</div>
+
+<div class="card">
+  <button id="btnCheck" class="primary">查询云端 user_data（当前登录用户）</button>
+  <div class="out" id="log">(点击按钮开始诊断…)</div>
+</div>
+
+<script src="lib/supabase/supabase.js"></script>
+<script>
+(function () {
+  'use strict';
+  const BUILTIN_URL = 'https://taujqtysezmmxhkxxjce.supabase.co';
+  const BUILTIN_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhdWpxdHlzZXptbXhoa3h4amNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzA4OTEsImV4cCI6MjEwMTQwNjg5MX0.2AxQ4F7pYXTWHFxjdlDMt7OhnIPJihEcEw8HhOOP9Y8';
+
+  const logEl = document.getElementById('log');
+  const lines = [];
+  function log(msg, cls) {
+    lines.push(msg);
+    logEl.innerHTML = lines.map(l => {
+      const m = l.match(/^(✅|❌|⚠️|ℹ️)/);
+      let c = '';
+      if (m && m[1] === '✅') c = 'ok';
+      else if (m && m[1] === '❌') c = 'err';
+      else if (m && m[1] === '⚠️') c = 'warn';
+      return `<span class="${c}">${l}</span>`;
+    }).join('\n');
+    logEl.scrollTop = logEl.scrollHeight;
+  }
+  const ok = m => log('✅ ' + m);
+  const err = m => log('❌ ' + m);
+  const warn = m => log('⚠️ ' + m);
+  const info = m => log('ℹ️ ' + m);
+
+  // 与主应用同款 storage 配置，复用 localStorage 中的登录 session
+  let client = null;
+  function initClient() {
+    if (client) return client;
+    if (typeof window.supabase === 'undefined') { err('supabase.js 未加载'); return null; }
+    client = window.supabase.createClient(BUILTIN_URL, BUILTIN_KEY, {
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storage: window.localStorage }
+    });
+    return client;
+  }
+
+  document.getElementById('btnCheck').onclick = async function () {
+    const btn = document.getElementById('btnCheck');
+    btn.disabled = true;
+    lines.length = 0;
+    try {
+      const c = initClient();
+      if (!c) return;
+      // 1. 登录状态
+      info('检查登录状态…');
+      const { data: { user } } = await c.auth.getUser();
+      if (!user) { err('❌ 未登录！session 未检测到。请先在主应用「好友」页面登录，再刷新本页重试。'); btn.disabled = false; return; }
+      ok('已登录: ' + (user.email || user.id));
+
+      // 2. 查询云端 user_data 全部 key
+      info('查询 user_data …');
+      const { data, error } = await c.from('user_data')
+        .select('key,value,updated_at')
+        .eq('user_id', user.id);
+      if (error) { err('查询出错: ' + error.message + ' (code: ' + error.code + ')'); btn.disabled = false; return; }
+      if (!data || data.length === 0) {
+        warn('云端 user_data 没有任何记录！说明从未成功上传过数据。');
+        btn.disabled = false; return;
+      }
+      ok('云端共有 ' + data.length + ' 条记录：');
+      // 3. 列出每个 key 及数据量
+      let rows = '';
+      const want = ['study_notes_v2','study_notes_folders','study_todos_v2','study_timer_records','study_ai_convs','study_taskline_v1'];
+      for (const r of data) {
+        const v = r.value;
+        let desc = 'null';
+        if (Array.isArray(v)) desc = 'array[' + v.length + ']';
+        else if (v && typeof v === 'object') desc = 'obj{' + Object.keys(v).length + '}';
+        else if (v !== null) desc = String(v).slice(0, 40);
+        rows += `<tr><td>${r.key}</td><td>${desc}</td><td>${(r.updated_at||'').slice(0,19).replace('T',' ')}</td></tr>`;
+        if (want.includes(r.key)) {
+          const cnt = Array.isArray(v) ? v.length : (v && typeof v === 'object' ? Object.keys(v).length : '?');
+          if (Array.isArray(v)) {
+            const notes = v.filter(x => x && x.type === 'note');
+            const folders = v.filter(x => x && x.type === 'folder');
+            if (r.key === 'study_notes_v2') ok(`study_notes_v2: ${v.length} 项（笔记 ${notes.length} / 文件夹 ${folders.length}）`);
+            else if (r.key === 'study_todos_v2') ok(`study_todos_v2: ${v.length} 个待办`);
+          }
+        }
+      }
+      logEl.innerHTML += `<table><tr><th>key</th><th>value 概况</th><th>updated_at</th></tr>${rows}</table>`;
+    } catch (e) {
+      err('诊断异常: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+})();
+</script>
+</body>
+</html>

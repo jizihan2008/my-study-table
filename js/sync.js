@@ -106,6 +106,24 @@
     return SYNC_KEYS.indexOf(key) !== -1;
   }
 
+  // 判断本地存储值是否为「空」：空数组 / 空对象 / 空字符串 / null。
+  // 用于防止「本地是空占位（如 []）」时误上传覆盖云端的真实数据。
+  function _isEmptyLocalValue(key) {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return true;
+    const trimmed = raw.trim();
+    if (trimmed === '' ) return true;
+    try {
+      const v = JSON.parse(trimmed);
+      if (v === null) return true;
+      if (Array.isArray(v)) return v.length === 0;
+      if (typeof v === 'object') return Object.keys(v).length === 0;
+      return String(v).trim() === '';
+    } catch (e) {
+      return trimmed === '';
+    }
+  }
+
   // ── IndexedDB 离线队列 ────────────────────────────────
   function _idbOpen() {
     return new Promise((resolve, reject) => {
@@ -225,8 +243,11 @@
     const keys = Array.from(dirtyKeys);
     dirtyKeys.clear();
     let okCount = 0;
+    const total = keys.filter(k => isSyncKey(k)).length || 1;
+    let done = 0;
     for (const key of keys) {
       if (!isSyncKey(key)) continue;
+      _emitProgress({ active: true, phase: 'upload', current: done + 1, total: total, key: key, label: SYNC_LABELS[key] || key });
       const res = await _uploadKey(key);
       if (res.ok) okCount++;
       else {
@@ -234,8 +255,10 @@
         const value = localStorage.getItem(key);
         await _outboxPut(key, value ? JSON.parse(value) : null, res.updatedAt || new Date().toISOString());
       }
+      done++;
     }
     if (okCount > 0) _emitStatus();
+    _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
   }
 
   async function _flushOutbox() {
@@ -302,23 +325,35 @@
         .eq('user_id', session.user.id);
       if (!error && data) remoteRows = data;
     } catch (e) { /* 忽略 */ }
-    const remoteKeys = new Set(remoteRows.map(r => r.key));
 
-    // 2. 本地有 → 上传；本地无 → 拉取
-    for (const key of SYNC_KEYS) {
-      if (!isSyncKey(key)) continue;
-      if (localStorage.getItem(key) !== null) {
-        // 本地已有数据：上传到云（覆盖云端旧值）
+    // 2. 合并策略：云端有非空数据且本地为空 → 拉取云端；
+    //    本地有真实数据 → 上传；本地与云端都空 → 跳过（不产生空占位覆盖）
+    const firstKeys = SYNC_KEYS.filter(k => isSyncKey(k));
+    const firstTotal = firstKeys.length || 1;
+    let firstDone = 0;
+    for (const key of firstKeys) {
+      firstDone++;
+      _emitProgress({ active: true, phase: 'first', current: firstDone, total: firstTotal, key: key, label: SYNC_LABELS[key] || key });
+      const localEmpty = _isEmptyLocalValue(key);
+      const remoteRow = remoteRows.find(r => r.key === key);
+      const remoteHasData = remoteRow && remoteRow.value !== null &&
+        !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
+        !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0);
+
+      if (localEmpty && remoteHasData) {
+        // 本地空、云端有数据 → 拉取云端（避免用本地空数组覆盖云端真实笔记）
+        saveData(key, remoteRow.value);
+        _setRemoteTs(key, remoteRow.updated_at);
+        _setLocalTs(key, remoteRow.updated_at);
+      } else if (!localEmpty) {
+        // 本地有真实数据 → 上传到云（覆盖云端旧值）
         await _uploadKey(key);
-      } else if (remoteKeys.has(key)) {
-        const row = remoteRows.find(r => r.key === key);
-        if (row && row.value !== null) {
-          saveData(key, row.value);
-          _setRemoteTs(key, row.updated_at);
-        }
       }
+      // 本地空 且 云端也空/无记录 → 跳过（不产生任何写入）
     }
     applyingRemote = false;
+    _refreshUI();
+    _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
   }
 
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
@@ -336,28 +371,54 @@
       if (error) { console.warn('[sync] 拉取失败:', error.message); return; }
       if (!data) return;
       _conflictQueue = [];
-      for (const row of data) {
-        if (!isSyncKey(row.key)) continue;
+      const syncRows = data.filter(r => isSyncKey(r.key));
+      const pullTotal = syncRows.length || 1;
+      let pullDone = 0;
+      for (const row of syncRows) {
+        pullDone++;
+        _emitProgress({ active: true, phase: 'pull', current: pullDone, total: pullTotal, key: row.key, label: SYNC_LABELS[row.key] || row.key });
         // Steam 云存档式合并：「谁新用谁」。
         // 云端比本地新（或本地缺失）→ 拉取覆盖本地；云端比本地旧 → 保留本地（等待本地上传）。
         // 若两端「在上次同步后都改过」（真冲突），则收集起来交由用户选择（见 _resolveConflicts）。
         const localTs = _getLocalTs()[row.key];          // 本地最后修改时间（ISO，可能为空）
         const remoteTs = row.updated_at;                  // 云端更新时间（ISO）
-        const localMissing = localStorage.getItem(row.key) === null;
-        const remoteNewer = !!remoteTs && (!localTs || new Date(remoteTs).getTime() >= new Date(localTs).getTime());
-        const lastSync = _getRemoteTs()[row.key];         // 上次成功同步基线
-        const conflict = !!localTs && !!remoteTs && !!lastSync &&
-          new Date(localTs).getTime() > new Date(lastSync).getTime() &&
-          new Date(remoteTs).getTime() > new Date(lastSync).getTime();
-        if (row.value !== null && conflict) {
-          // 真冲突：收集起来，等待用户决定用本地版还是云端版
-          _conflictQueue.push(row.key);
-        } else if (row.value !== null && (localMissing || remoteNewer)) {
+        const localEmpty = _isEmptyLocalValue(row.key);   // 本地缺失或为空占位（如 []）
+        const remoteEmpty = row.value === null ||
+          (Array.isArray(row.value) && row.value.length === 0) ||
+          (row.value && typeof row.value === 'object' && !Array.isArray(row.value) && Object.keys(row.value).length === 0);
+        const remoteHasData = !remoteEmpty;
+
+        if (localEmpty && remoteHasData) {
+          // 本地空 + 云端有数据 → 拉取云端
           saveData(row.key, row.value);
           _setRemoteTs(row.key, row.updated_at);
-          // 以云端为准后，本地修改时间对齐（避免后续又被判为本地新而重复上传旧数据）
           _setLocalTs(row.key, row.updated_at);
+        } else if (!localEmpty && !remoteHasData) {
+          // 本地有真实数据 + 云端空 → 保留本地，并确保稍后上传到云端
+          dirtyKeys.add(row.key);
+        } else if (!localEmpty && remoteHasData) {
+          // 两端都有真实数据 → 谁新用谁。关键安全规则：
+          // 本地有真实数据但「无本地时间戳」（如从备份恢复，study_sync_local_ts 不含该 key）时，
+          // 绝不盲目用云端覆盖——视为「本地待保护」，优先上传本地，避免云端旧/空数据清空本地。
+          if (localTs && remoteTs) {
+            if (new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
+              // 云端明确更新 → 拉取覆盖
+              saveData(row.key, row.value);
+              _setRemoteTs(row.key, row.updated_at);
+              _setLocalTs(row.key, row.updated_at);
+            } else {
+              // 本地更新或相同 → 保留本地并上传
+              dirtyKeys.add(row.key);
+            }
+          } else if (!localTs && remoteTs) {
+            // 本地有真实数据但无本地时间戳（恢复备份场景）→ 保护本地，上传覆盖云端
+            dirtyKeys.add(row.key);
+          } else {
+            // 两端都无时间戳等边缘情况 → 保留本地并上传
+            dirtyKeys.add(row.key);
+          }
         }
+        // 本地空 + 云端空 → 跳过
       }
       // 拉取完成，若存在冲突则提示用户选择（异步，不阻塞后续）
       if (_conflictQueue.length) _resolveConflicts();
@@ -365,6 +426,11 @@
       console.warn('[sync] 拉取异常:', e);
     } finally {
       applyingRemote = false;
+      // 拉取中标记的「本地待保护」dirtyKeys（本地有真实数据需上传）在此一并上传，
+      // 确保恢复备份后本地真实数据能推回云端，而不是被云端旧/空数据清空。
+      try { if (dirtyKeys.size > 0) await _flush(); } catch (e) { console.warn('[sync] 上传失败:', e); }
+      _refreshUI();
+      _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
     }
   }
 
@@ -478,6 +544,28 @@
     pullDebounceTimer = setTimeout(_pullAll, 800);
   }
 
+  // ── 拉取后刷新界面 ─────────────────────────────────
+  // 同步写入 localStorage 后，内存中的全局变量（notes/todos/links 等）不会自动更新，
+  // 需重新加载并重渲染，否则用户看到的是旧数据（即使 localStorage 已更新）。
+  // 此处用 try/catch 逐个调用，避免单个模块异常影响整体刷新。
+  function _refreshUI() {
+    try {
+      // 重新从 localStorage 加载内存变量（若模块已定义全局 let 变量）。
+      // 注：notes/todos/links 是 core.js 的全局 let 绑定，IIFE 作用域链可解析到它们，
+      // 直接赋值即可更新（此处不会被误判为「未声明」）。
+      if (typeof notes !== 'undefined') notes = loadData('study_notes_v2');
+      if (typeof todos !== 'undefined') todos = loadData('study_todos_v2');
+      if (typeof links !== 'undefined') links = loadData('study_links_v3');
+    } catch (e) { /* 忽略 */ }
+    const calls = [
+      'renderNotes', 'renderTodos', 'renderToday', 'renderLinks', 'renderCalendar',
+      'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats'
+    ];
+    for (const fn of calls) {
+      try { if (typeof window[fn] === 'function') window[fn](); } catch (e) { /* 忽略单个模块失败 */ }
+    }
+  }
+
   // ── 状态通知 ────────────────────────────────────────
   async function _emitStatus() {
     const status = await getStatus();
@@ -487,6 +575,22 @@
     listeners.add(fn);
     return () => listeners.delete(fn);
   }
+
+  // ── 同步进度（上传/拉取）通知 ──────────────────────
+  let progressListeners = new Set();
+  let _lastProgress = null;
+  // 上报进度。state: { active, phase: 'upload'|'pull'|'first'|'idle', current, total, key?, label? }
+  function _emitProgress(state) {
+    _lastProgress = state;
+    progressListeners.forEach(fn => { try { fn(state); } catch (e) {} });
+  }
+  function onProgress(fn) {
+    progressListeners.add(fn);
+    if (_lastProgress) { try { fn(_lastProgress); } catch (e) {} }
+    return () => progressListeners.delete(fn);
+  }
+  // 进度清零（一次同步开始/结束时）
+  function _resetProgress() { _lastProgress = null; }
   async function getStatus() {
     const cfg = getConfig();
     // 实时刷新登录态，避免依赖事件时序导致误判"未登录"
@@ -621,6 +725,7 @@
     uploadAll,
     getStatus,
     onStatus,
+    onProgress,
     get enabled() { return enabled; },
     get loggedIn() { return loggedIn; }
   };

@@ -1013,6 +1013,15 @@
           <span class="hint">开启后本地数据变更会自动上传，其他设备登录同一账号即可拉取到最新数据。</span>
         </div>
         <div id="syncStatus" class="settings-status" style="display:block;margin-top:8px;">同步状态：加载中…</div>
+        <div id="syncProgressWrap" style="display:none;margin-top:12px;">
+          <div style="display:flex;justify-content:space-between;font-size:12px;color:var(--text-secondary);margin-bottom:5px;">
+            <span id="syncProgressLabel">同步中…</span>
+            <span id="syncProgressPct">0%</span>
+          </div>
+          <div style="height:8px;background:var(--todo-bg);border-radius:4px;overflow:hidden;border:1px solid var(--border);">
+            <div id="syncProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#10b981,#4f6ef7);border-radius:4px;transition:width .3s ease;"></div>
+          </div>
+        </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
           <button class="btn-save-settings" onclick="syncManualSync()" style="background:#10b981;padding:6px 16px;width:auto;"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 立即同步</button>
           <button class="btn-save-settings" onclick="syncUploadAll()" style="background:#6366f1;padding:6px 16px;width:auto;"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 上传全部</button>
@@ -1287,7 +1296,7 @@
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260812-r2"></script>
-    <script src="js/settings.js?v=20260810-r16"></script>
+    <script src="js/settings.js?v=20260812-r17"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
     <script src="js/inbox.js?v=20260811-r1"></script>
@@ -1319,7 +1328,7 @@
     <script src="js/codegen.js?v=20260808-r14"></script>
     <script src="js/store.js?v=20260812-r15"></script>
     <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-    <script src="js/sync.js?v=20260812-r7"></script>
+    <script src="js/sync.js?v=20260812-r10"></script>
     <script src="js/webrtc-send.js?v=20260811-r1"></script>
     <script src="js/webrtc-recv.js?v=20260811-r1"></script>
 <script>
