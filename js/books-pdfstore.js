@@ -7,21 +7,48 @@
 //   - BookPdfStore.put(bookId, data, fileName) → 存入（data: Uint8Array）
 //   - BookPdfStore.list()         → [{bookId, fileName, size, savedAt}]
 //   - BookPdfStore.remove(bookId)
+//
+// 性能设计（v2）：
+//   - PDF 原始字节存 store 'pdfs'（keyPath bookId，直接存 Uint8Array，不做 Array.from 拷贝）
+//   - 元信息（fileName/size/savedAt）存独立 store 'meta'，list() 只读 meta，
+//     避免 getAll() 把几十 MB 的 PDF 字节全部加载进内存导致卡顿。
+//   - 数据库版本 v2：升级时把已有 'pdfs' 记录的元信息回填到 'meta'。
 // ═══════════════════════════════════════════════════════════════════
 
 (function (global) {
   'use strict';
   const IDB_NAME = 'mst-pdf';
-  const IDB_STORE = 'pdfs';
+  const IDB_VERSION = 2;
+  const STORE_PDFS = 'pdfs';
+  const STORE_META = 'meta';
 
   function _open() {
     return new Promise((resolve, reject) => {
       if (typeof indexedDB === 'undefined') { reject(new Error('no-indexeddb')); return; }
-      const req = indexedDB.open(IDB_NAME, 1);
-      req.onupgradeneeded = function () {
+      const req = indexedDB.open(IDB_NAME, IDB_VERSION);
+      req.onupgradeneeded = function (ev) {
         const db = req.result;
-        if (!db.objectStoreNames.contains(IDB_STORE)) {
-          db.createObjectStore(IDB_STORE, { keyPath: 'bookId' });
+        const oldVer = ev.oldVersion || 0;
+        if (!db.objectStoreNames.contains(STORE_PDFS)) {
+          db.createObjectStore(STORE_PDFS, { keyPath: 'bookId' });
+        }
+        if (!db.objectStoreNames.contains(STORE_META)) {
+          db.createObjectStore(STORE_META, { keyPath: 'bookId' });
+        }
+        // 从 v1 升级：把已有 'pdfs' 记录回填元信息（异步，升级事务内发起）
+        if (oldVer < 2) {
+          try {
+            const pdfs = db.transaction(STORE_PDFS, 'readonly').objectStore(STORE_PDFS);
+            const meta = db.transaction(STORE_META, 'readwrite').objectStore(STORE_META);
+            pdfs.openCursor().onsuccess = function (e) {
+              const cur = e.target.result;
+              if (cur) {
+                const r = cur.value;
+                meta.put({ bookId: String(r.bookId), fileName: r.fileName || '', size: (r.data ? r.data.length : 0), savedAt: r.savedAt || 0 });
+                cur.continue();
+              }
+            };
+          } catch (e) {}
         }
       };
       req.onsuccess = function () { resolve(req.result); };
@@ -34,7 +61,7 @@
       try {
         const db = await _open();
         return new Promise((resolve) => {
-          const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).get(String(bookId));
+          const req = db.transaction(STORE_PDFS, 'readonly').objectStore(STORE_PDFS).get(String(bookId));
           req.onsuccess = function () {
             db.close();
             const rec = req.result;
@@ -50,18 +77,24 @@
       } catch (e) { return null; }
     },
     async exists(bookId) {
-      const data = await BookPdfStore.read(bookId);
-      return !!data;
+      try {
+        const db = await _open();
+        return new Promise((resolve) => {
+          const req = db.transaction(STORE_META, 'readonly').objectStore(STORE_META).count(String(bookId));
+          req.onsuccess = function () { db.close(); resolve(req.result > 0); };
+          req.onerror = function () { db.close(); resolve(false); };
+        });
+      } catch (e) { return false; }
     },
     async list() {
       try {
         const db = await _open();
         return new Promise((resolve) => {
-          const req = db.transaction(IDB_STORE, 'readonly').objectStore(IDB_STORE).getAll();
+          const req = db.transaction(STORE_META, 'readonly').objectStore(STORE_META).getAll();
           req.onsuccess = function () {
             db.close();
             const recs = req.result || [];
-            resolve(recs.map((r) => ({ bookId: r.bookId, fileName: r.fileName || '', size: r.data ? r.data.length : 0, savedAt: r.savedAt || 0 })));
+            resolve(recs.map((r) => ({ bookId: r.bookId, fileName: r.fileName || '', size: r.size || 0, savedAt: r.savedAt || 0 })));
           };
           req.onerror = function () { db.close(); resolve([]); };
         });
@@ -71,8 +104,9 @@
       try {
         const db = await _open();
         return new Promise((resolve) => {
-          const tx = db.transaction(IDB_STORE, 'readwrite');
-          tx.objectStore(IDB_STORE).delete(String(bookId));
+          const tx = db.transaction([STORE_PDFS, STORE_META], 'readwrite');
+          tx.objectStore(STORE_PDFS).delete(String(bookId));
+          tx.objectStore(STORE_META).delete(String(bookId));
           tx.oncomplete = function () { db.close(); resolve(); };
           tx.onerror = function () { db.close(); resolve(); };
         });
@@ -81,9 +115,12 @@
     async put(bookId, data, fileName) {
       try {
         const db = await _open();
+        const size = data ? data.length : 0;
         return new Promise((resolve) => {
-          const tx = db.transaction(IDB_STORE, 'readwrite');
-          tx.objectStore(IDB_STORE).put({ bookId: String(bookId), data: Array.from(data), fileName: fileName || '', savedAt: Date.now() });
+          const tx = db.transaction([STORE_PDFS, STORE_META], 'readwrite');
+          // 直接存 Uint8Array（structured-clone 原生支持），避免 Array.from 超大数组拷贝
+          tx.objectStore(STORE_PDFS).put({ bookId: String(bookId), data: data, fileName: fileName || '', savedAt: Date.now() });
+          tx.objectStore(STORE_META).put({ bookId: String(bookId), fileName: fileName || '', size: size, savedAt: Date.now() });
           tx.oncomplete = function () { db.close(); resolve(true); };
           tx.onerror = function () { db.close(); resolve(false); };
         });

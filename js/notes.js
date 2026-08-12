@@ -683,6 +683,11 @@ function showNotesContextMenu(x,y,folderId,noteId){
   menu.dataset.folderId=folderId||'';
   menu.dataset.noteId=noteId||'';
   menu.classList.add('visible');
+  // 边界修正：菜单不超出视口
+  const rect=menu.getBoundingClientRect();
+  const vw=window.innerWidth, vh=window.innerHeight;
+  if(rect.right>vw)menu.style.left=Math.max(0,vw-rect.width-6)+'px';
+  if(rect.bottom>vh)menu.style.top=Math.max(0,vh-rect.height-6)+'px';
   // Show folder-only items only when right-clicking a folder
   const folderItems=document.getElementById('ctxFolderItems');
   if(folderItems)folderItems.style.display=folderId?'':'none';
@@ -957,7 +962,7 @@ function switchNoteView(mode){
   const tb=document.getElementById('notesFormatToolbar');if(tb)tb.style.display=mode==='edit'?'':'none';
   if(mode==='preview'){const n=getActiveNote();pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';pv.classList.add('active');if(pb)pb.classList.add('active');}
   else if(mode==='summary'){if(sp)sp.style.display='flex';if(sb)sb.classList.add('active');renderNoteSummary();const n=getActiveNote();if(n&&!n._summaryFresh&&(n.content||'').trim().length>0&&isAutoSummaryEnabled()){n._summaryUpdating=true;renderNoteSummary();generateNoteSummary(n).then(()=>{n._summaryUpdating=false;renderNoteSummary()});}}
-  else{ta.classList.remove('hidden');ta.focus();if(eb)eb.classList.add('active');}
+  else{ta.classList.remove('hidden');if(eb)eb.classList.add('active');} // 不自动聚焦，避免移动端切编辑模式弹键盘
 }
 
 // ═══════════ Notes: Summary ═══════════

@@ -1389,6 +1389,13 @@ function bkShowTermContextMenu(e) {
   if (!e.target.closest('.bk-kb-summary-text, .bk-keypoint-list, .bk-mindmap, .bk-pseudo-title, .bk-pseudo-expl, .bk-term-list, .bk-summary-node')) return;
   const menu = document.getElementById('bkTermContextMenu');
   if (!menu) return;
+  // 边界修正 helper：菜单位于鼠标处但不出视口
+  const clampMenu = () => {
+    const rect = menu.getBoundingClientRect();
+    const vw = window.innerWidth, vh = window.innerHeight;
+    if (rect.right > vw) menu.style.left = Math.max(0, vw - rect.width - 6) + 'px';
+    if (rect.bottom > vh) menu.style.top = Math.max(0, vh - rect.height - 6) + 'px';
+  };
 
   // 模式(a)：右键标黄的术语 span
   const hl = e.target.closest ? e.target.closest('.bk-term-hl') : null;
@@ -1402,10 +1409,10 @@ function bkShowTermContextMenu(e) {
     document.getElementById('bkTermCtxRemove').style.display = '';
     document.getElementById('bkTermCtxExplain').style.display = 'none';
     document.getElementById('bkTermCtxExample').style.display = 'none';
-    const menuW = 200, menuH = 56;
-    menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
-    menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
     menu.classList.add('visible');
+    clampMenu();
     return;
   }
 
@@ -1422,10 +1429,10 @@ function bkShowTermContextMenu(e) {
       document.getElementById('bkTermCtxRemove').style.display = 'none';
       document.getElementById('bkTermCtxExplain').style.display = '';
       document.getElementById('bkTermCtxExample').style.display = '';
-      const menuW = 200, menuH = 170;
-      menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
-      menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
+      menu.style.left = e.clientX + 'px';
+      menu.style.top = e.clientY + 'px';
       menu.classList.add('visible');
+      clampMenu();
       return;
     }
   }
@@ -1441,10 +1448,10 @@ function bkShowTermContextMenu(e) {
     document.getElementById('bkTermCtxExplain').style.display = 'none';
     document.getElementById('bkTermCtxExample').style.display = 'none';
     document.getElementById('bkTermCtxOriginal').style.display = '';
-    const menuW = 200, menuH = 40;
-    menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
-    menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
     menu.classList.add('visible');
+    clampMenu();
   }
 }
 

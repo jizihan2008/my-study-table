@@ -363,9 +363,20 @@ function setUiZoom(v) {
   localStorage.setItem(UI_ZOOM_KEY, String(v));
   applyUiZoom();
 }
-function applyUiZoom() {
+function applyUiZoom(el) {
+  const zoom = String(getUiZoom());
+  if (el) {
+    // 对单个动态元素应用缩放（如计时器浮窗）
+    if (el && el.style) el.style.zoom = zoom;
+    return;
+  }
+  // 对所有需跟随缩放的容器应用（含 .app 之外的固定浮层）
   const app = document.querySelector('.app');
-  if (app) app.style.zoom = String(getUiZoom());
+  if (app) app.style.zoom = zoom;
+  const float = document.getElementById('timerFloat');
+  if (float) float.style.zoom = zoom;
+  const more = document.getElementById('mobileMorePanel');
+  if (more) more.style.zoom = zoom;
 }
 
 // ── Render Appearance Panel ──

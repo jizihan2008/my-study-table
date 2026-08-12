@@ -207,7 +207,7 @@ function renderBooks() {
           <i data-lucide="list-tree" class="lucide-icon" style="width:15px;height:15px;"></i> <span id="bkTocTitle">章节目录</span>
         </div>
         <div class="bk-toc-toolbar">
-          <button class="bk-toc-btn" onclick="bkToggleToc()" title="隐藏目录"><i data-lucide="panel-left-close" class="lucide-icon" style="width:12px;height:12px;"></i>隐藏</button>
+          <button class="bk-toc-btn bk-toc-hide-btn" onclick="bkToggleToc()" title="隐藏目录"><i data-lucide="panel-left-close" class="lucide-icon" style="width:12px;height:12px;"></i>隐藏</button>
           <button class="bk-toc-btn" id="bkTocExpandAll" onclick="bkExpandAllToc(true)" title="展开全部目录"><i data-lucide="chevrons-down-up" class="lucide-icon" style="width:12px;height:12px;"></i>全部展开</button>
           <button class="bk-toc-btn" id="bkTocCollapseAll" onclick="bkExpandAllToc(false)" title="折叠全部目录"><i data-lucide="chevrons-up-down" class="lucide-icon" style="width:12px;height:12px;"></i>全部折叠</button>
         </div>
@@ -741,7 +741,7 @@ function bkShowReceivedPdfs() {
           <span class="bk-original-title"><i data-lucide="folder-open" class="lucide-icon" style="width:15px;height:15px;"></i> 本机已导入的 PDF</span>
           <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
         </div>
-        <div class="bk-original-body">${html}</div>
+        <div class="bk-original-body" style="white-space:normal;">${html}</div>
       </div>`;
     document.body.appendChild(overlay);
     if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
@@ -824,30 +824,53 @@ function bkAskImportMode(defaultTitle) {
     const overlay = document.createElement('div');
     overlay.className = 'bk-original-overlay';
     overlay.innerHTML = `
-      <div class="bk-original-panel" style="max-width:540px;">
+      <div class="bk-original-panel" style="max-width:460px;">
         <div class="bk-original-head">
-          <span class="bk-original-title"><i data-lucide="book-open" class="lucide-icon" style="width:15px;height:15px;"></i> 选择导入方式</span>
+          <span class="bk-original-title"><i data-lucide="file-input" class="lucide-icon" style="width:15px;height:15px;"></i> 导入教材</span>
           <button class="bk-original-close" onclick="this.closest('.bk-original-overlay').remove();window._bkImportModeResolve(null)"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
         </div>
-        <div class="bk-original-body" style="text-align:center;">
-          <div style="text-align:left;margin-bottom:10px;">
-            <label style="font-size:12px;color:var(--text-secondary);">书名（可修改）：</label>
-            <input id="bkImportTitleInput" value="${escapeHtml(defaultTitle || '')}" placeholder="输入书名"
-              style="width:100%;height:38px;font-size:14px;padding:0 10px;border:2px solid var(--border);border-radius:8px;background:var(--input-bg);color:var(--text);outline:none;box-sizing:border-box;margin-top:4px;">
+        <div class="bk-original-body" style="padding:16px 18px 20px;text-align:left;white-space:normal;">
+          <!-- 文件名确认条 -->
+          <div style="display:flex;align-items:center;gap:8px;background:var(--hover-bg,#f4f4f5);border:1px solid var(--border);border-radius:9px;padding:9px 12px;margin-bottom:14px;">
+            <i data-lucide="file-text" class="lucide-icon" style="width:15px;height:15px;color:var(--primary);flex-shrink:0;"></i>
+            <span style="font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${escapeHtml(defaultTitle || '')}</span>
           </div>
-          ${candidates.length ? `<div style="text-align:left;margin-bottom:8px;">
-            <label style="font-size:12px;color:var(--text-secondary);">检测到可能已有的书目，选择「匹配」会沿用该书目的章节与学习进度（不重新解析）：</label>
-          </div>` : ''}
-          ${candidates.map((c, i) => `
-            <button class="bk-quiz-btn" data-match-id="${c.book.id}" style="width:100%;justify-content:flex-start;gap:8px;margin-bottom:6px;padding:10px 12px;text-align:left;">
-              <i data-lucide="git-merge" class="lucide-icon" style="width:15px;height:15px;color:var(--primary);flex-shrink:0;"></i>
-              <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:13px;">匹配「${escapeHtml(c.book.title)}」</span>
-              <span style="margin-left:auto;font-size:11px;color:var(--text-secondary);flex-shrink:0;">${Math.round(c.sim * 100)}%</span>
+
+          <!-- 匹配已有书目 -->
+          ${candidates.length ? `
+          <div style="margin-bottom:14px;">
+            <div style="font-size:12px;color:var(--text-secondary);font-weight:600;margin-bottom:8px;display:flex;align-items:center;gap:6px;">
+              <i data-lucide="git-merge" class="lucide-icon" style="width:13px;height:13px;"></i> 已有相似书目（匹配将沿用章节与学习进度）
+            </div>
+            ${candidates.map((c) => `
+            <button class="bk-match-card" data-match-id="${c.book.id}">
+              <span class="bk-match-name" title="${escapeHtml(c.book.title)}">${escapeHtml(c.book.title)}</span>
+              <span class="bk-match-pct" style="${c.sim >= 0.85 ? 'background:var(--primary);color:#fff;' : ''}">${Math.round(c.sim * 100)}%</span>
             </button>`).join('')}
-          <button class="bk-quiz-btn primary" data-mode-new style="width:100%;margin-top:${candidates.length ? '10px' : '0'};padding:11px 12px;">
-            <i data-lucide="plus" class="lucide-icon" style="width:15px;height:15px;"></i> 新建书目
+          </div>` : `
+          <div style="display:flex;align-items:center;gap:8px;background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:9px;padding:9px 12px;margin-bottom:14px;">
+            <i data-lucide="search-x" class="lucide-icon" style="width:15px;height:15px;color:#f59e0b;flex-shrink:0;"></i>
+            <span style="font-size:12px;color:var(--text);">未检测到相似书目，将新建一本教材。</span>
+          </div>`}
+
+          <!-- 分隔 -->
+          <div style="display:flex;align-items:center;gap:10px;margin:14px 0;">
+            <div style="flex:1;height:1px;background:var(--border);"></div>
+            <span style="font-size:11px;color:var(--text-secondary);">或</span>
+            <div style="flex:1;height:1px;background:var(--border);"></div>
+          </div>
+
+          <!-- 新建书目 -->
+          <div style="margin-bottom:16px;">
+            <label style="font-size:12px;color:var(--text-secondary);font-weight:600;display:block;margin-bottom:6px;">书名（可修改）</label>
+            <input id="bkImportTitleInput" value="${escapeHtml(normTitle)}" placeholder="输入书名"
+              style="width:100%;height:40px;font-size:14px;padding:0 12px;border:2px solid var(--border);border-radius:9px;background:var(--input-bg);color:var(--text);outline:none;box-sizing:border-box;">
+          </div>
+
+          <button class="bk-quiz-btn primary" data-mode-new style="width:100%;padding:12px;font-size:13.5px;justify-content:center;">
+            <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i> 新建书目并解析
           </button>
-          <div style="margin-top:6px;font-size:11px;color:var(--text-secondary);">新建书目将创建一本全新教材；匹配已有书目会把 PDF 与章节合并进选中的那本书。</div>
+          <div style="margin-top:8px;font-size:11px;color:var(--text-secondary);line-height:1.6;">新建会完整解析 PDF 并切分章节；匹配已有书目则直接沿用该书内容，无需解析。</div>
         </div>
       </div>`;
     document.body.appendChild(overlay);
@@ -904,13 +927,18 @@ async function bkImportBook() {
     const finalTitle = importChoice.title || title;
     const isPwaImport = !window.electronAPI || !window.electronAPI.readPdfFile;
 
-    // 匹配已有书目：沿用旧书的章节与正文缓存，保留学习进度，不重新解析
+    // 匹配已有书目：沿用旧书的章节与正文缓存，保留学习进度，不重新解析；
+    // 但把新选的 PDF 字节存入本机（PWA 用 IndexedDB，供阅读时打开新 PDF）
     if (importChoice.mode === 'match') {
       const book = bkGetBookById(importChoice.bookId);
       if (!book) { alert('未找到要匹配的书目'); return; }
       book.title = finalTitle;
       book.fileName = fileName;
       book.updatedAt = new Date().toISOString();
+      // PWA：用新 PDF 替换本机存储（替换旧的），阅读时打开这份新 PDF
+      if (isPwaImport && typeof BookPdfStore !== 'undefined') {
+        await BookPdfStore.put(book.id, pdfData, fileName);
+      }
       bkSaveBooks();
       bkActiveBookId = book.id;
       bkActiveChapterId = book.chapters && book.chapters.length ? book.chapters[0].id : null;

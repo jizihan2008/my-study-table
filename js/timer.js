@@ -193,13 +193,13 @@ function renderTimer() {
       ${sessionsHtml}
       <div class="timer-controls">
         ${!timerRunning
-          ? `<button class="timer-btn timer-btn-start" onclick="timerStart()">▶ 开始</button>
-             <button class="timer-btn timer-btn-save" onclick="timerSave()"><i data-lucide="save" class="lucide-icon"></i> 保存</button>
-             <button class="timer-btn timer-btn-reset" onclick="timerReset()">⟲ 重置</button>`
-          : `<button class="timer-btn timer-btn-pause" onclick="timerPause()"><i data-lucide="pause-circle" class="lucide-icon"></i> 暂停</button>
-             <button class="timer-btn timer-btn-stop" onclick="timerStop()"><i data-lucide="stop-circle" class="lucide-icon"></i> 停止并保存</button>`
+          ? `<button class="timer-btn timer-btn-start" onclick="timerStart()"><span class="timer-btn-icon">▶</span><span class="timer-btn-label">开始</span></button>
+             <button class="timer-btn timer-btn-save" onclick="timerSave()"><i data-lucide="save" class="lucide-icon"></i><span class="timer-btn-label">保存</span></button>
+             <button class="timer-btn timer-btn-reset" onclick="timerReset()"><span class="timer-btn-icon">⟲</span><span class="timer-btn-label">重置</span></button>`
+          : `<button class="timer-btn timer-btn-pause" onclick="timerPause()"><i data-lucide="pause-circle" class="lucide-icon"></i><span class="timer-btn-label">暂停</span></button>
+             <button class="timer-btn timer-btn-stop" onclick="timerStop()"><i data-lucide="stop-circle" class="lucide-icon"></i><span class="timer-btn-label">停止并保存</span></button>`
         }
-        ${!isCentered ? `<button class="timer-btn timer-btn-manual${timerManualFormOpen ? ' active' : ''}" onclick="toggleManualRecordForm()">📝 ${timerManualFormOpen ? '取消' : '手动记录'}</button>` : ''}
+        ${!isCentered ? `<button class="timer-btn timer-btn-manual${timerManualFormOpen ? ' active' : ''}" onclick="toggleManualRecordForm()"><span class="timer-btn-icon">📝</span><span class="timer-btn-label">${timerManualFormOpen ? '取消' : '手动记录'}</span></button>` : ''}
       </div>
       ${!isCentered && timerManualFormOpen ? renderManualRecordForm() : ''}
     </div>
@@ -996,6 +996,8 @@ function updateTimerFloat() {
       ball.style.bottom = '96px';
     }
     document.body.appendChild(ball);
+    // 让浮窗跟随页面缩放（zoom 应用到动态元素）
+    if (typeof applyUiZoom === 'function') applyUiZoom(ball);
     makeTimerFloatDraggable(ball);
   }
   const totalMs = timerElapsed + (timerRunning ? Date.now() - timerSessionStart : 0);

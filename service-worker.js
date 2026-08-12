@@ -14,7 +14,7 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260812-r59',
+  './css/style.css?v=20260812-r66',
   './js/env.js?v=20260811-r1',
   './js/core.js?v=20260811-r2',
   './js/sync.js?v=20260811-r1',

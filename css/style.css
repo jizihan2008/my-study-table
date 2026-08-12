@@ -838,6 +838,11 @@ body {
 .notes-header-btn.off { opacity: 0.5; }
 .notes-header-btn .lucide-icon { flex-shrink: 0; }
 .notes-header-btn-text { white-space: nowrap; }
+/* 摘要按钮移到「笔记列表」标题旁后，用正常前景色（sidebar 为浅色背景） */
+.notes-sidebar-header-actions { display: inline-flex; align-items: center; gap: 6px; }
+.notes-sidebar-header .notes-header-btn { color: var(--text-secondary); }
+.notes-sidebar-header .notes-header-btn:hover { background: var(--hover-bg); color: var(--text); }
+.notes-sidebar-header .notes-header-btn .lucide-icon { color: inherit; }
 
 /* ── Notes: Format Toolbar ── */
 .notes-format-toolbar {
@@ -3532,6 +3537,7 @@ body {
   padding: 10px 24px;
   border: none;
   border-radius: 10px;
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
   cursor: pointer;
   font-size: 14px;
   font-weight: 600;
@@ -7734,6 +7740,22 @@ i[data-lucide] {
   white-space: pre-wrap; font-size: 14px; line-height: 1.8; color: var(--text);
 }
 .bk-original-hl { background: rgba(250, 204, 21, 0.35); border-radius: 2px; }
+/* 导入教材：匹配已有书目卡片 */
+.bk-match-card {
+  display: flex; align-items: center; gap: 8px; width: 100%;
+  padding: 10px 12px; margin-bottom: 6px; text-align: left;
+  background: var(--input-bg); border: 1px solid var(--border); border-radius: 9px;
+  color: var(--text); font-size: 12.5px; cursor: pointer;
+  transition: var(--transition);
+}
+.bk-match-card:hover { border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 15%, transparent); }
+.bk-match-name {
+  flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.bk-match-pct {
+  flex-shrink: 0; font-size: 11px; padding: 2px 7px; border-radius: 999px;
+  background: var(--hover-bg); color: var(--text-secondary); font-weight: 600;
+}
 .bk-original-hint, .bk-original-loading, .bk-original-empty {
   color: var(--text-secondary); font-size: 13px; text-align: center; padding: 20px 0;
 }
@@ -8177,6 +8199,10 @@ i[data-lucide] {
   .btn, button.btn, .notes-undo-btn, .cat-section-header button { min-height: 44px; }
   .todo-add-row input, .todo-add-row button { min-height: 44px; }
 
+  /* 计时器：手机端只显示符号/图标，隐藏文字（更紧凑） */
+  .timer-btn .timer-btn-label { display: none; }
+  .timer-btn { padding: 12px 16px; min-width: 48px; }
+
   /* 输入框全宽 */
   .link-grid { grid-template-columns: 1fr; }
   .modal { width: 100%; max-width: 100%; height: 100%; max-height: 100%; margin: 0; border-radius: 0; }
@@ -8246,14 +8272,24 @@ i[data-lucide] {
   #section-notes[data-notesview="toc"] .notes-editor { display: none; }
   #section-notes[data-notesview="main"] .notes-sidebar-wrap { display: none; }
   #section-notes[data-notesview="main"] .notes-editor { display: flex; width: 100%; }
-  /* 目录页全宽 */
-  #section-notes .notes-sidebar-wrap .notes-sidebar { width: 100%; border-right: none; }
-  #section-notes .notes-list { height: 100%; max-height: calc(100vh - 140px); }
+  /* 目录页全宽 + 去卡片化：笔记列表直接融入主卡片（去掉独立侧边栏的背景/圆角/边框 + 主卡片内边距贴齐） */
+  #section-notes .card { padding: 0; }
+  #section-notes .notes-sidebar-wrap .notes-sidebar { width: 100%; border-right: none; background: transparent; border-radius: 0; box-shadow: none; }
+  #section-notes .notes-list { height: 100%; max-height: calc(100vh - 100px); }
+  #section-notes .notes-sidebar-header {
+    background: transparent; border-bottom: 1px solid var(--border);
+    padding: 10px 14px 10px;
+  }
+  /* 移动端隐藏顶部「笔记」section 标题栏（标题已删、隐藏按钮隐藏，section-header 留空） */
+  #section-notes .section-header { display: none; }
   /* 隐藏桌面端视图切换按钮（移到右下角浮动菜单） */
   #section-notes .notes-view-toggle { display: none; }
+  /* 移动端隐藏「隐藏笔记列表」按钮（两级导航用返回按钮，无需隐藏列表） */
+  #section-notes #notesSidebarToggle { display: none !important; }
 
-  /* 右下角视图切换浮动按钮 + 菜单 */
+  /* 右下角视图切换浮动按钮 + 菜单（仅正文页显示，列表页隐藏） */
   .notes-mobile-views { position: fixed; right: 12px; bottom: 74px; z-index: 99; }
+  #section-notes[data-notesview="toc"] .notes-mobile-views { display: none; }
   .notes-mv-fab {
     display: inline-flex; align-items: center; justify-content: center;
     width: 48px; height: 48px; border: none; border-radius: 50%;
@@ -8288,7 +8324,9 @@ i[data-lucide] {
   /* ── 教材模块：手机端三级页面导航（书架→目录→章节内容）── */
   #booksApp.bk-layout {
     flex-direction: column;
-    height: calc(100vh - 148px);
+    /* 移动端顶部标题栏已隐藏、底部仅留 58px 底部导航，故高度对齐视口减 58px；
+       原 148px 是为旧的「顶部标题栏 + 底部导航」预留，会造成下方留白。 */
+    height: calc(100vh - 58px);
     min-height: 0;
     overflow: hidden;
   }
@@ -8312,6 +8350,11 @@ i[data-lucide] {
   /* 隐藏桌面端隐藏/恢复把手（移动端用返回按钮替代） */
   #booksApp .bk-pane-toggle,
   #booksApp .bk-pane-restore { display: none !important; }
+  /* 移动端隐藏目录的「隐藏」按钮（单栏布局用返回按钮，无需隐藏目录） */
+  #booksApp .bk-toc-hide-btn { display: none !important; }
+  /* 移动端正文：始终显示上一章/下一章按钮（目录不隐藏，否则默认被隐藏；书名较长时方便切换） */
+  #booksApp .bk-chapter-nav { display: inline-flex; margin-left: auto; }
+  #booksApp .bk-chapter-nav-btn { width: 34px; height: 34px; }
 
   /* 移动端导航头 */
   #booksApp .bk-mob-navbar {

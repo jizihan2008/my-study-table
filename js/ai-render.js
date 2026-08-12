@@ -1017,10 +1017,14 @@ function showAiChatContextMenu(e) {
   _aiCtxMarkdown = md;
   const menu = document.getElementById('aiChatContextMenu');
   if (!menu) return;
-  const menuW = 190, menuH = 90;
-  menu.style.left = Math.min(e.clientX, window.innerWidth - menuW - 8) + 'px';
-  menu.style.top = Math.min(e.clientY, window.innerHeight - menuH - 8) + 'px';
+  menu.style.left = e.clientX + 'px';
+  menu.style.top = e.clientY + 'px';
   menu.classList.add('visible');
+  // 边界修正：菜单不超出视口
+  const rect = menu.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  if (rect.right > vw) menu.style.left = Math.max(0, vw - rect.width - 6) + 'px';
+  if (rect.bottom > vh) menu.style.top = Math.max(0, vh - rect.height - 6) + 'px';
 }
 
 function closeAiChatContextMenu() {

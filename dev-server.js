@@ -24,6 +24,10 @@ http.createServer((req, res) => {
     res.writeHead(404, { 'Content-Type': 'text/plain' });
     return res.end('not found: ' + p);
   }
-  res.writeHead(200, { 'Content-Type': mime[path.extname(fp)] || 'application/octet-stream' });
+  // no-store：开发时禁止浏览器缓存（否则启发式缓存会导致改了代码刷新仍是旧版本）
+  res.writeHead(200, {
+    'Content-Type': mime[path.extname(fp)] || 'application/octet-stream',
+    'Cache-Control': 'no-store'
+  });
   fs.createReadStream(fp).pipe(res);
 }).listen(8080, () => console.log('serving http://localhost:8080'));
