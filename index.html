@@ -728,7 +728,7 @@
       <!-- Supabase Panel（好友系统 & 插件市场共享） -->
       <div class="settings-tab-panel" id="settingsPanelSupabase">
         <div class="settings-section-title"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> Supabase 连接</div>
-        <span class="hint" style="display:block;margin-bottom:12px;">好友系统和插件市场共用此 Supabase 项目连接。首次使用请先在 Supabase 控制台执行 <b>supabase/schema.sql</b> 建表。</span>
+        <span class="hint" style="display:block;margin-bottom:12px;">好友系统和插件市场共用此 Supabase 项目连接。应用已<b>内置默认项目</b>（下方已自动填入），通常无需修改即可直接使用；如需接入自己的项目，替换 URL 与 anon key 后点「保存并重新连接」。建表脚本见 <b>supabase/schema.sql</b>。</span>
         <div class="settings-field">
           <label>Supabase 项目地址（Project URL）</label>
           <input type="text" id="supabaseUrl" placeholder="https://xxxx.supabase.co" onchange="saveSupabaseSettings()" style="width:100%;">
@@ -1298,7 +1298,7 @@
     <script src="js/updater.js?v=20260802-r1"></script>
     <!-- 好友系统 -->
     <script src="lib/supabase/supabase.js"></script>
-    <script src="js/friends.js?v=20260805-r9"></script>
+    <script src="js/friends.js?v=20260812-r10"></script>
     <script src="js/friends-chat.js?v=20260805-r2"></script>
     <!-- 扩展系统 -->
     <script src="js/ext-api.js?v=20260804-r1"></script>
@@ -1306,7 +1306,7 @@
     <script src="js/builtin-extensions.js?v=20260804-r1"></script>
     <script src="js/ext-manager.js?v=20260804-r2"></script>
     <script src="js/codegen.js?v=20260808-r14"></script>
-    <script src="js/store.js?v=20260805-r13"></script>
+    <script src="js/store.js?v=20260812-r14"></script>
     <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
     <script src="js/sync.js?v=20260811-r1"></script>
     <script src="js/webrtc-send.js?v=20260811-r1"></script>

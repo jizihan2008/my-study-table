@@ -10,18 +10,30 @@
 const FRIENDS_CFG_KEY = 'study_supabase_config';
 const OLD_FRIENDS_CFG_KEY = 'study_friends_config';
 
+// ── 内置默认 Supabase 连接（项目 URL + anon public key）──
+// anon key 本就是公开信息，安全靠 RLS（行级安全）保证数据隔离；
+// 内置后所有用户开箱即用，无需手动填写。用户仍可在「设置 → Supabase」覆盖为自建项目。
+// 注意：升级为内置后，设置面板默认展示此值；若希望某用户强制使用自己的项目，覆盖即可。
+const BUILTIN_SUPABASE_CONFIG = {
+  url: 'https://taujqtysezmmxhkxxjce.supabase.co',
+  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhdWpxdHlzZXptbXhoa3h4amNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzA4OTEsImV4cCI6MjEwMTQwNjg5MX0.2AxQ4F7pYXTWHFxjdlDMt7OhnIPJihEcEw8HhOOP9Y8'
+};
+
 function getFriendsConfig() {
   try {
     let raw = localStorage.getItem(FRIENDS_CFG_KEY);
-    if (raw) return JSON.parse(raw);
+    if (raw) {
+      const cfg = JSON.parse(raw);
+      if (cfg && cfg.url && cfg.anonKey) return cfg;
+    }
     // 从旧键迁移
     raw = localStorage.getItem(OLD_FRIENDS_CFG_KEY);
     if (raw) {
       const cfg = JSON.parse(raw);
       if (cfg.url && cfg.anonKey) {
         localStorage.setItem(FRIENDS_CFG_KEY, raw);
+        return cfg;
       }
-      return cfg;
     }
     // 再尝试插件市场的旧键
     raw = localStorage.getItem('study_plugin_store_config');
@@ -29,8 +41,9 @@ function getFriendsConfig() {
       const cfg = JSON.parse(raw);
       if (cfg.url && cfg.anonKey) return cfg;
     }
-    return {};
-  } catch (e) { return {}; }
+    // 无本地配置 → 回退到内置默认（开箱即用）
+    return { url: BUILTIN_SUPABASE_CONFIG.url, anonKey: BUILTIN_SUPABASE_CONFIG.anonKey };
+  } catch (e) { return { url: BUILTIN_SUPABASE_CONFIG.url, anonKey: BUILTIN_SUPABASE_CONFIG.anonKey }; }
 }
 function saveFriendsConfig(cfg) {
   localStorage.setItem(FRIENDS_CFG_KEY, JSON.stringify(cfg));
@@ -928,17 +941,17 @@ async function renderFriends() {
   syncStudyStats();
 }
 
-// 未配置 Supabase 的引导页
+// 未配置 Supabase 的引导页（内置默认配置失效时兜底）
 function renderFriendsSetup() {
   return `
   <div class="fr-setup-wrap">
     <div class="fr-setup-card">
       <i data-lucide="users" class="lucide-icon fr-setup-icon"></i>
       <h3>好友系统需要先连接云端</h3>
-      <p>好友系统基于 Supabase 云服务，首次使用请先完成两件事：</p>
+      <p>应用已内置默认云服务连接，通常无需配置即可使用。若仍显示此页，请检查云端配置：</p>
       <ol class="fr-setup-steps">
         <li><b>创建数据库表</b>：打开 Supabase 控制台 → SQL Editor，执行应用目录下 <code>supabase/schema.sql</code> 中的脚本（已随应用提供）。</li>
-        <li><b>填写项目配置</b>：在 <b>设置 → 好友</b> 中填入项目的 URL 与 anon public key。</li>
+        <li><b>填写项目配置</b>：在 <b>设置 → 好友</b> 中填入项目的 URL 与 anon public key（默认已内置，可覆盖为自己的项目）。</li>
       </ol>
       <button class="btn-add" onclick="openSettingsModal()" style="align-self:center;">
         <i data-lucide="settings" class="lucide-icon" style="width:15px;height:15px;"></i> 前往设置

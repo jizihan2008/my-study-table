@@ -19,7 +19,10 @@ window.Store = (function () {
   function getStoreConfig() {
     try {
       let raw = localStorage.getItem(CONFIG_KEY);
-      if (raw) return JSON.parse(raw);
+      if (raw) {
+        const cfg = JSON.parse(raw);
+        if (cfg && cfg.url && cfg.anonKey) return cfg;
+      }
       // 从旧键迁移
       raw = localStorage.getItem(OLD_CONFIG_KEY);
       if (raw) {
@@ -36,8 +39,15 @@ window.Store = (function () {
         const cfg = JSON.parse(raw);
         if (cfg.url && cfg.anonKey) return cfg;
       }
-      return { url: '', anonKey: '' };
-    } catch (e) { return { url: '', anonKey: '' }; }
+      // 无本地配置 → 回退到内置默认（与好友系统共用）
+      const builtin = (typeof BUILTIN_SUPABASE_CONFIG !== 'undefined' && BUILTIN_SUPABASE_CONFIG)
+        ? BUILTIN_SUPABASE_CONFIG : { url: '', anonKey: '' };
+      return { url: builtin.url || '', anonKey: builtin.anonKey || '' };
+    } catch (e) {
+      const builtin = (typeof BUILTIN_SUPABASE_CONFIG !== 'undefined' && BUILTIN_SUPABASE_CONFIG)
+        ? BUILTIN_SUPABASE_CONFIG : { url: '', anonKey: '' };
+      return { url: builtin.url || '', anonKey: builtin.anonKey || '' };
+    }
   }
 
   function saveStoreConfig(cfg) {

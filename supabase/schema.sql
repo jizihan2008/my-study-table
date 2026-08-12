@@ -146,10 +146,11 @@ $$;
 -- RLS 策略
 -- ═══════════════════════════════════════════════════════════════════
 
--- profiles：所有人可读（匿名也能看昵称/用户名，供插件市场展示作者），本人可更新
+-- profiles：仅「已登录」用户可读（未登录的陌生人看不到任何用户资料，防枚举隐私），本人可更新
+-- 注：若需未登录也能看（如公开展示作者），改为 using (true) 即可；内置共享 anon key 时务必保持登录门槛。
 drop policy if exists "profiles_readable" on public.profiles;
 create policy "profiles_readable" on public.profiles
-  for select using (true);
+  for select using (auth.role() = 'authenticated');
 drop policy if exists "profiles_self_update" on public.profiles;
 create policy "profiles_self_update" on public.profiles
   for update using (auth.uid() = id);
