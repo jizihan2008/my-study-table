@@ -1011,7 +1011,14 @@
             <input type="checkbox" id="syncEnabled" style="width:18px;height:18px;accent-color:var(--primary);" onchange="toggleSyncEnabled()">
             <i data-lucide="cloud" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 开启云同步
           </label>
-          <span class="hint">开启后本地数据变更会自动上传，其他设备登录同一账号即可拉取到最新数据。</span>
+          <span class="hint">总开关。开启后可手动「立即同步」「上传全部」；配合下方「自动同步」实现自动上传与拉取。</span>
+        </div>
+        <div class="settings-field" style="margin-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="syncAutoEnabled" style="width:18px;height:18px;accent-color:var(--primary);" onchange="toggleSyncAutoEnabled()">
+            <i data-lucide="zap" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 开启自动同步
+          </label>
+          <span class="hint">开启后本地数据变更自动上传、定时拉取、其他设备变更实时同步。关闭后仅在点击「立即同步」「上传全部」时同步。</span>
         </div>
         <div id="syncStatus" class="settings-status" style="display:block;margin-top:8px;">同步状态：加载中…</div>
         <div id="syncProgressWrap" style="display:none;margin-top:12px;">
@@ -1297,7 +1304,7 @@
     <script src="js/music.js"></script>
     <script src="js/memory.js?v=20260803-r1"></script>
     <script src="js/appearance.js?v=20260812-r3"></script>
-    <script src="js/settings.js?v=20260812-r17"></script>
+    <script src="js/settings.js?v=20260812-r18"></script>
     <script src="js/utils.js?v=20260722-r2"></script>
     <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
     <script src="js/inbox.js?v=20260811-r1"></script>
@@ -1330,7 +1337,7 @@
     <script src="js/codegen.js?v=20260808-r14"></script>
     <script src="js/store.js?v=20260812-r15"></script>
     <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-    <script src="js/sync.js?v=20260812-r12"></script>
+    <script src="js/sync.js?v=20260812-r13"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
 setTimeout(async function() {

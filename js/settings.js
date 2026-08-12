@@ -535,10 +535,13 @@ async function renderSyncPanel() {
   }
   const st = await window.Sync.getStatus();
   if (enabledEl) enabledEl.checked = !!st.enabled;
+  const autoEl = document.getElementById('syncAutoEnabled');
+  if (autoEl) autoEl.checked = !!st.autoSync;
   if (statusEl) {
     const loggedTxt = st.loggedIn ? '已登录' : '未登录';
     const pendingTxt = st.pendingCount > 0 ? '，待上传 ' + st.pendingCount + ' 项' : '';
-    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt : '已关闭');
+    const autoTxt = st.autoSync ? '' : '（仅手动同步）';
+    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + autoTxt : '已关闭');
     statusEl.className = 'settings-status';
   }
   if (infoEl) {
@@ -597,6 +600,13 @@ function toggleSyncEnabled() {
   const enabledEl = document.getElementById('syncEnabled');
   if (!enabledEl || typeof window.Sync === 'undefined') return;
   window.Sync.setEnabled(enabledEl.checked);
+  renderSyncPanel();
+}
+
+function toggleSyncAutoEnabled() {
+  const autoEl = document.getElementById('syncAutoEnabled');
+  if (!autoEl || typeof window.Sync === 'undefined') return;
+  window.Sync.setAutoSync(autoEl.checked);
   renderSyncPanel();
 }
 

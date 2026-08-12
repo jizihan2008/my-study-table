@@ -100,7 +100,8 @@
   const PULL_INTERVAL = 30 * 60 * 1000;      // 定时全量拉取间隔（30 分钟）
 
   let client = null;                          // Supabase 客户端
-  let enabled = false;                        // 是否开启同步
+  let enabled = false;                        // 是否开启云同步（总开关）
+  let autoSync = false;                       // 是否自动同步（子开关：自动上传/定时拉取/Realtime）
   let loggedIn = false;
   let dirtyKeys = new Set();                  // 待上传的 key
   let uploadTimer = null;
@@ -188,8 +189,10 @@
       const cfg = JSON.parse(localStorage.getItem(CFG_KEY)) || {};
       // 默认开启云同步：新用户开箱即用（登录后自动同步）。未显式设置过开关时视为开启。
       if (typeof cfg.enabled !== 'boolean') cfg.enabled = true;
+      // 默认开启自动同步（跟随总开关）。未显式设置过时视为开启。
+      if (typeof cfg.autoSync !== 'boolean') cfg.autoSync = true;
       return cfg;
-    } catch (e) { return { enabled: true }; }
+    } catch (e) { return { enabled: true, autoSync: true }; }
   }
   function setConfig(cfg) {
     localStorage.setItem(CFG_KEY, JSON.stringify(cfg));
@@ -559,7 +562,8 @@
     if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
     // 无论是否登录都记录本地修改时间（Steam 云存档式合并需要；未登录时修改也会在登录后正确对比）
     _setLocalTs(key, new Date().toISOString());
-    if (!enabled || !loggedIn || !client) return;
+    // 自动上传仅在「云同步 + 自动同步」均开启时触发；关掉自动同步后需手动「立即同步/上传全部」
+    if (!enabled || !autoSync || !loggedIn || !client) return;
     dirtyKeys.add(key);
     clearTimeout(uploadTimer);
     uploadTimer = setTimeout(_flush, UPLOAD_DEBOUNCE);
@@ -569,7 +573,7 @@
   let _subscribing = false;   // 并发锁：防止 _subscribe 被重复触发导致 channel 冲突
   async function _subscribe() {
     const c = _client();
-    if (!c || !enabled || !loggedIn) return;
+    if (!c || !enabled || !autoSync || !loggedIn) return;
     if (_subscribing) return;             // 已在订阅中，忽略重复调用
     _subscribing = true;
     try {
@@ -601,7 +605,7 @@
   let pullDebounceTimer = null;
   function _debouncedPull() {
     clearTimeout(pullDebounceTimer);
-    pullDebounceTimer = setTimeout(() => { if (enabled) _pullAll(); }, 800);
+    pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) _pullAll(); }, 800);
   }
 
   // ── 拉取后刷新界面 ─────────────────────────────────
@@ -659,6 +663,7 @@
     if (!sess && loggedIn) loggedIn = false;
     return {
       enabled: enabled,
+      autoSync: !!cfg.autoSync,
       loggedIn: !!sess,
       pendingCount: dirtyKeys.size,
       lastPull: cfg.lastPull || 0
@@ -666,31 +671,54 @@
   }
 
   // ── 开关 ────────────────────────────────────────────
+  // 总开关：开启云同步。关闭则移除订阅、清理定时器、清空队列。
   function setEnabled(on) {
     const cfg = getConfig();
     cfg.enabled = !!on;
     setConfig(cfg);
     enabled = !!on;
+    // 同步 autoSync 状态（来自持久化配置）
+    autoSync = !!cfg.autoSync;
     if (enabled) {
       _init();
     } else {
-      // 彻底关闭：移除 Realtime 订阅 + 清理所有定时器 + 清空待上传队列，避免关闭后仍持续上传/拉取
-      if (realtimeChannel) {
-        try {
-          if (_client() && typeof _client().removeChannel === 'function') _client().removeChannel(realtimeChannel);
-          else realtimeChannel.unsubscribe();
-        } catch (e) {}
-        realtimeChannel = null;
-      }
-      clearTimeout(uploadTimer);
-      clearTimeout(pullTimer);
-      clearTimeout(pullDebounceTimer);
-      pullDebounceTimer = null;
-      dirtyKeys.clear();
-      // 复位进度条（避免界面一直显示「上传中」）
-      _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
+      _stopAutoSync();
     }
     _emitStatus();
+  }
+
+  // 子开关：开启自动同步（本地变更自动上传、定时拉取、Realtime 实时、登录后自动同步）。
+  // 关闭后仍可手动「立即同步」「上传全部」。
+  function setAutoSync(on) {
+    const cfg = getConfig();
+    cfg.autoSync = !!on;
+    setConfig(cfg);
+    autoSync = !!on;
+    if (!enabled) { _emitStatus(); return; }
+    if (autoSync) {
+      _init();
+    } else {
+      _stopAutoSync();
+    }
+    _emitStatus();
+  }
+
+  // 停止所有自动行为：移除 Realtime 订阅 + 清理定时器 + 清空待上传队列
+  function _stopAutoSync() {
+    if (realtimeChannel) {
+      try {
+        if (_client() && typeof _client().removeChannel === 'function') _client().removeChannel(realtimeChannel);
+        else realtimeChannel.unsubscribe();
+      } catch (e) {}
+      realtimeChannel = null;
+    }
+    clearTimeout(uploadTimer);
+    clearTimeout(pullTimer);
+    clearTimeout(pullDebounceTimer);
+    pullDebounceTimer = null;
+    dirtyKeys.clear();
+    // 复位进度条（避免界面一直显示「上传中」）
+    _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
   }
 
   // ── 手动触发 ────────────────────────────────────────
@@ -718,6 +746,8 @@
     if (typeof getSupabaseClient !== 'function') { enabled = false; return; }
     client = getSupabaseClient();
     if (!client) { enabled = false; return; }
+    // 自动同步子开关关闭时：不自动拉取/定时/订阅（仍可手动同步/上传全部）
+    if (!autoSync) return;
     const session = await getSession();
     loggedIn = !!session;
     if (loggedIn) {
@@ -734,7 +764,7 @@
   }
 
   async function _doSyncAfterLogin() {
-    if (!enabled || !loggedIn || !_client()) return;
+    if (!enabled || !autoSync || !loggedIn || !_client()) return;
     _subscribe();
     const ts = _getRemoteTs();
     const isFirst = Object.keys(ts).length === 0;
@@ -745,6 +775,7 @@
   function init() {
     const cfg = getConfig();
     enabled = !!cfg.enabled;
+    autoSync = !!cfg.autoSync;
     if (enabled) {
       setTimeout(_init, 1500);   // 等 friends.js 客户端就绪
     }
@@ -762,16 +793,20 @@
             if (session) {
               loggedIn = true;
               _doSyncAfterLogin();
-              clearTimeout(pullTimer);
-              pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+              if (autoSync) {
+                clearTimeout(pullTimer);
+                pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+              }
             } else {
               // 事件未带 session，异步获取确认
               getSession().then(function (s) {
                 loggedIn = !!s;
                 if (loggedIn) {
                   _doSyncAfterLogin();
-                  clearTimeout(pullTimer);
-                  pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+                  if (autoSync) {
+                    clearTimeout(pullTimer);
+                    pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+                  }
                 }
                 _emitStatus();
               });
@@ -791,6 +826,7 @@
   global.Sync = {
     init,
     setEnabled,
+    setAutoSync,
     isSyncKey,
     onLocalChange,
     manualSync,
@@ -799,6 +835,7 @@
     onStatus,
     onProgress,
     get enabled() { return enabled; },
+    get autoSync() { return autoSync; },
     get loggedIn() { return loggedIn; }
   };
 })(typeof window !== 'undefined' ? window : globalThis);
