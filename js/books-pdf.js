@@ -713,3 +713,159 @@ async function bkGetChapterTextWithPages(chapter) {
   }
   return '';
 }
+
+// ═══════════ 教材图片提取（供「图片集」模块：收集教材中的图片及其解释） ═══════════
+// 依赖：window.pdfjsLib（pdf.min.mjs），仅 Chromium/浏览器可用（依赖 canvas）
+// 图注（caption）识别：坐标行首锚定（方案 A）+ 正文引用动词过滤（方案 B）
+// 图片获取：对含图注的页面渲染为 canvas → JPEG dataURL（限宽压缩）
+
+// 从文本坐标 items 中提取图注（caption）。返回 [{ num, text }]
+// 方案 A（坐标行首锚定）：按 transform[5]（y）容差聚合成真实行 → 行内按 transform[4]（x）排序
+//   → 再按 x gap 拆分为栏片段（双栏/多栏排版）→ 每片段行首锚定 Figure/Fig/图 + 编号。
+//   图注长度不做硬限制（教材图注可能很长）；行中引用（"...In Figure 1.1 the..."）因不在行首而天然排除。
+// 方案 B（正文引用过滤）：核心判据是**编号后首词必须大写**（图注 \caption 是标题性大写名词短语；
+//   跨行拆词导致的"行首 Figure"如 "Figure 13.1 with key 36..." 编号后紧跟小写介词 → 丢弃）。
+//   补充：动词黑名单（shows/illustrates...）处理首词恰为大写动词的真正文引用，
+//   中文词（表示/说明...）仅用于中文图注。
+function bkExtractCaptionsFromText(items) {
+  const caps = [];
+  if (!items || !items.length) return caps;
+  const valid = items.filter(it => it && it.str && it.str.trim() !== '' && Array.isArray(it.transform));
+  if (!valid.length) return caps;
+
+  // 1) 按 y 容差聚合成行（同一视觉行的词可能相差几像素基线）
+  const rows = [];
+  const sorted = valid.slice().sort((a, b) => a.transform[5] - b.transform[5]);
+  for (const it of sorted) {
+    const y = it.transform[5];
+    const last = rows[rows.length - 1];
+    if (!last || y - last.y > 4) rows.push({ y, xs: [] });
+    rows[rows.length - 1].xs.push(it);
+  }
+  for (const row of rows) row.xs.sort((a, b) => a.transform[4] - b.transform[4]);
+
+  // 2) 行内按 x gap 拆分为栏片段，每栏独立做行首判断
+  // gap 用「上一 item 右边界 x+width 与当前 item 起始 x 的差」，不能用 item 起始 x 之差——
+  // pdf.js 会把整句合并成一个大 item（宽可达上百 px），紧邻的下一 item 起始 x 会因此差很大。
+  const segs = [];
+  for (const row of rows) {
+    let seg = { parts: [] };
+    let prevEnd = null;
+    for (const it of row.xs) {
+      const x = it.transform[4];
+      const xEnd = x + (it.width || 0);
+      if (prevEnd !== null && x - prevEnd > 40 && seg.parts.length > 0) {
+        segs.push(seg);
+        seg = { parts: [] };
+      }
+      seg.parts.push(it.str);
+      prevEnd = xEnd;
+    }
+    if (seg.parts.length > 0) segs.push(seg);
+  }
+
+  // 3) 行首锚定 + 正文引用过滤
+  // 判据（按可靠性）：
+  //   a) 编号后首词是英文小写字母 → 正文引用（含跨行拆词导致的"行首 Figure"），丢弃。
+  //      真图注 \caption 是标题性大写名词短语（"Figure 12.3 Inserting a node..."）；
+  //      首词非字母（数字/符号/中文）不触发，交由 b/c 判据。
+  //   b) 动词黑名单 shows/illustrates...（处理首词恰好大写动词的真正文引用）。
+  //   c) 中文词 表示/说明...（仅中文图注）。
+  const seen = new Set();
+  for (const seg of segs) {
+    const t = seg.parts.join(' ').replace(/\s+/g, ' ').trim();
+    if (!t) continue;
+    const m = BK_CAPTION_START_RE.exec(t);
+    if (!m) continue;
+    const num = m[1];
+    const rest = t.slice(m[0].length).trim();
+    if (!rest) continue;
+    if (bkFirstWordLowercase(rest) || bkIsBodyRefCaption(rest)) continue;
+    const key = num + '|' + rest.slice(0, 20);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    caps.push({ num, text: rest });
+  }
+  return caps;
+}
+
+// 图注行首模式：Figure 1.2 / Fig. 1-2 / Fig 1.2 / 图1.2 / 图 1-2
+const BK_CAPTION_START_RE = /^(?:Figure|Fig(?:ure)?\.?|图)\s*(\d+(?:[.-]\d+)*)\s*[:：,，]?\s*/i;
+// 编号后首词是英文小写字母 → 判正文引用（图注 \caption 编号后是大写标题短语）
+function bkFirstWordLowercase(rest) {
+  const m = /^([A-Za-z])/.exec(rest);
+  if (!m) return false; // 非字母开头（数字/符号/中文），不触发小写判据
+  return m[1] === m[1].toLowerCase();
+}
+// 英文正文引用动词（头部区命中即视为"Figure 1.1 shows/illustrates..." 句式）
+const BK_BODY_REF_EN_RE = /(?:^|[\s,.;:!?（(])(?:shows?|shown|showing|illustrates?|illustrating|depicts?|depicting|displays?|demonstrates?|demonstrating|presents?|presenting|summarizes?|summarizing|outlines?|outlining|compares?|comparing|describes?|describing)(?=$|[\s,.;:!?）)])/i;
+// 中文正文引用词（"图1-2 说明了/显示了/表示..."）
+const BK_BODY_REF_CN = ['表示', '展示', '示意', '说明', '如下', '显示', '给出', '描述', '列举', '比较', '总结'];
+function bkIsBodyRefCaption(rest) {
+  const head = rest.slice(0, 80); // 只看编号后头部区，长图注后部的动词不影响
+  if (BK_BODY_REF_EN_RE.test(head)) return true;
+  return BK_BODY_REF_CN.some(w => head.includes(w));
+}
+
+// 渲染指定 PDF 页为 JPEG dataURL（最大宽 maxW，默认 720px，质量 0.82）
+async function bkRenderPageToDataUrl(pdfjsLib, page, maxW) {
+  maxW = maxW || 720;
+  const viewport = page.getViewport({ scale: 1 });
+  const baseW = viewport.width;
+  const scale = Math.min(1.5, maxW / baseW); // 放大上限 1.5x，限制输出尺寸
+  const vp = page.getViewport({ scale });
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.ceil(vp.width);
+  canvas.height = Math.ceil(vp.height);
+  const ctx = canvas.getContext('2d');
+  ctx.fillStyle = '#fff';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+  await page.render({ canvasContext: ctx, viewport: vp }).promise;
+  return canvas.toDataURL('image/jpeg', 0.82);
+}
+
+// 从 PDF 中提取指定章节范围的图片（渲染含图注的页面）
+// 返回 [{ page, caption, dataUrl }]
+async function extractChapterFigurePages(pdfData, chapter, maxCount) {
+  const pdfjsLib = await ensurePdfJs();
+  if (!pdfjsLib) return [];
+  maxCount = maxCount || 8;
+  let data;
+  if (pdfData instanceof Uint8Array) data = pdfData;
+  else if (pdfData && pdfData.data && typeof pdfData.type === 'string') data = new Uint8Array(pdfData.data);
+  else if (pdfData && typeof pdfData === 'object') data = pdfData;
+  else return [];
+
+  let pdf = null;
+  try {
+    const loadingTask = pdfjsLib.getDocument({ data });
+    pdf = await loadingTask.promise;
+  } catch (err) {
+    console.error('图片提取：PDF 打开失败', err);
+    return [];
+  }
+
+  const results = [];
+  const start = Math.max(1, chapter.startPage || 1);
+  const end = Math.min(pdf.numPages, chapter.endPage || pdf.numPages);
+  try {
+    for (let p = start; p <= end && results.length < maxCount; p++) {
+      try {
+        const page = await pdf.getPage(p);
+        // 先提取文本层图注；无图注的页跳过（避免整页文字当图片收集）
+        const tc = await page.getTextContent();
+        const captions = bkExtractCaptionsFromText(tc.items);
+        if (captions.length === 0) continue;
+        const dataUrl = await bkRenderPageToDataUrl(pdfjsLib, page, 720);
+        if (!dataUrl) continue;
+        for (const cap of captions.slice(0, 2)) {
+          if (results.length >= maxCount) break;
+          results.push({ page: p, caption: cap.num + (cap.text ? ' ' + cap.text : ''), dataUrl });
+        }
+      } catch (e) { /* 单页失败跳过 */ }
+    }
+  } finally {
+    try { await pdf.destroy(); } catch (e) {}
+  }
+  return results;
+}

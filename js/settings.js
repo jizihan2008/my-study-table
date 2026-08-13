@@ -1111,6 +1111,8 @@ function openSettingsModal() {
   const maxFocusCount = parseInt(localStorage.getItem('study_max_focus_count')) || 3;
   const focusInput = document.getElementById('settingsMaxFocusCount');
   if (focusInput) focusInput.value = Math.max(2, Math.min(5, maxFocusCount));
+  // Load books KB settings
+  loadBooksKbSettings();
 }
 
 function closeSettingsModal(e) {
@@ -2286,6 +2288,24 @@ function loadWebSearchSettings() {
   if (engineEl) engineEl.value = engine;
   if (keyEl) keyEl.value = key;
   updateWebSearchKeyFieldVisibility();
+}
+
+// ═══════════ Books KB Settings ═══════════
+function saveBooksKbSettings() {
+  const el = document.getElementById('settingsBooksKbTruncate');
+  if (!el) return;
+  let v = parseInt(el.value, 10);
+  if (!Number.isFinite(v)) v = 9000;
+  v = Math.max(1000, Math.min(100000, v));
+  el.value = v;
+  localStorage.setItem('study_books_kb_truncate', String(v));
+}
+function loadBooksKbSettings() {
+  const el = document.getElementById('settingsBooksKbTruncate');
+  if (!el) return;
+  let v = parseInt(localStorage.getItem('study_books_kb_truncate') || '9000', 10);
+  if (!Number.isFinite(v)) v = 9000;
+  el.value = Math.max(1000, Math.min(100000, v));
 }
 
 // ═══════════ Evening Report Settings ═══════════

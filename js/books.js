@@ -5,7 +5,9 @@
 //  跨模块接口（由 books-pdf.js / books-kb.js / books-ai.js 提供）：
 //    books-pdf.js : parsePdfFile / splitChaptersByOutline / aiSplitChapters /
 //                   saveBookTextCache / loadBookTextCache / deleteBookTextCache / getChapterText
-//    books-kb.js  : bkRenderKbPanel / bkStartKbBuild / bkStopKbBuild / bkRetryChapter / bkBuildChapterSummary
+//    books-kb.js  : bkRenderKbPanel / bkStartKbBuild / bkStopKbBuild / bkRetryChapter /
+//                   bkBuildChapter / bkRebuildKb / bkKbRemoveTask / bkKbClearQueue / bkBuildChapterSummary
+//                   （构建任务统一走队列 bkKbQueue，支持跨书排队串行执行）
 //    books-ai.js  : bkRenderExplainTab / bkRenderQaTab / bkRenderQuizTab / bkRenderSummaryTab
 // ═══════════════════════════════════════════════════════════════════
 
@@ -28,7 +30,7 @@ try {
 let bkActiveTab = 'explain'; // explain | qa | quiz | summary
 try {
   const savedTab = localStorage.getItem('study_bk_active_tab') || '';
-  if (['explain', 'qa', 'quiz', 'summary', 'wrongbook'].includes(savedTab)) bkActiveTab = savedTab;
+  if (['explain', 'qa', 'quiz', 'summary', 'wrongbook', 'annotations'].includes(savedTab)) bkActiveTab = savedTab;
 } catch (e) {}
 let bkTextCache = null;      // 当前书籍的正文缓存 { bookId, pages, chapterTexts }
 
@@ -206,13 +208,12 @@ function renderBooks() {
         <div class="bk-toc-title">
           <i data-lucide="list-tree" class="lucide-icon" style="width:15px;height:15px;"></i> <span id="bkTocTitle">章节目录</span>
         </div>
-        <div class="bk-toc-toolbar">
+        <div class="bk-toc-toolbar" id="bkTocToolbar">
           <button class="bk-toc-btn bk-toc-hide-btn" onclick="bkToggleToc()" title="隐藏目录"><i data-lucide="panel-left-close" class="lucide-icon" style="width:12px;height:12px;"></i>隐藏</button>
           <button class="bk-toc-btn" id="bkTocExpandAll" onclick="bkExpandAllToc(true)" title="展开全部目录"><i data-lucide="chevrons-down-up" class="lucide-icon" style="width:12px;height:12px;"></i>全部展开</button>
           <button class="bk-toc-btn" id="bkTocCollapseAll" onclick="bkExpandAllToc(false)" title="折叠全部目录"><i data-lucide="chevrons-up-down" class="lucide-icon" style="width:12px;height:12px;"></i>全部折叠</button>
         </div>
         <div id="bkKbPanel"></div>
-        <div class="bk-kb-current" id="bkKbCurrent"></div>
       </div>
       <div class="bk-toc-list" id="bkTocList"></div>
     </div>
@@ -240,10 +241,14 @@ function bkRenderShelfList() {
   list.innerHTML = booksData.map(b => {
     const st = bkDeriveBookKbState(b);
     const active = b.id === bkActiveBookId;
-    const badgeCls = st.status === 'done' ? 'bk-badge-done'
+    // 已在构建队列中等待的书籍显示「排队中」（正在构建中的书仍显示「构建中」）
+    const queued = (typeof bkKbQueue !== 'undefined' && bkKbQueue.some(t => String(t.bookId) === String(b.id)));
+    const badgeCls = queued ? 'bk-badge-queued'
+      : st.status === 'done' ? 'bk-badge-done'
       : st.status === 'building' ? 'bk-badge-building'
       : st.status === 'partial' ? 'bk-badge-partial' : 'bk-badge-pending';
-    const badgeText = st.status === 'done' ? '已建库'
+    const badgeText = queued ? '排队中'
+      : st.status === 'done' ? '已建库'
       : st.status === 'building' ? '构建中'
       : st.status === 'partial' ? st.doneCount + '/' + st.total : '未建库';
     // 移动端：书架卡片右下角提供删除入口（隐藏桌面行内操作区）
@@ -273,6 +278,9 @@ function bkSelectBook(id) {
   bkActiveBookId = id;
   bkActiveChapterId = null;
   bkActiveTab = 'explain';
+  // 切换书籍时退出目录多选模式并清空选中，避免把上一本书的选中带入
+  _bkKbMultiSel = false;
+  _bkKbSelectedIds.clear();
   _bkPersistNav();
   bkTextCache = null;
   bkSaveBooks();
@@ -303,6 +311,10 @@ function bkDeleteBook(id) {
 // ═══════════ 中栏：章节树 + 知识库面板 ═══════════
 // 折叠状态（内存级）：Set 存已折叠的节点 key（实体节点用 id 字符串）
 let _bkCollapsedToc = new Set();
+
+// 目录批量选择（勾选多个章节加入构建队列）
+let _bkKbMultiSel = false;        // 是否处于多选模式
+let _bkKbSelectedIds = new Set(); // 已选中章节 id 集合（字符串）
 
 function bkToggleTocGroup(el) {
   const key = el && el.dataset ? el.dataset.key : '';
@@ -366,21 +378,27 @@ function bkRenderEntityTreeHtml(roots, book, depth = 0) {
     const active = node.id === bkActiveChapterId;
     const st = (node.kb && node.kb.status) || 'pending';
     const badge = badgeMap[st] || '';
+    // 多选模式下点击行 = 切换选中（不跳转）
+    const selClick = _bkKbMultiSel ? `event.stopPropagation();bkKbSelToggle(${node.id})` : `bkSelectChapter(${node.id})`;
     if (hasKids) {
-      // 非叶节点：整行可选中（讲解/知识库/问答等），箭头单独折叠
+      // 非叶节点：整行可选中（讲解/知识库/问答等），箭头单独折叠；右键可重建本章知识库
       html += `
         <div class="bk-chapter-group${active ? ' active' : ''}${collapsed ? ' collapsed' : ''}"
              style="padding-left:${8 + depth * 14}px"
-             onclick="bkSelectChapter(${node.id})" title="${escapeHtml(node.title)}">
+             data-chapter-id="${node.id}"
+             onclick="${selClick}" title="${escapeHtml(node.title)}">
+          ${_bkKbSelChk(node.id)}
           <span class="bk-chapter-arrow" data-key="${node.id}" onclick="event.stopPropagation();bkToggleTocGroup(this)">${collapsed ? '▸' : '▾'}</span>
           <span class="bk-chapter-name">${escapeHtml(node.title)}</span>${badge}
         </div>`;
       if (!collapsed) html += bkRenderEntityTreeHtml(kids, book, depth + 1);
     } else {
-      // 叶节点
+      // 叶节点；右键可重建本章知识库
       html += `
         <div class="bk-chapter ${active ? 'active' : ''}" style="padding-left:${10 + (depth + 1) * 14}px"
-             onclick="bkSelectChapter(${node.id})" title="${escapeHtml(node.title)}">
+             data-chapter-id="${node.id}"
+             onclick="${selClick}" title="${escapeHtml(node.title)}">
+          ${_bkKbSelChk(node.id)}
           <span class="bk-chapter-name">${escapeHtml(node.title)}</span>${badge}
         </div>`;
     }
@@ -431,9 +449,12 @@ function bkRenderChapterTreeHtml(tree, book, depth = 0) {
         const active = c.id === bkActiveChapterId;
         const st = (c.kb && c.kb.status) || 'pending';
         const indent = (depth + 1) * 14;
+        const selClick = _bkKbMultiSel ? `event.stopPropagation();bkKbSelToggle(${c.id})` : `bkSelectChapter(${c.id})`;
         html += `
           <div class="bk-chapter ${active ? 'active' : ''}" style="padding-left:${10 + indent}px"
-               onclick="bkSelectChapter(${c.id})" title="${escapeHtml(c.title)}">
+               data-chapter-id="${c.id}"
+               onclick="${selClick}" title="${escapeHtml(c.title)}">
+            ${_bkKbSelChk(c.id)}
             <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${badgeMap[st] || ''}
           </div>`;
       }
@@ -449,6 +470,19 @@ function bkRenderToc() {
   const list = document.getElementById('bkTocList');
   if (!book || !titleEl || !list) return;
   titleEl.textContent = book.title.length > 14 ? book.title.slice(0, 14) + '…' : book.title;
+
+  // 目录工具栏：普通模式（隐藏/展开/折叠 + 批量入队）⇄ 多选模式（全选/加入队列/取消）
+  const tocToolbar = document.getElementById('bkTocToolbar');
+  if (tocToolbar) {
+    tocToolbar.innerHTML = _bkKbMultiSel
+      ? `<button class="bk-toc-btn bk-toc-hide-btn" onclick="bkKbSelAll()" title="全选"><i data-lucide="check-check" class="lucide-icon" style="width:12px;height:12px;"></i>全选</button>
+         <button class="bk-toc-btn bk-toc-hide-btn bk-toc-sel-add" onclick="bkKbSelAddToQueue()" title="将选中章节加入构建队列"><i data-lucide="list-plus" class="lucide-icon" style="width:12px;height:12px;"></i>加入队列${_bkKbSelectedIds.size ? ' (' + _bkKbSelectedIds.size + ')' : ''}</button>
+         <button class="bk-toc-btn bk-toc-hide-btn" onclick="bkKbSelCancel()" title="退出多选"><i data-lucide="x" class="lucide-icon" style="width:12px;height:12px;"></i>取消</button>`
+      : `<button class="bk-toc-btn bk-toc-hide-btn" onclick="bkToggleToc()" title="隐藏目录"><i data-lucide="panel-left-close" class="lucide-icon" style="width:12px;height:12px;"></i>隐藏</button>
+         <button class="bk-toc-btn" id="bkTocExpandAll" onclick="bkExpandAllToc(true)" title="展开全部目录"><i data-lucide="chevrons-down-up" class="lucide-icon" style="width:12px;height:12px;"></i>全部展开</button>
+         <button class="bk-toc-btn" id="bkTocCollapseAll" onclick="bkExpandAllToc(false)" title="折叠全部目录"><i data-lucide="chevrons-up-down" class="lucide-icon" style="width:12px;height:12px;"></i>全部折叠</button>
+         <button class="bk-toc-btn" onclick="bkToggleKbMultiSel()" title="勾选多个章节加入构建队列"><i data-lucide="list-plus" class="lucide-icon" style="width:12px;height:12px;"></i>批量入队</button>`;
+  }
 
   // 知识库面板（进度 + 操作按钮）由 books-kb.js 负责渲染
   const kbPanel = document.getElementById('bkKbPanel');
@@ -487,9 +521,12 @@ function bkRenderToc() {
       if (!c) return '';
       const active = c.id === bkActiveChapterId;
       const st = (c.kb && c.kb.status) || 'pending';
+      const selClick = _bkKbMultiSel ? `event.stopPropagation();bkKbSelToggle(${c.id})` : `bkSelectChapter(${c.id})`;
       return `
         <div class="bk-chapter ${active ? 'active' : ''}" style="padding-left:10px"
-             onclick="bkSelectChapter(${c.id})" title="${escapeHtml(c.title)}">
+             data-chapter-id="${c.id}"
+             onclick="${selClick}" title="${escapeHtml(c.title)}">
+          ${_bkKbSelChk(c.id)}
           <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${badgeMap[st] || ''}
         </div>`;
     }).join('');
@@ -506,14 +543,80 @@ function bkRenderToc() {
       const active = c.id === bkActiveChapterId;
       const st = (c.kb && c.kb.status) || 'pending';
       const indent = Math.min(c.level || 0, 3) * 14;
+      const selClick = _bkKbMultiSel ? `event.stopPropagation();bkKbSelToggle(${c.id})` : `bkSelectChapter(${c.id})`;
       return `
         <div class="bk-chapter ${active ? 'active' : ''}" style="padding-left:${10 + indent}px"
-             onclick="bkSelectChapter(${c.id})" title="${escapeHtml(c.title)}">
+             data-chapter-id="${c.id}"
+             onclick="${selClick}" title="${escapeHtml(c.title)}">
+          ${_bkKbSelChk(c.id)}
           <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${badgeMap[st] || ''}
         </div>`;
     }).join('');
   }
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+
+// ═══════════ 目录批量选择（勾选多章加入构建队列） ═══════════
+// 多选模式下每个章节行前显示复选框，点击行/复选框切换选中；「加入队列」逐个入队
+function _bkKbSelChk(cid) {
+  if (!_bkKbMultiSel) return '';
+  const checked = _bkKbSelectedIds.has(String(cid)) ? ' checked' : '';
+  return `<span class="bk-chapter-check${checked}" data-cid="${cid}" onclick="event.stopPropagation();bkKbSelToggle(${cid})" title="选择/取消选择"></span>`;
+}
+
+// 进入/退出目录多选模式（退出时清空选中）
+function bkToggleKbMultiSel() {
+  const book = bkGetActiveBook();
+  if (!book) return;
+  _bkKbMultiSel = !_bkKbMultiSel;
+  if (!_bkKbMultiSel) _bkKbSelectedIds.clear();
+  bkRenderToc();
+}
+
+// 切换单个章节的选中状态
+function bkKbSelToggle(cid) {
+  const key = String(cid);
+  if (_bkKbSelectedIds.has(key)) _bkKbSelectedIds.delete(key);
+  else _bkKbSelectedIds.add(key);
+  bkRenderToc();
+}
+
+// 全选：本书所有章节条目（含实体树非叶节点，与「构建全书」口径一致）
+function bkKbSelAll() {
+  const book = bkGetActiveBook();
+  if (!book) return;
+  _bkKbSelectedIds = new Set((book.chapters || []).map(c => String(c.id)));
+  bkRenderToc();
+}
+
+// 退出多选并清空选中
+function bkKbSelCancel() {
+  _bkKbMultiSel = false;
+  _bkKbSelectedIds.clear();
+  bkRenderToc();
+}
+
+// 将选中章节逐个加入构建队列（走 bkKbEnqueue，自动去重），完成后退出多选
+function bkKbSelAddToQueue() {
+  const book = bkGetActiveBook();
+  if (!book || _bkKbSelectedIds.size === 0) return;
+  const cfg = (typeof getEffectiveApiConfig === 'function') ? getEffectiveApiConfig() : null;
+  if (!cfg || !cfg.apiKey || typeof callAiApi !== 'function') {
+    alert('请先在「设置 → AI」中配置 API Key，再构建知识库');
+    return;
+  }
+  let added = 0;
+  for (const id of _bkKbSelectedIds) {
+    const ch = (book.chapters || []).find(c => String(c.id) === id);
+    if (!ch || typeof bkKbEnqueue !== 'function') continue;
+    bkKbEnqueue({ bookId: book.id, mode: 'chapter', chapterId: ch.id });
+    added++;
+  }
+  if (added > 0) {
+    _bkKbMultiSel = false;
+    _bkKbSelectedIds.clear();
+  }
+  bkRenderToc();
 }
 
 function bkSelectChapter(id) {
@@ -548,7 +651,8 @@ function bkRenderMain() {
     { id: 'qa',      icon: 'message-circle-question', label: '全书问答' },
     { id: 'quiz',    icon: 'list-checks',     label: '测验练习' },
     { id: 'summary', icon: 'network',         label: '摘要导图' },
-    { id: 'wrongbook', icon: 'book-x',        label: '错题本' }
+    { id: 'wrongbook', icon: 'book-x',        label: '错题本' },
+    { id: 'annotations', icon: 'message-square', label: '批注' }
   ];
   tabs.innerHTML = tabDefs.map(t =>
     `<button class="bk-tab-btn ${bkActiveTab === t.id ? 'active' : ''}" onclick="bkSwitchTab('${t.id}')">
@@ -586,7 +690,7 @@ function bkRenderTabBody() {
   const body = document.getElementById('bkMainBody');
   if (!body || !book) return;
 
-  if (!chapter) {
+  if (!chapter && bkActiveTab !== 'annotations') {
     body.innerHTML = `
       <div class="bk-empty-hint">
         <i data-lucide="mouse-pointer-click" class="lucide-icon" style="width:52px;height:52px;"></i>
@@ -601,7 +705,8 @@ function bkRenderTabBody() {
     qa: 'bkRenderQaTab',
     quiz: 'bkRenderQuizTab',
     summary: 'bkRenderSummaryTab',
-    wrongbook: 'bkRenderWrongbookTab'
+    wrongbook: 'bkRenderWrongbookTab',
+    annotations: 'bkRenderAnnotationsTab'
   };
   const fn = fnMap[bkActiveTab];
   if (fn && typeof window[fn] === 'function') {
@@ -1196,8 +1301,9 @@ async function bkEnsureTextCache() {
     try { bkTextCache = await loadBookTextCache(book.id); } catch (e) { bkTextCache = null; }
   }
   if (!bkTextCache) {
-    bkTextCache = { bookId: book.id, pages: [], chapterTexts: {} };
+    bkTextCache = { bookId: book.id, pages: [], chapterTexts: {}, figures: {} };
   }
+  if (!bkTextCache.figures) bkTextCache.figures = {};
   return bkTextCache;
 }
 
