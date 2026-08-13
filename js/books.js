@@ -647,15 +647,22 @@ function bkRenderOutlineTreeHtml(outline, maxLevel, level = 0) {
 }
 
 // 询问用户章节划分颗粒度；返回 Promise<chapterLevel(0基)>，取消返回 null
-function bkAskChapterGranularity(outline) {
+// source：'toc'（从原书目录页解析）或 'outline'（从 PDF 书签解析），用于说明识别方式
+function bkAskChapterGranularity(outline, source) {
   const info = bkCollectOutlineLevels(outline);
   const totalLevels = info.maxLevel + 1; // 层级数量（1 基）
+  // 判断书是否含 Part 分组（如 Sipser 的 Part One/Two/Three）
+  const hasParts = (outline || []).some(o => /^part\s/i.test(String(o.title || '')));
+  // 每层的语义名称：有 Part 时 Part/章/节/小节，无 Part 时 章/节/小节
+  const levelNames = hasParts ? ['Part', '章', '节', '小节', '第四级', '第五级'] : ['章', '节', '小节', '第四级', '第五级'];
+  // 默认选中「章」层：有 Part 时章在 level1，无 Part 时章在 level0
+  const defaultLevel = hasParts ? 1 : 0;
   return new Promise((resolve) => {
     const levelsHtml = [];
     for (let i = 0; i < totalLevels; i++) {
       const lv = info.levels[i] || { items: 0, withPage: 0 };
-      levelsHtml.push(`<button class="bk-gran-lvl" data-level="${i}">
-        <b>层级 ${i + 1}</b>
+      levelsHtml.push(`<button class="bk-gran-lvl" data-level="${i}" ${i === defaultLevel ? 'data-default="1"' : ''}>
+        <b>${levelNames[i] || ('层级 ' + (i + 1))}</b>
         <span>${lv.items} 项</span>
       </button>`);
     }
@@ -666,6 +673,11 @@ function bkAskChapterGranularity(outline) {
         </div>
         <div style="font-size:12.5px;color:var(--text-secondary);margin-bottom:14px;line-height:1.7;">
           检测到本书目录包含 <b>${totalLevels}</b> 个层级。请选择将哪一层作为「章」：
+          <div style="margin-top:6px;padding:8px 10px;background:var(--hover-bg,#f4f4f5);border-radius:8px;font-size:12px;">
+            <b>识别方式：</b>${source === 'toc'
+              ? '从原书目录页（Contents）提取，按「章节编号位数」分层——一位数编号为章（如 1），两位为节（1.1），三位为小节（1.1.1）。'
+              : '从 PDF 自带书签（Outline）提取，按书签缩进层级分层。'}
+          </div>
         </div>
         <div class="bk-gran-levels" id="bkGranLevels">${levelsHtml.join('')}</div>
         <div style="font-size:12px;color:var(--text-secondary);margin:12px 0 6px;font-weight:500;">目录预览（展开至所选层级）：</div>
@@ -676,7 +688,7 @@ function bkAskChapterGranularity(outline) {
         </div>
       </div>`, { width: 560 });
     const treeEl = document.getElementById('bkGranTree');
-    let selected = -1;
+    let selected = defaultLevel;   // 默认选中「章」层，并展开预览到该层
 
     const renderTree = () => {
       if (treeEl) treeEl.innerHTML = bkRenderOutlineTreeHtml(outline, selected, 0);
@@ -691,6 +703,8 @@ function bkAskChapterGranularity(outline) {
       renderTree();
     };
     document.getElementById('bkGranLevels').addEventListener('click', onLvlClick);
+    // 首次渲染默认选中「章」层
+    renderTree();
 
     const cleanup = (val) => {
       document.getElementById('bkGranLevels').removeEventListener('click', onLvlClick);
@@ -728,8 +742,8 @@ function bkShowReceivedPdfs() {
             <div style="font-size:13.5px;font-weight:600;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(it.fileName || ('Book ' + it.bookId))}</div>
             <div style="font-size:11px;color:var(--text-secondary);">${(it.size / 1024 / 1024).toFixed(1)} MB · ${new Date(it.savedAt).toLocaleString()}</div>
           </div>
-          <button class="bk-quiz-btn primary" style="padding:6px 12px;font-size:12px;" onclick="bkOpenReceivedPdf('${it.bookId}')">阅读</button>
-          <button class="bk-quiz-btn" style="padding:6px 10px;font-size:12px;background:transparent;border-color:var(--border);" onclick="bkDeleteReceivedPdf('${it.bookId}')">删除</button>
+          <button class="bk-quiz-btn primary" style="padding:6px 12px;font-size:12px;" onclick="bkOpenReceivedPdf('${escapeJs(it.bookId)}')">阅读</button>
+          <button class="bk-quiz-btn" style="padding:6px 10px;font-size:12px;background:transparent;border-color:var(--border);" onclick="bkDeleteReceivedPdf('${escapeJs(it.bookId)}')">删除</button>
         </div>`;
       }).join('');
     }
@@ -972,17 +986,41 @@ async function bkImportBook() {
       return;
     }
 
-    // 章节切分：优先 outline，无 outline 时 AI 辅助
+    // 章节切分：优先从原书目录页（Contents）解析完整层级，其次 outline，最后 AI 辅助
     let chapters = null;
     let granLevel = 0; // 用户选择的颗粒度层级
     onProgress({ text: '正在切分章节…', percent: 99 });
-    if (parsed.outline && parsed.outline.length > 0) {
+    // ① 原书目录页解析（最完整、干净，含子章节结构；同样支持用户选择颗粒度）
+    if (typeof parseContentsFromToc === 'function' && parsed.tocTexts && parsed.tocTexts.length) {
+      try {
+        const tocChapters = parseContentsFromToc(parsed.tocTexts, parsed.pageCount);
+        if (tocChapters && tocChapters.length) {
+          if (typeof bkAskChapterGranularity === 'function' && typeof splitChaptersAtLevel === 'function') {
+            const info = bkCollectOutlineLevels(tocChapters);
+            if (info.maxLevel > 0) {
+              bkHideOverlay();
+              const picked = await bkAskChapterGranularity(tocChapters, 'toc');
+              if (picked === null) return; // 用户取消导入
+              granLevel = picked;
+              onProgress({ text: '正在切分章节…', percent: 99 });
+              chapters = splitChaptersAtLevel(tocChapters, parsed.pageCount, granLevel);
+            } else {
+              chapters = splitChaptersAtLevel(tocChapters, parsed.pageCount, 0);
+            }
+          } else {
+            chapters = splitChaptersAtLevel(tocChapters, parsed.pageCount, 0);
+          }
+        }
+      } catch (e) { chapters = null; }
+    }
+    // ② outline（书签）解析
+    if (!chapters && parsed.outline && parsed.outline.length > 0) {
       // 多层级目录：询问用户章节划分颗粒度
       if (typeof bkAskChapterGranularity === 'function' && typeof splitChaptersAtLevel === 'function') {
         const info = bkCollectOutlineLevels(parsed.outline);
         if (info.maxLevel > 0) {
           bkHideOverlay();
-          const picked = await bkAskChapterGranularity(parsed.outline);
+          const picked = await bkAskChapterGranularity(parsed.outline, 'outline');
           if (picked === null) return; // 用户取消导入
           granLevel = picked;
           onProgress({ text: '正在切分章节…', percent: 99 });
@@ -990,7 +1028,10 @@ async function bkImportBook() {
         }
       }
       if (!chapters) chapters = splitChaptersByOutline(parsed.outline, parsed.pageCount);
-    } else if (typeof aiSplitChapters === 'function') {
+    }
+    // ③ AI 辅助切分：仅当目录页解析和书签都未得到章节时才走 AI（独立判断，不挂在 else 上，
+    //   避免目录/书签已成功时误触发 AI）
+    if (!chapters && typeof aiSplitChapters === 'function') {
       chapters = await aiSplitChapters(parsed.pages, (msg) => onProgress({ text: msg, percent: 99 }));
     }
     if (!chapters || chapters.length === 0) {
@@ -1072,20 +1113,45 @@ async function bkReimportBook(id) {
     bkShowOverlay('<div class="bk-import-box"><div class="bk-spinner" style="width:26px;height:26px;"></div><p style="margin:12px 0 0;font-size:13.5px;color:var(--text);">正在重新解析 PDF…</p></div>');
     const parsed = await parsePdfFile(pdfData, onProgress);
     let chapters = null;
-    if (parsed.outline && parsed.outline.length > 0) {
+    // ① 原书目录页解析（与 bkImportBook 一致）
+    if (typeof parseContentsFromToc === 'function' && parsed.tocTexts && parsed.tocTexts.length) {
+      try {
+        const tocChapters = parseContentsFromToc(parsed.tocTexts, parsed.pageCount);
+        if (tocChapters && tocChapters.length) {
+          if (typeof bkAskChapterGranularity === 'function' && typeof splitChaptersAtLevel === 'function') {
+            const info = bkCollectOutlineLevels(tocChapters);
+            if (info.maxLevel > 0) {
+              bkHideOverlay();
+              const picked = await bkAskChapterGranularity(tocChapters, 'toc');
+              if (picked === null) return; // 用户取消重新导入
+              onProgress({ text: '正在切分章节…', percent: 99 });
+              chapters = splitChaptersAtLevel(tocChapters, parsed.pageCount, picked);
+            } else {
+              chapters = splitChaptersAtLevel(tocChapters, parsed.pageCount, 0);
+            }
+          } else {
+            chapters = splitChaptersAtLevel(tocChapters, parsed.pageCount, 0);
+          }
+        }
+      } catch (e) { chapters = null; }
+    }
+    // ② outline（书签）解析
+    if (!chapters && parsed.outline && parsed.outline.length > 0) {
       // 多层级目录：询问用户章节划分颗粒度
       if (typeof bkAskChapterGranularity === 'function' && typeof splitChaptersAtLevel === 'function') {
         const info = bkCollectOutlineLevels(parsed.outline);
         if (info.maxLevel > 0) {
           bkHideOverlay();
-          const picked = await bkAskChapterGranularity(parsed.outline);
+          const picked = await bkAskChapterGranularity(parsed.outline, 'outline');
           if (picked === null) return; // 用户取消重新导入
           onProgress({ text: '正在切分章节…', percent: 99 });
           chapters = splitChaptersAtLevel(parsed.outline, parsed.pageCount, picked);
         }
       }
       if (!chapters) chapters = splitChaptersByOutline(parsed.outline, parsed.pageCount);
-    } else if (typeof aiSplitChapters === 'function') {
+    }
+    // ③ AI 辅助切分：仅当目录页解析和书签都未得到章节时才走 AI（独立判断，避免误触发）
+    if (!chapters && typeof aiSplitChapters === 'function') {
       chapters = await aiSplitChapters(parsed.pages, (msg) => onProgress({ text: msg, percent: 99 }));
     }
     if (!chapters || chapters.length === 0) {

@@ -162,7 +162,11 @@ window.Store = (function () {
     try {
       let q = sb.from('plugin_store_items').select('*').eq('status', 'approved').order('downloads', { ascending: false });
       if (_tagFilter) q = q.contains('tags', [_tagFilter]);
-      if (_searchQuery) q = q.or(`name.ilike.%${_searchQuery}%,description.ilike.%${_searchQuery}%,tags.cs.{${_searchQuery}}`);
+      if (_searchQuery) {
+        // 清洗用户输入，防止 PostgREST 过滤串注入（. , ( ) * % 等特殊字符）
+        const term = String(_searchQuery).replace(/[(),.*%]/g, '').slice(0, 50);
+        q = q.or(`name.ilike.%${term}%,description.ilike.%${term}%,tags.cs.{${term}}`);
+      }
       const { data, error } = await q;
       if (error) throw error;
       _pluginsCache = data || [];

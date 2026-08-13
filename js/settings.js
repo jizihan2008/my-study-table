@@ -741,29 +741,30 @@ async function renderExtensionsPanel() {
     const publishBadge = ext.builtin ? '' : (published
       ? '<span class="ext-badge ext-badge-published" title="已发布到插件市场"><i data-lucide="check" class="lucide-icon" style="width:11px;height:11px;vertical-align:-1px;"></i> 已发布</span>'
       : '<span class="ext-badge ext-badge-unpublished" title="尚未发布到插件市场">未发布</span>');
-    const rollbackBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="rollbackExt('${ext.id}')"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:13px;height:13px;"></i> 回滚</button>`;
-    const publishBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="window.Store && window.Store.doUpload('${ext.id}')"><i data-lucide="upload" class="lucide-icon" style="width:13px;height:13px;"></i> 发布</button>`;
+    const extIdSafe = escapeJs(ext.id);
+    const rollbackBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="rollbackExt('${extIdSafe}')"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:13px;height:13px;"></i> 回滚</button>`;
+    const publishBtn = ext.builtin ? '' : `<button class="ext-action-btn" onclick="window.Store && window.Store.doUpload('${extIdSafe}')"><i data-lucide="upload" class="lucide-icon" style="width:13px;height:13px;"></i> 发布</button>`;
     const removeLabel = ext.builtin ? '移除' : '卸载';
     return `<div class="ext-card">
       <div class="ext-card-header">
         <div class="ext-card-left">
           <span class="ext-card-name"><i data-lucide="${m.type === 'patch' ? 'wrench' : 'puzzle'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> ${escapeHtml(m.name || ext.id)}</span>
-          <span class="ext-badge ext-badge-${m.type}">${typeLabels[m.type] || m.type}</span>
+          <span class="ext-badge ext-badge-${m.type === 'patch' ? 'patch' : 'plugin'}">${escapeHtml(typeLabels[m.type] || m.type)}</span>
           ${builtinBadge}
           ${publishBadge}
           <span class="ext-card-meta">v${escapeHtml(m.version || '?')} · ${sizeStr}</span>
         </div>
         <label class="toggle-switch ext-toggle">
-          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleExtension('${ext.id}', this.checked)">
+          <input type="checkbox" ${enabled ? 'checked' : ''} onchange="toggleExtension('${extIdSafe}', this.checked)">
           <span class="toggle-slider"></span>
         </label>
       </div>
       <div class="ext-card-desc">${escapeHtml(m.description || '（无描述）')}</div>
       <div class="ext-card-actions">
-        <button class="ext-action-btn" onclick="viewExtCode('${ext.id}')"><i data-lucide="file-code" class="lucide-icon" style="width:13px;height:13px;"></i> 查看代码</button>
+        <button class="ext-action-btn" onclick="viewExtCode('${extIdSafe}')"><i data-lucide="file-code" class="lucide-icon" style="width:13px;height:13px;"></i> 查看代码</button>
         ${publishBtn}
         ${rollbackBtn}
-        <button class="ext-action-btn ext-action-danger" onclick="removeExt('${ext.id}')"><i data-lucide="trash-2" class="lucide-icon" style="width:13px;height:13px;"></i> ${removeLabel}</button>
+        <button class="ext-action-btn ext-action-danger" onclick="removeExt('${extIdSafe}')"><i data-lucide="trash-2" class="lucide-icon" style="width:13px;height:13px;"></i> ${removeLabel}</button>
       </div>
       ${ext.error ? `<div class="ext-error">⚠ 上次装载出错: ${escapeHtml(ext.error)}</div>` : ''}
     </div>`;
@@ -773,7 +774,7 @@ async function renderExtensionsPanel() {
     listEl.innerHTML += `<div class="ext-removed-section">
       <div class="settings-section-title" style="margin-top:14px;"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 已移除的内置扩展</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;">
-        ${removedBuiltins.map(b => `<button class="ext-action-btn" onclick="restoreBuiltinExt('${b.id}')"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i> 恢复 ${escapeHtml((b.meta && b.meta.name) || b.id)}</button>`).join('')}
+        ${removedBuiltins.map(b => `<button class="ext-action-btn" onclick="restoreBuiltinExt('${escapeJs(b.id)}')"><i data-lucide="plus" class="lucide-icon" style="width:13px;height:13px;"></i> 恢复 ${escapeHtml((b.meta && b.meta.name) || b.id)}</button>`).join('')}
       </div>
     </div>`;
   }
@@ -1153,6 +1154,34 @@ function _getLastFocusEndTime() {
   return lastEnd;
 }
 
+// ── Helper: get TODAY's last focus end time (0 if no focus today) ──
+function _getTodayLastFocusEnd() {
+  if (typeof loadTimerRecords !== 'function') return 0;
+  const now = new Date();
+  const dayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate()).getTime();
+  const records = loadTimerRecords();
+  let lastEnd = 0;
+  for (const rec of records) {
+    if (!rec.sessions || rec.sessions.length === 0) continue;
+    for (const s of rec.sessions) {
+      if (s.end && s.end >= dayStart && s.end > lastEnd) lastEnd = s.end;
+    }
+  }
+  return lastEnd;
+}
+
+// ── Idle timer accumulation ──
+// 空闲计时器：仅累计「应用运行时 + 未在专注」的时长，每天重置，专注时归零。
+// 存储：study_reminder_idle_accum（今日累计毫秒）+ study_reminder_idle_day（日期）
+function _resetIdleAccum() {
+  localStorage.setItem('study_reminder_idle_accum', '0');
+  localStorage.setItem('study_reminder_idle_day', _getReminderTodayStr());
+}
+// 供 timer.js 在专注开始时调用：空闲计时器归零
+function resetIdleTimerOnFocus() {
+  if (typeof _resetIdleAccum === 'function') _resetIdleAccum();
+}
+
 // ── Helper: check if any habit is checked in today ──
 function _hasCheckedInToday() {
   if (typeof loadHabits !== 'function') return false;
@@ -1253,36 +1282,52 @@ function _checkIdleReminder() {
   const enabled = localStorage.getItem('study_reminder_idle_enabled') === 'true';
   if (!enabled) return;
 
-  // Limit to 3 times per day
-  const sentCount = parseInt(localStorage.getItem('study_reminder_idle_count_today') || '0');
+  // 每日重置空闲计时器（跨天时归零）
   const today = _getReminderTodayStr();
+  let accumDay = localStorage.getItem('study_reminder_idle_day');
+  let accum = parseInt(localStorage.getItem('study_reminder_idle_accum') || '0');
+  if (accumDay !== today) {
+    accum = 0;
+    localStorage.setItem('study_reminder_idle_accum', '0');
+    localStorage.setItem('study_reminder_idle_day', today);
+  }
+
+  // 正在专注：空闲计时器归零并保持为零（不累加、不提醒）
+  const isFocusing = (typeof timerRunning !== 'undefined' && timerRunning);
+  if (isFocusing) {
+    if (accum !== 0) _resetIdleAccum();
+    return;
+  }
+
+  // 今天没有专注记录 → 不累加空闲、不提醒（空闲计时器基于今日专注结束开始）
+  const todayLastFocus = _getTodayLastFocusEnd();
+  if (todayLastFocus === 0) return;
+
+  // 累加本次轮询间隔（约 30 秒）到空闲计时器，仅应用运行时才有此累加
+  accum += 30000;
+  localStorage.setItem('study_reminder_idle_accum', String(accum));
+
+  const idleMin = parseInt(localStorage.getItem('study_reminder_idle_after_min')) || 60;
+  if (accum < idleMin * 60000) return; // 空闲计时器未达阈值
+
+  // 每天最多提醒次数（unlimited = 不限）
+  const sentCount = parseInt(localStorage.getItem('study_reminder_idle_count_today') || '0');
   const sentDay = localStorage.getItem('study_reminder_idle_count_day');
   if (sentDay !== today) {
     localStorage.setItem('study_reminder_idle_count_day', today);
     localStorage.setItem('study_reminder_idle_count_today', '0');
   }
-  // Check daily limit (unlimited = never capped)
   const isUnlimited = localStorage.getItem('study_reminder_idle_unlimited') === 'true';
   if (!isUnlimited) {
     const maxCount = parseInt(localStorage.getItem('study_reminder_idle_max_count') || '3');
     if (sentCount >= maxCount) return;
   }
 
-  // Cooldown: at least 30 minutes between reminders
+  // 冷却：距上次提醒至少 30 分钟
   const lastSentTs = parseInt(localStorage.getItem('study_reminder_idle_last_ts') || '0');
   if (lastSentTs && (Date.now() - lastSentTs) < 30 * 60 * 1000) return;
 
-  const idleMin = parseInt(localStorage.getItem('study_reminder_idle_after_min')) || 60;
-  const lastFocus = _getLastFocusEndTime();
-  if (lastFocus === 0) return; // no focus history at all
-
-  const elapsed = (Date.now() - lastFocus) / 60000;
-  if (elapsed < idleMin) return;
-
-  // Don't remind if currently focusing
-  if (typeof timerRunning !== 'undefined' && timerRunning) return;
-
-  // Exemption time range check
+  // 豁免时间段
   if (_isInIdleExemptRange()) return;
 
   const msg = '你已经有一段时间没有进行聚焦计时了。' + _pick(ENCOURAGEMENTS_IDLE);
@@ -1852,10 +1897,10 @@ function renderAutomationList() {
   }
   el.innerHTML = automations.map(a => {
     const conv = aiConvs.find(c => c.id === a.convId);
-    const convTitle = conv ? (conv.title || '对话#' + a.convId) : '（对话已删除）';
+    const convTitle = conv ? escapeHtml(conv.title || '对话#' + a.convId) : '（对话已删除）';
     const isOnce = a.repeat === 'once';
     const repeatLabel = isOnce ? '1️⃣ 一次性' : '🔄 每天';
-    const timeLabel = isOnce ? `触发时间 ${a.at}` : `每天 ${a.at}`;
+    const timeLabel = isOnce ? `触发时间 ${escapeHtml(a.at)}` : `每天 ${escapeHtml(a.at)}`;
     return `
     <div style="display:flex;align-items:flex-start;padding:10px 12px;margin:4px 0;background:var(--todo-bg);border-radius:8px;font-size:13px;gap:8px;${a.enabled === false ? 'opacity:0.5;' : ''}">
       <input type="checkbox" ${a.enabled !== false ? 'checked' : ''} onchange="toggleAutomationEnabled(${a.id}, this.checked)" style="flex-shrink:0;margin-top:3px;cursor:pointer;width:16px;height:16px;accent-color:var(--primary);" title="${a.enabled !== false ? '已启用，点击停用' : '已停用，点击启用'}">
@@ -1866,7 +1911,7 @@ function renderAutomationList() {
           <span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">→ ${convTitle}</span>
         </div>
         <div style="color:var(--text-secondary);font-size:12px;margin-top:2px;">${escapeHtml(a.prompt)}</div>
-        ${a.lastRun ? `<div style="color:var(--done);font-size:10px;margin-top:2px;">✅ 上次运行：${a.lastRun}</div>` : '<div style="color:var(--text-secondary);font-size:10px;margin-top:2px;">⏳ 尚未运行</div>'}
+        ${a.lastRun ? `<div style="color:var(--done);font-size:10px;margin-top:2px;">✅ 上次运行：${escapeHtml(a.lastRun)}</div>` : '<div style="color:var(--text-secondary);font-size:10px;margin-top:2px;">⏳ 尚未运行</div>'}
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0;">
         <button onclick="editAutomationById(${a.id})" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:4px 8px;cursor:pointer;font-size:11px;" title="编辑">✏️</button>

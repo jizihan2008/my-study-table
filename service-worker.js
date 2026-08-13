@@ -16,7 +16,7 @@ const PRECACHE_URLS = [
   './manifest.webmanifest',
   './css/style.css?v=20260812-r66',
   './js/env.js?v=20260811-r1',
-  './js/core.js?v=20260811-r2',
+  './js/core.js?v=20260812-r8',
   './js/sync.js?v=20260811-r1',
   './icons/icon-192.png',
   './icons/icon-512.png'

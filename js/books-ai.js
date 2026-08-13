@@ -163,7 +163,7 @@ async function bkSendExplain() {
         </div>
         <div class="bk-msg-actions">
           <button class="bk-msg-action" onclick="bkSaveExplainAsNote()"><i data-lucide="save" class="lucide-icon" style="width:12px;height:12px;"></i> 存为笔记</button>
-          <button class="bk-msg-action" onclick="bkExplainQuick('${escapeAttr('请用更通俗的语言再解释一遍 ' + q)}')"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i> 再讲一遍</button>
+          <button class="bk-msg-action" onclick="bkExplainQuick('${escapeJs('请用更通俗的语言再解释一遍 ' + q)}')"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i> 再讲一遍</button>
         </div>
       </div>`, true);
   } catch (err) {
@@ -234,7 +234,7 @@ function _bkRenderExplainHistory(chapterId) {
       </div>
       <div class="bk-msg-actions">
         <button class="bk-msg-action" onclick="bkSaveExplainAsNote()"><i data-lucide="save" class="lucide-icon" style="width:12px;height:12px;"></i> 存为笔记</button>
-        <button class="bk-msg-action" onclick="bkExplainQuick('${escapeAttr('请用更通俗的语言再解释一遍 ' + m.content)}')"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i> 再讲一遍</button>
+        <button class="bk-msg-action" onclick="bkExplainQuick('${escapeJs('请用更通俗的语言再解释一遍 ' + m.content)}')"><i data-lucide="refresh-cw" class="lucide-icon" style="width:12px;height:12px;"></i> 再讲一遍</button>
       </div>
     </div>`;
   }).join('');
@@ -1027,7 +1027,7 @@ function bkRenderSummaryTab(book, chapter) {
   const termsHtml = (kb.terms && kb.terms.length)
     ? `<div class="bk-kb-card">
         <div class="bk-kb-card-title"><i data-lucide="bookmark" class="lucide-icon" style="width:14px;height:14px;"></i> 术语表<span style="font-weight:400;font-size:11px;color:var(--text-secondary);">（可悬停查看含义 · 右键移除标黄 · 点 × 删除术语）</span></div>
-        <div class="bk-term-list">${kb.terms.map(t => `<span class="bk-term-chip"><b>${escapeHtml(t.term)}</b> ${escapeHtml(t.def || '')}<button class="bk-term-chip-del" title="从术语表移除" onclick="bkDeleteTermFromGlossary('${escapeHtml(String(t.term).replace(/'/g, "\\'"))}')"><i data-lucide="x" class="lucide-icon" style="width:11px;height:11px;"></i></button></span>`).join('')}</div>
+        <div class="bk-term-list">${kb.terms.map(t => `<span class="bk-term-chip"><b>${escapeHtml(t.term)}</b> ${escapeHtml(t.def || '')}<button class="bk-term-chip-del" title="从术语表移除" onclick="bkDeleteTermFromGlossary('${escapeJs(t.term)}')"><i data-lucide="x" class="lucide-icon" style="width:11px;height:11px;"></i></button></span>`).join('')}</div>
       </div>` : '';
 
   const hasSummaryNodes = Array.isArray(kb.summaryNodes) && kb.summaryNodes.length > 0;

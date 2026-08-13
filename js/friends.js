@@ -217,13 +217,14 @@ function friendsAvatarHtml(profile, size) {
   const color = friendsAvatarColor(profile && (profile.username || profile.id));
   const px = size || 40;
   const url = profile && profile.avatar_url;
+  const initial = escapeHtml(friendsInitial(profile));
   if (url) {
     return `<span class="fr-avatar" style="width:${px}px;height:${px}px;flex-shrink:0;">
-      <img src="${escapeAttr(url)}" alt="" onerror="this.style.display='none';this.parentElement.classList.add('fr-avatar-fallback');this.parentElement.innerHTML='<span style=\'font-weight:600;color:#fff\'>${friendsInitial(profile)}</span>';">
-      <span style="color:${color};font-size:${Math.round(px * 0.44)}px;font-weight:700;">${friendsInitial(profile)}</span>
+      <img src="${escapeAttr(url)}" alt="" onerror="this.style.display='none';this.parentElement.classList.add('fr-avatar-fallback');this.parentElement.style.background='${escapeJs(color)}';">
+      <span style="color:#fff;font-size:${Math.round(px * 0.44)}px;font-weight:700;">${initial}</span>
     </span>`;
   }
-  return `<span class="fr-avatar" style="width:${px}px;height:${px}px;background:${color};flex-shrink:0;"><span style="color:#fff;font-size:${Math.round(px * 0.44)}px;font-weight:700;">${friendsInitial(profile)}</span></span>`;
+  return `<span class="fr-avatar" style="width:${px}px;height:${px}px;background:${escapeAttr(color)};flex-shrink:0;"><span style="color:#fff;font-size:${Math.round(px * 0.44)}px;font-weight:700;">${initial}</span></span>`;
 }
 
 // 判断好友是否在线：last_seen 在 2 分钟内
@@ -391,7 +392,10 @@ async function friendsSearchUsers(query) {
   if (!client || !me) return [];
   if (!query.trim()) return [];
   try {
-    const q = '%' + query.trim() + '%';
+    // 清洗用户输入，防止 PostgREST 过滤串注入（. , ( ) * % 等特殊字符）
+    const term = query.trim().replace(/[(),.*%]/g, '').slice(0, 50);
+    if (!term) return [];
+    const q = '%' + term + '%';
     const { data, error } = await client.from('profiles')
       .select('*').neq('id', me.id)
       .or(`username.ilike.${q},nickname.ilike.${q}`)
@@ -1467,9 +1471,9 @@ async function frRenameGroup(groupId) {
   document.getElementById('editModalTitle').innerHTML = '<i data-lucide="pencil" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 重命名分组';
   document.getElementById('editModalBody').innerHTML = `
     <div class="modal-field"><label>分组名称</label>
-      <input type="text" id="frGroupName" maxlength="20" value="${escapeAttr(g.name)}" onkeydown="if(event.key==='Enter')frCommitRename('${groupId}')">
+      <input type="text" id="frGroupName" maxlength="20" value="${escapeAttr(g.name)}" onkeydown="if(event.key==='Enter')frCommitRename('${escapeJs(groupId)}')">
     </div>
-    <button class="btn-save-modal" onclick="frCommitRename('${groupId}')">保存</button>
+    <button class="btn-save-modal" onclick="frCommitRename('${escapeJs(groupId)}')">保存</button>
   `;
   editModalOpen = true;
   document.getElementById('editModal').classList.add('open');

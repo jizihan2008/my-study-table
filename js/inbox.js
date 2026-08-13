@@ -481,7 +481,8 @@ window.Inbox = (function () {
       if (!res.ok) { alert('拉取失败：' + (res.reason || '未知错误')); if (btn) btn.disabled = false; return; }
       let added = 0, skipped = 0;
       for (const mail of res.mails || []) {
-        const key = (acc.host || '') + '|' + (mail.id || 0);
+        // 去重键包含账号维度（同一 host 可配置多个不同账号，避免 UID 撞 key 误判为重复）
+        const key = (acc.user || '') + '@' + (acc.host || '') + '|' + (mail.id || 0);
         const created = addMessage({
           channel: 'mail',
           mailKey: key,
@@ -774,7 +775,8 @@ window.Inbox = (function () {
     if (imgPath && isElectronEnv()) {
       try {
         const res = await window.electronAPI.captureReadImage(imgPath);
-        if (res.ok) {
+        // 仅允许位图 dataUrl，拒绝 SVG/HTML 等其他类型进入 DOM（防注入）
+        if (res.ok && /^data:image\/(png|jpe?g|gif|webp|bmp);/i.test(res.dataUrl || '')) {
           showInboxModal({
             title: '<i data-lucide="image" style="width:16px;height:16px;vertical-align:middle;"></i> 截图预览',
             body: `<img src="${res.dataUrl}" style="max-width:100%;border-radius:8px;" onerror="this.style.display='none'">`,

@@ -1038,7 +1038,8 @@ function statusBgColor(status) {
   if (!status) return '#6b7280';
   const options = loadStatusOptions();
   const found = options.find(o => o.name === status);
-  return found ? found.color : '#6b7280';
+  // 仅允许合法十六进制颜色，防止用户自定义状态色注入 CSS
+  return (found && /^#[0-9a-fA-F]{3,8}$/.test(found.color || '')) ? found.color : '#6b7280';
 }
 
 function buildStatusOptions(current) {
@@ -1110,10 +1111,13 @@ function buildStatusSelectHTML(current) {
   let optionItems = '';
   for (const o of options) {
     const cls = o.name === current ? ' selected' : '';
-    optionItems += `<div class="status-option${cls}" data-value="${escapeAttr(o.name)}" onclick="selectStatusOption(this.closest('.status-select-wrapper').querySelector('select'),'${escapeAttr(o.name)}')"><span class="status-dot" style="background:${o.color}"></span>${escapeHtml(o.name)}</div>`;
+    const oNameJs = escapeJs(o.name);
+    const oColor = /^#[0-9a-fA-F]{3,8}$/.test(o.color || '') ? o.color : '#6b7280';
+    optionItems += `<div class="status-option${cls}" data-value="${escapeAttr(o.name)}" onclick="selectStatusOption(this.closest('.status-select-wrapper').querySelector('select'),'${oNameJs}')"><span class="status-dot" style="background:${oColor}"></span>${escapeHtml(o.name)}</div>`;
   }
   if (current && !options.some(o => o.name === current)) {
-    optionItems += `<div class="status-option selected" data-value="${escapeAttr(current)}" onclick="selectStatusOption(this.closest('.status-select-wrapper').querySelector('select'),'${escapeAttr(current)}')"><span class="status-dot" style="background:#6b7280"></span>${escapeHtml(current)} <span class="status-custom-tag">自定义</span></div>`;
+    const curJs = escapeJs(current);
+    optionItems += `<div class="status-option selected" data-value="${escapeAttr(current)}" onclick="selectStatusOption(this.closest('.status-select-wrapper').querySelector('select'),'${curJs}')"><span class="status-dot" style="background:#6b7280"></span>${escapeHtml(current)} <span class="status-custom-tag">自定义</span></div>`;
   }
 
   const curColor = current ? statusBgColor(current) : '#6b7280';

@@ -60,6 +60,9 @@ async function parsePdfFile(buffer, onProgress) {
 
   const pageCount = pdf.numPages;
   const pages = [];
+  const tocTexts = [];   // 目录（Contents）各页，按行保存（保留换行，供目录层级解析）
+  let tocActive = false; // 是否正处目录区（目录可能跨多页，只有第一页含 "Contents"）
+  let tocStarted = false; // 是否已识别过目录（防止正文中再次出现 "contents" 单词重新激活收集）
 
   for (let i = 1; i <= pageCount; i++) {
     const page = await pdf.getPage(i);
@@ -75,6 +78,63 @@ async function parsePdfFile(buffer, onProgress) {
       text = '';
     }
     pages.push(text);
+
+    // 进入目录区：某页含 "Contents"（含间隔式 "C O N T E N T S"）即标记开始收集。
+    // 注意 tocStarted 守卫：一旦目录区结束（isBody 触发）就永久关闭，
+    // 避免正文中出现的 "contents" 单词（如 "the contents of..."）重新激活收集，
+    // 否则会误收集到正文/书末 Index 页。
+    if (!tocStarted && !tocActive && /c[\s.]*o[\s.]*n[\s.]*t[\s.]*e[\s.]*n[\s.]*t[\s.]*s/i.test(text)) {
+      tocActive = true;
+      tocStarted = true;
+    }
+    // 目录区收集（最多 12 页）。遇正文明显特征（Preface / Chapter N 正文）立即停止。
+    // 注意：不能把 "CONTENTS" 当停止信号——目录续页也以 "CONTENTS"+页码 开头，
+    // 否则会漏掉后续目录（如含 3.2/4/5/6 的页被误跳过，导致章节缺失）。
+    if (tocActive && tocTexts.length < 12) {
+      // preface 可能是间隔式 "P R E F A C E" 或带页码前缀 "xii PREFACE"，均需停止；
+      // 否则会收集到 Preface 正文页（其内容可能混入带编号的伪章节，如 "2.2 PUSHDOWN AUTOMATA"）
+      // 停止条件（仅在已收集至少 1 页目录后才判定，避免误伤目录首页）：
+      //  - 正文页眉 "CHAPTER 2 / TITLE"（含斜杠，目录页无此格式，最可靠）
+      //  - 间隔式 Preface "P R E F A C E"
+      //  - 版权页 Copyright / 致谢 / 参考书目 / 索引
+      // 这些都是目录区结束、进入正文/前言/版权区的信号，混入会带来伪章节。
+      const isBody = tocTexts.length > 0 && (
+        /chapter\s+\d+\s*\/\s*[a-z]/i.test(text) ||
+        /p\s*r\s*e\s*f\s*a\s*c\s*e/i.test(text) ||
+        /acknowledg/i.test(text) ||
+        /^\s*copyright/i.test(text) ||
+        /^\s*selected\s+bibliography/i.test(text) ||
+        /^\s*index\b/i.test(text)
+      );
+      // 目录区结束：停止收集；tocStarted 永久保持 true，防止正文中再次出现 "contents" 重新激活
+      if (isBody) { tocActive = false; }
+      else {
+        try {
+          const tc = await page.getTextContent();
+          const byY = {};
+          for (const it of tc.items || []) {
+            const y = Math.round(it.transform[5]);
+            const x = Math.round(it.transform[4]);
+            if (!byY[y]) byY[y] = [];
+            byY[y].push({ x, str: it.str });
+          }
+          const ys = Object.keys(byY).map(Number).sort((a, b) => b - a); // 顶→底
+          // 每行保留其最小 x（原始缩进坐标），供 parseContentsFromToc 统一聚类判断层级。
+          // 不在此处归一化，避免页脚/页码等噪声坐标污染整页基准。
+          const tocLines = ys.map(y => {
+            const items = byY[y].sort((a, b) => a.x - b.x);
+            const text = items.map(t => t.str).join('');
+            const minX = items[0].x;
+            // tab 前缀编码原始 x（非层级），解析时再聚类
+            return '\t' + minX + '\t' + text;
+          });
+          tocTexts.push(tocLines.join('\n'));
+        } catch (e) {}
+      }
+    }
+    // 已收集够目录页后停止
+    if (tocTexts.length >= 10) tocActive = false;
+
     if (i % 5 === 0 || i === pageCount) {
       report(`已提取第 ${i}/${pageCount} 页`, Math.round((i / pageCount) * 90));
     }
@@ -88,19 +148,52 @@ async function parsePdfFile(buffer, onProgress) {
   // 释放
   try { await pdf.destroy(); } catch (e) {}
 
-  return { pageCount, pages, outline };
+  return { pageCount, pages, outline, tocTexts };
+}
+
+// 清洗/过滤 outline 标题：
+// - 去尾部换行 \n、开头 *、两端空白
+// - 过滤「乱码标题」（公式碎片）：数学教材的书签里会混入大量被拆碎的公式符号
+//   （如 -Qt^n-k^ 2、CM-、(;)r)(-D'+1、4 48 ).），这些应丢弃；
+//   正常章节标题（Chapter/Example/Solution/1.1 等）保留。
+// 判定规则：含章节关键词 / 标准章节数字 / 中文 直接保留；
+//   否则要求「≥4 个英文字母 + 字母占比≥40% + 含≥4字母的单词」才保留（正常句子），
+//   纯公式碎片（字母少、夹杂大量符号）被丢弃。
+const BK_OUTLINE_KEYWORDS = ['Chapter','Example','Solution','Introduction','Summary','Problems','Contents','Preface',
+  'Notation','Definition','Theorem','Proposition','Lemma','Figure','Historical','Theoretical','Exercises',
+  'Combinatorial','Binomial','Proof','Permutations','Combinations','Random','Variable','Distributions',
+  'Distribution','Conditional','Expectation','Probability','Limit','Law','Hint','Self-Test','Generalized',
+  'Basic','Sampling','Counting','Independent','Coefficient','Note','Data','Preface','Notes','Brief','Problems'];
+function _cleanOutlineTitle(raw) {
+  let t = String(raw || '');
+  t = t.replace(/[\r\n]+/g, '').replace(/^\*+/, '').trim();
+  if (!t) return null; // 空标题
+  // 标准章节数字 X.Y / X.Y.Z（如 1.1, 2.3.4）→ 保留
+  if (/^\d+(\.\d+){1,2}$/.test(t)) return t;
+  // 含中文（CJK 字符）→ 保留
+  if (/[\u4e00-\u9fff]/.test(t)) return t;
+  // 含章节关键词 → 保留
+  if (BK_OUTLINE_KEYWORDS.some(k => t.includes(k))) return t;
+  // 否则：要求 ≥4 个英文字母、字母占比 ≥40%、且含 ≥4 字母的单词（正常句子特征）
+  const letters = (t.match(/[A-Za-z]/g) || []).length;
+  const total = t.replace(/\s/g, '').length || 1;
+  if (letters >= 4 && letters / total >= 0.4 && /[A-Za-z]{4,}/.test(t)) return t;
+  // 纯公式碎片：丢弃
+  return null;
 }
 
 // 递归解析 outline 每项的 dest → 页码（逻辑页，从 1 开始）
 async function resolveOutlineDest(pdf, items, level = 0) {
   const result = [];
   for (const item of items || []) {
+    const cleaned = _cleanOutlineTitle(item.title);
+    if (cleaned === null) continue; // 过滤乱码标题
     let page = null;
     if (item.dest) {
       page = await resolveOutlineDestPage(pdf, item.dest);
     }
     const node = {
-      title: String(item.title || '').trim(),
+      title: cleaned,
       level: level,
       page: page,
       items: []
@@ -131,6 +224,178 @@ async function resolveOutlineDestPage(pdf, dest) {
     try { return (await pdf.getPageIndex(dest[0])) + 1; } catch (e) {}
   }
   return null;
+}
+
+// ── 从原书目录页（Contents）解析完整章节树 ──
+// 目录页文本每行形如「章节号 标题 页号」或「标题 页号」：
+//   1 Combinatorial Analysis 1
+//   1.1 Introduction 1
+//   1.1.1 ... 5
+//   Summary 15
+// 解析规则：
+//   - 章节号判断层级：1（章）、1.1（节）、1.1.1（小节）
+//   - 无编号条目（Summary/Problems/...）视为上一章尾部，不作为独立章节
+//   - 章内小节（1.1/1.1.1）合并归属到章，作为章的子章节
+// 返回 outline 兼容的「树结构」：章节点含 items（节），节含 items（小节）。
+// 每个节点 {title, level, page, items}，与 splitChaptersAtLevel / bkCollectOutlineLevels 兼容，
+// 因此目录页解析后同样可以走「选择章节划分颗粒度」流程。
+function parseContentsFromToc(tocTexts, pageCount) {
+  // 每行可能是收集阶段编码的「\t<原始x坐标>\t文本」，也可能是旧版纯文本。
+  // 原始 x 坐标来自目录原文，需先全局聚类成缩进级别，辅助推断层级。
+  const rawLines = []; // { x, text }
+  for (const txt of tocTexts || []) {
+    for (const raw of txt.split('\n')) {
+      if (!raw.trim()) continue;
+      // 提取 x 前缀（若存在）；无前缀时 x=null（未知，退回纯编号判断）
+      let x = null;
+      let content = raw;
+      const im = raw.match(/^\t(-?\d+)\t(.*)$/);
+      if (im) {
+        x = parseInt(im[1], 10);
+        content = im[2];
+      }
+      const line = content.trim();
+      if (!line) continue;
+      rawLines.push({ x, text: line });
+    }
+  }
+  if (rawLines.length < 2) return null;
+
+  // ── 缩进聚类：把所有行的 x 按间隙分组（同一层级的 x 相近），组序号即缩进深度 indent ──
+  // 仅对「有 x」的行参与聚类；间隙阈值 6px 用于区分不同缩进层级。
+  const X_GAP = 6;
+  const xs = rawLines.map(l => l.x).filter(x => x != null);
+  const xToIndent = new Map();
+  if (xs.length) {
+    const sorted = [...new Set(xs)].sort((a, b) => a - b);
+    const clusters = [];
+    let cur = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i] - sorted[i - 1] > X_GAP) { clusters.push(cur); cur = [sorted[i]]; }
+      else cur.push(sorted[i]);
+    }
+    clusters.push(cur);
+    clusters.forEach((cls, idx) => cls.forEach(v => xToIndent.set(v, idx)));
+  }
+  const lines = rawLines.map(l => ({ indent: l.x == null ? null : (xToIndent.get(l.x) ?? 0), text: l.text }));
+
+  // 无意义孤立词（目录区可能混入正文/换行残留，需过滤）
+  const STOP_WORDS = new Set(['of','and','the','a','an','in','on','to','for','or','preface','contents','index',
+    'acknowledgments','acknowledgements','references','appendix','appendices','notes','bibliography','errata']);
+
+  // 每行：末尾数字 = 页号；前面是「章节号 标题」+ 可能的目录点线（dot leaders，如 "1.1 Title ..... 31"）
+  const parseLine = (line, indent) => {
+    // 行尾页号
+    const m = line.match(/^(.*?)[\s.]+(\d+)$/);
+    if (!m) return null;
+    let head = m[1].trim();
+    const page = parseInt(m[2], 10);
+    // 去掉目录点线：从第一个 ". ." 开始是点线，截断（标题本身不含连续点线）
+    const dotIdx = head.search(/\.\s+\./);
+    if (dotIdx >= 0) head = head.slice(0, dotIdx).trim();
+    // 过滤孤立介词/无意义词（如 "of 848"、"Preface x" 的残留）
+    if (STOP_WORDS.has(head.toLowerCase())) return null;
+    // Part 分组：如 "Part One: Automata and Languages" / "Part II ..." / "PART ONE"
+    const partMatch = head.match(/^Part\s+(One|Two|Three|Four|Five|Six|Seven|Eight|Nine|Ten|Eleven|Twelve|\d+|[IVX]+)\s*:?\s*(.*)$/i);
+    if (partMatch) {
+      // 保留原始大小写（如 "One" 而非 "ONE"），罗马数字统一大写（ii → II）
+      let partLabel = partMatch[1];
+      if (/^[ivx]+$/i.test(partLabel)) partLabel = partLabel.toUpperCase();
+      const partTitle = (partMatch[2] || '').trim();
+      // 完整标题带 Part 前缀：如 "Part One: Automata and Languages" 或 "Part One"
+      return { kind: 'part', num: 'Part ' + partLabel, title: 'Part ' + partLabel + (partTitle ? ': ' + partTitle : ''), page, indent };
+    }
+    const secMatch = head.match(/^(\d+(?:\.\d+)*)\s+(.*)$/);
+    if (secMatch) return { num: secMatch[1], title: secMatch[2].trim(), page, indent };
+    // 无编号条目（章内尾部如 Summary/Problems 保留；章外前置内容如 Preface/Index/Bibliography 过滤）
+    const lc = head.toLowerCase();
+    if (/^(preface|contents|index|selected\s+bibliography|acknowledg|about\s+the\s+author|list\s+of\s+|brief\s+contents|detailed\s+contents)/.test(lc)) return null;
+    return { num: null, title: head, page, indent }; // 无编号（章内尾部）
+  };
+
+  // 收集所有条目（含 Part / 章 / 节 / 小节 / 章内尾部）
+  const entries = [];
+  for (const { indent, text } of lines) {
+    const p = parseLine(text, indent);
+    if (!p) continue;
+    entries.push(p);
+  }
+  if (entries.length === 0) return null;
+
+  const isPart = (e) => e && e.kind === 'part';
+  const isChapter = (num) => num && /^\d+$/.test(num);
+  const isSection = (num) => num && /^\d+\.\d+$/.test(num);
+  const isSubsection = (num) => num && /^\d+\.\d+\.\d+$/.test(num);
+  // 章标题至少含一个 ≥3 字母的完整单词（排除 of/and/the 等孤立词误判）
+  const hasRealTitle = (t) => /[A-Za-z]{3,}/.test(String(t || ''));
+
+  // 标题带章节标号（如 "1.1 Introduction"、"4.6.1 Properties..."），无标号时用纯标题
+  const withNum = (num, title) => (num ? num + ' ' + title : title);
+
+  // 是否包含 Part 分组（如 Sipser 的 Part One/Two/Three）
+  const hasParts = entries.some(isPart);
+
+  // ── 缩进辅助层级判定 ──
+  // 收集阶段为每行标注了目录原文的缩进深度 indent（全局聚类，0 最左，越大越右）。
+  // 编号（1 / 1.1 / 1.1.1）是最可靠的层级信号，优先采用；
+  // 缩进作为补充，解决「无编号条目」（如 Sipser 目录里缩进更深的小节标题）
+  // 层级不清的问题：无编号条目若缩进比「节」还深，则归属到当前节下作为更深小节，
+  // 否则（与节平级或更浅，如 Summary/Problems）归属当前章下作为章的子节点。
+  // 用带编号条目校准「缩进 → 语义层级」的参照（chapterIndent/sectionIndent）。
+  let chapterIndent = null;  // 章的典型缩进（编号为纯整数的条目）
+  let sectionIndent = null;  // 节的典型缩进（编号为 x.y 的条目）
+  for (const e of entries) {
+    if (e.indent == null) continue;
+    if (isChapter(e.num) && chapterIndent === null) chapterIndent = e.indent;
+    else if (isSection(e.num) && sectionIndent === null) sectionIndent = e.indent;
+  }
+  // 无编号条目若比「节」缩进还深（存在节参照时），归属到当前节下作为更深小节
+  const deeperThanSection = (e) => e.indent != null && sectionIndent !== null && e.indent > sectionIndent;
+
+  // 构建树：
+  //  有 Part：Part(level0) → 章(1) → 节(2) → 小节(3)
+  //  无 Part：章(0) → 节(1) → 小节(2)
+  const root = [];
+  let curPart = null;
+  let curChapter = null;
+  let curSection = null;
+  const partOffset = hasParts ? 1 : 0;
+
+  for (const e of entries) {
+    if (isPart(e)) {
+      curPart = { title: e.title, level: 0, page: e.page, items: [] };
+      curChapter = null;
+      curSection = null;
+      root.push(curPart);
+    } else if (isChapter(e.num) && hasRealTitle(e.title)) {
+      curChapter = { title: withNum(e.num, e.title), level: partOffset, page: e.page, items: [] };
+      curSection = null;
+      if (curPart) curPart.items.push(curChapter);
+      else root.push(curChapter);
+    } else if (curChapter && isSection(e.num)) {
+      curSection = { title: withNum(e.num, e.title), level: partOffset + 1, page: e.page, items: [] };
+      curChapter.items.push(curSection);
+    } else if (curSection && isSubsection(e.num)) {
+      curSection.items.push({ title: withNum(e.num, e.title), level: partOffset + 2, page: e.page, items: [] });
+    } else if (curChapter && isSubsection(e.num)) {
+      // 章下直接出现小节（无一级节）：作为章的二级节点
+      curChapter.items.push({ title: withNum(e.num, e.title), level: partOffset + 2, page: e.page, items: [] });
+    } else if (curChapter && !e.num && hasRealTitle(e.title)) {
+      // 无章节编号条目（Summary / Problems / Theoretical Exercises / 缩进较深的章内小节等）。
+      // 依据缩进决定层级：
+      //   缩进比「节」还深（存在节参照时）→ 归属当前节下，作为更深小节；
+      //   否则（与章平级或仅比章深）→ 归属当前章下，作为章的子节点。
+      if (curSection && deeperThanSection(e)) {
+        curSection.items.push({ title: e.title, level: partOffset + 2, page: e.page, items: [] });
+      } else {
+        curSection = { title: e.title, level: partOffset + 1, page: e.page, items: [] };
+        curChapter.items.push(curSection);
+      }
+    }
+    // 无编号且缩进不深（与章平级）的纯尾部条目已由上面处理；其他无法归属的忽略
+  }
+  if (!root.length) return null;
+  return root;
 }
 
 // ── outline → 章节树 ──

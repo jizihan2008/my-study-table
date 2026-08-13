@@ -4,8 +4,23 @@ function escapeHtml(str) {
   div.textContent = str;
   return div.innerHTML;
 }
+// escapeJs：用于单引号 JS 字符串上下文（onclick="fn('...')"），先转义反斜杠再转义引号与换行，
+// 避免反斜杠绕过（如 \');alert(1)// 变为 \\' 时先转义 \\ 再闭合字符串）。
+function escapeJs(str) {
+  return String(str)
+    .replace(/\\/g, '\\\\')
+    .replace(/'/g, "\\'")
+    .replace(/"/g, '\\"')
+    .replace(/\n/g, '\\n')
+    .replace(/\r/g, '\\r');
+}
+// escapeAttr：仅用于 HTML 属性值上下文（双引号包裹）。
 function escapeAttr(str) {
-  return String(str).replace(/'/g, "\\'").replace(/"/g, '&quot;');
+  return String(str)
+    .replace(/&/g, '&amp;')
+    .replace(/"/g, '&quot;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 // ═══════════ Update keyboard shortcuts ═══════════
@@ -25,7 +40,7 @@ function renderChangelogModal() {
           <span>${dateStr}</span>
           <span>${timeStr}</span>
         </div>
-        <div class="modal-changelog-content">${e.content}</div>
+        <div class="modal-changelog-content">${escapeHtml(e.content)}</div>
       </div>
     `;
   }).join('');

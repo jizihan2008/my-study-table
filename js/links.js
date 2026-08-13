@@ -79,7 +79,7 @@ function renderLinkCards(linkList) {
     }
     const isApp = l.type === 'app';
     return `
-      <div class="link-card" onclick="openLink('${escapeAttr(l.url || '')}', '${l.type}')">
+      <div class="link-card" onclick="openLink('${escapeJs(l.url || '')}', '${escapeJs(l.type)}')">
         <div class="link-card-icon${isApp ? ' app-icon' : ''}">${letter}</div>
         <div class="link-card-name">${escapeHtml(l.name)}</div>
         ${l.url ? `<div class="link-card-url">${escapeHtml(l.url)}</div>` : ''}
@@ -114,10 +114,10 @@ function renderLinks() {
         <span class="cat-section-count">${groups[cat].length} 个</span>
         <div class="cat-section-right">
           <div class="cat-section-actions">
-            ${idx > 0 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategoryToTop('${escapeAttr(cat)}')" title="移到首位"><i data-lucide="chevrons-up" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
-            ${idx > 0 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategory('${escapeAttr(cat)}', -1)" title="上移"><i data-lucide="chevron-up" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
-            ${idx < cats.length - 1 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategory('${escapeAttr(cat)}', 1)" title="下移"><i data-lucide="chevron-down" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
-            ${idx < cats.length - 1 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategoryToBottom('${escapeAttr(cat)}')" title="移到末位"><i data-lucide="chevrons-down" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
+            ${idx > 0 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategoryToTop('${escapeJs(cat)}')" title="移到首位"><i data-lucide="chevrons-up" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
+            ${idx > 0 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategory('${escapeJs(cat)}', -1)" title="上移"><i data-lucide="chevron-up" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
+            ${idx < cats.length - 1 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategory('${escapeJs(cat)}', 1)" title="下移"><i data-lucide="chevron-down" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
+            ${idx < cats.length - 1 ? `<button class="cat-move-btn" onclick="event.stopPropagation();moveCategoryToBottom('${escapeJs(cat)}')" title="移到末位"><i data-lucide="chevrons-down" class="lucide-icon" style="width:12px;height:12px;"></i></button>` : ''}
           </div>
           <i data-lucide="chevron-down" class="lucide-icon cat-toggle" style="width:16px;height:16px;color:var(--text-secondary);flex-shrink:0;"></i>
         </div>

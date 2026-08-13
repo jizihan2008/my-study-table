@@ -21,7 +21,9 @@ const ACCENT_PRESETS = ['#4f6ef7','#3b82f6','#059669','#f97316','#8b5cf6','#6474
 function getCustomPresets() {
   try {
     const raw = localStorage.getItem('study_custom_presets');
-    return raw ? JSON.parse(raw) : {};
+    if (!raw) return {};
+    const v = JSON.parse(raw);
+    return (v && typeof v === 'object' && !Array.isArray(v)) ? v : {};
   } catch { return {}; }
 }
 
@@ -118,6 +120,28 @@ function cssUrl(url) {
   return `url("${u.replace(/["\\]/g, m => '\\' + m).replace(/\)/g, '%29')}")`;
 }
 
+// 仅允许合法 CSS 颜色（十六进制/rgb/hsl/常见关键词），其余一律降级为默认色，防 CSS 注入
+function safeCssColor(v, fallback) {
+  const s = String(v || '').trim();
+  if (!s) return fallback;
+  if (/^#[0-9a-fA-F]{3,8}$/.test(s)) return s;
+  if (/^rgba?\([\d\s,./%]+\)$/i.test(s)) return s;
+  if (/^hsla?\([\d\s,./%deg]+\)$/i.test(s)) return s;
+  if (/^[a-z]+$/i.test(s)) return s;
+  return fallback;
+}
+
+// 仅允许安全的背景图 URL（http(s)/相对路径/位图 data:image），其余返回空串
+function safeBgImageUrl(v) {
+  const s = String(v || '').trim();
+  return /^(https?:\/\/|\/|\.\.?\/|data:image\/(png|jpe?g|gif|webp);)/i.test(s) ? s : '';
+}
+
+function safeCssAngle(v) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 135;
+}
+
 // ── Helpers ──
 
 function adjustColor(hex, amount) {
@@ -209,17 +233,21 @@ function buildBgImageValue(eff) {
   if (eff.isPreset && eff.presetMode) {
     const pMode = eff.presetMode;
     if (pMode.bg === 'gradient') {
-      return `linear-gradient(${pMode.gAngle || 135}deg, ${pMode.gFrom || '#667eea'}, ${pMode.gTo || '#764ba2'})`;
+      return `linear-gradient(${safeCssAngle(pMode.gAngle)}deg, ${safeCssColor(pMode.gFrom, '#667eea')}, ${safeCssColor(pMode.gTo, '#764ba2')})`;
     }
     if (pMode.bg === 'image' && pMode.bgImage) {
-      return pMode.bgImage.startsWith('url(') ? pMode.bgImage : cssUrl(pMode.bgImage);
+      const img = safeBgImageUrl(pMode.bgImage);
+      return img ? cssUrl(img) : 'none';
     }
   }
   // Use custom background
   switch (eff.bgType) {
     case 'color': return 'none'; // use --bg via background-color
-    case 'gradient': return `linear-gradient(${eff.bgAngle}deg, ${eff.bgFrom}, ${eff.bgTo})`;
-    case 'image': return cssUrl(eff.bgImage);
+    case 'gradient': return `linear-gradient(${safeCssAngle(eff.bgAngle)}deg, ${safeCssColor(eff.bgFrom, '#667eea')}, ${safeCssColor(eff.bgTo, '#764ba2')})`;
+    case 'image': {
+      const img = safeBgImageUrl(eff.bgImage);
+      return img ? cssUrl(img) : 'none';
+    }
     case 'video': return 'none'; // handled by <video> element in applyCustomTheme
     default: return 'none';
   }
@@ -417,20 +445,26 @@ function renderAppearancePanel() {
     const active = cfg.preset === id ? ' active' : '';
     const isCustom = !!customPresets[id];
     const pm = p[mode] || p.light || {};
+    const idAttr = escapeAttr(String(id));
+    const nameHtml = escapeHtml(p.name || id);
     let previewStyle = '';
     if (pm.bg === 'gradient') {
-      previewStyle = `background:linear-gradient(${pm.gAngle || 135}deg,${pm.gFrom || '#667eea'},${pm.gTo || '#764ba2'})`;
+      const a = safeCssAngle(pm.gAngle);
+      const f = safeCssColor(pm.gFrom, '#667eea');
+      const t = safeCssColor(pm.gTo, '#764ba2');
+      previewStyle = `background:linear-gradient(${a}deg,${f},${t})`;
     } else if (pm.bg === 'image' && pm.bgImage) {
-      previewStyle = `background-image:url(${pm.bgImage});background-size:cover`;
+      const bgUrl = safeBgImageUrl(pm.bgImage);
+      previewStyle = bgUrl ? `background-image:url(${bgUrl});background-size:cover` : 'background:#667eea';
     } else if (pm.bg === 'video') {
       previewStyle = `background:#1a1a2e`; // dark with ▶ overlay via CSS
     } else {
-      previewStyle = `background:${pm.accent || p.light?.accent || '#4f6ef7'}`;
+      previewStyle = `background:${safeCssColor(pm.accent, p.light?.accent || '#4f6ef7')}`;
     }
-    return `<div class="theme-preset-card${active}" data-preset="${id}" title="${p.name}">
+    return `<div class="theme-preset-card${active}" data-preset="${idAttr}" title="${escapeAttr(p.name || id)}">
       <div class="tpc-preview" style="${previewStyle}"></div>
-      <div class="tpc-name">${p.name}</div>
-      ${isCustom ? '<span class="tpc-delete" data-delete-preset="' + id + '" title="删除预设">✕</span>' : ''}
+      <div class="tpc-name">${nameHtml}</div>
+      ${isCustom ? '<span class="tpc-delete" data-delete-preset="' + idAttr + '" title="删除预设">✕</span>' : ''}
     </div>`;
   }).join('');
 
@@ -496,7 +530,7 @@ function renderAppearancePanel() {
       </div>`;
   } else if (effectiveBgType === 'image') {
     bgExtra = `<div class="bg-image-url-row">
-      <input type="text" id="bgImageUrl" value="${(effectiveBgImage || '').replace(/"/g, '&quot;')}" placeholder="输入图片 URL 或 Data URL">
+      <input type="text" id="bgImageUrl" value="${escapeAttr(effectiveBgImage || '')}" placeholder="输入图片 URL 或 Data URL">
       <button id="bgImageApply">应用</button>
     </div>
     <div class="bg-image-local-row">
@@ -506,7 +540,7 @@ function renderAppearancePanel() {
     </div>`;
   } else if (effectiveBgType === 'video') {
     bgExtra = `<div class="bg-image-url-row">
-      <input type="text" id="bgVideoUrl" value="${(effectiveBgVideo || '').replace(/"/g, '&quot;')}" placeholder="输入视频 URL 或文件路径">
+      <input type="text" id="bgVideoUrl" value="${escapeAttr(effectiveBgVideo || '')}" placeholder="输入视频 URL 或文件路径">
       <button id="bgVideoApply">应用</button>
     </div>
     <div class="bg-image-local-row">

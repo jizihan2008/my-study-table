@@ -5,9 +5,23 @@
 // Record format: { id, targetId, targetType: 'todo'|'goal', date (YYYY-MM-DD), totalMs, sessions: [{ start: timestamp_ms, end: timestamp_ms }], affectsFocus: bool, manual: bool }
 
 // ═══════════ Data persistence ═══════════
+// 计数器从「当前时间戳」与「已存记录最大 id+1」中取较大者，避免加载历史记录后
+// 新生成的 id 与旧记录重复（系统时钟回拨 / 上次会话 id 已超越当前时间戳时）。
 let _timerRecordIdCounter = Date.now();
 
+function _syncTimerRecordCounter() {
+  let max = _timerRecordIdCounter;
+  try {
+    const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
+    for (const r of records) {
+      if (typeof r.id === 'number' && r.id >= max) max = r.id + 1;
+    }
+  } catch (e) { /* 忽略解析错误 */ }
+  _timerRecordIdCounter = max;
+}
+
 function genTimerRecordId() {
+  _syncTimerRecordCounter();
   return _timerRecordIdCounter++;
 }
 
@@ -383,6 +397,8 @@ function timerStart() {
   timerRunning = true;
   timerSessionStart = Date.now();
   timerHistoryExpanded = false;
+  // 专注开始：空闲计时器归零（空闲提醒逻辑）
+  if (typeof resetIdleTimerOnFocus === 'function') { try { resetIdleTimerOnFocus(); } catch (e) {} }
   timerInterval = setInterval(function() {
     renderTimer();
     saveTimerState();

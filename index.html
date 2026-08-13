@@ -13,7 +13,7 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/style.css?v=20260812-r66">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
-<script src="https://unpkg.com/lucide@latest"></script>
+<script src="https://unpkg.com/lucide@0.469.0"></script>
 </head>
 <body>
 
@@ -1290,58 +1290,58 @@
 <script src="js/liquid-glass.js?v=20260722-r23"></script>
 <script src="js/core.js?v=20260812-r8"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
-<script src="js/todos.js?v=20260807-r14"></script>
-    <script src="js/notes.js?v=20260812-r15"></script>
-    <script src="js/links.js?v=20260805-r7"></script>
-    <script src="js/today.js?v=20260723-r1"></script>
-    <!-- AI 模块（按依赖顺序加载） -->
-    <script src="js/ai-utils.js?v=20260807-r5"></script>
-    <script src="js/ai-tree.js?v=20260804-r3"></script>
-    <script src="js/ai-conv.js?v=20260803-r1"></script>
-    <script src="js/ai-attach.js?v=20260807-r1"></script>
-    <script src="js/ai-render.js?v=20260812-r11"></script>
-    <script src="js/ai-tools.js?v=20260811-r2"></script>
-    <script src="js/ai-search.js"></script>
-    <script src="js/ai-api.js?v=20260803-r1"></script>
-    <script src="js/ai-send.js?v=20260804-r3"></script>
-    <script src="js/music.js"></script>
-    <script src="js/memory.js?v=20260812-r3"></script>
-    <script src="js/appearance.js?v=20260812-r3"></script>
-    <script src="js/backup-idb.js?v=20260812-r1"></script>
-    <script src="js/settings.js?v=20260812-r21"></script>
-    <script src="js/utils.js?v=20260722-r2"></script>
-    <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
-    <script src="js/inbox.js?v=20260811-r1"></script>
-    <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
-    <script type="module">
-      import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
-      window.pdfjsLib = pdfjsLib;
-      pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
-    </script>
-    <script src="js/books-pdfstore.js?v=20260812-r2"></script>
-    <script src="js/books.js?v=20260812-r20"></script>
-    <script src="js/books-pdf.js?v=20260812-r2"></script>
-    <script src="js/books-kb.js?v=20260811-r7"></script>
-    <script src="js/books-ai.js?v=20260812-r8"></script>
-    <script src="js/calendar.js?v=20260724-r7"></script>
-    <script src="js/taskline.js?v=20260812-r27"></script>
-    <script src="js/timer.js?v=20260812-r23"></script>
-    <script src="js/habits.js?v=20260724-r1"></script>
-    <script src="js/stats.js?v=20260724-r1"></script>
-    <script src="js/updater.js?v=20260802-r1"></script>
-    <!-- 好友系统 -->
-    <script src="lib/supabase/supabase.js"></script>
-    <script src="js/friends.js?v=20260812-r10"></script>
-    <script src="js/friends-chat.js?v=20260805-r2"></script>
-    <!-- 扩展系统 -->
-    <script src="js/ext-api.js?v=20260804-r1"></script>
-    <script src="js/patch-engine.js?v=20260804-r1"></script>
-    <script src="js/builtin-extensions.js?v=20260804-r1"></script>
-    <script src="js/ext-manager.js?v=20260804-r2"></script>
-    <script src="js/codegen.js?v=20260808-r14"></script>
-    <script src="js/store.js?v=20260812-r15"></script>
-    <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-    <script src="js/sync.js?v=20260812-r19"></script>
+<script src="js/todos.js?v=20260813-r1"></script>
+<script src="js/notes.js?v=20260812-r15"></script>
+<script src="js/links.js?v=20260813-r1"></script>
+<script src="js/today.js?v=20260723-r1"></script>
+<!-- AI 模块（按依赖顺序加载） -->
+<script src="js/ai-utils.js?v=20260807-r5"></script>
+<script src="js/ai-tree.js?v=20260804-r3"></script>
+<script src="js/ai-conv.js?v=20260803-r1"></script>
+<script src="js/ai-attach.js?v=20260807-r1"></script>
+<script src="js/ai-render.js?v=20260812-r11"></script>
+<script src="js/ai-tools.js?v=20260811-r2"></script>
+<script src="js/ai-search.js"></script>
+<script src="js/ai-api.js?v=20260803-r1"></script>
+<script src="js/ai-send.js?v=20260804-r3"></script>
+<script src="js/music.js"></script>
+<script src="js/memory.js?v=20260812-r3"></script>
+<script src="js/appearance.js?v=20260813-r1"></script>
+<script src="js/backup-idb.js?v=20260812-r1"></script>
+<script src="js/settings.js?v=20260813-r1"></script>
+<script src="js/utils.js?v=20260813-r1"></script>
+<!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
+<script src="js/inbox.js?v=20260813-r1"></script>
+<!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
+<script type="module">
+  import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
+  window.pdfjsLib = pdfjsLib;
+  pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
+</script>
+<script src="js/books-pdfstore.js?v=20260812-r2"></script>
+<script src="js/books.js?v=20260813-r1"></script>
+<script src="js/books-pdf.js?v=20260813-r9"></script>
+<script src="js/books-kb.js?v=20260811-r7"></script>
+<script src="js/books-ai.js?v=20260813-r1"></script>
+<script src="js/calendar.js?v=20260724-r7"></script>
+<script src="js/taskline.js?v=20260812-r27"></script>
+<script src="js/timer.js?v=20260813-r1"></script>
+<script src="js/habits.js?v=20260724-r1"></script>
+<script src="js/stats.js?v=20260724-r1"></script>
+<script src="js/updater.js?v=20260802-r1"></script>
+<!-- 好友系统 -->
+<script src="lib/supabase/supabase.js"></script>
+<script src="js/friends.js?v=20260813-r1"></script>
+<script src="js/friends-chat.js?v=20260805-r2"></script>
+<!-- 扩展系统 -->
+<script src="js/ext-api.js?v=20260804-r1"></script>
+<script src="js/patch-engine.js?v=20260804-r1"></script>
+<script src="js/builtin-extensions.js?v=20260804-r1"></script>
+<script src="js/ext-manager.js?v=20260804-r2"></script>
+<script src="js/codegen.js?v=20260808-r14"></script>
+<script src="js/store.js?v=20260813-r1"></script>
+<!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
+<script src="js/sync.js?v=20260812-r19"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
 setTimeout(async function() {
