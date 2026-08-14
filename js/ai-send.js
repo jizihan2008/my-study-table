@@ -135,8 +135,12 @@ async function sendAiMessage() {
   if (visionFiles.length > 0) {
     userMsg.visionFiles = visionFiles;
   }
-  appendMessage(conv, userMsg);
+  // 记录待生成标记（刷新/重启后据此自动恢复被中断的 AI 回复）
+  const _pendingUserNodeId = appendMessage(conv, userMsg);
   safeSaveAiConvs();
+  if (_pendingUserNodeId) {
+    try { localStorage.setItem('study_ai_pending', JSON.stringify({ convId: conv.id, userNodeId: _pendingUserNodeId, at: Date.now() })); } catch {}
+  }
 
   // Clear attachments
   aiAttachments = [];
@@ -167,8 +171,18 @@ async function sendAiMessage() {
 
   let aiReplyText = null; // 最终回复文本（供调用方回填等使用）
   try {
-    const { finalCleanText, finalRawReply, finalReasoning } = await runToolCallLoop(apiCfg, conv, null);
+    const loopRes = await runToolCallLoop(apiCfg, conv, null);
+    let finalCleanText = loopRes.finalCleanText;
+    const finalRawReply = loopRes.finalRawReply;
+    const finalReasoning = loopRes.finalReasoning;
     aiReplyText = finalCleanText || null;
+    // max_tokens 截断（finish_reason='length'）→ 自动续写一次，让回复完整
+    if (loopRes.finishReason === 'length') {
+      const more = (typeof continueTruncatedReply === 'function') ? await continueTruncatedReply(apiCfg, conv, finalCleanText) : '';
+      if (more) finalCleanText = (finalCleanText || '').replace(/\s+$/, '') + '\n' + more;
+      else finalCleanText += '\n\n⚠️（回复因长度限制被截断，可调大 Max Tokens 或发送「继续」）';
+      aiReplyText = finalCleanText;
+    }
 
     // Build the final assistant message
     const keyName = getActiveKeyDisplayName();
@@ -212,6 +226,8 @@ async function sendAiMessage() {
   // Always reset loading state for this conversation
   setAiLoading(conv.id, false);
   setAiStopRequested(conv.id, false);
+  // 已生成/已停止/已失败：清除待生成标记（避免下次启动误判为"被中断"）
+  try { localStorage.removeItem('study_ai_pending'); } catch {}
   renderAiMessages();
   updateAiSendButton();
 
@@ -297,9 +313,20 @@ async function regenerateFromUserNode(conv, userNodeId) {
   switchBranch(conv, userNodeId);
   setAiLoading(conv.id, true);
   updateAiSendButton();
+  // 重新生成同样记录待生成标记（刷新中断后自动续传）
+  try { localStorage.setItem('study_ai_pending', JSON.stringify({ convId: conv.id, userNodeId, at: Date.now() })); } catch {}
 
   try {
-    const { finalCleanText, finalRawReply, finalReasoning } = await runToolCallLoop(apiCfg, conv, null);
+    const loopRes = await runToolCallLoop(apiCfg, conv, null);
+    let finalCleanText = loopRes.finalCleanText;
+    const finalRawReply = loopRes.finalRawReply;
+    const finalReasoning = loopRes.finalReasoning;
+    // max_tokens 截断（finish_reason='length'）→ 自动续写一次，让回复完整
+    if (loopRes.finishReason === 'length') {
+      const more = (typeof continueTruncatedReply === 'function') ? await continueTruncatedReply(apiCfg, conv, finalCleanText) : '';
+      if (more) finalCleanText = (finalCleanText || '').replace(/\s+$/, '') + '\n' + more;
+      else finalCleanText += '\n\n⚠️（回复因长度限制被截断，可调大 Max Tokens 或发送「继续」）';
+    }
 
     // runToolCallLoop 已通过 appendMessage 追加中间工具消息与最终回复，
     // 自动形成 user 节点下的新分支。若无任何追加（异常兜底），则手动创建。
@@ -328,6 +355,7 @@ async function regenerateFromUserNode(conv, userNodeId) {
 
   setAiLoading(conv.id, false);
   setAiStopRequested(conv.id, false);
+  try { localStorage.removeItem('study_ai_pending'); } catch {}
   renderAiMessages();
   updateAiSendButton();
 }
@@ -538,4 +566,37 @@ function aiToggleTodo(todoId) {
   renderTodos();
   renderToday();
   renderAiMessages();
+}
+
+// ═══════════ 刷新/重启后恢复被中断的 AI 回复 ═══════════
+// 发送/重新生成时写入 study_ai_pending { convId, userNodeId }，完成/停止/失败后清除。
+// 若刷新打断（fetch 中断、loading 状态丢失），启动时检测到该标记且对应 user 节点下
+// 还没有 assistant 回复，则自动切回该节点重新生成，实现"AI 对话不被打断"。
+function resumeInterruptedAiReply() {
+  let pending = null;
+  try { pending = JSON.parse(localStorage.getItem('study_ai_pending') || 'null'); } catch {}
+  try { localStorage.removeItem('study_ai_pending'); } catch {}
+  if (!pending || !pending.convId) return;
+  if (typeof aiConvs === 'undefined' || typeof ensureTree !== 'function' || typeof regenerateFromUserNode !== 'function') return;
+  const conv = aiConvs.find(c => String(c.id) === String(pending.convId));
+  if (!conv) return;
+  ensureTree(conv);
+  const userNode = conv.tree && conv.tree[pending.userNodeId];
+  // 仅当该节点确为 user 且其下尚无 assistant 回复（含工具中间消息）才续传，避免重复消耗 token
+  if (!userNode || userNode.role !== 'user') return;
+  const kids = userNode.children || [];
+  const hasAssistantReply = kids.some(kid => conv.tree[kid] && conv.tree[kid].role === 'assistant');
+  if (hasAssistantReply) return;
+  if (activeConvId !== conv.id) {
+    activeConvId = conv.id;
+    try { localStorage.setItem('study_active_conv', conv.id); } catch {}
+  }
+  setTimeout(() => {
+    if (typeof bkShowMiniToast === 'function') bkShowMiniToast('检测到上次 AI 回复被中断，已自动重新生成');
+    regenerateFromUserNode(conv, pending.userNodeId);
+  }, 300);
+}
+if (typeof window._aiResumeInited === 'undefined') {
+  window._aiResumeInited = true;
+  resumeInterruptedAiReply();
 }

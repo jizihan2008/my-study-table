@@ -2293,19 +2293,36 @@ function loadWebSearchSettings() {
 // ═══════════ Books KB Settings ═══════════
 function saveBooksKbSettings() {
   const el = document.getElementById('settingsBooksKbTruncate');
-  if (!el) return;
-  let v = parseInt(el.value, 10);
-  if (!Number.isFinite(v)) v = 9000;
-  v = Math.max(1000, Math.min(100000, v));
-  el.value = v;
-  localStorage.setItem('study_books_kb_truncate', String(v));
+  if (el) {
+    let v = parseInt(el.value, 10);
+    if (!Number.isFinite(v)) v = 9000;
+    v = Math.max(1000, Math.min(100000, v));
+    el.value = v;
+    localStorage.setItem('study_books_kb_truncate', String(v));
+  }
+  // 章节讲解上下文轮数（0~30）
+  const rEl = document.getElementById('settingsBooksCtxRounds');
+  if (rEl) {
+    let r = parseInt(rEl.value, 10);
+    if (!Number.isFinite(r)) r = 6;
+    r = Math.max(0, Math.min(30, r));
+    rEl.value = r;
+    localStorage.setItem('study_bk_explain_ctx_rounds', String(r));
+  }
 }
 function loadBooksKbSettings() {
   const el = document.getElementById('settingsBooksKbTruncate');
-  if (!el) return;
-  let v = parseInt(localStorage.getItem('study_books_kb_truncate') || '9000', 10);
-  if (!Number.isFinite(v)) v = 9000;
-  el.value = Math.max(1000, Math.min(100000, v));
+  if (el) {
+    let v = parseInt(localStorage.getItem('study_books_kb_truncate') || '9000', 10);
+    if (!Number.isFinite(v)) v = 9000;
+    el.value = Math.max(1000, Math.min(100000, v));
+  }
+  const rEl = document.getElementById('settingsBooksCtxRounds');
+  if (rEl) {
+    let r = parseInt(localStorage.getItem('study_bk_explain_ctx_rounds') || '6', 10);
+    if (!Number.isFinite(r)) r = 6;
+    rEl.value = Math.max(0, Math.min(30, r));
+  }
 }
 
 // ═══════════ Evening Report Settings ═══════════
@@ -2330,12 +2347,20 @@ function saveEveningReportSettings() {
   if (shouldTimerRun()) startAutomationTimer();
 }
 
-function debugTriggerEveningReport() {
+async function debugTriggerEveningReport() {
   if (eveningReportInProgress) return;
+  const apiCfg = getEffectiveReportApiConfig();
+  if (!apiCfg.apiKey) { alert('请先设置日报 API Key（设置 → 更多设置 → 日报 Key）'); return; }
+  const dbgEl = document.getElementById('debugStatus');
+  if (dbgEl) { dbgEl.textContent = '正在生成晚间日报...'; dbgEl.className = 'settings-status'; }
   eveningReportInProgress = true;
-  generateEveningReport().finally(() => { eveningReportInProgress = false; });
-  document.getElementById('debugStatus').textContent = '正在生成晚间日报...';
-  document.getElementById('debugStatus').className = 'settings-status';
+  try {
+    const r = await generateEveningReport();
+    if (r && r.ok) alert('🌙 晚间日报已生成，请在「☀️ 晨间日报」对话中查看');
+    else alert('晚间日报生成失败：' + (r && r.error ? r.error : '未知错误'));
+  } finally {
+    eveningReportInProgress = false;
+  }
 }
 
 // ═══════════ Day Report Key + Morning Report Settings ═══════════
@@ -3033,9 +3058,9 @@ function debugResetCheckin() {
   });
 }
 
-function debugTriggerReport() {
+async function debugTriggerReport() {
   const apiCfg = getEffectiveReportApiConfig();
-  if (!apiCfg.apiKey) { alert('请先设置 API Key'); return; }
+  if (!apiCfg.apiKey) { alert('请先设置日报 API Key（设置 → 更多设置 → 日报 Key）'); return; }
   // Ensure today is checked in before generating report
   const today = getTodayStr();
   const data = loadCheckinData();
@@ -3047,8 +3072,10 @@ function debugTriggerReport() {
     saveCheckinData(data);
     renderToday();
   }
-  generateDailyReport();
-  alert('晨间日报生成请求已发送，请在「☀️ 晨间日报」对话中查看');
+  // force=true：手动生成不受晨间日报开关影响
+  const r = await generateDailyReport(true);
+  if (r && r.ok) alert('☀️ 晨间日报已生成，请在「☀️ 晨间日报」对话中查看');
+  else alert('晨间日报生成失败：' + (r && r.error ? r.error : '未知错误'));
 }
 
 
@@ -3342,13 +3369,14 @@ function collectDailyReportData() {
 }
 
 // Auto-generate daily report after check-in (morning review style)
-async function generateDailyReport() {
+// 返回 { ok, error }：手动触发（debugTriggerReport）可 force=true 绕过晨间开关
+async function generateDailyReport(force) {
   const apiCfg = getEffectiveReportApiConfig();
-  if (!apiCfg.apiKey) return;
+  if (!apiCfg.apiKey) return { ok: false, error: '未配置日报 API Key（设置 → 更多设置 → 日报 Key）' };
 
-  // Check if morning report is enabled
+  // 自动触发受开关控制；手动触发（force=true）始终生成
   const morningCfg = JSON.parse(localStorage.getItem('study_morning_cfg') || '{"enabled":true}');
-  if (!morningCfg.enabled) return;
+  if (!morningCfg.enabled && !force) return { ok: false, error: '晨间日报已关闭（可在 设置 → 更多设置 中开启）' };
 
   const conv = getDailyReportConv();
   const data = collectDailyReportData();
@@ -3479,8 +3507,14 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
         }
         // Send Windows notification
         sendNotification('📋 晨间日报已生成', '你的 ' + data.todayStr + ' 晨间回顾已就绪 ☀️', 'daily-report');
+        return { ok: true };
       }
+      return { ok: false, error: 'AI 返回了空内容，请重试' };
     }
+    // 非 2xx：读取错误详情反馈给用户，不再静默失败
+    let errMsg = 'HTTP ' + resp.status;
+    try { const d = await resp.json(); errMsg = (d && d.error && d.error.message) || errMsg; } catch {}
+    return { ok: false, error: errMsg };
   } catch (e) {
     console.error('[日报] 生成失败:', e);
     // Show a non-intrusive status update if possible
@@ -3488,6 +3522,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       const debugEl = document.getElementById('debugStatus');
       if (debugEl) { debugEl.textContent = '日报生成失败: ' + (e.message || e); debugEl.className = 'settings-status'; }
     } catch {}
+    return { ok: false, error: (e && e.message) || String(e) };
   }
 }
 
@@ -3703,7 +3738,7 @@ function collectEveningReportData() {
 
 async function generateEveningReport() {
   const apiCfg = getEffectiveReportApiConfig();
-  if (!apiCfg.apiKey) return;
+  if (!apiCfg.apiKey) return { ok: false, error: '未配置日报 API Key（设置 → 更多设置 → 日报 Key）' };
 
   const conv = getDailyReportConv();
   const data = collectEveningReportData();
@@ -3841,10 +3876,17 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
           renderAiChat();
         }
         markEveningReportDone(todayStr);
+        return { ok: true };
       }
+      return { ok: false, error: 'AI 返回了空内容，请重试' };
     }
+    // 非 2xx：读取错误详情反馈给用户，不再静默失败
+    let errMsg = 'HTTP ' + resp.status;
+    try { const d = await resp.json(); errMsg = (d && d.error && d.error.message) || errMsg; } catch {}
+    return { ok: false, error: errMsg };
   } catch (e) {
     console.error('[日报] 晚间报告生成失败:', e);
+    return { ok: false, error: (e && e.message) || String(e) };
   }
 }
 

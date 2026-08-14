@@ -261,7 +261,7 @@ function bkRenderShelfList() {
         <div class="bk-book-cover"><i data-lucide="book-open" class="lucide-icon"></i></div>
         <div class="bk-book-meta">
           <div class="bk-book-name">${escapeHtml(b.title)}</div>
-          <div class="bk-book-sub">${(b.chapters || []).length} 章 · ${b.pageCount || 0} 页</div>
+          <div class="bk-book-sub">${(b.chapters || []).length} 章 · ${b.pageCount || 0} 页${b.lastRead && b.lastRead.chapterTitle ? ' · <span class="bk-book-sub-last">上次读到：' + escapeHtml(b.lastRead.chapterTitle) + '</span>' : ''}</div>
         </div>
         <span class="bk-book-kb-badge ${badgeCls}">${badgeText}</span>
         ${mobileDel}
@@ -299,6 +299,9 @@ function bkDeleteBook(id) {
     }
     _bkPersistNav();
     bkSaveBooks();
+    // 清理该书所有书签
+    const bms = _bkBookmarksLoad().filter(b => String(b.bookId) !== String(id));
+    _bkBookmarksSave(bms);
     if (typeof deleteBookTextCache === 'function') deleteBookTextCache(id);
     // PWA 本机导入的 PDF：同时清理 IndexedDB 中的原始字节
     if (window.BookPdfStore && typeof window.BookPdfStore.remove === 'function') {
@@ -389,7 +392,7 @@ function bkRenderEntityTreeHtml(roots, book, depth = 0) {
              onclick="${selClick}" title="${escapeHtml(node.title)}">
           ${_bkKbSelChk(node.id)}
           <span class="bk-chapter-arrow" data-key="${node.id}" onclick="event.stopPropagation();bkToggleTocGroup(this)">${collapsed ? '▸' : '▾'}</span>
-          <span class="bk-chapter-name">${escapeHtml(node.title)}</span>${badge}
+          <span class="bk-chapter-name">${escapeHtml(node.title)}</span>${_bkChapterMark(node.id)}${badge}
         </div>`;
       if (!collapsed) html += bkRenderEntityTreeHtml(kids, book, depth + 1);
     } else {
@@ -399,7 +402,7 @@ function bkRenderEntityTreeHtml(roots, book, depth = 0) {
              data-chapter-id="${node.id}"
              onclick="${selClick}" title="${escapeHtml(node.title)}">
           ${_bkKbSelChk(node.id)}
-          <span class="bk-chapter-name">${escapeHtml(node.title)}</span>${badge}
+          <span class="bk-chapter-name">${escapeHtml(node.title)}</span>${_bkChapterMark(node.id)}${badge}
         </div>`;
     }
   }
@@ -455,7 +458,7 @@ function bkRenderChapterTreeHtml(tree, book, depth = 0) {
                data-chapter-id="${c.id}"
                onclick="${selClick}" title="${escapeHtml(c.title)}">
             ${_bkKbSelChk(c.id)}
-            <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${badgeMap[st] || ''}
+            <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${_bkChapterMark(c.id)}${badgeMap[st] || ''}
           </div>`;
       }
       html += bkRenderChapterTreeHtml(node.children, book, depth + 1);
@@ -481,6 +484,7 @@ function bkRenderToc() {
       : `<button class="bk-toc-btn bk-toc-hide-btn" onclick="bkToggleToc()" title="隐藏目录"><i data-lucide="panel-left-close" class="lucide-icon" style="width:12px;height:12px;"></i>隐藏</button>
          <button class="bk-toc-btn" id="bkTocExpandAll" onclick="bkExpandAllToc(true)" title="展开全部目录"><i data-lucide="chevrons-down-up" class="lucide-icon" style="width:12px;height:12px;"></i>全部展开</button>
          <button class="bk-toc-btn" id="bkTocCollapseAll" onclick="bkExpandAllToc(false)" title="折叠全部目录"><i data-lucide="chevrons-up-down" class="lucide-icon" style="width:12px;height:12px;"></i>全部折叠</button>
+         <button class="bk-toc-btn" onclick="bkOpenBookmarks()" title="书签与阅读历史"><i data-lucide="bookmark" class="lucide-icon" style="width:12px;height:12px;"></i>书签</button>
          <button class="bk-toc-btn" onclick="bkToggleKbMultiSel()" title="勾选多个章节加入构建队列"><i data-lucide="list-plus" class="lucide-icon" style="width:12px;height:12px;"></i>批量入队</button>`;
   }
 
@@ -527,7 +531,7 @@ function bkRenderToc() {
              data-chapter-id="${c.id}"
              onclick="${selClick}" title="${escapeHtml(c.title)}">
           ${_bkKbSelChk(c.id)}
-          <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${badgeMap[st] || ''}
+          <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${_bkChapterMark(c.id)}${badgeMap[st] || ''}
         </div>`;
     }).join('');
     html += bkRenderChapterTreeHtml(groups, book);
@@ -549,7 +553,7 @@ function bkRenderToc() {
              data-chapter-id="${c.id}"
              onclick="${selClick}" title="${escapeHtml(c.title)}">
           ${_bkKbSelChk(c.id)}
-          <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${badgeMap[st] || ''}
+          <span class="bk-chapter-name">${escapeHtml(c.title)}</span>${_bkChapterMark(c.id)}${badgeMap[st] || ''}
         </div>`;
     }).join('');
   }
@@ -624,10 +628,270 @@ function bkSelectChapter(id) {
   // 点击章节优先跳到「摘要导图」；知识库尚未构建时保留「章节讲解」（摘要页无可看内容）
   const ch = bkGetActiveChapter();
   bkActiveTab = (ch && ch.kb && ch.kb.status === 'done') ? 'summary' : 'explain';
+  // 记录本书上次阅读位置（书签与阅读历史）
+  if (ch) {
+    const book = bkGetActiveBook();
+    if (book) {
+      book.lastRead = { chapterId: ch.id, chapterTitle: ch.title, at: Date.now() };
+      bkSaveBooks();
+    }
+  }
   _bkPersistNav();
   if (bkIsMobileView()) { bkMobileView = 'main'; renderBooks(); return; }
   bkRenderToc();
   bkRenderMain();
+}
+
+// ═══════════ 书签与阅读历史 ═══════════
+// 书签：localStorage study_bk_bookmarks_v1 = [{ bookId, bookTitle, chapterId, chapterTitle, createdAt }]（同书同章去重）
+// 历史：每本书 book.lastRead = { chapterId, chapterTitle, at }（bkSelectChapter 时更新）
+let _bkBmScope = 'all'; // 书签浮层范围：'all' 全部教材 | 'book' 仅当前激活书
+function _bkBookmarksLoad() {
+  try {
+    const arr = JSON.parse(localStorage.getItem('study_bk_bookmarks_v1') || '[]');
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function _bkBookmarksSave(arr) {
+  try { localStorage.setItem('study_bk_bookmarks_v1', JSON.stringify(arr)); } catch (e) {}
+}
+function bkIsChapterBookmarked(bookId, chapterId) {
+  return _bkBookmarksLoad().some(b => String(b.bookId) === String(bookId) && String(b.chapterId) === String(chapterId));
+}
+// 章节行前的书签标记（已添加书签的章节显示小书签图标）
+function _bkChapterMark(cid) {
+  const book = bkGetActiveBook();
+  if (!book || !bkIsChapterBookmarked(book.id, cid)) return '';
+  return '<i data-lucide="bookmark" class="lucide-icon bk-chapter-mark" style="width:11px;height:11px;flex:none;" title="已添加书签"></i>';
+}
+// 轻量自消失提示
+function bkShowMiniToast(text) {
+  let el = document.getElementById('bkMiniToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'bkMiniToast';
+    el.className = 'bk-mini-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = text;
+  el.classList.add('show');
+  clearTimeout(el._t);
+  el._t = setTimeout(() => el.classList.remove('show'), 1800);
+}
+// 轻量输入弹窗（书签命名/重命名），返回 Promise<string|null>（null 表示取消）
+let _bkPromptResolve = null;
+function bkPromptName(title, defVal) {
+  return new Promise((resolve) => {
+    _bkPromptResolve = resolve;
+    showCustomConfirm(String(title || '')
+      + '<div style="margin:10px 0;"><input id="bkNameInput" class="bk-name-input" value="' + escapeAttr(defVal || '') + '" placeholder="书签名称（留空用章节名）" maxlength="60"></div>'
+      + '<div class="bk-level-options"><button class="bk-level-btn bk-level-btn-default" onclick="bkPromptNameOk()">保存</button><button class="bk-level-btn" onclick="bkPromptNameCancel()">取消</button></div>',
+      { hideActions: true, showIcon: false })
+      .then(ok => {
+        // 兜底：点遮罩/取消关闭时 resolve(null)，避免 Promise 挂起
+        if (!ok) {
+          const r = _bkPromptResolve;
+          _bkPromptResolve = null;
+          if (typeof r === 'function') r(null);
+        }
+      });
+  });
+}
+function bkPromptNameOk() {
+  const input = document.getElementById('bkNameInput');
+  const v = input ? input.value.trim() : '';
+  const r = _bkPromptResolve;
+  _bkPromptResolve = null;
+  const cancel = document.getElementById('confirmCancel');
+  if (cancel) cancel.click(); // 触发 showCustomConfirm 内部 cleanup（关闭弹窗）
+  if (typeof r === 'function') r(v);
+}
+function bkPromptNameCancel() {
+  const r = _bkPromptResolve;
+  _bkPromptResolve = null;
+  const cancel = document.getElementById('confirmCancel');
+  if (cancel) cancel.click();
+  if (typeof r === 'function') r(null);
+}
+// 给当前激活章节添加/移除书签（添加时弹窗命名）
+function bkToggleBookmark() {
+  const book = bkGetActiveBook();
+  const chapter = bkGetActiveChapter();
+  if (!book || !chapter) return;
+  const arr = _bkBookmarksLoad();
+  const idx = arr.findIndex(b => String(b.bookId) === String(book.id) && String(b.chapterId) === String(chapter.id));
+  if (idx >= 0) {
+    arr.splice(idx, 1);
+    _bkBookmarksSave(arr);
+    bkShowMiniToast('已移除书签');
+    bkRenderToc();
+    return;
+  }
+  bkPromptName('添加书签', chapter.title).then(name => {
+    if (name == null) return; // 取消
+    arr.unshift({
+      bookId: book.id, bookTitle: book.title,
+      chapterId: chapter.id, chapterTitle: chapter.title,
+      name: name || chapter.title,
+      createdAt: Date.now()
+    });
+    _bkBookmarksSave(arr);
+    bkShowMiniToast('已添加书签');
+    bkRenderToc();
+  });
+}
+// 重命名书签
+function bkRenameBookmark(idx) {
+  const arr = _bkBookmarksLoad();
+  if (!Number.isFinite(idx) || idx < 0 || idx >= arr.length) return;
+  bkPromptName('重命名书签', arr[idx].name || arr[idx].chapterTitle || '').then(v => {
+    if (v == null) return;
+    arr[idx].name = v;
+    _bkBookmarksSave(arr);
+    bkRenderBookmarkList();
+    bkRenderToc();
+  });
+}
+// 删除指定序号的本地书签
+function bkRemoveBookmark(idx) {
+  const arr = _bkBookmarksLoad();
+  if (!Number.isFinite(idx) || idx < 0 || idx >= arr.length) return;
+  arr.splice(idx, 1);
+  _bkBookmarksSave(arr);
+  bkRenderBookmarkList();
+  bkRenderToc();
+}
+// 相对时间
+function _bkRelTime(ts) {
+  if (!ts) return '';
+  const diff = Date.now() - ts;
+  const m = Math.floor(diff / 60000);
+  if (m < 1) return '刚刚';
+  if (m < 60) return m + ' 分钟前';
+  const h = Math.floor(m / 60);
+  if (h < 24) return h + ' 小时前';
+  const d = Math.floor(h / 24);
+  if (d < 30) return d + ' 天前';
+  const dt = new Date(ts);
+  return (dt.getMonth() + 1) + '月' + dt.getDate() + '日';
+}
+// 打开书签与阅读历史浮层
+function bkOpenBookmarks() {
+  let overlay = document.getElementById('bkBookmarksOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'bkBookmarksOverlay';
+    overlay.className = 'bk-original-overlay';
+    overlay.addEventListener('click', function (ev) { if (ev.target === overlay) bkCloseBookmarksOverlay(); });
+    document.body.appendChild(overlay);
+  }
+  const curBook = bkGetActiveBook();
+  overlay.innerHTML = `
+    <div class="bk-original-panel" style="max-width:520px;">
+      <div class="bk-original-head">
+        <span class="bk-original-title"><i data-lucide="bookmark" class="lucide-icon" style="width:15px;height:15px;vertical-align:-2px;"></i> 书签与阅读历史</span>
+        <button class="bk-original-close" onclick="bkCloseBookmarksOverlay()" title="关闭 (Esc)"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+      </div>
+      <div class="bk-bookmarks-body">
+        <div class="bk-bookmarks-scope">
+          <button class="bk-bookmarks-scope-btn${_bkBmScope === 'all' ? ' active' : ''}" onclick="bkSetBmScope('all')">全部教材</button>
+          <button class="bk-bookmarks-scope-btn${_bkBmScope === 'book' ? ' active' : ''}" onclick="bkSetBmScope('book')">${curBook ? '本书：' + escapeHtml(curBook.title) : '本书'}</button>
+        </div>
+        <div class="bk-bookmarks-section-title"><i data-lucide="bookmark" class="lucide-icon" style="width:12px;height:12px;vertical-align:-1px;"></i> 书签 <small style="font-weight:400;">（右键目录中的章节 → 添加/移除书签）</small></div>
+        <div class="bk-bookmarks-list" id="bkBookmarkList"></div>
+        <div class="bk-bookmarks-section-title"><i data-lucide="history" class="lucide-icon" style="width:12px;height:12px;vertical-align:-1px;"></i> 最近阅读 <small style="font-weight:400;">（每本书上次读到的章节）</small></div>
+        <div class="bk-bookmarks-list" id="bkLastReadList"></div>
+      </div>
+    </div>`;
+  bkRenderBookmarkList();
+  bkRenderLastReadList();
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+function bkCloseBookmarksOverlay() {
+  const el = document.getElementById('bkBookmarksOverlay');
+  if (el) el.remove();
+}
+// 渲染书签列表
+function bkRenderBookmarkList() {
+  const wrap = document.getElementById('bkBookmarkList');
+  if (!wrap) return;
+  const arr = _bkBookmarksLoad();
+  const curBook = bkGetActiveBook();
+  // 按范围过滤（'book' 仅显示当前书），保留原始索引供删除/重命名使用
+  const list = arr.map((b, origIdx) => ({ b, origIdx }))
+    .filter(x => _bkBmScope === 'all' || (curBook && String(x.b.bookId) === String(curBook.id)));
+  if (list.length === 0) {
+    wrap.innerHTML = _bkBmScope === 'book'
+      ? '<div class="bk-bookmarks-empty">本书还没有书签<br><small>在目录中右键章节，选择「添加书签」。</small></div>'
+      : '<div class="bk-bookmarks-empty">还没有书签<br><small>在目录中右键章节，选择「添加书签」。</small></div>';
+    return;
+  }
+  wrap.innerHTML = list.map(({ b, origIdx }) => `
+    <div class="bk-bookmark-item">
+      <i data-lucide="bookmark" class="lucide-icon" style="width:13px;height:13px;flex:none;color:var(--primary);"></i>
+      <div class="bk-bookmark-info">
+        <div class="bk-bookmark-title">${escapeHtml(b.name || b.chapterTitle || '')}</div>
+        <div class="bk-bookmark-sub">${escapeHtml(b.bookTitle || '')} · ${escapeHtml(b.chapterTitle || '')} · ${_bkRelTime(b.createdAt)}</div>
+      </div>
+      <button class="bk-bookmark-jump" onclick="bkBookmarkJump(${Number(b.bookId)},${Number(b.chapterId)})">跳转</button>
+      <button class="bk-bookmark-edit" onclick="bkRenameBookmark(${origIdx})" title="重命名"><i data-lucide="pencil" class="lucide-icon" style="width:12px;height:12px;"></i></button>
+      <button class="bk-bookmark-del" onclick="bkRemoveBookmark(${origIdx})" title="删除书签"><i data-lucide="trash-2" class="lucide-icon" style="width:12px;height:12px;"></i></button>
+    </div>`).join('');
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+// 切换书签浮层范围（全部教材 / 仅当前书）
+function bkSetBmScope(scope) {
+  _bkBmScope = (scope === 'book') ? 'book' : 'all';
+  bkRenderBookmarkList();
+  bkRenderLastReadList();
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+// 渲染每本书上次阅读位置列表
+function bkRenderLastReadList() {
+  const wrap = document.getElementById('bkLastReadList');
+  if (!wrap) return;
+  let items = booksData
+    .filter(b => b.lastRead && b.lastRead.chapterId
+      && (b.chapters || []).some(c => String(c.id) === String(b.lastRead.chapterId)))
+    .sort((a, b) => (b.lastRead.at || 0) - (a.lastRead.at || 0));
+  // 按范围过滤（'book' 仅显示当前书）
+  if (_bkBmScope === 'book') {
+    const curBook = bkGetActiveBook();
+    if (curBook) items = items.filter(b => String(b.id) === String(curBook.id));
+  }
+  if (items.length === 0) {
+    wrap.innerHTML = _bkBmScope === 'book'
+      ? '<div class="bk-bookmarks-empty">本书还没有阅读记录<br><small>打开任意章节后会自动记录。</small></div>'
+      : '<div class="bk-bookmarks-empty">还没有阅读记录<br><small>打开任意章节后会自动记录。</small></div>';
+    return;
+  }
+  wrap.innerHTML = items.map(b => `
+    <div class="bk-bookmark-item">
+      <i data-lucide="history" class="lucide-icon" style="width:13px;height:13px;flex:none;color:var(--text-secondary);"></i>
+      <div class="bk-bookmark-info">
+        <div class="bk-bookmark-title">${escapeHtml(b.title)}</div>
+        <div class="bk-bookmark-sub">上次读到：${escapeHtml(b.lastRead.chapterTitle || '')} · ${_bkRelTime(b.lastRead.at)}</div>
+      </div>
+      <button class="bk-bookmark-jump" onclick="bkBookmarkJump(${Number(b.id)},${Number(b.lastRead.chapterId)})">继续</button>
+    </div>`).join('');
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+// 快捷跳转到书签/历史记录的章节
+function bkBookmarkJump(bookId, chapterId) {
+  const book = bkGetBookById(bookId);
+  const ch = book ? (book.chapters || []).find(c => String(c.id) === String(chapterId)) : null;
+  if (!book || !ch) return;
+  bkActiveBookId = book.id;
+  bkActiveChapterId = ch.id;
+  bkActiveTab = (ch.kb && ch.kb.status === 'done') ? 'summary' : 'explain';
+  _bkPersistNav();
+  // 记录该次跳转（视为在读位置）
+  book.lastRead = { chapterId: ch.id, chapterTitle: ch.title, at: Date.now() };
+  bkSaveBooks();
+  bkCloseBookmarksOverlay();
+  bkTextCache = null;
+  if (bkIsMobileView()) bkMobileView = 'main';
+  renderBooks();
 }
 
 // ═══════════ 右栏：头部 + tab + 内容 ═══════════

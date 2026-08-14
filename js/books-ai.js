@@ -130,10 +130,14 @@ async function bkSendExplain() {
   const chapterText = await bkGetChapterText(chapter);
   const snippet = bkSnippet(chapterText, 6000);
 
-  // 历史日志末尾一条是刚写入的当前问题，去掉；取最近 12 条（=6 轮 user/assistant 交替）作为多轮上下文
+  // 历史日志末尾一条是刚写入的当前问题，去掉；取最近 rounds*2 条（=rounds 轮 user/assistant 交替）作为多轮上下文
+  // rounds 可在 设置 → 更多设置 调整（默认 6，0 表示不带历史）
+  const rounds = _bkExplainCtxRounds();
   const logs = _bkExplainLogLoad(chapter.id) || [];
-  const ctxHistory = logs.slice(0, -1).slice(-12)
-    .map(m => ({ role: (m.role === 'assistant' ? 'assistant' : 'user'), content: String(m.content || '') }));
+  const ctxHistory = rounds > 0
+    ? logs.slice(0, -1).slice(-rounds * 2)
+        .map(m => ({ role: (m.role === 'assistant' ? 'assistant' : 'user'), content: String(m.content || '') }))
+    : [];
 
   const messages = [
     { role: 'system', content: _bkTutorSystem(kb) + '\n\n【本章原文片段】\n' + snippet },
@@ -1546,12 +1550,14 @@ function bkShowTermContextMenu(e) {
     menuEl('bkTermCtxAdd').style.display = 'none';
     menuEl('bkTermCtxRemove').style.display = 'none';
     menuEl('bkTermCtxExplain').style.display = 'none';
+    menuEl('bkTermCtxTutorTerm').style.display = 'none';
     menuEl('bkTermCtxExample').style.display = 'none';
     menuEl('bkTermCtxOriginal').style.display = 'none';
     menuEl('bkTermCtxOpenFloat').style.display = 'none';
     menuEl('bkTermCtxRebuildChapter').style.display = 'none';
     menuEl('bkTermCtxAiAnno').style.display = 'none';
     menuEl('bkTermCtxAddAnno').style.display = 'none';
+    menuEl('bkTermCtxBookmark').style.display = 'none';
   };
   // 每次右键先清空节点引用，避免上次图片/伪代码的残留影响「解释一下」的分支判断
   _bkCtxNodeEl = null;
@@ -1609,12 +1615,13 @@ function bkShowTermContextMenu(e) {
     return;
   }
 
-  // 模式(g)：右键术语 chip → AI 生成旁批
+  // 模式(g)：右键术语 chip → AI 生成旁批 / 章节讲解 AI 解释
   const tc = e.target.closest ? e.target.closest('.bk-term-chip') : null;
   if (tc) {
     e.preventDefault();
     _bkCtxNodeEl = tc;
     hideAll();
+    menuEl('bkTermCtxTutorTerm').style.display = '';
     menuEl('bkTermCtxAiAnno').style.display = '';
     menuEl('bkTermCtxAddAnno').style.display = '';
     showMenu();
@@ -1707,6 +1714,28 @@ function bkExplainSelection(mode) {
   if (typeof bkSwitchTab === 'function') bkSwitchTab('explain');
   bkExplainQuick(q);
 }
+
+// 右键术语 chip → 让章节讲解 AI 解释该术语（先取值再关闭菜单，避免上下文被清空）
+function bkExplainTermInTutor() {
+  const tc = _bkCtxNodeEl;
+  let term = '';
+  let def = '';
+  if (tc) {
+    const b = tc.querySelector ? tc.querySelector('b') : null;
+    term = b ? b.textContent.trim() : '';
+    if (tc.textContent) {
+      def = tc.textContent.replace(term, '').trim().replace(/[×✕x]\s*$/, '').trim();
+    }
+  }
+  bkCloseTermContextMenu();
+  if (!term) return;
+  const q = def
+    ? '请仔细讲解术语「' + term + '」（定义：' + def + '）。请拆解其概念内涵与判定标准，补充直觉理解与例子。'
+    : '请仔细讲解术语「' + term + '」，拆解其概念内涵、补充直觉理解与例子。';
+  if (typeof bkSwitchTab === 'function') bkSwitchTab('explain');
+  if (typeof bkExplainQuick === 'function') bkExplainQuick(q);
+}
+
 function bkCloseTermContextMenu() {
   const menu = document.getElementById('bkTermContextMenu');
   if (menu) menu.classList.remove('visible');
@@ -1735,6 +1764,7 @@ function bkInitTermContextMenu() {
       document.getElementById('bkTermCtxExplain').style.display = 'none';
       document.getElementById('bkTermCtxExample').style.display = 'none';
       document.getElementById('bkTermCtxOriginal').style.display = 'none';
+      document.getElementById('bkTermCtxBookmark').style.display = '';
       document.getElementById('bkTermCtxRebuildChapter').style.display = '';
       // 根据章节构建状态区分「构建」/「重新构建」：未构建（pending/failed/无 kb）显示「构建本章知识库」
       const _bkChapter = (typeof bkGetActiveBook === 'function' ? bkGetActiveBook() : null);
@@ -1742,6 +1772,11 @@ function bkInitTermContextMenu() {
       const _bkIsBuilt = !!(_bkCh && _bkCh.kb && (_bkCh.kb.status === 'done'));
       const _bkMenuText = document.getElementById('bkTermCtxRebuildChapterText');
       if (_bkMenuText) _bkMenuText.textContent = _bkIsBuilt ? '重新构建本章知识库' : '构建本章知识库';
+      // 书签菜单动态文字：已书签显示「移除书签」
+      const _bkBmText = document.getElementById('bkTermCtxBookmarkText');
+      if (_bkBmText && typeof bkIsChapterBookmarked === 'function') {
+        _bkBmText.textContent = bkIsChapterBookmarked(_bkChapter ? _bkChapter.id : '', cid) ? '移除书签' : '添加书签';
+      }
       menu.style.left = e.clientX + 'px';
       menu.style.top = e.clientY + 'px';
       menu.classList.add('visible');
@@ -1773,6 +1808,116 @@ function bkInitTermContextMenu() {
 if (typeof window._bkTermCtxInited === 'undefined') {
   window._bkTermCtxInited = true;
   bkInitTermContextMenu();
+}
+
+// 右键目录章节 → 添加/移除书签（基于 _bkCtxChapterId；数据层在 books.js）
+function bkToggleChapterBookmark() {
+  const book = bkGetActiveBook();
+  if (!book || _bkCtxChapterId == null) return;
+  const ch = (book.chapters || []).find(x => String(x.id) === String(_bkCtxChapterId));
+  if (!ch) return;
+  bkCloseTermContextMenu();
+  const arr = (typeof _bkBookmarksLoad === 'function') ? _bkBookmarksLoad() : [];
+  const idx = arr.findIndex(b => String(b.bookId) === String(book.id) && String(b.chapterId) === String(ch.id));
+  if (idx >= 0) {
+    arr.splice(idx, 1);
+    if (typeof _bkBookmarksSave === 'function') _bkBookmarksSave(arr);
+    if (typeof bkShowMiniToast === 'function') bkShowMiniToast('已移除书签');
+    if (typeof bkRenderToc === 'function') bkRenderToc();
+    return;
+  }
+  // 添加书签时弹窗命名
+  if (typeof bkPromptName === 'function') {
+    bkPromptName('添加书签', ch.title).then(name => {
+      if (name == null) return;
+      arr.unshift({
+        bookId: book.id, bookTitle: book.title,
+        chapterId: ch.id, chapterTitle: ch.title,
+        name: name || ch.title,
+        createdAt: Date.now()
+      });
+      if (typeof _bkBookmarksSave === 'function') _bkBookmarksSave(arr);
+      if (typeof bkShowMiniToast === 'function') bkShowMiniToast('已添加书签');
+      if (typeof bkRenderToc === 'function') bkRenderToc();
+    });
+  } else {
+    arr.unshift({ bookId: book.id, bookTitle: book.title, chapterId: ch.id, chapterTitle: ch.title, createdAt: Date.now() });
+    if (typeof _bkBookmarksSave === 'function') _bkBookmarksSave(arr);
+    if (typeof bkShowMiniToast === 'function') bkShowMiniToast('已添加书签');
+    if (typeof bkRenderToc === 'function') bkRenderToc();
+  }
+}
+
+// ═══════════ 章节讲解：选中文字 → 让 AI 继续仔细讲解 ═══════════
+let _bkExplainSelText = ''; // 最近一次选区文本缓存（点击按钮会先清选区，故用缓存）
+let _bkExplainSelBtn = null;
+function bkShowExplainSelButton() {
+  const sel = window.getSelection();
+  if (!sel || sel.isCollapsed) return;
+  const range = sel.getRangeAt(0);
+  const rect = range.getBoundingClientRect();
+  if (!rect || (!rect.width && !rect.height)) return;
+  if (!_bkExplainSelBtn) {
+    _bkExplainSelBtn = document.createElement('button');
+    _bkExplainSelBtn.id = 'bkExplainSelBtn';
+    _bkExplainSelBtn.className = 'bk-explain-sel-btn';
+    _bkExplainSelBtn.innerHTML = '<i data-lucide="graduation-cap" class="lucide-icon" style="width:12px;height:12px;"></i> 让 AI 仔细讲解';
+    _bkExplainSelBtn.addEventListener('click', bkExplainSelText);
+    document.body.appendChild(_bkExplainSelBtn);
+  }
+  const x = Math.max(4, Math.min(rect.left + rect.width / 2 - 60, window.innerWidth - 150));
+  const y = Math.max(4, rect.top - 36);
+  _bkExplainSelBtn.style.left = x + 'px';
+  _bkExplainSelBtn.style.top = y + 'px';
+  _bkExplainSelBtn.style.display = 'inline-flex';
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+function bkHideExplainSelButton() {
+  if (_bkExplainSelBtn) _bkExplainSelBtn.style.display = 'none';
+  _bkExplainSelText = '';
+}
+function bkExplainSelText() {
+  const text = _bkExplainSelText;
+  bkHideExplainSelButton();
+  if (!text) return;
+  if (typeof bkExplainQuick === 'function') {
+    bkExplainQuick('请继续仔细讲解下面这段文字，拆解其中的概念、补充直觉理解与例子：\n' + text);
+  }
+}
+function bkInitExplainSelection() {
+  document.addEventListener('mouseup', function () {
+    // 仅在章节讲解 tab 的聊天流内选中文字时显示按钮
+    if (bkActiveTab !== 'explain') { bkHideExplainSelButton(); return; }
+    const sel = window.getSelection();
+    const flow = document.getElementById('bkExplainFlow');
+    if (!sel || sel.isCollapsed || !flow || !flow.contains(sel.anchorNode) || !flow.contains(sel.focusNode)) {
+      bkHideExplainSelButton();
+      return;
+    }
+    const text = sel.toString().trim();
+    if (!text || text.length < 4) { bkHideExplainSelButton(); return; }
+    _bkExplainSelText = text;
+    bkShowExplainSelButton();
+  });
+  document.addEventListener('mousedown', function (e) {
+    // 点击按钮本身不清除选区（否则拿不到缓存文本也导致选区闪烁）
+    if (e.target && e.target.closest && e.target.closest('#bkExplainSelBtn')) return;
+    setTimeout(() => {
+      const sel = window.getSelection();
+      if (!sel || sel.isCollapsed) bkHideExplainSelButton();
+    }, 0);
+  });
+}
+if (typeof window._bkExplainSelInited === 'undefined') {
+  window._bkExplainSelInited = true;
+  bkInitExplainSelection();
+}
+
+// ═══════════ 章节讲解：上下文轮数设置 ═══════════
+// 可在 设置 → 更多设置 调整；0 表示不带历史对话，只发本章知识库+原文片段
+function _bkExplainCtxRounds() {
+  const v = parseInt(localStorage.getItem('study_bk_explain_ctx_rounds') || '6', 10);
+  return (Number.isFinite(v) && v >= 0 && v <= 30) ? v : 6;
 }
 
 // ═══════════ 摘要节点 → 显示原书原文 ═══════════

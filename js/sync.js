@@ -108,6 +108,7 @@
   let pullTimer = null;
   let realtimeChannel = null;
   let applyingRemote = false;                 // 防止远端写回本地触发再次上报的锁
+  let _lastPushAt = 0;                        // 上次主动上传完成时间（抑制自己变更的 realtime 回显）
   let listeners = new Set();                  // 状态监听器（settings 面板刷新用）
 
   // 判断某 key 是否参与同步
@@ -304,7 +305,10 @@
         }
         done++;
       }
-      if (okCount > 0) _emitStatus();
+      if (okCount > 0) {
+        _emitStatus();
+        _lastPushAt = Date.now();
+      }
     }).catch(() => {})
       .finally(() => {
         // 队列已全部处理完时才显示空闲；否则保持等待（下一个任务会继续更新）
@@ -664,6 +668,22 @@
   // 需重新加载并重渲染，否则用户看到的是旧数据（即使 localStorage 已更新）。
   // 此处用 try/catch 逐个调用，避免单个模块异常影响整体刷新。
   function _refreshUI() {
+    // ── 正在编辑的笔记保护：刷新会重渲染 DOM 并用 localStorage 覆盖内存，
+    //    若用户正在编辑笔记标题/正文，先把输入框当前值保存，刷新后写回内存并恢复输入框与焦点，避免回退。──
+    let editSnap = null;
+    try {
+      if (typeof getActiveNote === 'function') {
+        const n = getActiveNote();
+        const t = document.getElementById('noteTitleInput');
+        const a = document.getElementById('notesTextarea');
+        const dirty = !!(n && (n._dirtyTitle || n._dirtyContent));
+        const focusT = !!t && document.activeElement === t;
+        const focusA = !!a && document.activeElement === a;
+        if (n && n.id && (dirty || focusT || focusA)) {
+          editSnap = { id: n.id, title: t ? t.value : n.title, content: a ? a.value : n.content };
+        }
+      }
+    } catch (e) {}
     try {
       // 重新从 localStorage 加载内存变量（若模块已定义全局 let 变量）。
       // 注：notes/todos/links 是 core.js 的全局 let 绑定，IIFE 作用域链可解析到它们，
@@ -678,6 +698,22 @@
     ];
     for (const fn of calls) {
       try { if (typeof window[fn] === 'function') window[fn](); } catch (e) { /* 忽略单个模块失败 */ }
+    }
+    // 恢复正在编辑的笔记输入（值 + 焦点），避免同步刷新打断标题/正文编辑
+    if (editSnap) {
+      try {
+        if (typeof notes !== 'undefined' && Array.isArray(notes)) {
+          const n = notes.find(x => String(x.id) === String(editSnap.id));
+          if (n) { n.title = editSnap.title; n.content = editSnap.content; }
+        }
+        setTimeout(() => {
+          const t = document.getElementById('noteTitleInput');
+          const a = document.getElementById('notesTextarea');
+          if (t) t.value = editSnap.title;
+          if (a) a.value = editSnap.content;
+          if (t) t.focus();
+        }, 0);
+      } catch (e) {}
     }
   }
 

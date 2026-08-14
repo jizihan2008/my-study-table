@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260813-r13">
+<link rel="stylesheet" href="css/style.css?v=20260813-r16">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@0.469.0"></script>
 </head>
@@ -946,6 +946,11 @@
           <input type="number" id="settingsBooksKbTruncate" value="9000" min="1000" max="100000" step="500" onchange="saveBooksKbSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
           <span class="hint">构建教材章节知识库时，正文超过该字符数则只取头尾关键片段（各约 72%），控制 Token 消耗。数值越大知识越完整但消耗越大，默认 9000。</span>
         </div>
+        <div class="settings-field">
+          <label><i data-lucide="messages-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 章节讲解上下文轮数</label>
+          <input type="number" id="settingsBooksCtxRounds" value="6" min="0" max="30" step="1" onchange="saveBooksKbSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+          <span class="hint">章节讲解 AI 携带最近多少轮对话作为上下文（每轮 = 一问一答）。0 表示不带历史对话，只发本章知识库与原文片段。默认 6。</span>
+        </div>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 软件更新</div>
         <div class="settings-field">
@@ -1309,13 +1314,13 @@
 <script src="js/ai-render.js?v=20260812-r11"></script>
 <script src="js/ai-tools.js?v=20260811-r2"></script>
 <script src="js/ai-search.js"></script>
-<script src="js/ai-api.js?v=20260803-r1"></script>
-<script src="js/ai-send.js?v=20260804-r3"></script>
+<script src="js/ai-api.js?v=20260813-r2"></script>
+<script src="js/ai-send.js?v=20260813-r2"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260812-r3"></script>
 <script src="js/appearance.js?v=20260813-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260813-r2"></script>
+<script src="js/settings.js?v=20260813-r4"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
 <script src="js/inbox.js?v=20260813-r1"></script>
@@ -1326,10 +1331,10 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
 </script>
 <script src="js/books-pdfstore.js?v=20260812-r2"></script>
-<script src="js/books.js?v=20260813-r7"></script>
+<script src="js/books.js?v=20260813-r10"></script>
 <script src="js/books-pdf.js?v=20260813-r6"></script>
 <script src="js/books-kb.js?v=20260813-r10"></script>
-<script src="js/books-ai.js?v=20260813-r16"></script>
+<script src="js/books-ai.js?v=20260813-r18"></script>
 <script src="js/books-annot.js?v=20260813-r4"></script>
 <script src="js/calendar.js?v=20260724-r7"></script>
 <script src="js/taskline.js?v=20260812-r27"></script>
@@ -1349,7 +1354,7 @@
 <script src="js/codegen.js?v=20260808-r14"></script>
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-<script src="js/sync.js?v=20260812-r19"></script>
+<script src="js/sync.js?v=20260813-r1"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
 setTimeout(async function() {
@@ -1495,11 +1500,13 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-item" id="bkTermCtxAdd" onclick="bkAddSelectedTermToGlossary()"><i data-lucide="bookmark-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到术语表</div>
   <div class="context-menu-item" id="bkTermCtxRemove" style="display:none;" onclick="bkRemoveTermMark()"><i data-lucide="highlighter" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 移除术语标记</div>
   <div class="context-menu-item" id="bkTermCtxExplain" style="display:none;" onclick="bkExplainSelection('explain')"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 解释一下</div>
+  <div class="context-menu-item" id="bkTermCtxTutorTerm" style="display:none;" onclick="bkExplainTermInTutor()"><i data-lucide="graduation-cap" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 章节讲解 AI 解释</div>
   <div class="context-menu-item" id="bkTermCtxExample" style="display:none;" onclick="bkExplainSelection('example')"><i data-lucide="lightbulb" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 举个例子</div>
   <div class="context-menu-item" id="bkTermCtxOriginal" style="display:none;" onclick="bkShowOriginalText()"><i data-lucide="book-open" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 显示原书原文</div>
   <div class="context-menu-item" id="bkTermCtxOpenFloat" style="display:none;" onclick="bkOpenNodeFloat()"><i data-lucide="maximize-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 打开浮窗</div>
   <div class="context-menu-item" id="bkTermCtxAddAnno" style="display:none;" onclick="bkAnnotAddFromContext()"><i data-lucide="message-square-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加批注</div>
   <div class="context-menu-item" id="bkTermCtxAiAnno" style="display:none;" onclick="bkAnnotAiFromContext()"><i data-lucide="wand-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI 生成旁批</div>
+  <div class="context-menu-item" id="bkTermCtxBookmark" style="display:none;" onclick="bkToggleChapterBookmark()"><i data-lucide="bookmark" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="bkTermCtxBookmarkText">添加书签</span></div>
   <div class="context-menu-item" id="bkTermCtxRebuildChapter" style="display:none;" onclick="bkRebuildContextChapter()"><i data-lucide="rotate-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="bkTermCtxRebuildChapterText">重新构建本章知识库</span></div>
 </div>
 

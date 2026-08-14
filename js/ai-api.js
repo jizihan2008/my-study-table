@@ -146,7 +146,7 @@ async function callAiApi(apiMessages, apiCfg, conv) {
       toolResults.forEach(tr => appendMessage(conv, tr));
       appendMessage(conv, { role: 'assistant', content: finalReply, _kimiSearchResult: true });
       const { cleanText: ct, toolCalls: tcs } = extractToolCalls(finalReply);
-      return { cleanText: ct || finalReply || '（搜索无结果）', toolCalls: tcs, reasoning, rawReply: finalReply };
+      return { cleanText: ct || finalReply || '（搜索无结果）', toolCalls: tcs, reasoning, rawReply: finalReply, finishReason: data.choices?.[0]?.finish_reason || '' };
     } else {
       // Fallback: return partial result
       appendMessage(conv, { role: 'assistant', content: reply || '（搜索中断）', _kimiSearch: true });
@@ -154,7 +154,7 @@ async function callAiApi(apiMessages, apiCfg, conv) {
   }
 
   const { cleanText, toolCalls } = extractToolCalls(reply || '');
-  return { cleanText: cleanText || reply || '（未收到回复）', toolCalls, reasoning, rawReply: reply };
+  return { cleanText: cleanText || reply || '（未收到回复）', toolCalls, reasoning, rawReply: reply, finishReason: data.choices?.[0]?.finish_reason || '' };
 }
 
 // Build the apiMessages array from conversation history.
@@ -248,6 +248,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
   let finalRawReply = ''; // Keep original AI reply for memory parsing
   let finalReasoning = '';
   let allToolResults = [];
+  let finalFinishReason = ''; // 最后一次 API 调用的 finish_reason（'length' 表示被 max_tokens 截断）
 
   // Track previous tool calls to detect repeated identical queries
   // Stores per-action signatures so we can detect when AI keeps calling
@@ -269,16 +270,19 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
       setAiStopRequested(convId, false);
       finalCleanText = '⏹️ 已手动停止。';
       finalReasoning = '';
+      finalFinishReason = '';
       break;
     }
 
-    const { cleanText, toolCalls, reasoning, rawReply } = await callAiApi(apiMessages, apiCfg, conv);
+    const { cleanText, toolCalls, reasoning, rawReply, finishReason } = await callAiApi(apiMessages, apiCfg, conv);
+    finalFinishReason = finishReason || '';
 
     // Check stop again after API call (in case it took a long time)
     if (isAiStopRequested(convId)) {
       setAiStopRequested(convId, false);
       finalCleanText = '⏹️ 已手动停止。';
       finalReasoning = reasoning || '';
+      finalFinishReason = '';
       break;
     }
 
@@ -332,6 +336,8 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
       content: '【工具执行结果】\n' + compactResults,
       _toolInfo: { toolNames, toolLabel, results: toolResults }
     });
+    // 持久化中间工具调用，刷新/重启后已完成的工具结果不丢失（配合 study_ai_pending 自动续传）
+    if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
 
     // Check safety limit (repeatCount was already incremented above)
     if (anyRepeated) {
@@ -372,5 +378,22 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
     try { renderToday(); } catch (e) { console.warn('[AI] renderToday 失败:', e); }
   }
 
-  return { finalCleanText, finalRawReply, finalReasoning, allToolResults };
+  return { finalCleanText, finalRawReply, finalReasoning, allToolResults, finishReason: finalFinishReason };
+}
+
+// ═══════════ 截断回复续写 ═══════════
+// 当 API 因 max_tokens 截断（finish_reason='length'）时，追加断点继续指令再调用一次，
+// 把续写内容拼回原文，避免「戛然而止」。返回续写文本，失败返回 ''。
+async function continueTruncatedReply(apiCfg, conv, partialText) {
+  if (!partialText) return '';
+  try {
+    const msgs = buildApiMessages(conv, null);
+    msgs.push({ role: 'assistant', content: partialText });
+    msgs.push({ role: 'user', content: '（上一条回复因长度限制被截断）请从上次中断处无缝继续输出，不要重复已经写过的内容，直接从断点接着往下写。' });
+    const { cleanText } = await callAiApi(msgs, apiCfg, conv);
+    return cleanText || '';
+  } catch (e) {
+    console.warn('[AI] 续写截断回复失败:', e);
+    return '';
+  }
 }

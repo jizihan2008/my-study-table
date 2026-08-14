@@ -7252,6 +7252,94 @@ i[data-lucide] {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
   margin-top: 1px;
 }
+.bk-book-sub-last { color: var(--primary); }
+/* 章节行书签标记 */
+.bk-chapter-mark { color: var(--primary); }
+/* 书签与阅读历史浮层 */
+.bk-bookmarks-body { padding: 14px 16px 18px; overflow-y: auto; }
+/* 书签浮层范围切换（全部教材 / 本书） */
+.bk-bookmarks-scope { display: flex; gap: 6px; margin-bottom: 12px; }
+.bk-bookmarks-scope-btn {
+  flex: 1; padding: 6px 10px; border-radius: 7px;
+  border: 1px solid var(--border); background: var(--input-bg);
+  color: var(--text-secondary); font-size: 11.5px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  transition: var(--transition);
+}
+.bk-bookmarks-scope-btn:hover { border-color: var(--primary); color: var(--primary); }
+.bk-bookmarks-scope-btn.active {
+  border-color: var(--primary); background: rgba(99,102,241,0.1);
+  color: var(--primary); font-weight: 600;
+}
+.bk-bookmarks-section-title {
+  font-size: 12px; font-weight: 600; color: var(--text);
+  margin: 4px 0 8px; padding-bottom: 4px; border-bottom: 1px solid var(--border);
+}
+.bk-bookmarks-section-title:first-child { margin-top: 0; }
+.bk-bookmarks-section-title small { color: var(--text-secondary); }
+.bk-bookmarks-list { display: flex; flex-direction: column; gap: 6px; margin-bottom: 16px; }
+.bk-bookmarks-list:last-child { margin-bottom: 0; }
+.bk-bookmark-item {
+  display: flex; align-items: center; gap: 8px;
+  padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--input-bg);
+}
+.bk-bookmark-info { flex: 1; min-width: 0; }
+.bk-bookmark-title {
+  font-size: 12.5px; color: var(--text); font-weight: 600;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bk-bookmark-sub {
+  font-size: 11px; color: var(--text-secondary);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.bk-bookmark-jump {
+  flex-shrink: 0; padding: 4px 12px; border-radius: 6px; border: none;
+  background: var(--primary); color: #fff; font-size: 11px; cursor: pointer;
+  transition: var(--transition);
+}
+.bk-bookmark-jump:hover { background: var(--primary-hover); }
+.bk-bookmark-del {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px; border: none;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.bk-bookmark-del:hover { color: var(--danger); background: var(--hover-bg); }
+.bk-bookmark-edit {
+  flex-shrink: 0; width: 26px; height: 26px; border-radius: 6px; border: none;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+}
+.bk-bookmark-edit:hover { color: var(--primary); background: var(--hover-bg); }
+.bk-bookmarks-empty {
+  font-size: 11.5px; color: var(--text-secondary); text-align: center;
+  padding: 16px 0; line-height: 1.7;
+}
+/* 轻量自消失提示（书签等高频操作） */
+.bk-mini-toast {
+  position: fixed; left: 50%; bottom: 32px; transform: translateX(-50%) translateY(12px);
+  background: rgba(20, 20, 30, 0.92); color: #fff; font-size: 12.5px;
+  padding: 8px 18px; border-radius: 999px; z-index: 20000;
+  opacity: 0; pointer-events: none; transition: opacity 0.25s, transform 0.25s;
+}
+.bk-mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+/* 书签命名弹窗输入框 */
+.bk-name-input {
+  width: 100%; padding: 9px 11px; box-sizing: border-box;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--input-bg); color: var(--text); font-size: 13px;
+  outline: none; transition: var(--transition);
+}
+.bk-name-input:focus { border-color: var(--primary); }
+/* 章节讲解：选中文字 → 「让 AI 仔细讲解」浮动按钮 */
+.bk-explain-sel-btn {
+  position: fixed; z-index: 19999; display: inline-flex; align-items: center; gap: 4px;
+  padding: 5px 11px; border: none; border-radius: 999px;
+  background: var(--primary); color: #fff; font-size: 11.5px;
+  cursor: pointer; box-shadow: 0 3px 10px rgba(0, 0, 0, 0.25);
+  white-space: nowrap; transition: background 0.2s;
+}
+.bk-explain-sel-btn:hover { background: var(--primary-hover); }
 .bk-book-kb-badge {
   flex-shrink: 0; font-size: 10px; padding: 2px 7px; border-radius: 20px;
   font-weight: 600;
