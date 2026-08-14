@@ -310,12 +310,14 @@
   }
 
   // ── 上传单 item（含 hash 增量跳过、离线队列）────────────
-  // force=true（「上传全部」）：跳过 hash 增量判断，强制 upsert——
-  // 用于云端行曾被误删/外部清理时自愈补齐（本地 hash 存在会导致普通增量跳过）。
-  async function _uploadPiece(session, piece, force) {
+  // force=true（「上传全部」）：跳过 hash 增量判断，强制 upsert。
+  // 增量（force=false）跳过条件 = hash 相同 **且** 云端该行仍存在（remoteSet 含此 piece）——
+  // 否则即便 hash 相同也会重传补齐，防止云端行被外部清理/误删后本地永远 skip 不补。
+  async function _uploadPiece(session, piece, force, remoteSet) {
     const key = piece.kind + '/' + piece.itemId;
     const hash = _hashStr(piece.wrap.d);
-    if (!force && _getHash(key) === hash) return { ok: true, skipped: true };
+    const remoteHas = !remoteSet || remoteSet.has(key);   // remoteSet 查询失败(null)时视为存在，保守不重传
+    if (!force && _getHash(key) === hash && remoteHas) return { ok: true, skipped: true };
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
     const updatedAt = new Date().toISOString();
@@ -338,6 +340,19 @@
     return { ok: true };
   }
 
+  // ── 云端 item 集合（轻量：只查 kind+item_id，不拉 data，供增量判断"云端是否还有此行"）──
+  async function _fetchRemoteSet(session, c) {
+    try {
+      const { data, error } = await c.from('user_sync_items')
+        .select('kind,item_id')
+        .eq('user_id', session.user.id);
+      if (error || !data) return null;
+      const set = new Set();
+      data.forEach(r => set.add(r.kind + '/' + r.item_id));
+      return set;
+    } catch (e) { return null; }
+  }
+
   // ── 一次完整同步：配额检查 → 提取 → 压缩 → 上传 → 补传 → 拉取 → 清理 ──
   let logUploadChain = Promise.resolve();
   async function _flushLogs() {
@@ -357,6 +372,11 @@
       quotaExceeded = usedBytes >= cfg.quotaMB * 1024 * 1024;
     } catch (e) {}
 
+    // 增量同步前先取云端 item 集合（轻量），判断"hash 相同但云端行已消失"→ 强制补齐
+    let remoteSet = null;
+    if (!quotaExceeded) {
+      remoteSet = await _fetchRemoteSet(session, c);
+    }
     const retainedBase = new Set();   // 本次应保留的云端基础 id（供 TTL 清理）
     if (!quotaExceeded) {
       // ② 提取所有 item（TTL 过滤），仅上传「用户开启 + 数据有变化」的 item；
@@ -379,13 +399,14 @@
       queue.forEach(q => { totalPieces += q.pieces.length; });
 
       // ③ 逐片串行上传（进度：正在同步「名称」（i/N））
+      //    增量跳过条件：hash 相同 且 云端仍有该行（remoteSet）——云端缺失会自动重传补齐
       let done = 0;
       for (const q of queue) {
         for (const p of q.pieces) {
           done++;
           p.kind = q.kind;
           _emitProgress({ phase: 'uploading', current: q.name, uploaded: done, total: totalPieces });
-          const r = await _uploadPiece(session, p);
+          const r = await _uploadPiece(session, p, false, remoteSet);
           if (!r.ok) syncHadError = r.reason || '上传失败';
         }
       }
@@ -451,18 +472,26 @@
       .select('kind,item_id,data,updated_at')
       .eq('user_id', session.user.id);
     if (error || !data) return;
-    // 按 kind + 基础 id（去 _pN 分片后缀）分组
+    // 按 kind + 基础 id（去 _pN 分片后缀）分组；
+    // 兼容：若某组既有「基础无后缀单行」又有「分片行」（跨设备 plain/gzip 压缩算法或阈值不同导致
+    // 手机分片 / 电脑单片并存），**忽略无后缀单行**，只按分片重组——否则消息会重复。
     const grouped = {};
     for (const row of data) {
+      const isPiece = /_(p\d+)+$/.test(row.item_id);
       const baseId = row.item_id.replace(/_(p\d+)+$/, '');
       const key = row.kind + '/' + baseId;
-      (grouped[key] = grouped[key] || []).push(row);
+      const g = (grouped[key] = grouped[key] || { hasPiece: false, rows: [] });
+      if (isPiece) g.hasPiece = true;
+      g.rows.push(row);
     }
     applyingRemote = true;
     try {
       for (const key of Object.keys(grouped)) {
         const [kind, baseId] = key.split('/');
-        const pieces = grouped[key];
+        const g = grouped[key];
+        const pieces = g.hasPiece
+          ? g.rows.filter(r => /_(p\d+)+$/.test(r.item_id))
+          : g.rows;
         const remoteUpdated = pieces.reduce((m, p) =>
           new Date(p.updated_at).getTime() > new Date(m).getTime() ? p.updated_at : m, pieces[0].updated_at);
         const localTs = _getTs(key);
