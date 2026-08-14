@@ -464,6 +464,38 @@ grant all on table public.user_data to anon, authenticated, service_role;
 do $$ begin alter publication supabase_realtime add table public.user_data; exception when duplicate_object then null; end $$;
 
 -- ═══════════════════════════════════════════════════════════════════
+-- 日志类数据独立云存储（v0.4.1 云存储管理面板）
+-- 存 AI 对话、教材章节讲解日志、全书问答日志，与普通同步（user_data）分离，
+-- 按 item 粒度分片增量上传，每行一个 item（data 为 gzip 压缩串包装 {v,c,d}），
+-- bytes 记录压缩后字节数供每用户配额聚合（默认 50MB，可配置）。
+-- 说明：kind = 'ai_conv' | 'bk_explain' | 'bk_qa'；item_id 分片时追加 _p0/_p1 后缀。
+-- ═══════════════════════════════════════════════════════════════════
+create table if not exists public.user_sync_items (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  kind text not null,
+  item_id text not null,
+  data jsonb not null default '{}'::jsonb,
+  bytes int not null default 0,
+  updated_at timestamptz not null default now(),
+  constraint user_sync_items_unique unique (user_id, kind, item_id)
+);
+create index if not exists idx_user_sync_items_user on public.user_sync_items (user_id, updated_at desc);
+alter table public.user_sync_items enable row level security;
+
+-- RLS：仅本人可读可写
+drop policy if exists "user_sync_items_self_all" on public.user_sync_items;
+create policy "user_sync_items_self_all" on public.user_sync_items
+  for all using (auth.uid() = user_id)
+  with check (auth.uid() = user_id);
+
+-- 授权 Data API 角色
+grant all on table public.user_sync_items to anon, authenticated, service_role;
+
+-- 启用 Realtime（远端变更实时推送，供其他设备合并回本地）
+do $$ begin alter publication supabase_realtime add table public.user_sync_items; exception when duplicate_object then null; end $$;
+
+-- ═══════════════════════════════════════════════════════════════════
 -- Storage 配置说明（需在 Supabase 控制台手动操作）
 -- ═══════════════════════════════════════════════════════════════════
 -- 1. 创建 bucket：名称 plugin-store，勾选 Public bucket

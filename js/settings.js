@@ -518,9 +518,12 @@ function switchSettingsTab(tab) {
   if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
     loadSupabaseSettings();
   }
-  // Render sync panel
+  // Render sync panel（含日志类数据云存储区块，js/sync-logs.js，与同步共用同一 tab）
   if (tab === 'sync' && typeof renderSyncPanel === 'function') {
     renderSyncPanel();
+  }
+  if (tab === 'sync' && typeof window.SyncLogs !== 'undefined' && window.SyncLogs.renderPanel) {
+    window.SyncLogs.renderPanel();
   }
 }
 

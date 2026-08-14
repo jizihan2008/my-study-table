@@ -216,6 +216,10 @@ function _bkExplainLogSave(chapterId, logs) {
     store[chapterId] = logs;
     localStorage.setItem('study_bk_explain_logs_v1', JSON.stringify(store));
   } catch (e) {}
+  // 上报日志同步通道（js/sync-logs.js，gzip 压缩 + 分片 + 配额）
+  if (typeof SyncLogs !== 'undefined' && SyncLogs.onLocalChange) {
+    try { SyncLogs.onLocalChange('study_bk_explain_logs_v1'); } catch (e) {}
+  }
 }
 function _bkExplainLogAppend(chapterId, role, content) {
   if (!chapterId || !content) return;
@@ -250,6 +254,58 @@ function _bkRenderExplainHistory(chapterId) {
   }).join('');
 }
 
+// ── 全书问答记录持久化（按书存 localStorage，切换页面不丢失，可跨设备云同步）──
+// key: study_bk_qa_logs_v1 = { [bookId]: [{role, content, hit?, ts}] }，每本书上限 60 条
+function _bkQaLogLoad(bookId) {
+  try {
+    const store = JSON.parse(localStorage.getItem('study_bk_qa_logs_v1') || '{}');
+    const arr = store[bookId];
+    return Array.isArray(arr) ? arr : [];
+  } catch (e) { return []; }
+}
+function _bkQaLogSave(bookId, logs) {
+  try {
+    const store = JSON.parse(localStorage.getItem('study_bk_qa_logs_v1') || '{}');
+    store[bookId] = logs;
+    localStorage.setItem('study_bk_qa_logs_v1', JSON.stringify(store));
+  } catch (e) {}
+  // 上报日志同步通道（js/sync-logs.js，gzip 压缩 + 分片 + 配额）
+  if (typeof SyncLogs !== 'undefined' && SyncLogs.onLocalChange) {
+    try { SyncLogs.onLocalChange('study_bk_qa_logs_v1'); } catch (e) {}
+  }
+}
+function _bkQaLogAppend(bookId, role, content, meta) {
+  if (!bookId || !content) return;
+  const logs = _bkQaLogLoad(bookId);
+  logs.push(Object.assign({ role: role, content: String(content), ts: Date.now() }, meta || {}));
+  if (logs.length > 60) logs.splice(0, logs.length - 60);
+  _bkQaLogSave(bookId, logs);
+}
+
+// 渲染全书问答的历史记录（持久化消息，供 bkRenderQaTab 调用）
+function _bkRenderQaHistory(bookId) {
+  const logs = _bkQaLogLoad(bookId);
+  return logs.map(m => {
+    if (m.role === 'user') {
+      return `<div class="bk-msg user">
+        <div class="bk-msg-row">
+          <div class="bk-msg-avatar"><i data-lucide="user" class="lucide-icon" style="width:15px;height:15px;"></i></div>
+          <div class="bk-msg-bubble">${escapeHtml(m.content)}</div>
+        </div>
+      </div>`;
+    }
+    return `<div class="bk-msg assistant">
+      <div class="bk-msg-row">
+        <div class="bk-msg-avatar"><i data-lucide="message-circle-question" class="lucide-icon" style="width:16px;height:16px;"></i></div>
+        <div class="bk-msg-bubble">
+          ${(m.hit && m.hit.length) ? `<div class="bk-msg-meta">命中章节：<b>${escapeHtml(m.hit.join('、'))}</b></div>` : ''}
+          <div class="markdown-body">${_bkRenderMd(m.content)}</div>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
 // ═══════════ 全书问答 tab ═══════════
 function bkRenderQaTab(book, chapter) {
   const body = document.getElementById('bkMainBody');
@@ -271,7 +327,8 @@ function bkRenderQaTab(book, chapter) {
         <div class="bk-msg-avatar"><i data-lucide="message-circle-question" class="lucide-icon" style="width:16px;height:16px;"></i></div>
         <div class="bk-msg-bubble">对《${escapeHtml(book.title)}》全书提问，我会自动检索相关章节并结合原文回答。<br>例如：<br>· "什么是 ${escapeHtml((book.chapters && book.chapters[0] && book.chapters[0].title) || '核心概念')}？"<br>· "讲讲书里关于 XXX 的推导过程"</div>
       </div>
-    </div>`;
+    </div>
+    ${_bkRenderQaHistory(book.id)}`;
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
 }
 
@@ -293,6 +350,7 @@ async function bkSendQa() {
         <div class="bk-msg-bubble">${escapeHtml(q)}</div>
       </div>
     </div>`);
+  _bkQaLogAppend(book.id, 'user', q);
   input.value = '';
   _bkAiBusy = true;
   sendBtn.disabled = true;
@@ -319,10 +377,20 @@ async function bkSendQa() {
   }
   const context = contextParts.join('\n\n---\n\n') || '（未检索到有效原文）';
 
+  // 多轮上下文：与章节讲解共用「讲解/问答上下文轮数」设置（study_bk_explain_ctx_rounds，默认 6，0 表示不带历史）
+  // 日志末尾一条是刚写入的当前问题，去掉；取最近 rounds*2 条（=rounds 轮 user/assistant 交替）
+  const rounds = _bkExplainCtxRounds();
+  const qaLogs = _bkQaLogLoad(book.id) || [];
+  const ctxHistory = rounds > 0
+    ? qaLogs.slice(0, -1).slice(-rounds * 2)
+        .map(m => ({ role: (m.role === 'assistant' ? 'assistant' : 'user'), content: String(m.content || '') }))
+    : [];
+
   try {
     const res = await callAiApi([
       { role: 'system', content: '你是教材问答助手。基于用户教材内容回答问题，优先使用提供的原文与知识库。'
         + '回答用中文、条理清晰，可引用章节出处。若原文不足，明确说明并结合常识补充。\n\n【检索到的教材内容】\n' + context },
+      ...ctxHistory,
       { role: 'user', content: q }
     ], cfg, null);
     const answer = (res && res.cleanText) || '（AI 未返回内容，请重试）';
@@ -340,6 +408,7 @@ async function bkSendQa() {
           <button class="bk-msg-action" onclick="bkSaveQaAsNote()"><i data-lucide="save" class="lucide-icon" style="width:12px;height:12px;"></i> 存为笔记</button>
         </div>
       </div>`);
+    _bkQaLogAppend(book.id, 'assistant', answer, { hit: hitNames });
     _bkLastQa = { title: book.title + ' · 问答', content: '**问题：' + q + '**\n\n' + answer };
     if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
     flow.scrollTop = flow.scrollHeight;

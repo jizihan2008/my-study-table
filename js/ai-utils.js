@@ -56,6 +56,10 @@ function safeSaveAiConvs() {
       try { localStorage.setItem('study_ai_convs', JSON.stringify(minimal)); } catch (_) {}
     }
   }
+  // 上报日志同步通道（js/sync-logs.js，按会话 id 拆分 + 分片 + 配额）
+  if (typeof SyncLogs !== 'undefined' && SyncLogs.onLocalChange) {
+    try { SyncLogs.onLocalChange('study_ai_convs'); } catch (e) {}
+  }
 }
 
 // ═══════════ Custom Confirm Dialog (replaces native confirm to avoid Electron focus bugs) ═══════════

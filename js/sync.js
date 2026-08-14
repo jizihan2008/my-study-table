@@ -2,6 +2,7 @@
 // js/sync.js — Supabase 双向数据云同步（手机端 PWA / 桌面端共用）
 // 将白名单内的 localStorage key（待办/笔记/计时/习惯/任务线/电子书元数据等）
 // 同步到 Supabase user_data 表，per-key updated_at 后写者胜（LWW）。
+// 注：AI 对话 / 教材讲解 / 全书问答三类日志已剥离到 js/sync-logs.js 独立通道。
 //
 // 特性：
 //   - 变更检测：saveData 经 window.Sync.onLocalChange(key) 上报，debounce 2s 批量上传
@@ -46,9 +47,9 @@
     'study_longterm_goals',    // 长期目标（实际存储 key）
     'study_links_v3',          // 快捷链接
     'study_quick_access',      // 快捷访问
-    'study_ai_convs',          // AI 助手聊天记录（跨设备查看历史对话）
+    // 注：study_ai_convs / study_bk_explain_logs_v1 / study_bk_qa_logs_v1
+    // 已剥离到独立通道 sync-logs.js（gzip 压缩 + 分片 + 配额），不再走普通同步
     'study_ai_memory',         // AI 记忆画像
-    'study_bk_explain_logs_v1',// 教材章节讲解日志
     'study_bk_quiz_state_v1',  // 教材测验状态
     'study_todo_completed_log' // 待办完成日志（历史完成记录）
   ];
@@ -85,9 +86,7 @@
     'study_longterm_goals': '长期目标',
     'study_links_v3': '快捷链接',
     'study_quick_access': '快捷访问',
-    'study_ai_convs': 'AI 助手聊天记录',
     'study_ai_memory': 'AI 记忆画像',
-    'study_bk_explain_logs_v1': '教材讲解日志',
     'study_bk_quiz_state_v1': '教材测验状态',
     'study_todo_completed_log': '待办完成日志'
   };
@@ -613,6 +612,14 @@
 
   // ── 变更上报（saveData 钩子调用）─────────────────────
   function onLocalChange(key) {
+    // 日志类 key（AI 对话 / 教材讲解 / 全书问答）已剥离到独立通道 sync-logs.js：
+    // 走 saveData 的写点（如 settings.js 写 study_ai_convs）在此转发给 SyncLogs。
+    if (key === 'study_ai_convs' || key === 'study_bk_explain_logs_v1' || key === 'study_bk_qa_logs_v1') {
+      if (typeof window.SyncLogs !== 'undefined' && window.SyncLogs.onLocalChange) {
+        window.SyncLogs.onLocalChange(key);
+      }
+      return;
+    }
     if (!isSyncKey(key)) return;
     if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
     // 无论是否登录都记录本地修改时间（Steam 云存档式合并需要；未登录时修改也会在登录后正确对比）
