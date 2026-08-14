@@ -194,29 +194,47 @@
     } catch (e) { /* 忽略 */ }
   }
 
-  // ── gzip 压缩 / 解压（原生 CompressionStream）──────────
-  async function _gzipB64(obj) {
-    const enc = new TextEncoder();
-    const blob = new Blob([enc.encode(JSON.stringify(obj))]);
-    const stream = blob.stream().pipeThrough(new CompressionStream('gzip'));
-    const buf = await new Response(stream).arrayBuffer();
-    const bytes = new Uint8Array(buf);
-    let bin = '';
-    const CH = 0x8000;
-    for (let i = 0; i < bytes.length; i += CH) {
-      bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
-    }
-    return { b64: btoa(bin), rawBytes: bytes.length };
-  }
-  async function _gzipDecode(data) {
-    try {
-      if (data && data.v === 1 && data.c === 'gzip' && typeof data.d === 'string') {
-        const bin = atob(data.d);
-        const bytes = new Uint8Array(bin.length);
-        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-        const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+  // ── 传输层编码：优先 gzip（原生 CompressionStream），不支持则降级 plain base64 ──
+  // 手机 PWA / 旧 WebView 可能缺失 CompressionStream 或 Blob.stream()，
+  // 若直接抛错会被 _packItem 的 catch 静默跳过 → 所有 item 都传不上去。
+  async function _encodePayload(obj) {
+    const text = JSON.stringify(obj);
+    const canGzip = typeof CompressionStream === 'function' &&
+      typeof DecompressionStream === 'function' &&
+      typeof Blob !== 'undefined' && Blob.prototype && typeof Blob.prototype.stream === 'function';
+    if (canGzip) {
+      try {
+        const enc = new TextEncoder();
+        const blob = new Blob([enc.encode(text)]);
+        const stream = blob.stream().pipeThrough(new CompressionStream('gzip'));
         const buf = await new Response(stream).arrayBuffer();
-        return JSON.parse(new TextDecoder().decode(buf));
+        const bytes = new Uint8Array(buf);
+        let bin = '';
+        const CH = 0x8000;
+        for (let i = 0; i < bytes.length; i += CH) {
+          bin += String.fromCharCode.apply(null, bytes.subarray(i, i + CH));
+        }
+        return { b64: btoa(bin), rawBytes: bytes.length, algo: 'gzip' };
+      } catch (e) { /* fallthrough to plain */ }
+    }
+    // 降级：明文 base64（任何环境可用；体积更大，会触发更早分片，仍能增量上传）
+    const plain = btoa(unescape(encodeURIComponent(text)));
+    return { b64: plain, rawBytes: plain.length, algo: 'plain' };
+  }
+  async function _decodePayload(data) {
+    try {
+      if (data && data.v === 1 && typeof data.d === 'string') {
+        if (data.c === 'gzip') {
+          const bin = atob(data.d);
+          const bytes = new Uint8Array(bin.length);
+          for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+          const stream = new Blob([bytes]).stream().pipeThrough(new DecompressionStream('gzip'));
+          const buf = await new Response(stream).arrayBuffer();
+          return JSON.parse(new TextDecoder().decode(buf));
+        }
+        if (data.c === 'plain') {
+          return JSON.parse(decodeURIComponent(escape(atob(data.d))));
+        }
       }
       // 旧明文数据透传（未压缩对象）
       return (data && typeof data === 'object') ? data : null;
@@ -278,9 +296,9 @@
   }
   async function _packRec(itemId, meta, tree, activePath, items, depth) {
     const payload = { meta, tree, activePath, items, part: 0, parts: 1 };
-    const r = await _gzipB64(payload);
+    const r = await _encodePayload(payload);
     if (r.b64.length <= MAX_ITEM_CHAR || items.length <= 1 || depth >= 6) {
-      return [{ itemId, wrap: { v: 1, c: 'gzip', d: r.b64 }, bytes: r.rawBytes }];
+      return [{ itemId, wrap: { v: 1, c: r.algo, d: r.b64 }, bytes: r.rawBytes }];
     }
     const mid = Math.ceil(items.length / 2);
     const left = await _packRec(itemId + '_p0', meta, tree, activePath, items.slice(0, mid), depth + 1);
@@ -292,10 +310,12 @@
   }
 
   // ── 上传单 item（含 hash 增量跳过、离线队列）────────────
-  async function _uploadPiece(session, piece) {
+  // force=true（「上传全部」）：跳过 hash 增量判断，强制 upsert——
+  // 用于云端行曾被误删/外部清理时自愈补齐（本地 hash 存在会导致普通增量跳过）。
+  async function _uploadPiece(session, piece, force) {
     const key = piece.kind + '/' + piece.itemId;
     const hash = _hashStr(piece.wrap.d);
-    if (_getHash(key) === hash) return { ok: true, skipped: true };
+    if (!force && _getHash(key) === hash) return { ok: true, skipped: true };
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
     const updatedAt = new Date().toISOString();
@@ -347,7 +367,12 @@
         retainedBase.add(item.kind + '/' + item.itemId);
         if (!_isItemOn(item.kind, item.itemId)) continue;   // 用户关闭 → 本地保留、跳过上传
         let pieces;
-        try { pieces = await _packItem(item); } catch (e) { continue; }
+        try {
+          pieces = await _packItem(item);
+        } catch (e) {
+          console.warn('[SyncLogs] 压缩失败:', item.kind + '/' + item.itemId, e);
+          continue;
+        }
         queue.push({ kind: item.kind, name: _itemName(item.kind, item), pieces });
       }
       let totalPieces = 0;
@@ -371,8 +396,11 @@
       _emitProgress({ phase: 'outbox', outbox: outboxCount, current: '', uploaded: 0, total: 0 });
       await _flushOutbox(session, c);
 
-      // ⑤ TTL 清理：远端有、但本地已不在保留范围（过期）的 item 删除
-      await _pruneRemote(session, c, retainedBase);
+      // ⑤ TTL 清理：已禁用！
+      // 原 _pruneRemote 用「本机提取集合」判断云端行是否保留，跨设备时灾难性误删——
+      // 手机本地只有 4 个会话、电脑 7 个，手机一同步就把云端"本地没有"的会话删掉。
+      // 云端 TTL 清理改由云端定时任务（后续）负责；此处不再做任何删除。
+      // await _pruneRemote(session, c, retainedBase);
     }
 
     // ⑥ 拉取远端合并（LWW：远端新于本地才写回；不受配额限制）
@@ -453,7 +481,7 @@
     const sorted = pieces.slice().sort((a, b) => a.item_id.localeCompare(b.item_id));
     let meta = null, tree = null, activePath = null, items = [];
     for (const p of sorted) {
-      const obj = await _gzipDecode(p.data);
+      const obj = await _decodePayload(p.data);
       if (!obj) return null;
       if (obj.meta) meta = obj.meta;
       if (obj.tree) tree = obj.tree;
@@ -561,15 +589,58 @@
   function uploadAll() {
     return _enqueue(async () => {
       const session = await _session();
-      if (!session) return;
+      if (!session) return { uploaded: 0, skipped: 0, failed: 0, reasons: [] };
       const items = _extractAll();
+      let uploaded = 0, skipped = 0, failed = 0;
+      const reasons = [];
       for (const item of items) {
         if (!_isItemOn(item.kind, item.itemId)) continue;
         let pieces;
-        try { pieces = await _packItem(item); } catch (e) { continue; }
-        for (const p of pieces) { p.kind = item.kind; await _uploadPiece(session, p); }
+        try {
+          pieces = await _packItem(item);
+        } catch (e) {
+          failed++;
+          const msg = '压缩失败: ' + item.kind + '/' + item.itemId + ' ' + (e && e.message ? e.message : e);
+          reasons.push(msg);
+          console.warn('[SyncLogs] ' + msg);
+          continue;
+        }
+        for (const p of pieces) {
+          p.kind = item.kind;
+          try {
+            // force=true：跳过 hash 增量判断，确保「全部上传」真正把所有 item 推到云端
+            //（自愈云端曾被误删/清理的行；增量上传仍由自动同步走 _flushLogs）
+            const r = await _uploadPiece(session, p, true);
+            if (r.ok && r.skipped) skipped++;
+            else if (r.ok) uploaded++;
+            else {
+              failed++;
+              const msg = item.kind + '/' + item.itemId + ' ' + (r.reason || '上传失败');
+              reasons.push(msg);
+            }
+          } catch (e) {
+            failed++;
+            const msg = item.kind + '/' + item.itemId + ' 异常: ' + (e && e.message ? e.message : e);
+            reasons.push(msg);
+          }
+        }
       }
-      await _flushLogs();
+      // 结果可见：toast + console + 状态条
+      const summary = '上传完成：成功 ' + uploaded + '，跳过 ' + skipped + (failed ? '，失败 ' + failed : '');
+      console.warn('[SyncLogs] uploadAll 结果:', { uploaded, skipped, failed, reasons });
+      if (typeof showMiniToast === 'function') {
+        try {
+          showMiniToast(summary + (failed ? '（' + reasons[0] + '）' : ''), failed ? 'error' : '');
+        } catch (e) {}
+      }
+      _emitProgress({
+        phase: failed ? 'error' : 'done',
+        current: '', uploaded: 0, total: 0,
+        lastError: failed ? reasons[0] : '',
+        lastSyncAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+      });
+      if (failed === 0) await _flushLogs();
+      return { uploaded, skipped, failed, reasons };
     });
   }
   // 独立串行队列：所有手动/自动任务排队执行，不并发
