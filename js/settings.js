@@ -1892,6 +1892,64 @@ function quitApp() {
   }
 }
 
+// ═══════════ 云存储诊断（设置页 Debug tab）═══════════
+// 用主应用自己的 getSupabaseClient() 查询 user_sync_items（SyncLogs 独立通道），
+// 完全复用主应用登录 session，绕开外部测试网页的 file:///iframe localStorage 隔离问题。
+function runStorageDiag() {
+  const out = document.getElementById('storageDiagOut');
+  if (!out) return;
+  out.textContent = '查询中…';
+  (async () => {
+    let c = null;
+    try { c = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null; } catch (e) {}
+    if (!c) { out.textContent = '❌ Supabase 未加载/未配置（请先配置好友系统）'; return; }
+    let session = null;
+    try {
+      let res = c.auth.getSession();
+      if (res && typeof res.then === 'function') res = await res;
+      session = res && res.data && res.data.session ? res.data.session : null;
+    } catch (e) {}
+    if (!session) { out.textContent = '❌ 未登录：请先在「好友」页登录后再试。'; return; }
+    const lines = ['✅ 已登录: ' + (session.user.email || session.user.id)];
+    try {
+      const { data, error } = await c.from('user_sync_items')
+        .select('kind,item_id,bytes,updated_at')
+        .eq('user_id', session.user.id)
+        .order('updated_at', { ascending: false });
+      if (error) {
+        out.textContent = '❌ 查询失败: ' + error.message + ' (code: ' + error.code + ')\n' + lines.join('\n');
+        return;
+      }
+      if (!data || !data.length) {
+        out.textContent = 'ℹ️ user_sync_items 没有任何记录（尚未上传过日志，或 schema.sql 未执行）。\n' + lines.join('\n');
+        return;
+      }
+      const KIND = { ai_conv: 'AI 对话', bk_explain: '章节讲解', bk_qa: '全书问答' };
+      const byKind = {};
+      const byBase = {};
+      let total = 0;
+      for (const r of data) {
+        byKind[r.kind] = (byKind[r.kind] || 0) + 1;
+        total += (typeof r.bytes === 'number' ? r.bytes : 0);
+        const baseId = r.item_id.replace(/_(p\d+)+$/, '');
+        const k = r.kind + '/' + baseId;
+        byBase[k] = byBase[k] || { c: 0, b: 0 };
+        byBase[k].c++;
+        byBase[k].b += (typeof r.bytes === 'number' ? r.bytes : 0);
+      }
+      lines.push('物理行: ' + data.length + ' ｜ 逻辑条目: ' + Object.keys(byBase).length);
+      lines.push('总量: ' + total + ' B ≈ ' + (total / (1024 * 1024)).toFixed(3) + ' MB');
+      for (const k of Object.keys(byKind)) {
+        const kb = data.filter(r => r.kind === k).reduce((s, r) => s + (typeof r.bytes === 'number' ? r.bytes : 0), 0);
+        lines.push('· ' + (KIND[k] || k) + ': ' + byKind[k] + ' 行, ' + (kb / (1024 * 1024)).toFixed(3) + ' MB');
+      }
+      out.textContent = lines.join('\n');
+    } catch (e) {
+      out.textContent = '❌ 异常: ' + (e && e.message ? e.message : e);
+    }
+  })();
+}
+
 // ═══════════ Automation List UI ═══════════
 function renderAutomationList() {
   const el = document.getElementById('automationList');

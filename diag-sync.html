@@ -26,6 +26,11 @@
   <div class="out" id="log">(点击按钮开始诊断…)</div>
 </div>
 
+<div class="card">
+  <button id="btnLogs">查询云端 AI 日志数据条目（user_sync_items）</button>
+  <div class="out" id="logLogs">(点击按钮开始查询…)</div>
+</div>
+
 <script src="lib/supabase/supabase.js"></script>
 <script>
 (function () {
@@ -65,15 +70,71 @@
   const warn = m => log('⚠️ ' + m);
   const info = m => log('ℹ️ ' + m);
 
+  // 与主应用 getFriendsConfig() 同款配置读取顺序：study_supabase_config → study_friends_config
+  // → study_plugin_store_config → 内置回退。确保使用与主应用相同的 Supabase 项目，
+  // 否则 session 的 storage key（sb-<项目ref>-auth-token）对不上 → 判定未登录。
+  function getDiagConfig() {
+    const keys = ['study_supabase_config', 'study_friends_config', 'study_plugin_store_config'];
+    for (const k of keys) {
+      try {
+        const raw = localStorage.getItem(k);
+        if (raw) {
+          const cfg = JSON.parse(raw);
+          if (cfg && cfg.url && cfg.anonKey) return cfg;
+        }
+      } catch (e) {}
+    }
+    return { url: BUILTIN_URL, anonKey: BUILTIN_KEY };
+  }
+  function sessionStorageKey(url) {
+    const ref = (String(url || '').match(/^https?:\/\/([^.\/]+)/) || [])[1] || '';
+    return ref ? 'sb-' + ref + '-auth-token' : '';
+  }
+
   // 与主应用同款 storage 配置，复用 localStorage 中的登录 session
   let client = null;
+  let clientCfg = null;
   function initClient() {
     if (client) return client;
     if (typeof window.supabase === 'undefined') { err('supabase.js 未加载'); return null; }
-    client = window.supabase.createClient(BUILTIN_URL, BUILTIN_KEY, {
+    clientCfg = getDiagConfig();
+    client = window.supabase.createClient(clientCfg.url, clientCfg.anonKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: false, storage: window.localStorage }
     });
     return client;
+  }
+  // 未登录时输出诊断：使用的项目 / session key / localStorage 里的全部 Supabase session key
+  function printAuthDiag() {
+    const cfg = clientCfg || getDiagConfig();
+    const key = sessionStorageKey(cfg.url);
+    let has = false;
+    try { has = !!localStorage.getItem(key); } catch (e) {}
+    warn('当前页面 origin: ' + location.origin);
+    warn('使用的 Supabase 项目: ' + cfg.url);
+    if (key) warn('session storage key: ' + key + (has ? '（存在 → 项目匹配，session 有值但获取失败，可能是 token 过期）' : '（不存在）'));
+    // 扫描 localStorage 中所有 Supabase session key，判断主应用实际用了哪个项目 / 是否真的登录过
+    const sbKeys = [];
+    try {
+      for (let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf('sb-') === 0) sbKeys.push(k);
+      }
+    } catch (e) {}
+    if (sbKeys.length === 0) {
+      warn('本环境的 localStorage 中没有任何 sb- 开头的 key → 说明在这个环境里从未登录过（或主应用登录在别的环境/别的存储）。');
+    } else {
+      warn('本环境 localStorage 中发现的 Supabase session key：');
+      sbKeys.forEach(k => {
+        let len = 0;
+        try { len = (localStorage.getItem(k) || '').length; } catch (e) {}
+        info('   · ' + k + (len ? '（长度 ' + len + '）' : '（空）'));
+      });
+      const otherRef = sbKeys.map(k => k.replace(/^sb-/, '').replace(/-auth-token$/, ''));
+      if (otherRef.some(r => r && r !== (sessionStorageKey(cfg.url).replace(/^sb-/, '').replace(/-auth-token$/, '')))) {
+        warn('发现与当前项目不同的 session key → 主应用登录用的是【其他 Supabase 项目】（自定义配置），而本页读到的配置是内置项目。请检查「设置 → Supabase」中的配置是否被覆盖。');
+      }
+    }
+    warn('打开方式提示：请确认本页是在 Electron 主窗口 F12 → Console 输入 location.href="diag-sync.html" 打开的；在浏览器（Chrome/Edge）双击 html 虽然也是 file://，但那是浏览器的 localStorage，与主应用完全隔离。');
   }
 
   document.getElementById('btnCheck').onclick = async function () {
@@ -86,7 +147,7 @@
       // 1. 登录状态
       info('检查登录状态…');
       const { data: { user } } = await c.auth.getUser();
-      if (!user) { err('❌ 未登录！session 未检测到。请先在主应用「好友」页面登录，再刷新本页重试。'); btn.disabled = false; return; }
+      if (!user) { err('❌ 未登录！session 未检测到。'); printAuthDiag(); btn.disabled = false; return; }
       ok('已登录: ' + (user.email || user.id));
 
       // 2. 查询云端 user_data 全部 key
@@ -123,6 +184,92 @@
       logEl.innerHTML += `<table><tr><th>key</th><th>value 概况</th><th>updated_at</th></tr>${rows}</table>`;
     } catch (e) {
       err('诊断异常: ' + e.message);
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  // ── 查询云端 AI 日志数据条目（user_sync_items，SyncLogs 独立通道）──
+  const logEl2 = document.getElementById('logLogs');
+  const lines2 = [];
+  function log2(msg, cls) {
+    lines2.push(msg);
+    logEl2.innerHTML = lines2.map(l => {
+      const m = l.match(/^(✅|❌|⚠️|ℹ️)/);
+      let c = '';
+      if (m && m[1] === '✅') c = 'ok';
+      else if (m && m[1] === '❌') c = 'err';
+      else if (m && m[1] === '⚠️') c = 'warn';
+      return `<span class="${c}">${l}</span>`;
+    }).join('\n');
+    logEl2.scrollTop = logEl2.scrollHeight;
+  }
+  const ok2 = m => log2('✅ ' + m);
+  const err2 = m => log2('❌ ' + m);
+  const warn2 = m => log2('⚠️ ' + m);
+  const info2 = m => log2('ℹ️ ' + m);
+
+  document.getElementById('btnLogs').onclick = async function () {
+    const btn = document.getElementById('btnLogs');
+    btn.disabled = true;
+    lines2.length = 0;
+    try {
+      const c = initClient();
+      if (!c) return;
+      info2('检查登录状态…');
+      const { data: { user } } = await c.auth.getUser();
+      if (!user) { err2('未登录！session 未检测到。'); printAuthDiag(); btn.disabled = false; return; }
+      ok2('已登录: ' + (user.email || user.id));
+
+      // 1. 查询 user_sync_items（AI 对话 / 章节讲解 / 全书问答 日志）
+      info2('查询 user_sync_items …');
+      const { data, error } = await c.from('user_sync_items')
+        .select('kind,item_id,bytes,updated_at')
+        .eq('user_id', user.id)
+        .order('updated_at', { ascending: false });
+      if (error) { err2('查询出错: ' + error.message + ' (code: ' + error.code + ')'); btn.disabled = false; return; }
+      if (!data || data.length === 0) {
+        warn2('云端 user_sync_items 没有任何记录。说明日志云存储通道尚未上传过数据（先确认 schema.sql 已执行、并在主应用触发一次同步）。');
+        btn.disabled = false; return;
+      }
+
+      // 2. 统计
+      const KIND_LABEL = { 'ai_conv': 'AI 对话', 'bk_explain': '章节讲解', 'bk_qa': '全书问答' };
+      const byKind = {};
+      const byBase = {};
+      let totalBytes = 0;
+      for (const r of data) {
+        byKind[r.kind] = (byKind[r.kind] || 0) + 1;
+        totalBytes += (typeof r.bytes === 'number' ? r.bytes : 0);
+        const baseId = r.item_id.replace(/_(p\d+)+$/, '');   // 去分片后缀，合并为逻辑条目
+        const k = r.kind + '/' + baseId;
+        byBase[k] = byBase[k] || { count: 0, bytes: 0, rows: [] };
+        byBase[k].count++;
+        byBase[k].bytes += (typeof r.bytes === 'number' ? r.bytes : 0);
+        byBase[k].rows.push(r);
+      }
+      const logicCount = Object.keys(byBase).length;
+
+      ok2('物理行数（含分片）: ' + data.length + ' 条，逻辑条目数（去分片合并）: ' + logicCount + ' 条');
+      ok2('总字节数: ' + totalBytes + ' B ≈ ' + (totalBytes / (1024 * 1024)).toFixed(3) + ' MB');
+      info2('按 kind 统计：');
+      for (const k of Object.keys(byKind)) {
+        const kb = data.filter(r => r.kind === k).reduce((s, r) => s + (typeof r.bytes === 'number' ? r.bytes : 0), 0);
+        ok2(`  · ${KIND_LABEL[k] || k} (${k}): ${byKind[k]} 行, ${(kb / (1024 * 1024)).toFixed(3)} MB`);
+      }
+
+      // 3. 明细表
+      let rows = '';
+      for (const k of Object.keys(byBase)) {
+        const [kind, baseId] = k.split('/');
+        const g = byBase[k];
+        const meta = g.rows[0];
+        const label = KIND_LABEL[kind] || kind;
+        rows += `<tr><td>${label}</td><td>${baseId}</td><td>${g.count > 1 ? g.count + ' 片' : '—'}</td><td>${g.bytes} B</td><td>${fmtUtc(meta.updated_at)}</td></tr>`;
+      }
+      logEl2.innerHTML += `<table><tr><th>kind</th><th>item_id</th><th>分片</th><th>bytes</th><th>updated_at</th></tr>${rows}</table>`;
+    } catch (e) {
+      err2('查询异常: ' + e.message);
     } finally {
       btn.disabled = false;
     }

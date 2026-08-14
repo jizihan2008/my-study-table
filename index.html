@@ -967,6 +967,11 @@
         <p class="hint" style="margin-bottom:10px;">关闭窗口后应用会最小化到系统托盘，点击下方按钮可完全退出。</p>
         <button class="btn-save-settings" onclick="quitApp()" style="background:#ef4444;"><i data-lucide="log-out" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 退出应用</button>
         <div class="settings-status" id="debugStatus"></div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 云存储诊断（AI 日志）</div>
+        <p class="hint" style="margin-bottom:10px;">查询当前账号在云端 user_sync_items 表的 AI 对话 / 章节讲解 / 全书问答日志条目与用量（使用主应用自己的登录 session，无需额外登录）。</p>
+        <button class="btn-save-settings" onclick="runStorageDiag()" style="width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 查询云存储数据</button>
+        <div class="storage-diag-out" id="storageDiagOut"></div>
       </div>
 
       <!-- Data Panel -->
@@ -1324,7 +1329,7 @@
 <script src="js/memory.js?v=20260812-r3"></script>
 <script src="js/appearance.js?v=20260813-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260814-r5"></script>
+<script src="js/settings.js?v=20260814-r6"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
 <script src="js/inbox.js?v=20260813-r1"></script>
@@ -1360,7 +1365,7 @@
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync.js?v=20260814-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260814-r2"></script>
+<script src="js/sync-logs.js?v=20260814-r3"></script>
 <script>
 // Initialize sidebar nav and switch to home tab on page load
 setTimeout(async function() {

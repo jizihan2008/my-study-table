@@ -58,6 +58,19 @@
   let realtimeChannel = null;
   let pullDebounceTimer = null;
   let listeners = new Set();
+  let progressListeners = new Set();
+  // 同步进度状态（面板「同步」区块实时显示；见 _emitProgress / _statusLine）
+  let progressState = {
+    phase: 'idle',        // idle | quota | uploading | outbox | pulling | done | error
+    current: '',          // 正在同步的 item 名称（如「算法导论 · 排序与堆」）
+    uploaded: 0,
+    total: 0,             // 当前批次待上传分片总数
+    pending: 0,           // 待同步 item 数（从未上传过的 on 项）
+    outbox: 0,            // 离线待补传条数
+    dirtyHint: false,     // 本地有变更尚未同步（onLocalChange 置位，上传完成后清除）
+    lastSyncAt: null,     // 上次同步完成时间 HH:mm
+    lastError: ''
+  };
 
   // ── 工具：本地读取 ────────────────────────────────────
   function _getLocal(key, fallback) {
@@ -117,6 +130,8 @@
     if (!LOG_KEYS[key]) return;
     if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
     if (!_enabled() || !cfg.autoSync || !loggedIn || !client) return;
+    // 仅置 dirty 标记（不在高频写点里重算 pending，避免流式输出卡顿）
+    _emitProgress({ dirtyHint: true });
     scheduleUpload();
   }
 
@@ -311,9 +326,11 @@
     if (!session) return;
     const c = _client();
     if (!c) return;
+    let syncHadError = '';
 
     // ① 配额软护栏：已用 ≥ 配额则跳过上传（新日志自动停止上传，本地保留），
     //    仍执行拉取合并；避免配额无限增长。用户删除云端内容后自动恢复。
+    _emitProgress({ phase: 'quota', current: '', uploaded: 0, total: 0 });
     let quotaExceeded = false;
     try {
       const usedBytes = await _fetchUsage(session, c);
@@ -322,29 +339,57 @@
 
     const retainedBase = new Set();   // 本次应保留的云端基础 id（供 TTL 清理）
     if (!quotaExceeded) {
-      // ② 提取所有 item（TTL 过滤），仅上传「用户开启 + 数据有变化」的 item
+      // ② 提取所有 item（TTL 过滤），仅上传「用户开启 + 数据有变化」的 item；
+      //    先全部压缩收集（得到总片数供进度统计），再逐片串行上传
       const items = _extractAll();
+      const queue = [];   // [{ kind, name, pieces }]
       for (const item of items) {
         retainedBase.add(item.kind + '/' + item.itemId);
         if (!_isItemOn(item.kind, item.itemId)) continue;   // 用户关闭 → 本地保留、跳过上传
         let pieces;
         try { pieces = await _packItem(item); } catch (e) { continue; }
-        for (const p of pieces) {
-          p.kind = item.kind;
-          await _uploadPiece(session, p);
+        queue.push({ kind: item.kind, name: _itemName(item.kind, item), pieces });
+      }
+      let totalPieces = 0;
+      queue.forEach(q => { totalPieces += q.pieces.length; });
+
+      // ③ 逐片串行上传（进度：正在同步「名称」（i/N））
+      let done = 0;
+      for (const q of queue) {
+        for (const p of q.pieces) {
+          done++;
+          p.kind = q.kind;
+          _emitProgress({ phase: 'uploading', current: q.name, uploaded: done, total: totalPieces });
+          const r = await _uploadPiece(session, p);
+          if (!r.ok) syncHadError = r.reason || '上传失败';
         }
       }
 
-      // ③ 补传离线队列（网络恢复自动重传）
+      // ④ 补传离线队列（网络恢复自动重传）
+      const outboxAll = await _outboxGetAll();
+      const outboxCount = outboxAll.filter(it => typeof it.key === 'string' && it.key.indexOf('log:') === 0).length;
+      _emitProgress({ phase: 'outbox', outbox: outboxCount, current: '', uploaded: 0, total: 0 });
       await _flushOutbox(session, c);
 
-      // ④ TTL 清理：远端有、但本地已不在保留范围（过期）的 item 删除
+      // ⑤ TTL 清理：远端有、但本地已不在保留范围（过期）的 item 删除
       await _pruneRemote(session, c, retainedBase);
     }
 
-    // ⑤ 拉取远端合并（LWW：远端新于本地才写回；不受配额限制）
+    // ⑥ 拉取远端合并（LWW：远端新于本地才写回；不受配额限制）
+    _emitProgress({ phase: 'pulling', current: '', uploaded: 0, total: 0 });
     await _pullItems(session, c);
 
+    // ⑦ 完成：汇总待同步数（仍未上传的项）并清除 dirty 标记
+    const nowStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    _emitProgress({
+      phase: 'done',
+      current: '', uploaded: 0, total: 0,
+      pending: _computePendingCount(),
+      dirtyHint: false,
+      outbox: 0,
+      lastSyncAt: nowStr,
+      lastError: syncHadError
+    });
     _emitStatus();
   }
 
@@ -609,10 +654,8 @@
 
     root.innerHTML = html;
     if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
-    if (!session) {
-      const st = document.getElementById('storageStatus');
-      if (st) st.textContent = '未登录，登录后自动同步';
-    }
+    const st = document.getElementById('storageStatus');
+    if (st) st.textContent = session ? _statusLine() : '未登录，登录后自动同步';
   }
   // 章节 id 为 genId() 生成（全局唯一），可跨书查找章节名（booksData 来自 books.js，加载在 sync-logs.js 之前）
   function _resolveChapterTitle(chapterId) {
@@ -676,6 +719,60 @@
     const st = document.getElementById('storageStatus');
     if (st) st.textContent = '已删除云端全部日志数据（本地保留）。';
     renderPanel();
+  }
+
+  // ── 同步进度通知（面板实时显示「正在同步什么 / 待同步队列」）──
+  function _emitProgress(patch) {
+    Object.assign(progressState, patch || {});
+    progressListeners.forEach(fn => { try { fn(progressState); } catch (e) {} });
+    // 面板打开时轻量更新状态条（不整表重渲染，避免闪烁/滚动丢失）
+    const st = document.getElementById('storageStatus');
+    if (st) {
+      st.textContent = _statusLine();
+      st.style.color = progressState.phase === 'error' ? '#EF4444' : '';
+    }
+  }
+  // 综合状态文本
+  function _statusLine() {
+    const p = progressState;
+    const pendTxt = p.pending > 0 ? (p.pending + ' 项待上传') : (p.dirtyHint ? '有变更待同步' : '已全部同步');
+    let t;
+    switch (p.phase) {
+      case 'quota': t = '配额检查中…'; break;
+      case 'uploading':
+        t = '正在同步「' + (p.current || '…') + '」' + (p.total ? '（' + Math.min(p.uploaded, p.total) + '/' + p.total + '）' : '');
+        if (p.outbox > 0) t += ' · 离线补传 ' + p.outbox;
+        return t;
+      case 'outbox': t = '正在补传离线数据' + (p.outbox ? '（' + p.outbox + ' 条）' : '') + '…'; break;
+      case 'pulling': t = '正在拉取云端合并…'; break;
+      case 'error': return '同步出错：' + (p.lastError || '未知错误');
+      case 'done':
+      case 'idle':
+      default:
+        t = pendTxt;
+        if (p.lastSyncAt) t += ' · 上次 ' + p.lastSyncAt;
+        if (p.lastError) t += ' · 有失败项';
+        return t;
+    }
+    return t + ' · ' + pendTxt;
+  }
+  // 待同步 item 数：TTL 内、已开启、且从未上传过（hash 缺失）的项（同步计算，不 gzip）
+  function _computePendingCount() {
+    let n = 0;
+    const hashMap = _getLocal(HASH_KEY, {});
+    const items = _extractAll();
+    for (const item of items) {
+      if (!_isItemOn(item.kind, item.itemId)) continue;
+      if (!hashMap[item.kind + '/' + item.itemId]) n++;
+    }
+    return n;
+  }
+  function onProgress(fn) {
+    progressListeners.add(fn);
+    return () => progressListeners.delete(fn);
+  }
+  function getSyncProgress() {
+    return Object.assign({}, progressState);
   }
 
   // ── 状态通知 ─────────────────────────────────────────
@@ -862,11 +959,13 @@
     uploadAll,
     getStatus,
     getUsage,
+    getSyncProgress,
     renderPanel: renderPanelSafe,
     setItemEnabled,
     deleteAllRemote,
     migrateLegacy,
     onStatus,
+    onProgress,
     get enabled() { return _enabled(); },
     get autoSync() { return !!cfg.autoSync; },
     get loggedIn() { return loggedIn; }
