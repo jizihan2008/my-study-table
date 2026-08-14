@@ -3371,6 +3371,28 @@ function collectDailyReportData() {
   };
 }
 
+// ═══════════ 全局轻提示（自消失 toast）═══════════
+let _miniToastTimer = null;
+function showMiniToast(msg, type, persist) {
+  let el = document.getElementById('appMiniToast');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'appMiniToast';
+    el.className = 'mini-toast';
+    document.body.appendChild(el);
+  }
+  el.textContent = msg;
+  el.className = 'mini-toast show' + (type === 'error' ? ' error' : type === 'info' ? ' info' : '');
+  if (persist) {
+    // 保持常驻（如"正在生成日报…"），直到下次 showMiniToast 覆盖才切换/消失
+    clearTimeout(_miniToastTimer);
+    _miniToastTimer = null;
+    return;
+  }
+  clearTimeout(_miniToastTimer);
+  _miniToastTimer = setTimeout(() => { el.className = 'mini-toast'; }, 2600);
+}
+
 // Auto-generate daily report after check-in (morning review style)
 // 返回 { ok, error }：手动触发（debugTriggerReport）可 force=true 绕过晨间开关
 async function generateDailyReport(force) {
@@ -3477,47 +3499,47 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 格式自由，语气自然、清醒、有方向感。用 Markdown 但不要太刻板。`;
 
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
+  showMiniToast('☀️ 正在生成晨间日报…', 'info', true);
   try {
-    const resp = await fetch(baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiCfg.apiKey
-      },
-      body: JSON.stringify({
-        model: apiCfg.model,
-        messages: [
-          { role: 'system', content: '你是用户的学习伙伴，在每天早上打卡后生成一份晨间日报。你的角色是：清醒、温暖、有洞察力。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾昨天（完成/未完成/模式发现），并开启今天（优先级/方向/心态）。你也关注用户的复习习惯（笔记的间隔重复复习是知识内化的关键，逾期复习会降低记忆效果）和日常习惯（坚持频率、有无掉链子、模式洞察）。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
-          ...conv.messages.slice(-20),
-          { role: 'user', content: reportPrompt }
-        ],
-        temperature: apiCfg.temperature,
-        max_tokens: 2048
-      })
-    });
-    if (resp.ok) {
-      const respData = await resp.json();
-      const report = (respData.choices?.[0]?.message?.content || '').trim();
-      if (report) {
-        appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' });
-        appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
-        // Keep only last 30 messages to avoid bloating
-        trimConvMessages(conv, 30);
-        saveData('study_ai_convs', aiConvs);
-        // Refresh AI chat if user is viewing the report conversation
-        if (activeConvId === conv.id) {
-          renderAiChat();
-        }
-        // Send Windows notification
-        sendNotification('📋 晨间日报已生成', '你的 ' + data.todayStr + ' 晨间回顾已就绪 ☀️', 'daily-report');
-        return { ok: true };
-      }
-      return { ok: false, error: 'AI 返回了空内容，请重试' };
+    if (typeof callAiApi !== 'function') {
+      showMiniToast('晨间日报生成失败：AI 模块未就绪', 'error');
+      return { ok: false, error: 'AI 模块未就绪，请重启应用' };
     }
-    // 非 2xx：读取错误详情反馈给用户，不再静默失败
-    let errMsg = 'HTTP ' + resp.status;
-    try { const d = await resp.json(); errMsg = (d && d.error && d.error.message) || errMsg; } catch {}
-    return { ok: false, error: errMsg };
+    // 复用手动发送同款 API 调用（callAiApi）：自动带上 deepThink 参数（Kimi/DeepSeek 默认思考开启，
+    // 裸 fetch 未显式禁用会把 max_tokens 全部耗在 reasoning 上 → content 为空）；并处理
+    // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
+    const apiMessages = [
+      { role: 'system', content: '你是用户的学习伙伴，在每天早上打卡后生成一份晨间日报。你的角色是：清醒、温暖、有洞察力。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾昨天（完成/未完成/模式发现），并开启今天（优先级/方向/心态）。你也关注用户的复习习惯（笔记的间隔重复复习是知识内化的关键，逾期复习会降低记忆效果）和日常习惯（坚持频率、有无掉链子、模式洞察）。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+      ...conv.messages.slice(-20),
+      { role: 'user', content: reportPrompt }
+    ];
+    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null);
+    const report = (cleanText || '').trim();
+    if (report) {
+      appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' });
+      appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
+      // Keep only last 30 messages to avoid bloating
+      trimConvMessages(conv, 30);
+      saveData('study_ai_convs', aiConvs);
+      // Refresh AI chat if user is viewing the report conversation
+      if (activeConvId === conv.id) {
+        renderAiChat();
+      }
+      // Send Windows notification
+      sendNotification('📋 晨间日报已生成', '你的 ' + data.todayStr + ' 晨间回顾已就绪 ☀️', 'daily-report');
+      showMiniToast('☀️ 晨间日报已生成');
+      return { ok: true };
+    }
+    if (finishReason === 'length') {
+      showMiniToast('晨间日报生成失败：回复被截断（max_tokens 不足），请重试或调大 max_tokens', 'error');
+      return { ok: false, error: '回复被截断（max_tokens 不足），请重试或调大 max_tokens' };
+    }
+    if (reasoning) {
+      showMiniToast('晨间日报生成失败：模型仅返回思考内容，请关闭深度思考后重试', 'error');
+      return { ok: false, error: '模型仅返回了思考内容（无正文），请关闭深度思考后重试' };
+    }
+    showMiniToast('晨间日报生成失败：AI 返回了空内容', 'error');
+    return { ok: false, error: 'AI 返回了空内容，请重试' };
   } catch (e) {
     console.error('[日报] 生成失败:', e);
     // Show a non-intrusive status update if possible
@@ -3525,6 +3547,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       const debugEl = document.getElementById('debugStatus');
       if (debugEl) { debugEl.textContent = '日报生成失败: ' + (e.message || e); debugEl.className = 'settings-status'; }
     } catch {}
+    showMiniToast('晨间日报生成失败：' + ((e && e.message) || String(e)), 'error');
     return { ok: false, error: (e && e.message) || String(e) };
   }
 }
@@ -3845,50 +3868,51 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
   const todayStr = data.todayStr;
+  showMiniToast('🌙 正在生成晚间日报…', 'info', true);
   try {
-    const resp = await fetch(baseUrl + '/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiCfg.apiKey
-      },
-      body: JSON.stringify({
-        model: apiCfg.model,
-        messages: [
-          { role: 'system', content: '你是用户的学习伙伴，在每天晚上生成一份晚间日报。你的角色是：温暖、有洞察力、善于总结。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾今天（完成了什么/有什么收获/时间花在哪里），并帮助用户沉淀心得、放松心态。你也关注复习习惯和日常习惯的状态。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
-          ...conv.messages.slice(-20),
-          { role: 'user', content: reportPrompt }
-        ],
-        temperature: apiCfg.temperature,
-        max_tokens: 1536
-      })
-    });
-    if (resp.ok) {
-      const respData = await resp.json();
-      const report = (respData.choices?.[0]?.message?.content || '').trim();
-      if (report) {
-        appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' });
-        appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
-        trimConvMessages(conv, 30);
-        saveData('study_ai_convs', aiConvs);
-        // Send Windows notification (before render/mark to ensure delivery)
-        try {
-          sendNotification('🌙 晚间日报已生成', '你的 ' + todayStr + ' 晚间回顾已就绪', 'evening-report');
-        } catch { /* notification best-effort, don't block report flow */ }
-        if (activeConvId === conv.id) {
-          renderAiChat();
-        }
-        markEveningReportDone(todayStr);
-        return { ok: true };
-      }
-      return { ok: false, error: 'AI 返回了空内容，请重试' };
+    if (typeof callAiApi !== 'function') {
+      showMiniToast('晚间日报生成失败：AI 模块未就绪', 'error');
+      return { ok: false, error: 'AI 模块未就绪，请重启应用' };
     }
-    // 非 2xx：读取错误详情反馈给用户，不再静默失败
-    let errMsg = 'HTTP ' + resp.status;
-    try { const d = await resp.json(); errMsg = (d && d.error && d.error.message) || errMsg; } catch {}
-    return { ok: false, error: errMsg };
+    // 复用手动发送同款 API 调用（callAiApi）：自动带上 deepThink 参数（Kimi/DeepSeek 默认思考开启，
+    // 裸 fetch 未显式禁用会把 max_tokens 全部耗在 reasoning 上 → content 为空）；并处理
+    // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
+    const apiMessages = [
+      { role: 'system', content: '你是用户的学习伙伴，在每天晚上生成一份晚间日报。你的角色是：温暖、有洞察力、善于总结。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾今天（完成了什么/有什么收获/时间花在哪里），并帮助用户沉淀心得、放松心态。你也关注复习习惯和日常习惯的状态。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+      ...conv.messages.slice(-20),
+      { role: 'user', content: reportPrompt }
+    ];
+    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null);
+    const report = (cleanText || '').trim();
+    if (report) {
+      appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' });
+      appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
+      trimConvMessages(conv, 30);
+      saveData('study_ai_convs', aiConvs);
+      // Send Windows notification (before render/mark to ensure delivery)
+      try {
+        sendNotification('🌙 晚间日报已生成', '你的 ' + todayStr + ' 晚间回顾已就绪', 'evening-report');
+      } catch { /* notification best-effort, don't block report flow */ }
+      showMiniToast('🌙 晚间日报已生成');
+      if (activeConvId === conv.id) {
+        renderAiChat();
+      }
+      markEveningReportDone(todayStr);
+      return { ok: true };
+    }
+    if (finishReason === 'length') {
+      showMiniToast('晚间日报生成失败：回复被截断（max_tokens 不足），请重试或调大 max_tokens', 'error');
+      return { ok: false, error: '回复被截断（max_tokens 不足），请重试或调大 max_tokens' };
+    }
+    if (reasoning) {
+      showMiniToast('晚间日报生成失败：模型仅返回思考内容，请关闭深度思考后重试', 'error');
+      return { ok: false, error: '模型仅返回了思考内容（无正文），请关闭深度思考后重试' };
+    }
+    showMiniToast('晚间日报生成失败：AI 返回了空内容', 'error');
+    return { ok: false, error: 'AI 返回了空内容，请重试' };
   } catch (e) {
     console.error('[日报] 晚间报告生成失败:', e);
+    showMiniToast('晚间日报生成失败：' + ((e && e.message) || String(e)), 'error');
     return { ok: false, error: (e && e.message) || String(e) };
   }
 }

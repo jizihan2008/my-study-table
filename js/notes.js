@@ -375,6 +375,9 @@ function renderNoteList() {
           <span class="ns-note-title">${escapeHtml(item.title||'')||'未命名笔记'}</span>
           ${tagsHtml}
           ${reviewBadge}
+          <button class="ns-note-float-btn" title="浮窗查看（可拖拽/缩放）" onclick="event.stopPropagation();openNoteFloat(${item.id})">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+          </button>
         </div>
         ${summaryHtml}
       </li>`;
@@ -1329,4 +1332,84 @@ function resetReviewOnEdit(note) {
   // Only reset if the last review wasn't already today (avoid duplicate entries)
   if (lastReview && lastReview.startsWith(todayStr)) return;
   note._reviewHistory.push(new Date().toISOString());
+}
+
+// ═══════════ 笔记浮窗（类似教材节点浮窗：右下角可拖拽/缩放卡片）
+// 复用 books-ai.js 的通用拖拽/缩放函数（makeBkNodeFloatDraggable/Resizable）与 .bk-node-float/.bnf-* 样式。
+let _noteFloatEscHandler = null;
+function openNoteFloat(id) {
+  const note = findNoteItem(id);
+  if (!note) return;
+  // 单例：先移除旧的
+  const old = document.getElementById('noteFloat');
+  if (old) old.remove();
+
+  const title = note.title || '未命名笔记';
+  const content = (note.content || '').trim();
+  const bodyHtml = content
+    ? formatNoteContent(note.content)
+    : '<div style="color:var(--text-secondary);opacity:.8;padding:8px 0;">（空白笔记）</div>';
+  const wordCount = content.length;
+  const tagsLine = (note.tags && note.tags.length > 0)
+    ? note.tags.map(t => `<span class="ns-tag" style="pointer-events:none;">${escapeHtml(t)}</span>`).join(' ')
+    : '';
+  const due = calcNextReviewDate(note);
+  const dueBadge = (!note._skipReview && content && toLocalDateStr(due) <= getTodayStr())
+    ? '<span class="ns-review-badge due" style="pointer-events:none;">待复习</span>' : '';
+  const createdTxt = fmtNoteFloatTime(note.createdAt);
+  const updatedTxt = fmtNoteFloatTime(note.updatedAt);
+
+  const float = document.createElement('div');
+  float.id = 'noteFloat';
+  float.className = 'bk-node-float note-float';
+  float.innerHTML = `
+    <div class="bnf-rs bnf-rs-n"></div><div class="bnf-rs bnf-rs-s"></div>
+    <div class="bnf-rs bnf-rs-e"></div><div class="bnf-rs bnf-rs-w"></div>
+    <div class="bnf-rs bnf-rs-ne"></div><div class="bnf-rs bnf-rs-nw"></div>
+    <div class="bnf-rs bnf-rs-se"></div><div class="bnf-rs bnf-rs-sw"></div>
+    <div class="bnf-header">
+      <span class="bnf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></span>
+      <span class="bnf-title">${escapeHtml(title)}</span>
+      <button class="bnf-close" title="关闭 (Esc)" onclick="closeNoteFloat()">✕</button>
+    </div>
+    <div class="bnf-body note-float-body">
+      <div class="notes-editor-preview" style="padding:0;">${bodyHtml}</div>
+      <div class="note-float-meta">${tagsLine}${dueBadge}<span class="nf-meta-item">📝 ${wordCount} 字</span><span class="nf-meta-item">🕐 创建 ${createdTxt}</span><span class="nf-meta-item">✏️ 更新 ${updatedTxt}</span></div>
+    </div>`;
+  document.body.appendChild(float);
+
+  if (typeof makeBkNodeFloatDraggable === 'function') { try { makeBkNodeFloatDraggable(float); } catch (e) {} }
+  if (typeof makeBkNodeFloatResizable === 'function') { try { makeBkNodeFloatResizable(float); } catch (e) {} }
+
+  // Esc 关闭（单例监听，防重复注册）
+  if (_noteFloatEscHandler) document.removeEventListener('keydown', _noteFloatEscHandler);
+  _noteFloatEscHandler = function (e) {
+    if (e.key === 'Escape') {
+      const f = document.getElementById('noteFloat');
+      if (f) f.remove();
+    }
+  };
+  document.addEventListener('keydown', _noteFloatEscHandler);
+}
+function closeNoteFloat() {
+  const f = document.getElementById('noteFloat');
+  if (f) f.remove();
+  if (_noteFloatEscHandler) {
+    document.removeEventListener('keydown', _noteFloatEscHandler);
+    _noteFloatEscHandler = null;
+  }
+}
+// 浮窗时间格式化：今天显示「HH:mm」，今年显示「M月d日」，跨年显示「yyyy年M月d日」
+function fmtNoteFloatTime(ts) {
+  if (!ts) return '';
+  const d = new Date(ts);
+  if (isNaN(d.getTime())) return '';
+  const now = new Date();
+  if (d.getFullYear() === now.getFullYear() && d.getMonth() === now.getMonth() && d.getDate() === now.getDate()) {
+    return d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+  }
+  if (d.getFullYear() === now.getFullYear()) {
+    return (d.getMonth() + 1) + '月' + d.getDate() + '日';
+  }
+  return d.getFullYear() + '年' + (d.getMonth() + 1) + '月' + d.getDate() + '日';
 }

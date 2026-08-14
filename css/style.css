@@ -463,6 +463,15 @@ body {
   border-left: 3px solid var(--primary);
 }
 .todo-root-title { font-size: 16px; font-weight: 700; color: var(--text); margin-bottom: 4px; }
+.todo-root-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; }
+.todo-root-collapse {
+  flex-shrink: 0; width: 24px; height: 24px;
+  display: flex; align-items: center; justify-content: center;
+  border: 1px solid var(--border); background: transparent; color: var(--text-secondary);
+  border-radius: 6px; cursor: pointer; padding: 0; transition: var(--transition);
+}
+.todo-root-collapse:hover { border-color: var(--primary); color: var(--primary); background: rgba(79,110,247,0.08); }
+.todo-root-collapse svg { width: 14px; height: 14px; }
 .todo-root-meta { display: flex; align-items: center; gap: 12px; margin-bottom: 6px; }
 .todo-root-due { font-size: 12px; color: var(--text-secondary); }
 .todo-root-status { font-size: 12px; font-weight: 600; padding: 2px 10px; border-radius: 10px; }
@@ -8854,3 +8863,66 @@ i[data-lucide] {
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 340px;
 }
 .storage-item-meta { font-size: 11px; color: var(--text-secondary); margin-top: 2px; }
+
+/* ═══════════ 全局轻提示 toast（settings.js showMiniToast）═══════════ */
+.mini-toast {
+  position: fixed; top: 18px; left: 50%;
+  transform: translateX(-50%) translateY(-16px);
+  background: #10b981; color: #fff; font-size: 13px; font-weight: 600;
+  padding: 10px 20px; border-radius: 10px;
+  box-shadow: 0 6px 20px rgba(0,0,0,0.18);
+  opacity: 0; pointer-events: none;
+  transition: opacity 0.25s ease, transform 0.25s ease;
+  z-index: 1200;
+  max-width: 80vw; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.mini-toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+.mini-toast.error { background: #ef4444; }
+.mini-toast.info { background: #4f6ef7; }
+
+/* ═══════════ 笔记浮窗（复用教材节点浮窗 .bk-node-float / .bnf-* 机制，notes.js openNoteFloat）═══════════ */
+.note-float {
+  width: 460px; max-width: 92vw;
+  /* 磨砂玻璃：半透明 + backdrop blur（跟随主题自适应，玻璃主题下更通透） */
+  background: rgba(255, 255, 255, 0.68) !important;
+  -webkit-backdrop-filter: blur(18px) saturate(160%);
+  backdrop-filter: blur(18px) saturate(160%);
+  border-color: rgba(255, 255, 255, 0.45) !important;
+  box-shadow: 0 12px 36px rgba(31, 36, 48, 0.16), 0 0 0 1px rgba(255,255,255,0.06) inset !important;
+}
+[data-theme="dark"] .note-float {
+  background: rgba(28, 31, 42, 0.68) !important;
+  border-color: rgba(255, 255, 255, 0.10) !important;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(255,255,255,0.04) inset !important;
+}
+[data-glass="true"] .note-float {
+  background: rgba(30, 36, 52, 0.5) !important;
+  border-color: rgba(255, 255, 255, 0.14) !important;
+  -webkit-backdrop-filter: blur(22px) saturate(180%);
+  backdrop-filter: blur(22px) saturate(180%);
+}
+[data-glass="true"][data-theme="light"] .note-float {
+  background: rgba(255, 255, 255, 0.5) !important;
+  border-color: rgba(255, 255, 255, 0.5) !important;
+}
+.note-float .bnf-body { max-height: 58vh; }
+.note-float-body .notes-editor-preview { padding: 0; background: transparent; }
+.note-float-meta {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  margin-top: 10px; padding-top: 8px; border-top: 1px dashed var(--border);
+}
+.nf-meta-item {
+  font-size: 11px; color: var(--text-secondary); opacity: 0.9;
+  display: inline-flex; align-items: center; gap: 3px; white-space: nowrap;
+}
+/* 笔记列表项 hover 时显示浮窗按钮 */
+.ns-note-float-btn {
+  flex-shrink: 0; width: 22px; height: 22px;
+  display: flex; align-items: center; justify-content: center;
+  border: none; background: transparent; color: var(--text-secondary);
+  border-radius: 6px; cursor: pointer; padding: 0;
+  opacity: 0; transition: var(--transition);
+}
+.ns-note-top:hover .ns-note-float-btn, .ns-note-float-btn:focus-visible { opacity: 1; }
+.ns-note-float-btn:hover { background: var(--hover-bg); color: var(--primary); }
+.ns-note-float-btn svg { width: 13px; height: 13px; }

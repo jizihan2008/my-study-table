@@ -350,6 +350,54 @@ function navigateUp() {
   renderTodos();
 }
 
+// ═══════════ Todo: Root info collapse ═══════════
+// 打开子目录时顶部显示根目录信息卡；用户可折叠/展开（状态存 localStorage）
+function renderTodoRootInfo() {
+  const rootInfo = document.getElementById('todoRootInfo');
+  if (!rootInfo) return;
+  if (currentTodoRoot === null) {
+    rootInfo.style.display = 'none';
+    rootInfo.innerHTML = '';
+    return;
+  }
+  const rootTodo = findTodo(currentTodoRoot);
+  if (!rootTodo) {
+    rootInfo.style.display = 'none';
+    rootInfo.innerHTML = '';
+    return;
+  }
+  const collapsed = localStorage.getItem('study_todo_rootinfo_collapsed') === '1';
+  const tagsHtml = (rootTodo.tags && rootTodo.tags.length > 0)
+    ? `<div class="todo-root-tags">${rootTodo.tags.map(tag => `<span class="todo-tag">${escapeHtml(tag)}</span>`).join('')}</div>`
+    : '';
+  const chevron = collapsed
+    ? '<path d="M6 9l6 6 6-6"/>'
+    : '<path d="M6 15l6-6 6 6"/>';
+  rootInfo.style.display = '';
+  rootInfo.innerHTML = `
+    <div class="todo-root-head">
+      <div class="todo-root-title">📁 ${escapeHtml(rootTodo.text)}</div>
+      <button class="todo-root-collapse" onclick="toggleTodoRootInfo()" title="${collapsed ? '展开根目录信息' : '折叠根目录信息'}">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${chevron}</svg>
+      </button>
+    </div>
+    <div class="todo-root-info-body"${collapsed ? ' style="display:none;"' : ''}>
+      <div class="todo-root-meta">
+        ${rootTodo.dueDate ? `<span class="todo-root-due">📅 ${rootTodo.dueDate}</span>` : ''}
+        <span class="todo-root-status" style="color:${rootTodo.done ? '#10b981' : '#f59e0b'};background:${rootTodo.done ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)'};">${rootTodo.done ? '✅ 已完成' : '⏳ 进行中'}</span>
+      </div>
+      ${rootTodo.content ? `<div class="todo-root-content">${escapeHtml(rootTodo.content)}</div>` : ''}
+      ${tagsHtml}
+    </div>
+  `;
+}
+function toggleTodoRootInfo() {
+  const collapsed = localStorage.getItem('study_todo_rootinfo_collapsed') === '1';
+  localStorage.setItem('study_todo_rootinfo_collapsed', collapsed ? '0' : '1');
+  // 只重渲染根目录信息区块，避免整个列表闪烁/滚动位置丢失
+  renderTodoRootInfo();
+}
+
 function goToTodoDirectory(id) {
   const t = findTodo(id);
   if (!t) return;
@@ -938,30 +986,8 @@ function renderTodos() {
   renderBreadcrumb();
   document.getElementById('todoSectionTitle').textContent = '待办事项';
 
-  // Render root info when inside a directory
-  const rootInfo = document.getElementById('todoRootInfo');
-  if (currentTodoRoot !== null) {
-    const rootTodo = findTodo(currentTodoRoot);
-    if (rootTodo) {
-      const tagsHtml = (rootTodo.tags && rootTodo.tags.length > 0)
-        ? `<div class="todo-root-tags">${rootTodo.tags.map(tag => `<span class="todo-tag">${escapeHtml(tag)}</span>`).join('')}</div>`
-        : '';
-      rootInfo.style.display = '';
-      rootInfo.innerHTML = `
-        <div class="todo-root-title">📁 ${escapeHtml(rootTodo.text)}</div>
-        <div class="todo-root-meta">
-          ${rootTodo.dueDate ? `<span class="todo-root-due">📅 ${rootTodo.dueDate}</span>` : ''}
-          <span class="todo-root-status" style="color:${rootTodo.done ? '#10b981' : '#f59e0b'};background:${rootTodo.done ? 'rgba(16,185,129,0.1)' : 'rgba(245,158,11,0.1)'};">${rootTodo.done ? '✅ 已完成' : '⏳ 进行中'}</span>
-        </div>
-        ${rootTodo.content ? `<div class="todo-root-content">${escapeHtml(rootTodo.content)}</div>` : ''}
-        ${tagsHtml}
-      `;
-    } else {
-      rootInfo.style.display = 'none';
-    }
-  } else {
-    rootInfo.style.display = 'none';
-  }
+  // Render root info when inside a directory（支持折叠，见 renderTodoRootInfo/toggleTodoRootInfo）
+  renderTodoRootInfo();
 
   const visibleRoots = getVisibleTodos();
   // 整个渲染过程只解析一次计时记录，避免每个节点都重复 JSON.parse

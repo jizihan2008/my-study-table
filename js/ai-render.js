@@ -6,6 +6,11 @@
 function renderAiChat() {
   const layout = document.getElementById('aiChatLayout');
   if (!layout) return;
+  // 重建前：记录输入框焦点 + 实时保存草稿。避免重渲染（自动标题生成 / 日报完成 / 首次发送命名等
+  // 异步完成后调用本函数）把用户正在输入的内容与焦点一并替换，导致"无法输入文字"。
+  const _prevInput = document.getElementById('aiInput');
+  const _hadInputFocus = !!(_prevInput && document.activeElement === _prevInput);
+  if (typeof saveAiDraft === 'function') { try { saveAiDraft(); } catch (e) {} }
   const hasApiKey = !!(loadApiKeys().length > 0);
 
   // 无 API Key 时也正常渲染界面（可查看历史聊天记录），仅禁用发送并在顶部提示。
@@ -122,6 +127,15 @@ function renderAiChat() {
   }, 100);
   // Restore input draft for current conv
   restoreAiDraft();
+  // 重建后恢复输入焦点与光标（此前正在输入时被重渲染打断的场景）
+  if (_hadInputFocus && !noKey) {
+    const _inp = document.getElementById('aiInput');
+    if (_inp && !_inp.disabled) {
+      _inp.focus();
+      const _len = _inp.value.length;
+      try { _inp.setSelectionRange(_len, _len); } catch (e) {}
+    }
+  }
   updateSidebarAiBadge();
   // Initialize toolbar state
   initAiToolbar();
