@@ -121,7 +121,12 @@ function loadTodoCompletedLog() {
   catch { return []; }
 }
 function saveTodoCompletedLog(log) {
-  localStorage.setItem('study_todo_completed_log', JSON.stringify(log));
+  // 走 saveData → 触发 Sync.onLocalChange → 待办完成日志跨设备同步
+  if (typeof saveData === 'function') {
+    saveData('study_todo_completed_log', log);
+  } else {
+    localStorage.setItem('study_todo_completed_log', JSON.stringify(log));
+  }
 }
 
 function toggleTodoHideDone() {

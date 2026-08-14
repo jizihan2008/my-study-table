@@ -40,7 +40,12 @@ function loadTimerRecords() {
 }
 
 function saveTimerRecords(records) {
-  localStorage.setItem('study_timer_records', JSON.stringify(records));
+  // 走 saveData → 触发 Sync.onLocalChange → 计时记录跨设备同步（此前直接 setItem 不通知同步）
+  if (typeof saveData === 'function') {
+    saveData('study_timer_records', records);
+  } else {
+    localStorage.setItem('study_timer_records', JSON.stringify(records));
+  }
 }
 
 // ═══════════ Global state ═══════════

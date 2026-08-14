@@ -449,7 +449,12 @@ function _bkQuizSaveState() {
   try {
     const store = JSON.parse(localStorage.getItem('study_bk_quiz_state_v1') || '{}');
     store[_bkQuizStateKey(book, chapter)] = { type: _bkQuizType, questions: _bkQuiz };
-    localStorage.setItem('study_bk_quiz_state_v1', JSON.stringify(store));
+    // 走 saveData → 触发 Sync.onLocalChange → 测验状态跨设备同步（此前直接 setItem 不通知同步）
+    if (typeof saveData === 'function') {
+      saveData('study_bk_quiz_state_v1', store);
+    } else {
+      localStorage.setItem('study_bk_quiz_state_v1', JSON.stringify(store));
+    }
   } catch (e) {}
 }
 function _bkQuizLoadState() {

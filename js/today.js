@@ -40,7 +40,12 @@ function loadCheckinData() {
 }
 
 function saveCheckinData(data) {
-  localStorage.setItem('study_checkin', JSON.stringify(data));
+  // 走 saveData → 触发 Sync.onLocalChange → 打卡记录跨设备同步（此前直接 setItem 不通知同步）
+  if (typeof saveData === 'function') {
+    saveData('study_checkin', data);
+  } else {
+    localStorage.setItem('study_checkin', JSON.stringify(data));
+  }
 }
 
 function getWeekDays() {
@@ -91,7 +96,12 @@ function loadFocusData() {
 }
 
 function saveFocusData(data) {
-  localStorage.setItem('study_today_focus', JSON.stringify(data));
+  // 走 saveData → 触发 Sync.onLocalChange → 今日聚焦跨设备同步
+  if (typeof saveData === 'function') {
+    saveData('study_today_focus', data);
+  } else {
+    localStorage.setItem('study_today_focus', JSON.stringify(data));
+  }
 }
 
 function getTodayFocusItems() {
@@ -647,7 +657,12 @@ function loadGoals() {
 }
 
 function saveGoals(goals) {
-  localStorage.setItem('study_longterm_goals', JSON.stringify(goals));
+  // 走 saveData → 触发 Sync.onLocalChange → 长期目标跨设备同步
+  if (typeof saveData === 'function') {
+    saveData('study_longterm_goals', goals);
+  } else {
+    localStorage.setItem('study_longterm_goals', JSON.stringify(goals));
+  }
 }
 
 function addGoal() {

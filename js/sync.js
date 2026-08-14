@@ -36,7 +36,8 @@
     'study_notes_folders',     // 笔记文件夹结构
     'study_timer_records',     // 专注计时记录
     'study_taskline_v1',       // 任务线（学习任务进度）
-    'study_habits',            // 习惯打卡（当前版）
+    'study_habits_v2',         // 习惯打卡（当前版 v2，habits.js HABITS_KEY）
+    'study_habits',            // 习惯打卡（旧版）
     'study_habits_v1',         // 习惯打卡（旧版）
     'study_books_v1',          // 教材书架
     'study_books_meta',        // 教材元数据
@@ -76,6 +77,7 @@
     'study_timer_records': '计时记录',
     'study_taskline_v1': '任务线',
     'study_habits': '习惯打卡',
+    'study_habits_v2': '习惯打卡（当前版）',
     'study_habits_v1': '习惯打卡（旧版）',
     'study_books_v1': '教材书架',
     'study_books_meta': '教材元数据',
