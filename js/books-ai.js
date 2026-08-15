@@ -435,6 +435,9 @@ let _bkQuiz = null;       // 当前测验题目数组
 let _bkQuizType = 'choice'; // choice | mixed
 let _bkQuizHistory = null; // 当前书籍测验记录（引用）
 // 测验生成跨 tab 状态：生成目标书/章 + 最近一次失败信息（切走再切回不丢"生成中/结果"）
+// _bkQuizGenerating：独立的"测验正在生成"标志——不能用全局 _bkAiBusy 判断，
+// 否则章节提问/讲解时 _bkAiBusy=true 会让测验页误显示"生成中"。
+let _bkQuizGenerating = false;
 let _bkQuizGenBookId = null;
 let _bkQuizGenChapterId = null;
 let _bkQuizGenError = null;
@@ -473,8 +476,8 @@ function bkRenderQuizTab(book, chapter) {
   if (!body) return;
   body.classList.remove('bk-body-chat');
   _bkQuizHistory = book.quizRecords || [];
-  // 生成中判断：_bkQuizGen* 保留上次生成目标（生成完成后不清空，供错误提示定位）
-  const generating = _bkAiBusy
+  // 生成中判断：用独立的 _bkQuizGenerating（_bkQuizGen* 保留上次生成目标，不清空供错误提示定位）
+  const generating = _bkQuizGenerating
     && String(_bkQuizGenBookId || '') === String(book.id)
     && String(_bkQuizGenChapterId || '') === String(chapter.id);
   // 恢复持久化的当前测验（题目 + 已作答内容），无则从空态开始；生成中保持 loading 不恢复旧题
@@ -733,6 +736,7 @@ async function bkGenerateQuiz() {
   _bkQuizType = (typeSel && typeSel.value) || 'choice';
 
   _bkAiBusy = true;
+  _bkQuizGenerating = true;
   _bkQuizGenBookId = book.id;
   _bkQuizGenChapterId = chapter.id;
   _bkQuizGenError = null;
@@ -781,6 +785,7 @@ async function bkGenerateQuiz() {
     _bkQuizGenError = String((err && err.message) || err) || '测验生成失败';
   } finally {
     _bkAiBusy = false;
+    _bkQuizGenerating = false;
     // 若当前正显示该书本章的测验页，重渲染以展示结果（成功出题 / 失败提示）；
     // 若用户已切到其他 tab/章节，则不做任何 DOM 操作，等切回时 bkRenderQuizTab 按状态恢复
     if (bkActiveTab === 'quiz'
@@ -1115,12 +1120,9 @@ function bkRenderSummaryTab(book, chapter) {
   const pseudoSource = (book.pseudocode && book.pseudocode.source === 'ai') ? 'AI 判定为编程书' : '手动标记为编程书';
 
   const pseudoToggleHtml = `
-    <div class="bk-kb-pseudo-toggle">
-      <button class="bk-msg-action" onclick="bkToggleProgrammingBook()" title="开启后，构建/重建知识库时将按章收集伪代码及其解释">
-        <i data-lucide="code" class="lucide-icon" style="width:12px;height:12px;"></i> 本书为编程书：${progOn ? '开' : '关'}
-      </button>
-      ${progOn && !pseudoItems.length ? '<span class="bk-kb-pseudo-hint">本章未提取到伪代码（可能本章无伪代码，或需重新构建本章知识库收集）</span>' : ''}
-    </div>`;
+    <button class="bk-msg-action" onclick="bkToggleProgrammingBook()" title="开启后，构建/重建知识库时将按章收集伪代码及其解释">
+      <i data-lucide="code" class="lucide-icon" style="width:12px;height:12px;"></i> 收集伪代码：${progOn ? '开' : '关'}
+    </button>`;
 
   const pseudoHtml = (progOn && pseudoItems.length)
     ? `<div class="bk-kb-card">
@@ -1143,12 +1145,9 @@ function bkRenderSummaryTab(book, chapter) {
     }
   } catch (e) {}
   const figToggleHtml = `
-    <div class="bk-kb-pseudo-toggle">
-      <button class="bk-msg-action" onclick="bkToggleFigureCollect()" title="开启后，构建/重建知识库时将按章收集教材中的图片及其解释（图注）">
-        <i data-lucide="image" class="lucide-icon" style="width:12px;height:12px;"></i> 收集图片及其解释：${figOn ? '开' : '关'}
-      </button>
-      ${figOn && !figItems.length ? '<span class="bk-kb-pseudo-hint">本章未收集到图片（可能本章无图，或需重新构建本章知识库收集）</span>' : ''}
-    </div>`;
+    <button class="bk-msg-action" onclick="bkToggleFigureCollect()" title="开启后，构建/重建知识库时将按章收集教材中的图片及其解释（图注）">
+      <i data-lucide="image" class="lucide-icon" style="width:12px;height:12px;"></i> 收集图片：${figOn ? '开' : '关'}
+    </button>`;
   const figItemsHtml = figItems.map((f, i) => {
     const img = (figImages && figImages[f.dataUrlIndex] && figImages[f.dataUrlIndex].dataUrl)
       ? figImages[f.dataUrlIndex].dataUrl
@@ -1185,9 +1184,19 @@ function bkRenderSummaryTab(book, chapter) {
         <div class="bk-mindmap-wrap"><div class="bk-mindmap">${bkRenderMindmap(kb.mindmap, 1)}</div></div>
       </div>` : '';
 
+  const toggleHints = [
+    (progOn && !pseudoItems.length ? '本章未提取到伪代码（可能本章无伪代码，或需重新构建本章知识库收集）' : ''),
+    (figOn && !figItems.length ? '本章未收集到图片（可能本章无图，或需重新构建本章知识库收集）' : '')
+  ].filter(Boolean);
+  const togglesHtml = `
+    <div class="bk-kb-pseudo-toggle">
+      ${pseudoToggleHtml}
+      ${figToggleHtml}
+      ${toggleHints.map(h => `<span class="bk-kb-pseudo-hint">${h}</span>`).join('')}
+    </div>`;
+
   body.innerHTML = `
-    ${pseudoToggleHtml}
-    ${figToggleHtml}
+    ${togglesHtml}
     <div class="bk-summary-grid">
       <div class="bk-kb-card">
         <div class="bk-kb-card-title"><i data-lucide="file-text" class="lucide-icon" style="width:14px;height:14px;"></i> 章节摘要<span style="font-weight:400;font-size:11px;color:var(--text-secondary);">（${hasSummaryNodes ? '节点可右键显示原书原文' : '重新生成摘要后，节点可右键显示原书原文'}）</span></div>
@@ -1276,17 +1285,18 @@ function bkToggleFigureCollect() {
 }
 
 // 「重新构建本章」按钮处理：完整重建当前章节知识库（摘要/术语/重点/导图，编程书含伪代码），覆盖现有内容
+// 若已有构建进行中，仍允许入队排队（由构建队列串行执行），不再静默拦截
 function bkRebuildChapter() {
   const book = bkGetActiveBook();
   const chapter = bkGetActiveChapter();
   if (!book || !chapter) return;
-  if (_bkAiBusy || (typeof bkKbBuilding !== 'undefined' && bkKbBuilding)) return;
   const btn = document.getElementById('bkRebuildChapterBtn');
   if (btn) btn.disabled = true;
   const collectPseudo = (book.pseudocode && book.pseudocode.enabled === true);
   const collectFig = (book.figures && book.figures.enabled === true);
   const extraParts = [collectPseudo ? '<b>伪代码</b>' : '', collectFig ? '<b>图片及其解释</b>' : ''].filter(Boolean);
-  bkChooseKbLevel(`确定要重新构建「${escapeHtml(chapter.title)}」的知识库吗？<br><small>将重新生成<b>摘要、术语表、重点、知识导图</b>${extraParts.length ? '与' + extraParts.join('、') : ''}，覆盖现有内容。<br>请选择摘要详细程度：</small>`).then(level => {
+  const busyTip = (typeof bkKbBuilding !== 'undefined' && bkKbBuilding) ? '<br><b style="color:#eab308;">当前有构建任务进行中，将加入队列排队执行。</b>' : '';
+  bkChooseKbLevel(`确定要重新构建「${escapeHtml(chapter.title)}」的知识库吗？<br><small>将重新生成<b>摘要、术语表、重点、知识导图</b>${extraParts.length ? '与' + extraParts.join('、') : ''}，覆盖现有内容。<br>请选择摘要详细程度：</small>${busyTip}`).then(level => {
     if (btn) btn.disabled = false;
     if (!level) return;
     bkBuildChapter(chapter.id, level);
@@ -1294,6 +1304,7 @@ function bkRebuildChapter() {
 }
 
 // 右键章节菜单「重新构建本章知识库」：先选中该章节，再走 bkRebuildChapter 的确认+构建流程
+// 若已有构建进行中，仍允许入队排队（由构建队列串行执行），不再静默拦截
 function bkRebuildContextChapter() {
   const cid = _bkCtxChapterId;
   bkCloseTermContextMenu();
@@ -1301,7 +1312,6 @@ function bkRebuildContextChapter() {
   const book = bkGetActiveBook();
   const ch = (book && book.chapters || []).find(x => x.id === cid);
   if (!book || !ch) return;
-  if (_bkAiBusy || (typeof bkKbBuilding !== 'undefined' && bkKbBuilding)) return;
   // 切到该章节（激活），确保构建/渲染作用于正确章节
   if (typeof bkSelectChapter === 'function' && bkActiveChapterId !== cid) bkSelectChapter(cid);
   const collectPseudo = (book.pseudocode && book.pseudocode.enabled === true);
@@ -1310,10 +1320,124 @@ function bkRebuildContextChapter() {
   const isBuilt = !!(ch.kb && ch.kb.status === 'done');
   const verb = isBuilt ? '重新构建' : '构建';
   const coverNote = isBuilt ? '，覆盖现有内容' : '';
-  bkChooseKbLevel(`确定要${verb}「${escapeHtml(ch.title)}」的知识库吗？<br><small>将生成<b>摘要、术语表、重点、知识导图</b>${extraParts.length ? '与' + extraParts.join('、') : ''}${coverNote}。<br>请选择摘要详细程度：</small>`).then(level => {
+  const busyTip = (typeof bkKbBuilding !== 'undefined' && bkKbBuilding) ? '<br><b style="color:#eab308;">当前有构建任务进行中，将加入队列排队执行。</b>' : '';
+  bkChooseKbLevel(`确定要${verb}「${escapeHtml(ch.title)}」的知识库吗？<br><small>将生成<b>摘要、术语表、重点、知识导图</b>${extraParts.length ? '与' + extraParts.join('、') : ''}${coverNote}。<br>请选择摘要详细程度：</small>${busyTip}`).then(level => {
     if (!level) return;
     bkBuildChapter(cid, level);
   });
+}
+
+// 右键章节菜单「AI 总结本章为笔记」：收集「章节原文 + 摘要导图全部内容 + 本章讲解记录」，
+// 调用 AI 生成一篇 Markdown 笔记并保存到「笔记 → 教材学习」文件夹
+async function bkSummarizeChapterToNote() {
+  const cid = _bkCtxChapterId;
+  bkCloseTermContextMenu();
+  if (!cid) return;
+  const book = bkGetActiveBook();
+  const ch = (book && book.chapters || []).find(x => x.id === cid);
+  if (!book || !ch) return;
+  if (_bkAiBusy || (typeof bkKbBuilding !== 'undefined' && bkKbBuilding)) {
+    showMiniToast('已有 AI 任务进行中，请稍候', 'error');
+    return;
+  }
+  const cfg = _bkRequireKey();
+  if (!cfg) return;
+  _bkAiBusy = true;
+  try {
+    // 1. 章节原文
+    let chapterText = '';
+    try { chapterText = await bkGetChapterText(ch); } catch (e) { chapterText = ''; }
+    // 2. 摘要导图全部内容（摘要/摘要节点/重点提纲/术语表/知识导图/伪代码/图片图注）
+    const kb = ch.kb || {};
+    const kbParts = [];
+    if (kb.summary) kbParts.push('【章节摘要】\n' + kb.summary);
+    if (Array.isArray(kb.summaryNodes) && kb.summaryNodes.length) {
+      kbParts.push('【摘要要点】\n' + kb.summaryNodes.map((n, i) => (i + 1) + '. ' + (n.text || '')).join('\n'));
+    }
+    if (Array.isArray(kb.keyPoints) && kb.keyPoints.length) {
+      kbParts.push('【重点提纲】\n' + kb.keyPoints.map((k, i) => (i + 1) + '. ' + k).join('\n'));
+    }
+    if (Array.isArray(kb.terms) && kb.terms.length) {
+      kbParts.push('【术语表】\n' + kb.terms.map(t => (t.term || '') + '：' + (t.def || '')).join('\n'));
+    }
+    if (kb.mindmap && kb.mindmap.name) {
+      const mmLines = [];
+      const flatMm = (node, depth) => {
+        if (!node) return;
+        mmLines.push('  '.repeat(depth) + (node.name || ''));
+        (node.children || []).forEach(c => flatMm(c, depth + 1));
+      };
+      flatMm(kb.mindmap, 0);
+      kbParts.push('【知识导图】\n' + mmLines.join('\n'));
+    }
+    if (Array.isArray(kb.pseudocode) && kb.pseudocode.length) {
+      kbParts.push('【伪代码】\n' + kb.pseudocode.map((p, i) => (i + 1) + '. ' + (p.title || '') + '\n' + (p.code || '')).join('\n'));
+    }
+    if (Array.isArray(kb.figures) && kb.figures.length) {
+      kbParts.push('【图片图注】\n' + kb.figures.map((f, i) => (i + 1) + '. ' + (f.caption || '') + '：' + (f.explanation || '')).join('\n'));
+    }
+    // 3. 本章讲解记录（所有问答）
+    const logs = _bkExplainLogLoad(ch.id);
+    const explainText = logs.map(m => (m.role === 'user' ? '问：' : '答：') + m.content).join('\n\n');
+    const textSnippet = bkSnippet(chapterText, 6000);
+    const kbSnippet = bkSnippet(kbParts.join('\n\n'), 6000);
+    const explainSnippet = bkSnippet(explainText, 6000);
+
+    showMiniToast('📝 正在将「' + ch.title + '」总结为笔记…', 'info', true);
+    const messages = [
+      { role: 'system', content: '你是学习笔记整理助手。根据提供的章节原文、知识库摘要导图和章节讲解记录，把本章内容整理成一篇结构清晰、便于复习的 Markdown 笔记。要求：\n1. 用中文书写；\n2. 覆盖本章核心概念、原理、步骤与结论；\n3. 结构组织清晰，善用标题层级、列表、粗体等 Markdown 语法；\n4. 突出重点，避免冗长堆砌；\n5. 不输出多余开场白，直接输出笔记正文。' },
+      { role: 'user', content: '书籍：《' + book.title + '》\n章节：' + ch.title + '\n\n【章节原文】\n' + (textSnippet || '（无）') + '\n\n【摘要导图】\n' + (kbSnippet || '（无）') + '\n\n【章节讲解记录】\n' + (explainSnippet || '（无）') }
+    ];
+    const res = await callAiApi(messages, cfg, null);
+    const answer = (res && res.cleanText) || '';
+    if (!answer || !answer.trim()) {
+      showMiniToast('AI 未返回内容，请重试', 'error');
+      return;
+    }
+    const content = '# ' + book.title + ' · ' + ch.title + '\n\n> 本章学习笔记（由 AI 根据章节原文、摘要导图与讲解记录生成）\n\n' + answer;
+    const note = _bkSaveNoteReturn(book.title + ' · ' + ch.title + ' · 学习笔记', content, answer.slice(0, 120));
+    if (!note) { showMiniToast('笔记保存失败', 'error'); return; }
+    showMiniToast('✅ 已生成并保存到「笔记 → 教材学习」');
+    showCustomConfirm('笔记已保存到「笔记 → 教材学习」文件夹。<br>是否立即打开查看？').then(ok => {
+      if (!ok) return;
+      if (typeof switchTab === 'function') switchTab('notes');
+      if (typeof selectNote === 'function') selectNote(note.id);
+    });
+  } catch (e) {
+    console.error('AI 总结章节为笔记失败:', e);
+    showMiniToast('总结失败：' + ((e && e.message) || String(e)), 'error');
+  } finally {
+    _bkAiBusy = false;
+  }
+}
+// _bkSaveNote 的返回值变体：返回 note 对象（供跳转打开），无 alert
+function _bkSaveNoteReturn(title, content, summary) {
+  try {
+    const folderId = _bkGetBooksNoteFolderId();
+    const note = {
+      id: genId(),
+      type: 'note',
+      title: title,
+      content: content,
+      summary: summary || '',
+      _summaryFresh: true,
+      parentId: folderId || null,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      _reviewHistory: [],
+      _skipReview: true,
+      tags: []
+    };
+    if (typeof notes !== 'undefined' && Array.isArray(notes)) {
+      notes.push(note);
+      saveData('study_notes_v2', notes);
+      return note;
+    }
+    return null;
+  } catch (e) {
+    console.error('保存笔记失败:', e);
+    return null;
+  }
 }
 
 // 「重新生成摘要」按钮处理：仅重生成当前章节摘要（不动术语表/重点/导图）
@@ -1629,6 +1753,7 @@ function bkShowTermContextMenu(e) {
     menuEl('bkTermCtxOriginal').style.display = 'none';
     menuEl('bkTermCtxOpenFloat').style.display = 'none';
     menuEl('bkTermCtxRebuildChapter').style.display = 'none';
+    menuEl('bkTermCtxSummaryNote').style.display = 'none';
     menuEl('bkTermCtxAiAnno').style.display = 'none';
     menuEl('bkTermCtxAddAnno').style.display = 'none';
     menuEl('bkTermCtxBookmark').style.display = 'none';
@@ -1839,6 +1964,7 @@ function bkInitTermContextMenu() {
       document.getElementById('bkTermCtxExample').style.display = 'none';
       document.getElementById('bkTermCtxOriginal').style.display = 'none';
       document.getElementById('bkTermCtxBookmark').style.display = '';
+      document.getElementById('bkTermCtxSummaryNote').style.display = '';
       document.getElementById('bkTermCtxRebuildChapter').style.display = '';
       // 根据章节构建状态区分「构建」/「重新构建」：未构建（pending/failed/无 kb）显示「构建本章知识库」
       const _bkChapter = (typeof bkGetActiveBook === 'function' ? bkGetActiveBook() : null);

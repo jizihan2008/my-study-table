@@ -866,6 +866,89 @@ function normalizeLatex(formula) {
   return formula.replace(/\\\\(?=[a-zA-Z])/g, '\\');
 }
 
+// ── 内嵌思维导图（```mindmap），复用教材知识库导图样式 ──
+// 支持两种格式（自动识别）：
+//   A. 缩进树：每行一个节点，2 空格 / Tab 表示层级
+//   B. Unicode 树形字符（AI 常用）：├─ / └─ / │ 前缀，如：
+//       0x22 深度优先搜索
+//       ├─ 概念体系
+//       │  ├─ 状态空间 = 图
+//       │  └─ DFS 三要素
+//       └─ 方法论
+// 输入 code 已由 formatMarkdownBase 整体 HTML 转义，节点名不再二次转义。
+// 判断代码块内容是否"看起来像"思维导图（用于裸 ``` 无语言标记时自动识别）：
+//   - 含树形字符（├ └ │）→ 是
+//   - 否则：≥2 个非空行 + ≥2 个不同缩进级别 + 无代码特征 + 无 ASCII 树连接线
+function looksLikeMindmap(code) {
+  const s = String(code || '');
+  if (/[├└]/.test(s)) return true; // 树形字符格式
+  const nonEmpty = s.split('\n').filter(l => l.trim());
+  if (nonEmpty.length < 2) return false;
+  // 排除 ASCII 树/图（如二叉树图、目录树）：
+  // 存在以连接符（\ / |）开头的行（如 "/"、"/ \"、"|-- main.js"、"|\"）→ 是结构图，
+  // 不是"每行一个纯文本节点名"的思维导图缩进树
+  if (nonEmpty.some(l => /^[\\/|]/.test(l.trim()))) return false;
+  const indents = nonEmpty.map(l => (l.match(/^(\t| {2,})/) ? l.match(/^(\t| {2,})/)[0].length : 0));
+  if (new Set(indents).size < 2) return false; // 无嵌套层级
+  if (/[{};]|=>|<\/|<!--|\$\{|\b(function|const|let|var|return|if|else|for|while|class|import|export)\b/.test(s)) return false;
+  return true;
+}
+
+function renderNoteMindmap(code) {
+  const lines = String(code || '').split('\n');
+  const root = { name: '', children: [] };
+  const isTreeChar = lines.some(l => /[├└]/.test(l));
+
+  const stack = [{ node: root, depth: -1 }];
+  const pushNode = (depth, name) => {
+    const node = { name: name, children: [] };
+    while (stack.length > 1 && depth <= stack[stack.length - 1].depth) stack.pop();
+    stack[stack.length - 1].node.children.push(node);
+    stack.push({ node: node, depth: depth });
+  };
+
+  // 树形字符格式的层级宽度：收集所有 ├/└ 的列位置，取第一个非零列作为每级缩进宽度。
+  // （不能只数 │：最后分支的子行用「空格」代替竖线，如 `   ├─`，无 │ 但已是下一级。）
+  let unit = 0;
+  if (isTreeChar) {
+    const uniqCols = [...new Set(lines.map(l => l.search(/[├└]/)).filter(i => i >= 0))].sort((a, b) => a - b);
+    for (const c of uniqCols) { if (c > 0) { unit = c; break; } }
+  }
+
+  for (const raw of lines) {
+    const line = raw.replace(/\t/g, '  ').replace(/\s+$/, '');
+    if (!line.trim()) continue;
+    if (isTreeChar) {
+      // ─+ 匹配一个或多个横线：AI 常用 tree 命令风格 `├── name`（双横线），
+      // 单 ─ 会漏掉第二个横线导致节点名残留 "─ " 前缀。
+      const m = line.match(/^([│| ]*)([├└])─+[ \t]*(.*)$/);
+      if (m) {
+        const col = line.indexOf(m[2]);
+        const depth = unit > 0 ? Math.round(col / unit) + 1 : 1;
+        pushNode(depth, m[3].trim());
+      } else {
+        pushNode(0, line.trim());
+      }
+    } else {
+      // 缩进：层级 = 前导空格数
+      const indent = line.length - line.trimStart().length;
+      pushNode(indent, line.trim());
+    }
+  }
+
+  const renderNode = (node, level) => {
+    const children = (node.children && node.children.length)
+      ? node.children.map(c => renderNode(c, level + 1)).join('')
+      : '';
+    return `<div class="bk-mm-node level-${Math.min(level, 4)}">${node.name}${children}</div>`;
+  };
+  if (root.children.length === 0) {
+    return `<div class="bk-mindmap-wrap"><div class="bk-mindmap"><div class="bk-mm-node level-1">${String(code || '').trim()}</div></div></div>`;
+  }
+  const html = root.children.map(c => renderNode(c, 1)).join('');
+  return `<div class="bk-mindmap-wrap"><div class="bk-mindmap">${html}</div></div>`;
+}
+
 // ── Shared Markdown-to-HTML base renderer ──
 // Escapes HTML, then applies: code blocks, tables, inline code, hr, headings, bold, italic, unordered lists.
 // Returns HTML string with placeholders for protected blocks already restored.
@@ -905,10 +988,17 @@ function formatMarkdownBase(text, extraProcessor) {
     .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
 
   // Code blocks (fenced) — protect from further processing
+  // 语言标记为 mindmap 时渲染为思维导图（教材知识库风格）；
+  // 裸 ```（无语言标记）但内容像缩进树/树形字符时也自动渲染思维导图，否则按普通代码块
   const codeBlocks = [];
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const idx = codeBlocks.length;
-    codeBlocks.push(`<pre><code>${code}</code></pre>`);
+    const l = (lang || '').toLowerCase();
+    if (l === 'mindmap' || (!l && looksLikeMindmap(code))) {
+      codeBlocks.push(renderNoteMindmap(code));
+    } else {
+      codeBlocks.push(`<pre><code>${code}</code></pre>`);
+    }
     return `%%CODEBLOCK_${idx}%%`;
   });
 
@@ -1004,10 +1094,35 @@ function formatAiContent(text) {
   });
 }
 
-function formatNoteContent(text) {
+// 把笔记批注锚点注入为 ⟦id⟧ 标记（formatMarkdownBase 渲染后再替换为 <mark class="note-ann">）
+// 锚点 start/end 基于源文本（textarea.value）偏移，从后往前替换避免偏移漂移。
+function injectNoteAnnotations(text, note) {
+  if (!note || !Array.isArray(note._annotations)) return text;
+  const anns = note._annotations.filter(a => a.end > a.start && (a.text || '').trim());
+  if (anns.length === 0) return text;
+  const sorted = anns.slice().sort((x, y) => x.start - y.start);
+  let s = String(text || '');
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const a = sorted[i];
+    const start = Math.max(0, Math.min(a.start, s.length));
+    const end = Math.max(start, Math.min(a.end, s.length));
+    if (end <= start) continue;
+    s = s.slice(0, start) + '\u27E6' + a.id + '\u27E7' + s.slice(start, end) + '\u27E6/' + a.id + '\u27E7' + s.slice(end);
+  }
+  return s;
+}
+
+function formatNoteContent(text, note) {
   // Replace literal \n (backslash-n) with real newlines before markdown processing
   let cleaned = (text || '').replace(/\\n/g, '\n');
-  return formatMarkdownBase(cleaned);
+  // 注入批注锚点标记（基于源文本偏移，与 textarea 一致）
+  const n = note || (typeof getActiveNote === 'function' ? getActiveNote() : null);
+  cleaned = injectNoteAnnotations(cleaned, n);
+  let html = formatMarkdownBase(cleaned);
+  // 批注标记 → 高亮 <mark>（⟦id⟧ / ⟦/id⟧ 不受 markdown 处理影响）
+  html = html.replace(/\u27E6([A-Za-z0-9_-]+)\u27E7/g, '<mark class="note-ann" data-id="$1">');
+  html = html.replace(/\u27E6\/([A-Za-z0-9_-]+)\u27E7/g, '</mark>');
+  return html;
 }
 
 // ═══════════ AI Chat: 选中文字右键保存为笔记 ═══════════

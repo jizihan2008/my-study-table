@@ -172,6 +172,7 @@
               <button class="notes-view-btn" id="notesPreviewBtn" onclick="switchNoteView('preview')">预览</button>
               <button class="notes-view-btn" id="notesEditBtn" onclick="switchNoteView('edit')">编辑</button>
               <button class="notes-view-btn" id="notesSummaryBtn" onclick="switchNoteView('summary')">摘要</button>
+              <button class="notes-view-btn notes-ann-btn" id="notesAnnBtn" onclick="toggleNoteAnnPanel()" title="批注列表">批注<span id="notesAnnCount"></span></button>
             </div>
           </div>
           <div class="notes-tag-bar" id="notesTagBar"></div>
@@ -218,6 +219,7 @@
             <button onclick="switchNoteView('preview');hideNotesMobileViewMenu()"><i data-lucide="eye" class="lucide-icon"></i>预览</button>
             <button onclick="switchNoteView('edit');hideNotesMobileViewMenu()"><i data-lucide="square-pen" class="lucide-icon"></i>编辑</button>
             <button onclick="switchNoteView('summary');hideNotesMobileViewMenu()"><i data-lucide="sparkles" class="lucide-icon"></i>摘要</button>
+            <button onclick="toggleNoteAnnPanel();hideNotesMobileViewMenu()"><i data-lucide="message-square" class="lucide-icon"></i>批注<span id="notesAnnCountMobile"></span></button>
           </div>
         </div>
       </div>
@@ -1312,7 +1314,7 @@
 <script src="js/core.js?v=20260812-r10"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260814-r2"></script>
-<script src="js/notes.js?v=20260814-r2"></script>
+<script src="js/notes.js?v=20260814-r15"></script>
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20260814-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
@@ -1320,7 +1322,7 @@
 <script src="js/ai-tree.js?v=20260804-r3"></script>
 <script src="js/ai-conv.js?v=20260803-r1"></script>
 <script src="js/ai-attach.js?v=20260807-r1"></script>
-<script src="js/ai-render.js?v=20260814-r1"></script>
+<script src="js/ai-render.js?v=20260814-r7"></script>
 <script src="js/ai-tools.js?v=20260811-r2"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-api.js?v=20260813-r2"></script>
@@ -1340,10 +1342,10 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
 </script>
 <script src="js/books-pdfstore.js?v=20260812-r2"></script>
-<script src="js/books.js?v=20260813-r10"></script>
+<script src="js/books.js?v=20260814-r1"></script>
 <script src="js/books-pdf.js?v=20260813-r6"></script>
-<script src="js/books-kb.js?v=20260813-r10"></script>
-<script src="js/books-ai.js?v=20260814-r3"></script>
+<script src="js/books-kb.js?v=20260814-r1"></script>
+<script src="js/books-ai.js?v=20260814-r7"></script>
 <script src="js/books-annot.js?v=20260813-r4"></script>
 <script src="js/calendar.js?v=20260724-r7"></script>
 <script src="js/taskline.js?v=20260812-r27"></script>
@@ -1363,7 +1365,7 @@
 <script src="js/codegen.js?v=20260808-r14"></script>
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-<script src="js/sync.js?v=20260814-r2"></script>
+<script src="js/sync.js?v=20260814-r3"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260814-r6"></script>
 <script>
@@ -1433,9 +1435,40 @@ if (typeof lucide !== 'undefined') {
   </div>
   <div class="context-menu-note-items" id="ctxNoteItems">
     <div class="context-menu-sep"></div>
+    <div class="context-menu-item" onclick="contextOpenNoteFloat()"><i data-lucide="external-link" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 浮窗查看</div>
     <div class="context-menu-item" id="ctxToggleReview" onclick="contextToggleSkipReview()"><i data-lucide="eye-off" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="ctxToggleReviewText">跳过复习</span></div>
+    <div class="context-menu-item" id="ctxMarkReviewed" onclick="contextMarkReviewed()"><i data-lucide="check-circle" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 完成复习</div>
+    <div class="context-menu-item" onclick="contextResetReview()"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重置复习周期</div>
     <div class="context-menu-item" onclick="contextArchiveNote()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档笔记</div>
     <div class="context-menu-item danger" onclick="contextDeleteNote()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除笔记</div>
+  </div>
+</div>
+
+<!-- 笔记批注输入模态框（独立磨砂 shell 设计：引用原文 + 大字输入 + 计数 + 底部操作栏） -->
+<div class="modal-overlay note-ann-overlay" id="noteAnnModal" onclick="closeNoteAnnModal()">
+  <div class="note-ann-shell" onclick="event.stopPropagation()">
+    <div class="na-shell-header">
+      <div class="na-shell-title">
+        <i data-lucide="message-square" class="lucide-icon"></i>
+        <span class="note-ann-modal-title-text">添加批注</span>
+      </div>
+      <button class="na-shell-close" onclick="closeNoteAnnModal()" title="关闭 (Esc)"><i data-lucide="x" class="lucide-icon"></i></button>
+    </div>
+    <div class="na-shell-body">
+      <div class="na-anchor-label"><i data-lucide="quote" class="lucide-icon"></i> 被批注的原文</div>
+      <div class="note-ann-modal-anchor"></div>
+      <div class="na-input-wrap">
+        <textarea id="noteAnnModalText" rows="4" maxlength="2000" placeholder="写下你的批注…（Ctrl+Enter 保存，Esc 取消）"></textarea>
+        <div class="na-input-meta">
+          <span class="na-count"><b id="noteAnnCount">0</b> / 2000</span>
+          <span class="na-hint">Ctrl+Enter 保存 · Esc 取消</span>
+        </div>
+      </div>
+    </div>
+    <div class="na-shell-footer">
+      <button class="na-btn" onclick="closeNoteAnnModal()">取消</button>
+      <button class="na-btn primary" onclick="saveNoteAnnModal()"><i data-lucide="check" class="lucide-icon"></i> 保存批注</button>
+    </div>
   </div>
 </div>
 
@@ -1518,6 +1551,7 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-item" id="bkTermCtxAddAnno" style="display:none;" onclick="bkAnnotAddFromContext()"><i data-lucide="message-square-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加批注</div>
   <div class="context-menu-item" id="bkTermCtxAiAnno" style="display:none;" onclick="bkAnnotAiFromContext()"><i data-lucide="wand-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI 生成旁批</div>
   <div class="context-menu-item" id="bkTermCtxBookmark" style="display:none;" onclick="bkToggleChapterBookmark()"><i data-lucide="bookmark" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="bkTermCtxBookmarkText">添加书签</span></div>
+  <div class="context-menu-item" id="bkTermCtxSummaryNote" style="display:none;" onclick="bkSummarizeChapterToNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI 总结本章为笔记</div>
   <div class="context-menu-item" id="bkTermCtxRebuildChapter" style="display:none;" onclick="bkRebuildContextChapter()"><i data-lucide="rotate-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="bkTermCtxRebuildChapterText">重新构建本章知识库</span></div>
 </div>
 

@@ -255,14 +255,26 @@
       return { ok: true, skipped: true, reason: 'too-large' };
     }
     const payload = value ? JSON.parse(value) : null;
-    const updatedAt = new Date().toISOString();
-    const { error } = await c.from('user_data')
-      .upsert({ user_id: session.user.id, key, value: payload, updated_at: updatedAt },
-        { onConflict: 'user_id,key' });
-    if (error) return { ok: false, reason: error.message };
+    // 用「服务器时间」作为云端 updated_at（不传该字段 → 数据库 default now()），
+    // 避免客户端时钟偏差（手机时间慢于电脑）导致 LWW 判定「云端不新」→ 另一设备永不拉取。
+    let updatedAt = new Date().toISOString();   // select 不可用时兜底
+    let upsertErr = null;
+    try {
+      const { data, error } = await c.from('user_data')
+        .upsert({ user_id: session.user.id, key, value: payload },
+          { onConflict: 'user_id,key' })
+        .select('updated_at')
+        .single();
+      upsertErr = error;
+      if (!error && data && data.updated_at) updatedAt = data.updated_at;
+    } catch (e) {
+      // upsert 可能已成功但 select/single 抛错（如版本不支持）→ 视为成功，时间用客户端兜底
+      upsertErr = null;
+    }
+    if (upsertErr) return { ok: false, reason: upsertErr.message };
     // 成功上传后清掉对应 outbox
     await _outboxRemove(key);
-    // 同步本地与云端时间戳，标记该 key 本地已是最新（避免 _pullAll 误判云端旧而反复上传）
+    // 同步本地与云端时间戳（以服务器时间为准），标记该 key 本地已是最新
     _setRemoteTs(key, updatedAt);
     _setLocalTs(key, updatedAt);
     return { ok: true, updatedAt };
@@ -326,8 +338,9 @@
     if (!c) return;
     const items = await _outboxGetAll();
     for (const item of items) {
+      // 补传同样不传 updated_at → 服务器 now()，避免 outbox 里的旧客户端时间戳污染 LWW
       const { error } = await c.from('user_data')
-        .upsert({ user_id: session.user.id, key: item.key, value: item.value, updated_at: item.updatedAt },
+        .upsert({ user_id: session.user.id, key: item.key, value: item.value },
           { onConflict: 'user_id,key' });
       if (!error) await _outboxRemove(item.key);
     }

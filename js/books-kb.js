@@ -442,7 +442,12 @@ function bkBuildChapter(chapterId, detailLevel) {
     alert('请先在「设置 → AI」中配置 API Key，再构建知识库');
     return;
   }
+  // 已有构建进行中 → 入队排队，并给出明确反馈（不再"没反应"）
+  const queued = !!(typeof bkKbBuilding !== 'undefined' && bkKbBuilding);
   bkKbEnqueue({ bookId: book.id, mode: 'chapter', chapterId: ch.id, detailLevel });
+  if (queued && typeof showMiniToast === 'function') {
+    showMiniToast('已加入构建队列，将在当前任务完成后构建「' + ch.title + '」', 'info');
+  }
 }
 
 // ── 单章构建执行体（由队列调度执行） ──

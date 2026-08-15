@@ -472,6 +472,8 @@ function bkRenderToc() {
   const titleEl = document.getElementById('bkTocTitle');
   const list = document.getElementById('bkTocList');
   if (!book || !titleEl || !list) return;
+  // 保存滚动位置：重建列表前记录，重建后恢复，避免目录"往下跳一下"
+  const savedScrollTop = list.scrollTop;
   titleEl.textContent = book.title.length > 14 ? book.title.slice(0, 14) + '…' : book.title;
 
   // 目录工具栏：普通模式（隐藏/展开/折叠 + 批量入队）⇄ 多选模式（全选/加入队列/取消）
@@ -502,6 +504,7 @@ function bkRenderToc() {
         <p>本书尚未切分章节<br>点击上方「构建知识库」开始</p>
       </div>`;
     if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+    list.scrollTop = savedScrollTop;
     return;
   }
 
@@ -558,6 +561,7 @@ function bkRenderToc() {
     }).join('');
   }
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+  list.scrollTop = savedScrollTop;
 }
 
 // ═══════════ 目录批量选择（勾选多章加入构建队列） ═══════════
@@ -578,11 +582,23 @@ function bkToggleKbMultiSel() {
 }
 
 // 切换单个章节的选中状态
+// 只做局部更新（checkbox + 工具栏计数），不重建整表——
+// 重建整表会丢失目录滚动位置，导致点击章节后列表"往下跳一下"。
 function bkKbSelToggle(cid) {
   const key = String(cid);
   if (_bkKbSelectedIds.has(key)) _bkKbSelectedIds.delete(key);
   else _bkKbSelectedIds.add(key);
-  bkRenderToc();
+  const chk = document.querySelector('#bkTocList .bk-chapter-check[data-cid="' + key + '"]');
+  if (chk) chk.classList.toggle('checked', _bkKbSelectedIds.has(key));
+  _bkKbUpdateSelCount();
+}
+// 更新工具栏「加入队列 (N)」计数
+function _bkKbUpdateSelCount() {
+  const addBtn = document.querySelector('#bkTocToolbar .bk-toc-sel-add');
+  if (!addBtn) return;
+  const size = _bkKbSelectedIds.size;
+  addBtn.innerHTML = '<i data-lucide="list-plus" class="lucide-icon" style="width:12px;height:12px;"></i>加入队列' + (size ? ' (' + size + ')' : '');
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
 }
 
 // 全选：本书所有章节条目（含实体树非叶节点，与「构建全书」口径一致）

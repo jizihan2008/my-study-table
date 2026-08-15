@@ -32,6 +32,7 @@
     if (n.type === 'note' && !n._reviewHistory) n._reviewHistory = [];
     if (n.type === 'note' && n._skipReview === undefined) n._skipReview = false;
     if (n.type === 'note' && !Array.isArray(n.tags)) n.tags = [];
+    if (n.type === 'note' && !Array.isArray(n._annotations)) n._annotations = [];
   }
 })();
 
@@ -195,8 +196,7 @@ function onNotesChange() {
   if (notesDebounceId) clearTimeout(notesDebounceId);
   notesDebounceId = setTimeout(() => {
     note._summaryFresh = false;
-    // Editing a note resets its review cycle (it'll be due again after 1 day)
-    resetReviewOnEdit(note);
+    // 编辑笔记不再重置复习周期（改为右键菜单手动「重置复习周期」）
     saveData('study_notes_v2', notes);
     document.getElementById('notesStatus').textContent = '已保存';
     note._dirtyContent = false;
@@ -375,9 +375,6 @@ function renderNoteList() {
           <span class="ns-note-title">${escapeHtml(item.title||'')||'未命名笔记'}</span>
           ${tagsHtml}
           ${reviewBadge}
-          <button class="ns-note-float-btn" title="浮窗查看（可拖拽/缩放）" onclick="event.stopPropagation();openNoteFloat(${item.id})">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-          </button>
         </div>
         ${summaryHtml}
       </li>`;
@@ -713,6 +710,13 @@ function showNotesContextMenu(x,y,folderId,noteId){
     const icon=document.getElementById('ctxToggleReview')?.querySelector('[data-lucide]');
     if(txt)txt.textContent=note&&note._skipReview?'恢复复习':'跳过复习';
     if(icon)icon.setAttribute('data-lucide',note&&note._skipReview?'eye':'eye-off');
+    // 「完成复习」仅对今天到期/逾期的笔记显示（跳过复习或尚未到期的笔记不显示）
+    const mkEl=document.getElementById('ctxMarkReviewed');
+    if(mkEl){
+      const isDue=!!(note && note.type==='note' && !note._skipReview && note.content && note.content.trim()
+        && toLocalDateStr(calcNextReviewDate(note)) <= getTodayStr());
+      mkEl.style.display=isDue?'':'none';
+    }
   }
   document.querySelectorAll('.ns-folder-header').forEach(h=>h.classList.remove('context-active'));
   if(folderId){const el=document.querySelector(`[data-item-id="${folderId}"] .ns-folder-header`);if(el)el.classList.add('context-active');}
@@ -728,6 +732,420 @@ function contextNewNote(){
   const menu=document.getElementById('notesContextMenu');
   const folderId=menu?(parseInt(menu.dataset.folderId)||null):null;
   closeNotesContextMenu();createNewNote(folderId);
+}
+// ═══════════ 笔记选区 → AI 解释（右键新开对话标签页）═══════════
+// 在笔记预览/编辑区选中一段文字后右键，弹出「AI 解释」菜单；
+// 点击后切换到 AI 页、新建一个对话标签页并把选中文字作为提问发送。
+// 提问会附带：笔记标题、笔记 id、选中内容的上下文片段（前后各若干字符）。
+// 在预览 DOM 中把选区映射到纯文本区间（按 DOM 文本节点顺序拼接全文）
+function getNotePreviewSelRange() {
+  const pv = document.getElementById('notesPreview');
+  if (!pv) return null;
+  const sel = window.getSelection();
+  if (!sel || sel.rangeCount === 0) return null;
+  const nodes = [];
+  const walker = document.createTreeWalker(pv, NodeFilter.SHOW_TEXT);
+  let total = 0;
+  while (walker.nextNode()) {
+    const n = walker.currentNode;
+    nodes.push({ node: n, start: total, len: n.textContent.length });
+    total += n.textContent.length;
+  }
+  if (nodes.length === 0) return null;
+  const locate = (node, offset) => {
+    if (!node) return 0;
+    if (node.nodeType === Node.TEXT_NODE) {
+      for (const it of nodes) if (it.node === node) return it.start + Math.min(offset, it.len);
+      return 0;
+    }
+    for (const it of nodes) if (it.node.parentNode === node) return it.start + Math.min(offset, it.len);
+    return 0;
+  };
+  const a = locate(sel.anchorNode, sel.anchorOffset);
+  const b = locate(sel.focusNode, sel.focusOffset);
+  return { start: Math.min(a, b), end: Math.max(a, b), fullText: nodes.map(n => n.textContent).join('') };
+}
+// 提取选中内容在完整文本中的上下文（前后各 N 字符，边缘加省略号）
+function buildNoteCtx(fullText, selStart, selEnd, N) {
+  const n = N || 120;
+  const s = Math.max(0, selStart - n);
+  const e = Math.min(fullText.length, selEnd + n);
+  return {
+    prefix: (s > 0 ? '…' : '') + fullText.slice(s, selStart),
+    suffix: fullText.slice(selEnd, e) + (e < fullText.length ? '…' : '')
+  };
+}
+function bindNoteSelectionAiMenu() {
+  const pv = document.getElementById('notesPreview');
+  if (pv) {
+    pv.addEventListener('contextmenu', function (e) {
+      closeNoteAnnFloat();   // 防止残留的批注浮层遮挡右键目标
+      const r = getNotePreviewSelRange();
+      const sel = window.getSelection();
+      // 兜底：TreeWalker 定位失败时直接用选区文本
+      const fallbackText = sel && !sel.isCollapsed ? sel.toString().trim() : '';
+      const rawSel = r ? r.fullText.substring(r.start, r.end) : '';
+      const text = rawSel.trim() || fallbackText;
+      if (!text) return;   // 无选中文字 → 走浏览器默认行为
+      e.preventDefault();
+      let selStart = -1, selEnd = -1, fullText = '';
+      if (r) {
+        selStart = r.start + (rawSel.length - rawSel.trimStart().length);
+        selEnd = r.start + rawSel.trimEnd().length;
+        fullText = r.fullText;
+      }
+      // 批注锚点基于源文本（textarea.value）。预览渲染文本 ≠ 源文本（markdown 语法被渲染），
+      // 用「内容匹配」反查源文本位置；找不到则禁用添加批注（AI 解释仍可用）。
+      let srcStart = -1, srcEnd = -1;
+      const note = getActiveNote();
+      if (note) {
+        const S = note.content || '';
+        const found = S.indexOf(text);
+        if (found >= 0) { srcStart = found; srcEnd = found + text.length; }
+      }
+      showNoteAiExplainMenu(e.clientX, e.clientY, text, buildNoteCtx(fullText, selStart, selEnd), srcStart, srcEnd);
+    });
+  }
+  const ta = document.getElementById('notesTextarea');
+  if (ta) {
+    ta.addEventListener('contextmenu', function (e) {
+      closeNoteAnnFloat();
+      const rawSel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
+      if (!rawSel.trim()) return;
+      e.preventDefault();
+      const selStart = ta.selectionStart + (rawSel.length - rawSel.trimStart().length);
+      const selEnd = ta.selectionStart + rawSel.trimEnd().length;
+      showNoteAiExplainMenu(e.clientX, e.clientY, rawSel.trim(), buildNoteCtx(ta.value, selStart, selEnd), selStart, selEnd);
+    });
+  }
+}
+function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd) {
+  let menu = document.getElementById('noteAiExplainMenu');
+  if (!menu) {
+    menu = document.createElement('div');
+    menu.id = 'noteAiExplainMenu';
+    menu.className = 'context-menu visible';
+    menu.innerHTML = '<div class="context-menu-item" onclick="aiExplainSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>🤖 AI 解释选中文字</div>'
+      + '<div class="context-menu-sep"></div>'
+      + '<div class="context-menu-item" id="noteAiExplainAddAnn" onclick="addAnnFromSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>💬 添加批注</div>';
+    document.body.appendChild(menu);
+    document.addEventListener('click', function (e) {
+      if (!e.target.closest('#noteAiExplainMenu')) closeNoteAiExplainMenu();
+    });
+  }
+  menu.style.left = x + 'px';
+  menu.style.top = y + 'px';
+  menu.dataset.text = text;
+  menu.dataset.ctx = ctx ? JSON.stringify(ctx) : '';
+  menu.dataset.srcStart = (srcStart === undefined || srcStart === null) ? -1 : srcStart;
+  menu.dataset.srcEnd = (srcEnd === undefined || srcEnd === null) ? -1 : srcEnd;
+  // 无法定位源文本位置时（预览中内容跨 markdown 语法导致 indexOf 失败）隐藏批注项
+  const addAnnItem = menu.querySelector('#noteAiExplainAddAnn');
+  if (addAnnItem) addAnnItem.style.display = (menu.dataset.srcStart >= 0) ? '' : 'none';
+  menu.style.display = 'block';
+}
+// 从右键菜单「添加批注」：打开批注输入模态
+function addAnnFromSelection() {
+  const menu = document.getElementById('noteAiExplainMenu');
+  const start = menu ? parseInt(menu.dataset.srcStart || '-1', 10) : -1;
+  const end = menu ? parseInt(menu.dataset.srcEnd || '-1', 10) : -1;
+  const text = menu ? (menu.dataset.text || '') : '';
+  closeNoteAiExplainMenu();
+  if (start < 0 || end <= start || !text) return;
+  openNoteAnnModal(start, end, text, null);
+}
+function closeNoteAiExplainMenu() {
+  const menu = document.getElementById('noteAiExplainMenu');
+  if (menu) menu.style.display = 'none';
+}
+function aiExplainSelection() {
+  const menu = document.getElementById('noteAiExplainMenu');
+  const text = menu ? (menu.dataset.text || '') : '';
+  let ctx = null;
+  try { ctx = menu.dataset.ctx ? JSON.parse(menu.dataset.ctx) : null; } catch (e) { ctx = null; }
+  closeNoteAiExplainMenu();
+  if (!text) return;
+  // 附带笔记标题 + id（getActiveNote 取当前打开/选中的笔记）
+  const note = getActiveNote();
+  const title = note ? (note.title || '未命名笔记') : '';
+  const nid = note ? note.id : '';
+  let prompt = '请解释下面这段内容，它出自笔记「' + title + '」（笔记ID：' + nid + '）。\n\n';
+  if (ctx && (ctx.prefix || ctx.suffix)) {
+    prompt += '以下是选中内容及其上下文片段（⟪⟫ 内为需要解释的选中内容）：\n';
+    prompt += ctx.prefix + '⟪⟫' + text + '⟪⟫' + ctx.suffix;
+  } else {
+    prompt += text;
+  }
+  // 切到 AI 页 → 新开一个对话标签页
+  if (typeof switchTab === 'function') switchTab('ai');
+  if (typeof createNewConv === 'function') createNewConv();
+  // 新会话渲染后填入输入框并发送（sendAiMessage 从 #aiInput 读取）
+  setTimeout(function () {
+    const input = document.getElementById('aiInput');
+    if (input) {
+      input.value = prompt;
+      if (typeof autoResizeAiInput === 'function') autoResizeAiInput();
+      if (typeof sendAiMessage === 'function') sendAiMessage();
+    }
+  }, 80);
+}
+bindNoteSelectionAiMenu();   // 绑定笔记预览/编辑区的选中文字 → AI 解释右键菜单
+
+// ═══════════ 笔记批注系统 ═══════════
+// 数据：note._annotations = [{ id, start, end, text, createdAt, updatedAt }]
+//   start/end = 源文本（textarea.value）字符偏移；text = 批注文字
+// 预览高亮：ai-render.js 的 formatNoteContent 用 ⟦id⟧ 标记注入渲染后替换为 <mark class="note-ann">
+function getNoteAnnotations() {
+  const note = getActiveNote();
+  if (!note) return [];
+  if (!Array.isArray(note._annotations)) note._annotations = [];
+  return note._annotations;
+}
+function saveNoteAnnotations(note) {
+  if (!note) note = getActiveNote();
+  if (!note) return;
+  note.updatedAt = new Date().toISOString();
+  saveData('study_notes_v2', notes);
+  renderNotes();
+  renderNoteAnnBadge();
+}
+function addNoteAnnotation(start, end, text) {
+  const note = getActiveNote();
+  if (!note) return null;
+  if (!Array.isArray(note._annotations)) note._annotations = [];
+  const ann = { id: genId(), start: start, end: end, text: text, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() };
+  note._annotations.push(ann);
+  saveNoteAnnotations(note);
+  showAiToast('已添加批注 💬');
+  return ann;
+}
+function updateNoteAnnotation(id, text) {
+  const note = getActiveNote();
+  if (!note || !Array.isArray(note._annotations)) return;
+  const ann = note._annotations.find(a => a.id === id);
+  if (!ann) return;
+  ann.text = text;
+  ann.updatedAt = new Date().toISOString();
+  saveNoteAnnotations(note);
+  showAiToast('批注已更新 ✏️');
+}
+function deleteNoteAnnotation(id) {
+  const note = getActiveNote();
+  if (!note || !Array.isArray(note._annotations)) return;
+  note._annotations = note._annotations.filter(a => a.id !== id);
+  saveNoteAnnotations(note);
+  showAiToast('批注已删除 🗑️');
+}
+// 跳转定位：切到编辑模式并选中锚点区间
+function jumpToAnnotation(start, end) {
+  closeNoteAnnPanel();
+  switchNoteView('edit');
+  const ta = document.getElementById('notesTextarea');
+  if (!ta) return;
+  ta.focus();
+  const s = Math.max(0, Math.min(start, ta.value.length));
+  const e = Math.max(s, Math.min(end, ta.value.length));
+  ta.setSelectionRange(s, e);
+  try {
+    const line = ta.value.slice(0, s).split('\n').length;
+    const lh = parseFloat(getComputedStyle(ta).lineHeight) || 20;
+    ta.scrollTop = Math.max(0, (line - 4) * lh);
+  } catch (err) {}
+}
+
+// ── 批注输入模态 ──
+let _noteAnnModalState = null;   // { start, end, anchorText, editId }
+function openNoteAnnModal(start, end, anchorText, editId) {
+  _noteAnnModalState = { start: start, end: end, anchorText: anchorText, editId: editId };
+  const overlay = document.getElementById('noteAnnModal');
+  if (!overlay) return;
+  const titleEl = overlay.querySelector('.note-ann-modal-title-text');
+  const anchorEl = overlay.querySelector('.note-ann-modal-anchor');
+  const textEl = document.getElementById('noteAnnModalText');
+  if (titleEl) titleEl.textContent = editId ? '编辑批注' : '添加批注';
+  if (anchorEl) anchorEl.textContent = anchorText || '';
+  if (textEl) textEl.value = editId ? ((getNoteAnnotations().find(a => a.id === editId) || {}).text || '') : '';
+  updateNoteAnnCount();
+  overlay.classList.add('open');
+  setTimeout(function () { if (textEl) textEl.focus(); }, 60);
+}
+// 批注输入字数统计
+function updateNoteAnnCount() {
+  const textEl = document.getElementById('noteAnnModalText');
+  const countEl = document.getElementById('noteAnnCount');
+  if (!textEl || !countEl) return;
+  const n = textEl.value.length;
+  countEl.textContent = n;
+  const wrap = countEl.closest('.na-count');
+  if (wrap) wrap.classList.toggle('near-limit', n >= 1900);
+}
+document.addEventListener('input', function (e) {
+  if (e.target && e.target.id === 'noteAnnModalText') updateNoteAnnCount();
+});
+function closeNoteAnnModal() {
+  const overlay = document.getElementById('noteAnnModal');
+  if (overlay) overlay.classList.remove('open');
+  _noteAnnModalState = null;
+}
+function saveNoteAnnModal() {
+  const st = _noteAnnModalState;
+  const textEl = document.getElementById('noteAnnModalText');
+  const content = textEl ? textEl.value.trim() : '';
+  if (!st || !content) return;
+  if (st.editId) updateNoteAnnotation(st.editId, content);
+  else addNoteAnnotation(st.start, st.end, content);
+  closeNoteAnnModal();
+}
+// 模态内 Esc 关闭 / Ctrl+Enter 保存
+document.addEventListener('keydown', function (e) {
+  const overlay = document.getElementById('noteAnnModal');
+  if (!overlay || !overlay.classList.contains('open')) return;
+  if (e.key === 'Escape') { closeNoteAnnModal(); }
+  else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveNoteAnnModal(); }
+});
+
+// ── 批注浮层（点击预览高亮 mark 打开）──
+let _noteAnnFloatEscHandler = null;
+function openNoteAnnFloat(annId) {
+  const note = getActiveNote();
+  const ann = note && Array.isArray(note._annotations) ? note._annotations.find(a => a.id === annId) : null;
+  if (!note || !ann) return;
+  const old = document.getElementById('noteAnnFloat');
+  if (old) old.remove();
+  const anchorText = (note.content || '').substring(ann.start, ann.end) || '（位置已失效）';
+  const float = document.createElement('div');
+  float.id = 'noteAnnFloat';
+  float.className = 'note-ann-float';
+  float.innerHTML = `
+    <div class="naf-head">
+      <span class="naf-title">💬 批注</span>
+      <button class="naf-close" title="关闭 (Esc)" onclick="closeNoteAnnFloat()">✕</button>
+    </div>
+    <div class="naf-anchor">${escapeHtml(anchorText)}</div>
+    <div class="naf-text">${escapeHtml(ann.text)}</div>
+    <div class="naf-meta">${fmtNoteFloatTime(ann.updatedAt)}</div>
+    <div class="naf-actions">
+      <button onclick="editNoteAnnFromFloat('${ann.id}')">✏️ 编辑</button>
+      <button onclick="jumpToAnnotation(${ann.start}, ${ann.end})">📍 定位</button>
+      <button class="danger" onclick="deleteNoteAnnFromFloat('${ann.id}')">🗑️ 删除</button>
+    </div>`;
+  document.body.appendChild(float);
+  if (_noteAnnFloatEscHandler) document.removeEventListener('keydown', _noteAnnFloatEscHandler);
+  _noteAnnFloatEscHandler = function (e) { if (e.key === 'Escape') closeNoteAnnFloat(); };
+  document.addEventListener('keydown', _noteAnnFloatEscHandler);
+}
+function closeNoteAnnFloat() {
+  const f = document.getElementById('noteAnnFloat');
+  if (f) f.remove();
+  if (_noteAnnFloatEscHandler) { document.removeEventListener('keydown', _noteAnnFloatEscHandler); _noteAnnFloatEscHandler = null; }
+}
+function editNoteAnnFromFloat(annId) {
+  const note = getActiveNote();
+  const ann = note && Array.isArray(note._annotations) ? note._annotations.find(a => a.id === annId) : null;
+  if (!ann) return;
+  const anchorText = (note.content || '').substring(ann.start, ann.end) || '';
+  closeNoteAnnFloat();
+  openNoteAnnModal(ann.start, ann.end, anchorText, annId);
+}
+function deleteNoteAnnFromFloat(annId) {
+  showCustomConfirm('确定删除这条批注？').then(function (ok) {
+    if (!ok) return;
+    closeNoteAnnFloat();
+    deleteNoteAnnotation(annId);
+  });
+}
+// 预览区点击高亮 → 打开批注浮层（事件委托，mark 随渲染更新）
+// 关键：仅当没有非折叠选区时才弹浮层。否则用户"选中文字（拖选/双击）后右键"时，
+// mouseup 落在 mark 上会立刻弹出浮层，遮挡预览区导致后续 contextmenu 目标变成浮层，
+// 右键菜单（AI 解释/添加批注）失效。
+document.addEventListener('click', function (e) {
+  const mark = e.target.closest ? e.target.closest('mark.note-ann') : null;
+  if (!mark) return;
+  const sel = window.getSelection();
+  if (sel && !sel.isCollapsed) return;   // 正在选中文字 → 不弹浮层，交给右键菜单
+  e.stopPropagation();
+  openNoteAnnFloat(mark.dataset.id);
+});
+
+// ── 批注列表浮窗 ──
+// 与笔记浮窗 openNoteFloat 相同的 .bk-node-float note-float 机制：
+// 毛玻璃、可拖拽、8 向调整大小、关闭按钮；点击其它地方不会关闭（仅按钮/✕/Esc 关闭）。
+let _noteAnnPanelEscHandler = null;
+function toggleNoteAnnPanel() {
+  const panel = document.getElementById('noteAnnPanel');
+  if (panel) { closeNoteAnnPanel(); return; }
+  openNoteAnnPanel();
+}
+function openNoteAnnPanel() {
+  const old = document.getElementById('noteAnnPanel');
+  if (old) old.remove();
+  const panel = document.createElement('div');
+  panel.id = 'noteAnnPanel';
+  // 注意：不能共用 .note-ann-float（单条批注浮层带 transform 定位），会导致拖动跳变
+  panel.className = 'bk-node-float note-float note-ann-list-float';
+  panel.innerHTML = `
+    <div class="bnf-rs bnf-rs-n" data-dir="n"></div><div class="bnf-rs bnf-rs-s" data-dir="s"></div>
+    <div class="bnf-rs bnf-rs-e" data-dir="e"></div><div class="bnf-rs bnf-rs-w" data-dir="w"></div>
+    <div class="bnf-rs bnf-rs-ne" data-dir="ne"></div><div class="bnf-rs bnf-rs-nw" data-dir="nw"></div>
+    <div class="bnf-rs bnf-rs-se" data-dir="se"></div><div class="bnf-rs bnf-rs-sw" data-dir="sw"></div>
+    <div class="bnf-header">
+      <span class="bnf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg></span>
+      <span class="bnf-title" id="noteAnnPanelTitle">批注列表</span>
+      <button class="bnf-close" title="关闭 (Esc)" onclick="closeNoteAnnPanel()">✕</button>
+    </div>
+    <div class="bnf-body note-ann-list" id="noteAnnPanelBody"></div>`;
+  document.body.appendChild(panel);
+  renderNoteAnnPanel();
+  // 复用笔记浮窗的拖拽 / 8 向缩放
+  if (typeof makeBkNodeFloatDraggable === 'function') { try { makeBkNodeFloatDraggable(panel); } catch (e) {} }
+  if (typeof makeBkNodeFloatResizable === 'function') { try { makeBkNodeFloatResizable(panel); } catch (e) {} }
+  // Esc 关闭（单例监听，防重复注册）
+  if (_noteAnnPanelEscHandler) document.removeEventListener('keydown', _noteAnnPanelEscHandler);
+  _noteAnnPanelEscHandler = function (e) { if (e.key === 'Escape') closeNoteAnnPanel(); };
+  document.addEventListener('keydown', _noteAnnPanelEscHandler);
+}
+function renderNoteAnnPanel() {
+  const panel = document.getElementById('noteAnnPanel');
+  if (!panel) return;
+  const titleEl = document.getElementById('noteAnnPanelTitle');
+  const body = document.getElementById('noteAnnPanelBody');
+  if (!body) return;
+  const note = getActiveNote();
+  const anns = note && Array.isArray(note._annotations)
+    ? note._annotations.slice().sort((a, b) => a.start - b.start) : [];
+  if (titleEl) titleEl.textContent = '批注列表（' + anns.length + '）';
+  if (anns.length === 0) {
+    body.innerHTML = '<div class="nap-empty">暂无批注。<br>在编辑或预览中选中文字，右键 → 「添加批注」。</div>';
+    return;
+  }
+  body.innerHTML = anns.map(function (a) {
+    const anchor = (note.content || '').substring(a.start, a.end) || '（位置已失效）';
+    return '<div class="nap-item" onclick="jumpToAnnotation(' + a.start + ', ' + a.end + ')">'
+      + '<div class="nap-anchor">' + escapeHtml(anchor) + '</div>'
+      + '<div class="nap-text">' + escapeHtml(a.text) + '</div>'
+      + '<div class="nap-meta">' + fmtNoteFloatTime(a.updatedAt) + '</div>'
+      + '</div>';
+  }).join('');
+}
+function closeNoteAnnPanel() {
+  const panel = document.getElementById('noteAnnPanel');
+  if (panel) panel.remove();
+  if (_noteAnnPanelEscHandler) {
+    document.removeEventListener('keydown', _noteAnnPanelEscHandler);
+    _noteAnnPanelEscHandler = null;
+  }
+}
+// 编辑器 header「批注」按钮徽章（桌面 + 手机版两处）
+function renderNoteAnnBadge() {
+  const note = getActiveNote();
+  const cnt = note && Array.isArray(note._annotations) ? note._annotations.length : 0;
+  const label = cnt > 0 ? ' ' + cnt : '';
+  const el = document.getElementById('notesAnnCount');
+  if (el) el.textContent = label;
+  const elM = document.getElementById('notesAnnCountMobile');
+  if (elM) elM.textContent = label;
+  const btn = document.getElementById('notesAnnBtn');
+  if (btn) btn.classList.toggle('has-ann', cnt > 0);
 }
 function contextNewFolder(){
   const menu=document.getElementById('notesContextMenu');
@@ -757,6 +1175,35 @@ function contextToggleSkipReview(){
   closeNotesContextMenu();
   renderNoteList();
   if(typeof renderReviewCard==='function')renderReviewCard();
+}
+function contextMarkReviewed(){
+  const menu=document.getElementById('notesContextMenu');
+  const id=menu?parseInt(menu.dataset.noteId):null;
+  closeNotesContextMenu();
+  if(!id)return;
+  markNoteReviewed(id);   // 复用复习卡片「复习完成」逻辑：push 复习记录 + 更新 updatedAt + 保存
+}
+// 右键「浮窗查看」：打开笔记浮窗（原列表项上的浮窗按钮移到这里）
+function contextOpenNoteFloat(){
+  const menu=document.getElementById('notesContextMenu');
+  const id=menu?parseInt(menu.dataset.noteId):null;
+  closeNotesContextMenu();
+  if(!id)return;
+  openNoteFloat(id);
+}
+// 右键「重置复习周期」：手动重置复习周期（原编辑自动重置改为手动触发）
+function contextResetReview(){
+  const menu=document.getElementById('notesContextMenu');
+  const id=menu?parseInt(menu.dataset.noteId):null;
+  closeNotesContextMenu();
+  if(!id)return;
+  const note=findNoteItem(id);
+  if(!note)return;
+  resetReviewOnEdit(note);
+  saveData('study_notes_v2',notes);
+  renderNoteList();
+  if(typeof renderReviewCard==='function')renderReviewCard();
+  showAiToast('已重置复习周期');
 }
 function contextArchiveNote(){
   const menu=document.getElementById('notesContextMenu');
@@ -842,6 +1289,7 @@ function renderNotes(){
   renderNotesTagInput();
   applyTagFilterBar();
   notesApplyMobileView();
+  renderNoteAnnBadge();
 }
 
 // ═══════════ Notes: Markdown Formatting ═══════════
@@ -1347,34 +1795,25 @@ function openNoteFloat(id) {
   const title = note.title || '未命名笔记';
   const content = (note.content || '').trim();
   const bodyHtml = content
-    ? formatNoteContent(note.content)
+    ? formatNoteContent(note.content, note)
     : '<div style="color:var(--text-secondary);opacity:.8;padding:8px 0;">（空白笔记）</div>';
-  const wordCount = content.length;
-  const tagsLine = (note.tags && note.tags.length > 0)
-    ? note.tags.map(t => `<span class="ns-tag" style="pointer-events:none;">${escapeHtml(t)}</span>`).join(' ')
-    : '';
-  const due = calcNextReviewDate(note);
-  const dueBadge = (!note._skipReview && content && toLocalDateStr(due) <= getTodayStr())
-    ? '<span class="ns-review-badge due" style="pointer-events:none;">待复习</span>' : '';
-  const createdTxt = fmtNoteFloatTime(note.createdAt);
-  const updatedTxt = fmtNoteFloatTime(note.updatedAt);
 
   const float = document.createElement('div');
   float.id = 'noteFloat';
   float.className = 'bk-node-float note-float';
   float.innerHTML = `
-    <div class="bnf-rs bnf-rs-n"></div><div class="bnf-rs bnf-rs-s"></div>
-    <div class="bnf-rs bnf-rs-e"></div><div class="bnf-rs bnf-rs-w"></div>
-    <div class="bnf-rs bnf-rs-ne"></div><div class="bnf-rs bnf-rs-nw"></div>
-    <div class="bnf-rs bnf-rs-se"></div><div class="bnf-rs bnf-rs-sw"></div>
+    <div class="bnf-rs bnf-rs-n" data-dir="n"></div><div class="bnf-rs bnf-rs-s" data-dir="s"></div>
+    <div class="bnf-rs bnf-rs-e" data-dir="e"></div><div class="bnf-rs bnf-rs-w" data-dir="w"></div>
+    <div class="bnf-rs bnf-rs-ne" data-dir="ne"></div><div class="bnf-rs bnf-rs-nw" data-dir="nw"></div>
+    <div class="bnf-rs bnf-rs-se" data-dir="se"></div><div class="bnf-rs bnf-rs-sw" data-dir="sw"></div>
     <div class="bnf-header">
       <span class="bnf-icon"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:15px;height:15px;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/><line x1="16" y1="13" x2="8" y2="13"/><line x1="16" y1="17" x2="8" y2="17"/><polyline points="10 9 9 9 8 9"/></svg></span>
       <span class="bnf-title">${escapeHtml(title)}</span>
       <button class="bnf-close" title="关闭 (Esc)" onclick="closeNoteFloat()">✕</button>
     </div>
     <div class="bnf-body note-float-body">
-      <div class="notes-editor-preview" style="padding:0;">${bodyHtml}</div>
-      <div class="note-float-meta">${tagsLine}${dueBadge}<span class="nf-meta-item">📝 ${wordCount} 字</span><span class="nf-meta-item">🕐 创建 ${createdTxt}</span><span class="nf-meta-item">✏️ 更新 ${updatedTxt}</span></div>
+      <!-- 必须带 active 类：.notes-editor-preview 默认 display:none，缺 active 会导致正文不显示 -->
+      <div class="notes-editor-preview active" style="padding:0;">${bodyHtml}</div>
     </div>`;
   document.body.appendChild(float);
 
