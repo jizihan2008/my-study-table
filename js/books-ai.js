@@ -97,6 +97,46 @@ function bkExplainQuick(text) {
   bkSendExplain();
 }
 
+// 章节讲解 AI 公共提问函数：学习 tab 与讲解 tab 共用。
+// 提示词（知识库摘要 + 章节原文片段）、上下文（最近 rounds 轮对话）、日志（study_bk_explain_logs_v1
+// 同一 chapterId）与 bkSendExplain 完全一致，保证两边对话历史互通。
+// 返回回答文本（string）；未配置 Key / 章节不合法 / 问题为空返回 null（不写日志）。
+async function bkAskTutorCore(chapter, question) {
+  const cfg = _bkRequireKey();
+  if (!cfg) return null;
+  if (!chapter) return null;
+  const q = String(question || '').trim();
+  if (!q) return null;
+
+  // 写用户消息日志（与讲解 tab 同一份历史）
+  _bkExplainLogAppend(chapter.id, 'user', q);
+
+  // 拼装：知识库 + 章节原文片段 + 当前章节最近 rounds 轮对话上下文
+  const kb = chapter.kb || {};
+  const chapterText = await bkGetChapterText(chapter);
+  const snippet = bkSnippet(chapterText, 6000);
+
+  // 历史日志末尾一条是刚写入的当前问题，去掉；取最近 rounds*2 条（=rounds 轮 user/assistant 交替）
+  // rounds 可在 设置 → 更多设置 调整（默认 6，0 表示不带历史）
+  const rounds = _bkExplainCtxRounds();
+  const logs = _bkExplainLogLoad(chapter.id) || [];
+  const ctxHistory = rounds > 0
+    ? logs.slice(0, -1).slice(-rounds * 2)
+        .map(m => ({ role: (m.role === 'assistant' ? 'assistant' : 'user'), content: String(m.content || '') }))
+    : [];
+
+  const messages = [
+    { role: 'system', content: _bkTutorSystem(kb) + '\n\n【本章原文片段】\n' + snippet },
+    ...ctxHistory,
+    { role: 'user', content: q }
+  ];
+
+  const res = await callAiApi(messages, cfg, null);
+  const answer = (res && res.cleanText) || '（AI 未返回内容，请重试）';
+  _bkExplainLogAppend(chapter.id, 'assistant', answer);
+  return answer;
+}
+
 // 发送讲解问题（知识库 + 章节原文片段）
 async function bkSendExplain() {
   const input = document.getElementById('bkExplainInput');
@@ -118,32 +158,11 @@ async function bkSendExplain() {
         <div class="bk-msg-bubble">${escapeHtml(q)}</div>
       </div>
     </div>`);
-  _bkExplainLogAppend(chapter.id, 'user', q);
   input.value = '';
   _bkAiBusy = true;
   _bkExplainBusy = true;
   sendBtn.disabled = true;
   sendBtn.innerHTML = '<i data-lucide="loader" class="lucide-icon bk-spinner" style="width:14px;height:14px;border-width:2px;animation:bk-spin 0.8s linear infinite;"></i> 讲解中…';
-
-  // 拼装：知识库 + 章节原文片段 + 当前章节最近 6 轮对话上下文
-  const kb = chapter.kb || {};
-  const chapterText = await bkGetChapterText(chapter);
-  const snippet = bkSnippet(chapterText, 6000);
-
-  // 历史日志末尾一条是刚写入的当前问题，去掉；取最近 rounds*2 条（=rounds 轮 user/assistant 交替）作为多轮上下文
-  // rounds 可在 设置 → 更多设置 调整（默认 6，0 表示不带历史）
-  const rounds = _bkExplainCtxRounds();
-  const logs = _bkExplainLogLoad(chapter.id) || [];
-  const ctxHistory = rounds > 0
-    ? logs.slice(0, -1).slice(-rounds * 2)
-        .map(m => ({ role: (m.role === 'assistant' ? 'assistant' : 'user'), content: String(m.content || '') }))
-    : [];
-
-  const messages = [
-    { role: 'system', content: _bkTutorSystem(kb) + '\n\n【本章原文片段】\n' + snippet },
-    ...ctxHistory,
-    { role: 'user', content: q }
-  ];
 
   // 消息始终持久化；UI 只更新当前在讲解页时可见的流（避免切页后对已销毁元素操作）
   const renderIntoCurrent = (html, scrollBottom) => {
@@ -158,9 +177,12 @@ async function bkSendExplain() {
   };
 
   try {
-    const res = await callAiApi(messages, cfg, null);
-    const answer = (res && res.cleanText) || '（AI 未返回内容，请重试）';
-    _bkExplainLogAppend(chapter.id, 'assistant', answer);
+    const answer = await bkAskTutorCore(chapter, q);
+    if (answer === null) {
+      const loadingEl = document.getElementById('bkExplainLoadingMsg');
+      if (loadingEl) loadingEl.remove();
+      return;
+    }
     // 记录最近的讲解结果，供"存为笔记"使用
     _bkLastExplain = { title: book.title + ' · ' + chapter.title, content: '**问题：' + q + '**\n\n' + answer };
     const loadingEl = document.getElementById('bkExplainLoadingMsg');

@@ -239,7 +239,64 @@ async function resolveOutlineDestPage(pdf, dest) {
 // 返回 outline 兼容的「树结构」：章节点含 items（节），节含 items（小节）。
 // 每个节点 {title, level, page, items}，与 splitChaptersAtLevel / bkCollectOutlineLevels 兼容，
 // 因此目录页解析后同样可以走「选择章节划分颗粒度」流程。
-function parseContentsFromToc(tocTexts, pageCount) {
+// 从标题开头提取章节编号（"1"、"1.1"、"2.3.4"），兼容 "Chapter 1"/"Chapter1" 前缀；无编号返回 null
+function _extractTocNum(title) {
+  const s = String(title || '').trim();
+  if (!s) return null;
+  let m = s.match(/^(\d+(?:\.\d+)*)\b/);
+  if (m) return m[1];
+  m = s.match(/^chapter\s*(\d+)/i);
+  if (m) return m[1];
+  return null;
+}
+
+// 用 outline（书签）的物理页码校准目录解析出的「印刷页码」。
+// 目录页解析得到的 page 是书页上印的页码（印刷页码），而章节 startPage 需为
+// PDF 物理页码（1 起始，从封面算起）。两者间存在恒定偏移 offset（封面/扉页/前言/目录
+// 等前置页数量）。outline 的 page 由 pdf.js getPageIndex+1 得到，是真实物理页码，可作基准。
+// 策略：按章节编号匹配 outline 与 toc 条目，计算 offset=物理-印刷，取众数，再把整棵
+//       toc 树的 page 统一加上 offset。
+function calibrateTocPagesByOutline(tocTree, outline, pageCount) {
+  if (!tocTree || !outline) return;
+  const outlinePages = new Map();
+  (function walk(items) {
+    for (const o of items || []) {
+      const num = _extractTocNum(o.title);
+      if (num && o.page > 0 && !outlinePages.has(num)) outlinePages.set(num, o.page);
+      if (o.items) walk(o.items);
+    }
+  })(outline);
+  const tocPages = new Map();
+  (function walk(items) {
+    for (const o of items || []) {
+      const num = _extractTocNum(o.title);
+      if (num && o.page > 0 && !tocPages.has(num)) tocPages.set(num, o.page);
+      if (o.items) walk(o.items);
+    }
+  })(tocTree);
+  const offsets = [];
+  for (const [num, physical] of outlinePages) {
+    const printed = tocPages.get(num);
+    if (printed != null) offsets.push(physical - printed);
+  }
+  if (!offsets.length) return;
+  const freq = new Map();
+  for (const o of offsets) freq.set(o, (freq.get(o) || 0) + 1);
+  let best = 0, bestCount = -1;
+  for (const [o, c] of freq) if (c > bestCount) { best = o; bestCount = c; }
+  if (best <= 0) return; // offset 为 0（无需校准）或负值（异常），不校准
+  (function apply(items) {
+    for (const o of items || []) {
+      if (o.page > 0) {
+        o.page += best;
+        if (pageCount && o.page > pageCount) o.page = pageCount;
+      }
+      if (o.items) apply(o.items);
+    }
+  })(tocTree);
+}
+
+function parseContentsFromToc(tocTexts, pageCount, outline) {
   // 每行可能是收集阶段编码的「\t<原始x坐标>\t文本」，也可能是旧版纯文本。
   // 原始 x 坐标来自目录原文，需先全局聚类成缩进级别，辅助推断层级。
   const rawLines = []; // { x, text }
@@ -395,6 +452,10 @@ function parseContentsFromToc(tocTexts, pageCount) {
     // 无编号且缩进不深（与章平级）的纯尾部条目已由上面处理；其他无法归属的忽略
   }
   if (!root.length) return null;
+  // 目录里的页码是「印刷页码」，需校准为 PDF 物理页码（用 outline 书签的物理页码作基准）
+  if (outline && outline.length) {
+    calibrateTocPagesByOutline(root, outline, pageCount);
+  }
   return root;
 }
 
@@ -426,7 +487,10 @@ function splitChaptersByOutline(outline, pageCount) {
   const chapters = entries.map((o, i) => {
     const startPage = o.page;
     const next = entries[i + 1];
-    const endPage = next ? next.page - 1 : pageCount;
+    // endPage = 下一章起始页（**包含共享边界页**）。
+    // 教材章节边界可能共享同一 PDF 页（上一章最后一页 = 下一章第一页，如新章从右页起），
+    // 该页同时含上一章结尾与下一章开头，两章都应包含 → endPage 用 next.page（而非 next.page-1）。
+    const endPage = next ? next.page : pageCount;
     return {
       id: genId(),
       title: o.title || ('章节 ' + (i + 1)),
@@ -436,11 +500,12 @@ function splitChaptersByOutline(outline, pageCount) {
       kb: { status: 'pending', summary: '', terms: [], keyPoints: [], mindmap: null }
     };
   });
-  // 仅当相邻章节起始页重叠（同页多个标题）时合并，正常的递增章节各自独立
+  // 仅当相邻章节起始页重叠（同页多个标题：startPage 相同或更早）时合并，
+  // 正常的递增章节（含共享边界页）各自独立。
   const merged = [];
   for (const c of chapters) {
     const prev = merged[merged.length - 1];
-    if (prev && c.startPage <= prev.endPage) {
+    if (prev && c.startPage <= prev.startPage) {
       prev.endPage = Math.max(prev.endPage, c.endPage);
       prev.title = prev.title + ' / ' + c.title;
     } else {
@@ -519,9 +584,10 @@ function splitChaptersAtLevel(outline, pageCount, targetLevel) {
       if (n.children.length) {
         end = myEnd;
       } else {
-        end = nextStart ? nextStart - 1 : (parentEnd || pageCount);
+        // endPage = 下一章起始页（**包含共享边界页**，理由见 splitChaptersByOutline）
+        end = nextStart ? nextStart : (parentEnd || pageCount);
       }
-      if (nextStart && end > nextStart - 1) end = nextStart - 1;
+      if (nextStart && end > nextStart) end = nextStart;
       if (!n.startPage && n.children.length) n.startPage = byId.get(n.children[0]).startPage;
       if (!n.startPage) n.startPage = end || 1;
       n.endPage = Math.max(n.startPage, end || n.startPage);
@@ -586,7 +652,8 @@ async function aiSplitChapters(pages, onMsg) {
         .map(c => ({ title: String(c.title || '').trim(), startPage: Math.max(1, Math.round(Number(c.startPage) || 0)) }))
         .filter(c => c.title && c.startPage > 0);
       if (valid.length > 0) {
-        // 补全每章 endPage 与 kb 字段
+        // 补全每章 endPage 与 kb 字段。
+        // endPage = 下一章起始页（包含共享边界页，理由见 splitChaptersByOutline）
         return valid.map((c, i) => {
           const next = valid[i + 1];
           return {
@@ -594,7 +661,7 @@ async function aiSplitChapters(pages, onMsg) {
             title: c.title,
             level: 0,
             startPage: c.startPage,
-            endPage: next ? next.startPage - 1 : pages.length,
+            endPage: next ? next.startPage : pages.length,
             kb: { status: 'pending', summary: '', terms: [], keyPoints: [], mindmap: null }
           };
         });

@@ -176,6 +176,7 @@
             </div>
           </div>
           <div class="notes-tag-bar" id="notesTagBar"></div>
+          <div class="notes-keywords-bar" id="notesKeywordsBar"></div>
           <div class="notes-format-toolbar" id="notesFormatToolbar">
             <button class="fmt-btn" onclick="formatText('bold')" title="粗体 (Ctrl+B)"><b>B</b></button>
             <button class="fmt-btn" onclick="formatText('italic')" title="斜体 (Ctrl+I)"><i>I</i></button>
@@ -436,6 +437,15 @@
     <div class="card" style="padding:0;overflow:hidden;border-radius:var(--radius);">
       <div id="booksApp" class="bk-layout">
         <!-- rendered by renderBooks() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 全局关键词 Section ── -->
+  <div class="section" id="section-keywords">
+    <div class="card" style="padding:0;overflow:hidden;border-radius:var(--radius);">
+      <div id="keywordsApp" class="kw-layout">
+        <!-- rendered by renderKeywords() -->
       </div>
     </div>
   </div>
@@ -1314,7 +1324,7 @@
 <script src="js/core.js?v=20260812-r10"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260814-r2"></script>
-<script src="js/notes.js?v=20260814-r15"></script>
+<script src="js/notes.js?v=20260818-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20260814-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
@@ -1347,6 +1357,8 @@
 <script src="js/books-kb.js?v=20260814-r1"></script>
 <script src="js/books-ai.js?v=20260814-r7"></script>
 <script src="js/books-annot.js?v=20260813-r4"></script>
+<script src="js/keywords.js?v=20260818-r1"></script>
+<script src="js/books-study.js?v=20260820-r1"></script>
 <script src="js/calendar.js?v=20260724-r7"></script>
 <script src="js/taskline.js?v=20260812-r27"></script>
 <script src="js/timer.js?v=20260814-r1"></script>
@@ -1557,6 +1569,13 @@ if (typeof lucide !== 'undefined') {
 
 <!-- 教材术语：悬停气泡 -->
 <div class="bk-term-tooltip" id="bkTermTooltip"></div>
+
+<!-- 教材「学习」tab：选中文字右键菜单（添加到全局关键词库 / 解释一下 / 翻译） -->
+<div class="context-menu" id="bkStudyContextMenu">
+  <div class="context-menu-item" id="bkStudyCtxAddTerm" onclick="bkStudyAskAddTerm()"><i data-lucide="bookmark-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到术语表</div>
+  <div class="context-menu-item" id="bkStudyCtxExplain" onclick="bkStudyAskExplain()"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 解释一下</div>
+  <div class="context-menu-item" id="bkStudyCtxTranslate" onclick="bkStudyAskTranslate()"><i data-lucide="languages" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 翻译</div>
+</div>
 
 </body>
 </html>

@@ -1,5 +1,5 @@
 // ═══════════ Notes: Data (unified with folders, like todos) ═══════════
-// v=20260724-r11: align header buttons, summary text label, context menu entries
+// v=20260818-r1: add note keywords (keywords[]), AI extract + manual add/remove
 // notes array now stores BOTH notes and folders.
 // Each item: { id, type: 'note'|'folder', parentId, title, ... }
 // Folders use `title` as folder name (same field).
@@ -32,6 +32,7 @@
     if (n.type === 'note' && !n._reviewHistory) n._reviewHistory = [];
     if (n.type === 'note' && n._skipReview === undefined) n._skipReview = false;
     if (n.type === 'note' && !Array.isArray(n.tags)) n.tags = [];
+    if (n.type === 'note' && !Array.isArray(n.keywords)) n.keywords = [];
     if (n.type === 'note' && !Array.isArray(n._annotations)) n._annotations = [];
   }
 })();
@@ -49,7 +50,7 @@ function findNoteItem(id) { return notes.find(n => n.id === id); }
 function getNoteItemChildren(parentId) { return notes.filter(n => n.parentId === parentId); }
 
 function createNewNote(parentId) {
-  const newNote = { id: genId(), type: 'note', title: '', content: '', summary: '', _summaryFresh: false, parentId: parentId || null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), _reviewHistory: [], _skipReview: false, tags: [] };
+  const newNote = { id: genId(), type: 'note', title: '', content: '', summary: '', _summaryFresh: false, parentId: parentId || null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), _reviewHistory: [], _skipReview: false, tags: [], keywords: [] };
   notes.push(newNote);
   activeNoteId = newNote.id;
   localStorage.setItem('study_active_note', activeNoteId);
@@ -153,6 +154,7 @@ function selectNote(id) {
   if (notesIsMobile()) notesMobileView = 'main';   // 移动端选中笔记 → 进入正文页
   renderNotes();
   renderNotesTagInput();
+  renderNotesKeywordsInput();
   applyTagFilterBar();
 }
 
@@ -1287,6 +1289,7 @@ function renderNotes(){
   updateLastEditedDisplay(note);
   renderNoteSummary();
   renderNotesTagInput();
+  renderNotesKeywordsInput();
   applyTagFilterBar();
   notesApplyMobileView();
   renderNoteAnnBadge();
@@ -1496,6 +1499,140 @@ function removeNoteTag(index) {
   saveData('study_notes_v2', notes);
   renderNotesTagInput();
   renderNoteList();
+}
+
+// ═══════════ Notes: Keyword Management ═══════════
+function renderNotesKeywordsInput() {
+  const bar = document.getElementById('notesKeywordsBar');
+  if (!bar) return;
+  const note = getActiveNote();
+  if (!note) { bar.innerHTML = ''; return; }
+  const kws = note.keywords || [];
+  const kwChips = kws.map((w, i) =>
+    `<span class="nk-chip">${escapeHtml(w)}<span class="nk-chip-remove" onclick="removeNoteKeyword(${i})" title="删除关键词">✕</span></span>`
+  ).join('');
+  const aiBtn = `<button class="nk-ai-btn" id="nkAiBtn" onclick="aiExtractNoteKeywords()" title="AI 从笔记内容自动提取关键词"><i data-lucide="sparkles" class="lucide-icon" style="width:12px;height:12px;"></i> AI 提取</button>`;
+  bar.innerHTML = kwChips
+    + `<input type="text" class="nk-input" id="nkKeywordInput" placeholder="${kws.length ? '+' : '添加关键词'}" onkeydown="handleKeywordInputKey(event)" onblur="commitKeywordInput()">`
+    + aiBtn;
+  if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+}
+
+function handleKeywordInputKey(e) {
+  if (e.key === 'Enter') { e.preventDefault(); commitKeywordInput(); }
+  else if (e.key === ',') { e.preventDefault(); commitKeywordInput(); }
+}
+
+function commitKeywordInput() {
+  const input = document.getElementById('nkKeywordInput');
+  if (!input) return;
+  const val = input.value.trim();
+  input.value = '';
+  if (!val) return;
+  const note = getActiveNote();
+  if (!note) return;
+  if (!Array.isArray(note.keywords)) note.keywords = [];
+  const newKws = val.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+  for (const w of newKws) {
+    if (!note.keywords.includes(w)) note.keywords.push(w);
+  }
+  note.updatedAt = new Date().toISOString();
+  saveData('study_notes_v2', notes);
+  renderNotesKeywordsInput();
+  renderNoteList();
+}
+
+function removeNoteKeyword(index) {
+  const note = getActiveNote();
+  if (!note || !Array.isArray(note.keywords)) return;
+  note.keywords.splice(index, 1);
+  note.updatedAt = new Date().toISOString();
+  saveData('study_notes_v2', notes);
+  renderNotesKeywordsInput();
+  renderNoteList();
+}
+
+// AI 提取关键词：复用摘要 AI Key 配置，返回 string[] 并与已有关键词合并去重
+async function aiExtractNoteKeywords() {
+  const note = getActiveNote();
+  if (!note) return;
+  const content = (note.content || '').trim();
+  if (!content) {
+    if (typeof showMiniToast === 'function') showMiniToast('笔记内容为空，无法提取关键词', 'error');
+    return;
+  }
+  const aiKey = getSummaryAiKey();
+  if (!aiKey) {
+    if (typeof showMiniToast === 'function') showMiniToast('未配置摘要 AI Key，请先到「设置 → 摘要 AI」配置', 'error');
+    return;
+  }
+  const btn = document.getElementById('nkAiBtn');
+  const btnHtml = btn ? btn.innerHTML : '';
+  if (btn) { btn.disabled = true; btn.innerHTML = '⏳ 提取中…'; }
+  const baseUrl = (aiKey.baseUrl || 'https://api.openai.com/v1').replace(/\/+$/, '');
+  const truncContent = content.slice(0, 6000);
+  try {
+    const resp = await fetch(baseUrl + '/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + aiKey.key },
+      body: JSON.stringify({
+        model: aiKey.model || 'gpt-3.5-turbo',
+        messages: [
+          { role: 'system', content: '你是一个关键词提取助手。根据笔记内容提取 3~8 个最核心的关键词（中文或英文短语，单个词 2~6 字为宜）。只输出一个 JSON 字符串数组，例如 ["关键词1","关键词2"]。不要输出任何解释或多余字符。' },
+          { role: 'user', content: '笔记标题：' + (note.title || '未命名') + '\n\n笔记内容：\n' + truncContent }
+        ],
+        temperature: 0.2,
+        max_tokens: 200
+      })
+    });
+    if (resp.ok) {
+      const data = await resp.json();
+      const raw = (data.choices?.[0]?.message?.content || '').trim();
+      const arr = parseKeywordList(raw);
+      if (!Array.isArray(arr) || arr.length === 0) {
+        if (typeof showMiniToast === 'function') showMiniToast('AI 未返回有效关键词，请重试', 'error');
+        return;
+      }
+      if (!Array.isArray(note.keywords)) note.keywords = [];
+      let added = 0;
+      for (const w of arr) {
+        if (!note.keywords.includes(w)) { note.keywords.push(w); added++; }
+      }
+      if (added === 0) {
+        if (typeof showMiniToast === 'function') showMiniToast('AI 提取完成，但均为已有关键词（共 ' + note.keywords.length + ' 个）');
+        renderNotesKeywordsInput();
+        return;
+      }
+      note.updatedAt = new Date().toISOString();
+      saveData('study_notes_v2', notes);
+      renderNotesKeywordsInput();
+      renderNoteList();
+      if (typeof showMiniToast === 'function') showMiniToast('已提取 ' + arr.length + ' 个关键词，新增 ' + added + ' 个 ✨');
+    } else {
+      if (typeof showMiniToast === 'function') showMiniToast('AI 提取失败（HTTP ' + resp.status + '）', 'error');
+    }
+  } catch (e) {
+    if (typeof showMiniToast === 'function') showMiniToast('AI 提取失败：' + ((e && e.message) || String(e)), 'error');
+  } finally {
+    if (btn) { btn.disabled = false; btn.innerHTML = btnHtml; }
+  }
+}
+
+// 解析 AI 返回的关键词：优先整体 JSON 数组，失败则提取内容中的数组片段
+function parseKeywordList(raw) {
+  if (!raw) return [];
+  try {
+    const v = JSON.parse(raw);
+    if (Array.isArray(v)) return v.map(s => String(s).trim()).filter(Boolean);
+  } catch (e) { /* fallthrough */ }
+  const m = raw.match(/\[[\s\S]*?\]/);
+  if (m) {
+    try {
+      const v = JSON.parse(m[0]);
+      if (Array.isArray(v)) return v.map(s => String(s).trim()).filter(Boolean);
+    } catch (e2) { /* fallthrough */ }
+  }
+  return [];
 }
 
 // ═══════════ Notes: helpers for other modules ═══════════

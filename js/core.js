@@ -194,6 +194,7 @@ function switchTab(tab) {
   if (tab === 'taskline' && typeof renderTaskLine === 'function') renderTaskLine();
   if (tab === 'notes') renderNotes();
   if (tab === 'books') { if (typeof renderBooks === 'function') renderBooks(); }
+  if (tab === 'keywords') { if (typeof renderKeywords === 'function') renderKeywords(); }
   if (tab === 'ai') renderAiChat();
   if (tab === 'today') renderToday();
   if (tab === 'calendar') renderCalendar();
@@ -366,6 +367,7 @@ const ALL_NAV_ITEMS = [
   { id: 'taskline',  icon: 'swords',        label: '任务线' },
   { id: 'notes',     icon: 'file-text',     label: '笔记' },
   { id: 'books',     icon: 'library',       label: '教材' },
+  { id: 'keywords',  icon: 'key-round',     label: '关键词' },
   { id: 'today',     icon: 'calendar-check',label: '今天' },
   { id: 'calendar',  icon: 'calendar',      label: '日历' },
   { id: 'timer',     icon: 'timer',         label: '计时器' },

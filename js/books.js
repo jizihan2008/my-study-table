@@ -30,7 +30,7 @@ try {
 let bkActiveTab = 'explain'; // explain | qa | quiz | summary
 try {
   const savedTab = localStorage.getItem('study_bk_active_tab') || '';
-  if (['explain', 'qa', 'quiz', 'summary', 'wrongbook', 'annotations'].includes(savedTab)) bkActiveTab = savedTab;
+  if (['explain', 'qa', 'quiz', 'summary', 'wrongbook', 'annotations', 'study'].includes(savedTab)) bkActiveTab = savedTab;
 } catch (e) {}
 let bkTextCache = null;      // 当前书籍的正文缓存 { bookId, pages, chapterTexts }
 
@@ -222,6 +222,12 @@ function renderBooks() {
     </div>
     <div class="bk-main">
       ${mobileMainNav}
+      <div class="bk-main-collapsebar" id="bkMainCollapseBar" title="展开顶部信息">
+        <button class="bk-main-expand-btn" onclick="bkToggleHead(false)" title="展开书名与标签页">
+          <i data-lucide="panel-top-open" class="lucide-icon" style="width:15px;height:15px;"></i>
+          <span>展开</span>
+        </button>
+      </div>
       <div class="bk-main-head" id="bkMainHead"></div>
       <div class="bk-main-tabs" id="bkMainTabs"></div>
       <div class="bk-main-body" id="bkMainBody"></div>
@@ -911,6 +917,10 @@ function bkBookmarkJump(bookId, chapterId) {
 }
 
 // ═══════════ 右栏：头部 + tab + 内容 ═══════════
+// 顶部信息（书名/章节名/标签页）折叠状态，localStorage 记忆
+let bkHeadCollapsed = false;
+try { bkHeadCollapsed = localStorage.getItem('study_bk_head_collapsed') === '1'; } catch (e) {}
+
 function bkRenderMain() {
   const book = bkGetActiveBook();
   const chapter = bkGetActiveChapter();
@@ -924,7 +934,8 @@ function bkRenderMain() {
     <div class="bk-chapter-nav">
       <button class="bk-chapter-nav-btn" onclick="bkNavChapter(-1)" title="上一章"><i data-lucide="chevron-left" class="lucide-icon" style="width:14px;height:14px;"></i></button>
       <button class="bk-chapter-nav-btn" onclick="bkNavChapter(1)" title="下一章"><i data-lucide="chevron-right" class="lucide-icon" style="width:14px;height:14px;"></i></button>
-    </div>`;
+    </div>
+    <button class="bk-main-collapse-btn" onclick="bkToggleHead(true)" title="收起顶部信息"><i data-lucide="panel-top-close" class="lucide-icon" style="width:15px;height:15px;"></i></button>`;
 
   const tabDefs = [
     { id: 'explain', icon: 'graduation-cap', label: '章节讲解' },
@@ -932,7 +943,8 @@ function bkRenderMain() {
     { id: 'quiz',    icon: 'list-checks',     label: '测验练习' },
     { id: 'summary', icon: 'network',         label: '摘要导图' },
     { id: 'wrongbook', icon: 'book-x',        label: '错题本' },
-    { id: 'annotations', icon: 'message-square', label: '批注' }
+    { id: 'annotations', icon: 'message-square', label: '批注' },
+    { id: 'study', icon: 'book-open-check', label: '学习' }
   ];
   tabs.innerHTML = tabDefs.map(t =>
     `<button class="bk-tab-btn ${bkActiveTab === t.id ? 'active' : ''}" onclick="bkSwitchTab('${t.id}')">
@@ -941,6 +953,26 @@ function bkRenderMain() {
   ).join('');
 
   bkRenderTabBody();
+  bkApplyHeadCollapse();
+  if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
+}
+
+// 折叠 / 展开顶部信息（书名、章节名、标签页）
+function bkToggleHead(collapsed) {
+  bkHeadCollapsed = !!collapsed;
+  try { localStorage.setItem('study_bk_head_collapsed', bkHeadCollapsed ? '1' : '0'); } catch (e) {}
+  bkApplyHeadCollapse();
+}
+
+// 应用折叠状态：折叠时隐藏 head+tabs 并显示右上角「展开」条
+function bkApplyHeadCollapse() {
+  const head = document.getElementById('bkMainHead');
+  const tabs = document.getElementById('bkMainTabs');
+  const bar = document.getElementById('bkMainCollapseBar');
+  if (!head || !tabs || !bar) return;
+  head.style.display = bkHeadCollapsed ? 'none' : '';
+  tabs.style.display = bkHeadCollapsed ? 'none' : '';
+  bar.style.display = bkHeadCollapsed ? 'flex' : 'none';
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);
 }
 
@@ -986,7 +1018,8 @@ function bkRenderTabBody() {
     quiz: 'bkRenderQuizTab',
     summary: 'bkRenderSummaryTab',
     wrongbook: 'bkRenderWrongbookTab',
-    annotations: 'bkRenderAnnotationsTab'
+    annotations: 'bkRenderAnnotationsTab',
+    study: 'bkRenderStudyTab'
   };
   const fn = fnMap[bkActiveTab];
   if (fn && typeof window[fn] === 'function') {
@@ -1378,7 +1411,7 @@ async function bkImportBook() {
     // ① 原书目录页解析（最完整、干净，含子章节结构；同样支持用户选择颗粒度）
     if (typeof parseContentsFromToc === 'function' && parsed.tocTexts && parsed.tocTexts.length) {
       try {
-        const tocChapters = parseContentsFromToc(parsed.tocTexts, parsed.pageCount);
+        const tocChapters = parseContentsFromToc(parsed.tocTexts, parsed.pageCount, parsed.outline);
         if (tocChapters && tocChapters.length) {
           if (typeof bkAskChapterGranularity === 'function' && typeof splitChaptersAtLevel === 'function') {
             const info = bkCollectOutlineLevels(tocChapters);
@@ -1501,7 +1534,7 @@ async function bkReimportBook(id) {
     // ① 原书目录页解析（与 bkImportBook 一致）
     if (typeof parseContentsFromToc === 'function' && parsed.tocTexts && parsed.tocTexts.length) {
       try {
-        const tocChapters = parseContentsFromToc(parsed.tocTexts, parsed.pageCount);
+        const tocChapters = parseContentsFromToc(parsed.tocTexts, parsed.pageCount, parsed.outline);
         if (tocChapters && tocChapters.length) {
           if (typeof bkAskChapterGranularity === 'function' && typeof splitChaptersAtLevel === 'function') {
             const info = bkCollectOutlineLevels(tocChapters);
