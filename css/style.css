@@ -3287,19 +3287,23 @@ backdrop-filter: blur(var(--glass-blur, 16px)) saturate(140%);
 -webkit-backdrop-filter: blur(var(--glass-blur, 16px)) saturate(140%);
 }
 /* 全屏侧边栏在 glass 下用半透明玻璃背景（非 glass 时保持 card 色） */
-[data-glass="true"] .bk-study:fullscreen .bk-study-ai {
-background: rgba(255,255,255,0.45);
-border-left: 1px solid rgba(128,128,128,0.15);
+[data-glass="true"] .bk-study:fullscreen .bk-study-ai,
+[data-glass="true"] .bk-study.fake-fullscreen .bk-study-ai {
+  background: rgba(255,255,255,0.45);
+  border-left: 1px solid rgba(128,128,128,0.15);
 }
-[data-glass="true"][data-theme="dark"] .bk-study:fullscreen .bk-study-ai {
-background: rgba(15,23,42,0.55);
-border-left: 1px solid rgba(128,128,128,0.2);
+[data-glass="true"][data-theme="dark"] .bk-study:fullscreen .bk-study-ai,
+[data-glass="true"][data-theme="dark"] .bk-study.fake-fullscreen .bk-study-ai {
+  background: rgba(15,23,42,0.55);
+  border-left: 1px solid rgba(128,128,128,0.2);
 }
-[data-glass="true"] .bk-study:fullscreen .bk-study-ai-trigger {
-background: rgba(255,255,255,0.35);
+[data-glass="true"] .bk-study:fullscreen .bk-study-ai-trigger,
+[data-glass="true"] .bk-study.fake-fullscreen .bk-study-ai-trigger {
+  background: rgba(255,255,255,0.35);
 }
-[data-glass="true"][data-theme="dark"] .bk-study:fullscreen .bk-study-ai-trigger {
-background: rgba(15,23,42,0.45);
+[data-glass="true"][data-theme="dark"] .bk-study:fullscreen .bk-study-ai-trigger,
+[data-glass="true"][data-theme="dark"] .bk-study.fake-fullscreen .bk-study-ai-trigger {
+  background: rgba(15,23,42,0.45);
 }
 /* 侧边栏内的输入框在 glass 下半透明 */
 [data-glass="true"] .bk-study-ai .bk-qa-input {
@@ -9493,19 +9497,37 @@ i[data-lucide] {
 }
 .bk-study-nav-btn:disabled { opacity: 0.35; cursor: default; }
 
-/* 全屏：整个学习面板全屏显示 */
-.bk-study:fullscreen {
+/* 全屏：整个学习面板全屏显示（原生 Fullscreen API + iOS 类全屏共用） */
+.bk-study:fullscreen,
+.bk-study.fake-fullscreen {
   width: 100vw; height: 100vh;
   background: var(--app-bg, var(--bg));
   padding: 14px 20px;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
-.bk-study:fullscreen .bk-study-stage {
+/* iOS 类全屏：html 固定铺满，隐藏左侧界面栏/头部导航 */
+html.mst-fake-fullscreen,
+html.mst-fake-fullscreen body {
+  position: fixed; inset: 0; width: 100%; height: 100%; overflow: hidden;
+}
+html.mst-fake-fullscreen .sidebar,
+html.mst-fake-fullscreen .sidebar-hover-trigger,
+html.mst-fake-fullscreen .mobile-drawer-overlay,
+html.mst-fake-fullscreen .mobile-tabbar,
+html.mst-fake-fullscreen .header {
+  display: none !important;
+}
+html.mst-fake-fullscreen .app {
+  max-width: none !important; padding: 0 !important; margin: 0 !important;
+}
+.bk-study:fullscreen .bk-study-stage,
+.bk-study.fake-fullscreen .bk-study-stage {
   flex: 1; min-height: 0;
 }
 /* 全屏时 AI 板块改为右侧侧边栏（hover 自动隐藏/显示，仿左侧界面栏） */
-.bk-study:fullscreen .bk-study-ai {
+.bk-study:fullscreen .bk-study-ai,
+.bk-study.fake-fullscreen .bk-study-ai {
   position: fixed; top: 0; right: 0; bottom: 0; z-index: 2000;
   width: 320px; max-width: 40vw;
   margin: 0; padding: 12px 14px;
@@ -9515,17 +9537,20 @@ i[data-lucide] {
   transform: translateX(105%);
   transition: transform 0.28s ease;
 }
-.bk-study:fullscreen .bk-study-ai.open {
+.bk-study:fullscreen .bk-study-ai.open,
+.bk-study.fake-fullscreen .bk-study-ai.open {
   transform: translateX(0);
 }
-.bk-study:fullscreen .bk-study-ai-flow {
+.bk-study:fullscreen .bk-study-ai-flow,
+.bk-study.fake-fullscreen .bk-study-ai-flow {
   flex: 1; max-height: none;
 }
 /* 全屏时右侧 hover 触发条（竖条，仿界面栏 hover 触发器） */
 .bk-study-ai-trigger {
   display: none;
 }
-.bk-study:fullscreen .bk-study-ai-trigger {
+.bk-study:fullscreen .bk-study-ai-trigger,
+.bk-study.fake-fullscreen .bk-study-ai-trigger {
   display: flex; align-items: center; justify-content: center;
   position: fixed; right: 0; top: 50%; transform: translateY(-50%);
   z-index: 1999;
@@ -9537,15 +9562,17 @@ i[data-lucide] {
   box-shadow: -3px 0 10px rgba(0,0,0,0.08);
   transition: var(--transition);
 }
-.bk-study:fullscreen .bk-study-ai-trigger:hover {
+.bk-study:fullscreen .bk-study-ai-trigger:hover,
+.bk-study.fake-fullscreen .bk-study-ai-trigger:hover {
   color: var(--primary); border-color: var(--primary);
 }
 /* 侧边栏打开时隐藏触发条 */
-.bk-study:fullscreen .bk-study-ai.open ~ .bk-study-ai-trigger {
+.bk-study:fullscreen .bk-study-ai.open ~ .bk-study-ai-trigger,
+.bk-study.fake-fullscreen .bk-study-ai.open ~ .bk-study-ai-trigger {
   opacity: 0; pointer-events: none;
 }
 @media (max-width: 700px) {
-  .bk-study:fullscreen .bk-study-ai { width: 86vw; max-width: none; }
+  .bk-study:fullscreen .bk-study-ai, .bk-study.fake-fullscreen .bk-study-ai { width: 86vw; max-width: none; }
 }
 
 /* PDF 阅读区 */
@@ -9627,6 +9654,22 @@ i[data-lucide] {
   margin: 0 -18px 0; padding: 0 18px;
   display: flex; flex-direction: column;
   background: var(--card);
+  transition: opacity .25s ease, max-height .25s ease, padding .25s ease;
+}
+/* 非全屏时底部面板空闲自动隐藏（与顶部工具栏一致） */
+.bk-study-ai.hidden {
+  opacity: 0; max-height: 0; padding: 0;
+  border-top: none; pointer-events: none;
+}
+/* 全屏时侧边栏由 transform 控制，.hidden 不生效 */
+.bk-study:fullscreen .bk-study-ai.hidden {
+  opacity: 1; max-height: none; padding: 12px 14px;
+  border-top: none; pointer-events: auto;
+}
+/* iOS 类全屏同 */
+.bk-study.fake-fullscreen .bk-study-ai.hidden {
+  opacity: 1; max-height: none; padding: 12px 14px;
+  border-top: none; pointer-events: auto;
 }
 /* 侧边栏 tab 头（学习助手 / 笔记） */
 .bk-study-ai-tabs {

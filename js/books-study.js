@@ -291,6 +291,11 @@ async function bkRenderStudyTab(book, chapter) {
 
   // 顶部工具栏空闲自动隐藏：鼠标在 PDF 区移动/点击时显示，空闲 2.5s 后隐藏
   bkStudyBindPdfInteractions();
+
+  // iOS 类全屏状态保持：新 root 重新挂类（html 层类已在 documentElement 上）
+  if (_stFakeFs) {
+    body.querySelector('#bkStudyRoot')?.classList.add('fake-fullscreen');
+  }
 }
 
 // ── 阅读交互：工具栏自动隐藏 / 点击空白翻页 / 键盘翻页 ──
@@ -313,20 +318,36 @@ function bkStudyScheduleCloseAiPanel() {
   }, _ST_AI_HOVER_DELAY);
 }
 
-// 显示工具栏并重置空闲计时（每次进入学习 tab 或交互时调用）
+// 是否非全屏（原生全屏 + iOS 类全屏都算全屏）
+function _stIsFullscreen() {
+  return _stFakeFs || !!document.fullscreenElement;
+}
+// 显示顶部工具栏 + 底部 AI 面板（非全屏时），并重置空闲计时
 function bkStudyShowTop() {
   const t = document.getElementById('bkStudyTop');
   if (t) t.classList.remove('hidden');
+  // 非全屏时底部面板一起显示（全屏时底部是侧边栏，由 hover 控制）
+  if (!_stIsFullscreen()) {
+    const ai = document.getElementById('bkStudyAiPanel');
+    if (ai) ai.classList.remove('hidden');
+  }
   clearTimeout(_stTopTimer);
   _stTopTimer = setTimeout(() => {
     const el = document.getElementById('bkStudyTop');
     if (el && document.activeElement && document.activeElement.id !== 'bkStudyPdfInput') {
       el.classList.add('hidden');
+      // 非全屏时底部面板一起隐藏（全屏时不动，避免影响 hover 侧边栏）
+      if (!_stIsFullscreen()) {
+        const ai = document.getElementById('bkStudyAiPanel');
+        if (ai && document.activeElement && document.activeElement.id !== 'bkStudyAiInput') {
+          ai.classList.add('hidden');
+        }
+      }
     }
   }, 2500);
 }
 
-// 切换工具栏显示/隐藏（点击 PDF 中间区域）
+// 切换工具栏显示/隐藏（点击 PDF 中间区域；非全屏时顶部+底部一起切换）
 function bkStudyToggleTop() {
   const t = document.getElementById('bkStudyTop');
   if (!t) return;
@@ -336,13 +357,34 @@ function bkStudyToggleTop() {
     // 手动隐藏：立即隐藏并取消空闲计时
     clearTimeout(_stTopTimer);
     t.classList.add('hidden');
+    // 非全屏时底部面板一起隐藏
+    if (!_stIsFullscreen()) {
+      const ai = document.getElementById('bkStudyAiPanel');
+      if (ai) ai.classList.add('hidden');
+    }
   }
 }
 
+// iOS（Safari/部分 WebView）不支持 requestFullscreen，用「类全屏」模拟
+function bkIsIOS() {
+  const ua = navigator.userAgent;
+  return /iPad|iPhone|iPod/.test(ua)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS 13+
+}
+let _stFakeFs = false; // 类全屏状态（iOS）
+
 // 全屏切换：全屏整个学习面板（工具栏 + PDF 阅读区 + AI 板块）
+// iOS 无 Fullscreen API → 用 .fake-fullscreen 类模拟（position:fixed 铺满视口）
 function bkStudyToggleFullscreen() {
   const root = document.getElementById('bkStudyRoot');
   if (!root) return;
+  if (bkIsIOS()) {
+    _stFakeFs = !_stFakeFs;
+    document.documentElement.classList.toggle('mst-fake-fullscreen', _stFakeFs);
+    root.classList.toggle('fake-fullscreen', _stFakeFs);
+    bkStudyOnFullscreenChange();
+    return;
+  }
   if (document.fullscreenElement) {
     document.exitFullscreen().catch(() => {});
   } else {
@@ -350,6 +392,12 @@ function bkStudyToggleFullscreen() {
       root.requestFullscreen().catch(() => {});
     } else if (root.webkitRequestFullscreen) {
       root.webkitRequestFullscreen();
+    } else {
+      // 兜底：同样走类全屏
+      _stFakeFs = true;
+      document.documentElement.classList.add('mst-fake-fullscreen');
+      root.classList.add('fake-fullscreen');
+      bkStudyOnFullscreenChange();
     }
   }
 }
@@ -357,7 +405,7 @@ function bkStudyToggleFullscreen() {
 function bkStudyOnFullscreenChange() {
   const btn = document.getElementById('bkStudyFullscreenBtn');
   if (!btn) return;
-  const isFs = !!document.fullscreenElement;
+  const isFs = _stFakeFs || !!document.fullscreenElement;
   btn.innerHTML = `<i data-lucide="${isFs ? 'minimize' : 'maximize'}" class="lucide-icon" style="width:15px;height:15px;"></i>`;
   btn.title = isFs ? '退出全屏' : '全屏';
   if (typeof lucide !== 'undefined') setTimeout(() => lucide.createIcons(), 0);

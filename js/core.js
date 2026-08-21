@@ -143,6 +143,52 @@ function initSidebarHover() {
   trigger.addEventListener('mouseleave', () => {
     if (!sidebarOpen) { /* nothing to close */ }
   });
+
+  // 触屏：从屏幕左缘向右滑动打开侧边栏（iPad/触屏平板呼出难问题的解决方案）
+  initSidebarEdgeSwipe();
+}
+
+// ═══════════ 触屏左缘右滑 → 打开侧边栏 ═══════════
+// 从屏幕最左缘（40px 内）开始向右滑（水平位移 > 70px 且水平明显大于垂直）即打开。
+// 兼容两种布局：>800px 用 openSidebar，≤800px 用 openMobileDrawer。
+let _edgeSwipe = null; // { startX, startY }
+function initSidebarEdgeSwipe() {
+  const canTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!canTouch) return;
+
+  const edgeZone = 40;   // 左缘触发区宽度
+  const minDist = 70;    // 最小水平滑动距离
+  const slope = 1.6;     // 水平/垂直比值阈值（防竖滑误触）
+
+  document.addEventListener('touchstart', (e) => {
+    // 侧边栏已开、类全屏（iOS PDF 全屏）、或触点在输入类元素上时不监听
+    if (sidebarOpen || document.body.classList.contains('mobile-drawer-open')
+        || document.documentElement.classList.contains('mst-fake-fullscreen')) { _edgeSwipe = null; return; }
+    const t = e.touches && e.touches[0];
+    if (!t) return;
+    if (t.clientX <= edgeZone) {
+      _edgeSwipe = { startX: t.clientX, startY: t.clientY, fired: false };
+    } else {
+      _edgeSwipe = null;
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!_edgeSwipe || _edgeSwipe.fired) return;
+    const t = e.touches && e.touches[0];
+    if (!t) return;
+    const dx = t.clientX - _edgeSwipe.startX;
+    const dy = Math.abs(t.clientY - _edgeSwipe.startY);
+    // 左滑（dx<0）忽略；水平位移达标且明显大于垂直位移 → 判定为呼出手势
+    if (dx >= minDist && dx > dy * slope) {
+      _edgeSwipe.fired = true;
+      if (window.innerWidth <= 800) openMobileDrawer();
+      else openSidebar();
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => { _edgeSwipe = null; });
+  document.addEventListener('touchcancel', () => { _edgeSwipe = null; });
 }
 
 // ═══════════ Dark Mode ═══════════
