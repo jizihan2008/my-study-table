@@ -9498,18 +9498,29 @@ i[data-lucide] {
 .bk-study-nav-btn:disabled { opacity: 0.35; cursor: default; }
 
 /* 全屏：整个学习面板全屏显示（原生 Fullscreen API + iOS 类全屏共用） */
-.bk-study:fullscreen,
-.bk-study.fake-fullscreen {
+.bk-study:fullscreen {
   width: 100vw; height: 100vh;
   background: var(--app-bg, var(--bg));
   padding: 14px 20px;
   display: flex; flex-direction: column;
   overflow: hidden;
 }
-/* iOS 类全屏：html 固定铺满，隐藏左侧界面栏/头部导航 */
-html.mst-fake-fullscreen,
+/* iOS 类全屏：依赖父级布局铺满（书架/目录已隐藏、.bk-main 占满视口、.bk-main-body padding:0）。
+   不用 position:fixed（避免父容器 transform 改变 containing block 导致错位/超屏），
+   用 flex:1 在 .bk-main-body（flex column）内撑满整个视口。 */
+.bk-study.fake-fullscreen {
+  flex: 1; min-height: 0; min-width: 0;
+  background: var(--app-bg, var(--bg));
+  padding: 14px 20px;
+  display: flex; flex-direction: column;
+  overflow: hidden;
+}
+/* iOS 类全屏：锁定滚动并隐藏左侧界面栏/头部导航（不 fixed body，避免双 fixed 视口错乱） */
+html.mst-fake-fullscreen {
+  overflow: hidden; height: 100%;
+}
 html.mst-fake-fullscreen body {
-  position: fixed; inset: 0; width: 100%; height: 100%; overflow: hidden;
+  overflow: hidden; height: 100%;
 }
 html.mst-fake-fullscreen .sidebar,
 html.mst-fake-fullscreen .sidebar-hover-trigger,
@@ -9520,6 +9531,21 @@ html.mst-fake-fullscreen .header {
 }
 html.mst-fake-fullscreen .app {
   max-width: none !important; padding: 0 !important; margin: 0 !important;
+}
+/* 教材模块：类全屏时隐藏书架/目录，只留主区，并让主区铺满整屏 */
+html.mst-fake-fullscreen #booksApp .bk-shelf,
+html.mst-fake-fullscreen #booksApp .bk-toc {
+  display: none !important;
+}
+html.mst-fake-fullscreen #booksApp .bk-layout {
+  height: 100dvh !important; min-height: 0 !important;
+}
+html.mst-fake-fullscreen #booksApp .bk-main {
+  flex: 1 1 100% !important; max-width: none !important;
+  border-right: none !important;
+}
+html.mst-fake-fullscreen #booksApp .bk-main-body {
+  padding: 0 !important;
 }
 .bk-study:fullscreen .bk-study-stage,
 .bk-study.fake-fullscreen .bk-study-stage {

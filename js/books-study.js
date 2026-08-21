@@ -365,40 +365,49 @@ function bkStudyToggleTop() {
   }
 }
 
-// iOS（Safari/部分 WebView）不支持 requestFullscreen，用「类全屏」模拟
+// iOS（Safari/部分 WebView）不支持元素 requestFullscreen，用「类全屏」模拟。
+// 检测增强：iPadOS 13+ Safari UA 伪装成 Mac，需靠 platform + 触屏能力判断；
+// 再兜底「有触屏但没有真正 Fullscreen API」的情况。
 function bkIsIOS() {
   const ua = navigator.userAgent;
-  return /iPad|iPhone|iPod/.test(ua)
-    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS 13+
+  if (/iPad|iPhone|iPod/.test(ua)) return true;
+  if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) return true; // iPadOS 13+
+  // 触屏设备（iPad/安卓平板）但平台非 MacIntel 且无真正全屏 API → 也走类全屏
+  const hasTouch = ('ontouchstart' in window) && navigator.maxTouchPoints > 0;
+  const noRealFs = !document.documentElement.requestFullscreen
+    && !document.documentElement.webkitRequestFullscreen;
+  return hasTouch && noRealFs;
 }
-let _stFakeFs = false; // 类全屏状态（iOS）
+let _stFakeFs = false; // 类全屏状态
 
-// 全屏切换：全屏整个学习面板（工具栏 + PDF 阅读区 + AI 板块）
-// iOS 无 Fullscreen API → 用 .fake-fullscreen 类模拟（position:fixed 铺满视口）
+// 切换到类全屏 / 退出类全屏
+function _bkSetFakeFs(on) {
+  _stFakeFs = on;
+  document.documentElement.classList.toggle('mst-fake-fullscreen', on);
+  const root = document.getElementById('bkStudyRoot');
+  if (root) root.classList.toggle('fake-fullscreen', on);
+  bkStudyOnFullscreenChange();
+}
+
+// 全屏切换：优先标准 Fullscreen API，iOS/不支持时回退到类全屏（position:fixed 铺满视口）
 function bkStudyToggleFullscreen() {
   const root = document.getElementById('bkStudyRoot');
   if (!root) return;
-  if (bkIsIOS()) {
-    _stFakeFs = !_stFakeFs;
-    document.documentElement.classList.toggle('mst-fake-fullscreen', _stFakeFs);
-    root.classList.toggle('fake-fullscreen', _stFakeFs);
-    bkStudyOnFullscreenChange();
+  // 类全屏中 → 退出
+  if (_stFakeFs) { _bkSetFakeFs(false); return; }
+  // 标准全屏中 → 退出
+  if (document.fullscreenElement) {
+    document.exitFullscreen().catch(() => _bkSetFakeFs(true));
     return;
   }
-  if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => {});
+  if (bkIsIOS()) { _bkSetFakeFs(true); return; }
+  if (root.requestFullscreen) {
+    root.requestFullscreen()
+      .catch(() => _bkSetFakeFs(true)); // 标准 API 失败（如 iOS/权限）→ 类全屏
+  } else if (root.webkitRequestFullscreen) {
+    root.webkitRequestFullscreen();
   } else {
-    if (root.requestFullscreen) {
-      root.requestFullscreen().catch(() => {});
-    } else if (root.webkitRequestFullscreen) {
-      root.webkitRequestFullscreen();
-    } else {
-      // 兜底：同样走类全屏
-      _stFakeFs = true;
-      document.documentElement.classList.add('mst-fake-fullscreen');
-      root.classList.add('fake-fullscreen');
-      bkStudyOnFullscreenChange();
-    }
+    _bkSetFakeFs(true);
   }
 }
 // 全屏状态变化：更新按钮图标（maximize ⇄ minimize）
@@ -425,10 +434,6 @@ function bkStudyBindPdfInteractions() {
   _stPdfInteractBound = true;
 
   // 鼠标在 PDF 区移动 → 显示
-  document.addEventListener('mousemove', (e) => {
-    if (typeof bkActiveTab !== 'undefined' && bkActiveTab !== 'study') return;
-    if (e.target && e.target.closest && e.target.closest('#bkStudyPdfWrap')) bkStudyShowTop();
-  }, { passive: true });
   // 点击 PDF 区：中间区域 → 切换工具栏显示/隐藏；左右空白 → 翻页（同时保持工具栏状态）
   document.addEventListener('click', (e) => {
     if (typeof bkActiveTab !== 'undefined' && bkActiveTab !== 'study') return;

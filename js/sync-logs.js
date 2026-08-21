@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════
-// js/sync-logs.js — 日志类数据独立云同步通道（v0.4.1）
+// js/sync-logs.js — 日志类数据独立云同步通道（v0.4.2，新增云端 TTL 自动清理）
 // 将三类「大数据」从通用同步（sync.js → user_data）中剥离：
 //   - ai_conv     AI 对话（study_ai_convs）
 //   - bk_explain  教材章节讲解日志（study_bk_explain_logs_v1）
@@ -417,11 +417,14 @@
       _emitProgress({ phase: 'outbox', outbox: outboxCount, current: '', uploaded: 0, total: 0 });
       await _flushOutbox(session, c);
 
-      // ⑤ TTL 清理：已禁用！
-      // 原 _pruneRemote 用「本机提取集合」判断云端行是否保留，跨设备时灾难性误删——
-      // 手机本地只有 4 个会话、电脑 7 个，手机一同步就把云端"本地没有"的会话删掉。
-      // 云端 TTL 清理改由云端定时任务（后续）负责；此处不再做任何删除。
-      // await _pruneRemote(session, c, retainedBase);
+      // ⑤ TTL 清理：按云端 updated_at 时间戳跨设备安全清理。
+      // 旧 _pruneRemote 用「本机提取集合」判断云端行是否保留，跨设备会误删（手机只有 4 会话、
+      // 电脑 7 会话，手机一同步就删掉云端"本地没有"的）。现改为纯云端时间戳策略：
+      //   - 教材日志（bk_explain/bk_qa）：updated_at 超过 3 个月删除
+      //   - AI 对话（ai_conv）：只保留最近 AI_MAX_CONVS（20）个会话（按基础 item_id 分组取
+      //     最新 updated_at 排序）
+      // 不依赖本地数据，任何设备同步时都安全。
+      await _pruneRemoteTTL(session, c);
     }
 
     // ⑥ 拉取远端合并（LWW：远端新于本地才写回；不受配额限制）
@@ -562,20 +565,56 @@
     } catch (e) { /* 写回失败不影响其它 item */ }
   }
 
-  // ── TTL 清理远端（过期 item 自动删，用户关闭的保留）────
-  async function _pruneRemote(session, c, retainedBase) {
+  // ── TTL 清理远端（纯云端时间戳，跨设备安全）────────────────
+  // 策略：
+  //   - 教材日志（bk_explain / bk_qa）：updated_at 早于 BK_TTL_MS（3 个月）→ 删除
+  //   - AI 对话（ai_conv）：按基础 item_id（去 _pN 分片后缀）分组，取每组最新 updated_at，
+  //     只保留最近 AI_MAX_CONVS（20）个会话 → 删除其余（含分片行）
+  // 只依据云端 updated_at，不读取本地数据，任何设备同步时都安全、可预期。
+  async function _pruneRemoteTTL(session, c) {
     const { data, error } = await c.from('user_sync_items')
-      .select('id,kind,item_id')
+      .select('id,kind,item_id,updated_at')
       .eq('user_id', session.user.id);
-    if (error || !data) return;
+    if (error || !data || !data.length) return;
+    const now = Date.now();
     const toDelete = [];
+
+    // 教材日志：按 TTL 删除过期行
     for (const row of data) {
-      const baseId = row.item_id.replace(/_(p\d+)+$/, '');
-      if (!retainedBase.has(row.kind + '/' + baseId)) toDelete.push(row.id);
+      if (row.kind === 'bk_explain' || row.kind === 'bk_qa') {
+        const t = new Date(row.updated_at).getTime();
+        if (now - t > BK_TTL_MS) toDelete.push(row.id);
+      }
     }
+
+    // AI 对话：按会话（基础 id）分组，只保留最近 AI_MAX_CONVS 个
+    const aiRows = data.filter(r => r.kind === 'ai_conv');
+    if (aiRows.length) {
+      // 基础 id → 该会话所有行中最新 updated_at
+      const byConv = new Map();
+      for (const row of aiRows) {
+        const base = row.item_id.replace(/_(p\d+)+$/, '');
+        const t = new Date(row.updated_at).getTime();
+        const cur = byConv.get(base);
+        if (!cur || t > cur) byConv.set(base, t);
+      }
+      // 按最新活跃时间降序，保留前 AI_MAX_CONVS 个
+      const sorted = [...byConv.entries()].sort((a, b) => b[1] - a[1]);
+      const keep = new Set(sorted.slice(0, AI_MAX_CONVS).map(e => e[0]));
+      for (const row of aiRows) {
+        const base = row.item_id.replace(/_(p\d+)+$/, '');
+        if (!keep.has(base)) toDelete.push(row.id);
+      }
+    }
+
     if (!toDelete.length) return;
     try {
-      await c.from('user_sync_items').delete().in('id', toDelete);
+      // 分批次删除（in() 有长度限制），避免请求体过大
+      for (let i = 0; i < toDelete.length; i += 300) {
+        const chunk = toDelete.slice(i, i + 300);
+        await c.from('user_sync_items').delete().in('id', chunk);
+      }
+      _emitProgress({ phase: 'pruning', current: '', uploaded: 0, total: toDelete.length });
     } catch (e) { /* 清理失败可容忍，下轮再试 */ }
   }
 
@@ -749,6 +788,7 @@
     }
 
     html += `<div class="storage-actions" style="margin-top:4px;">
+      <button class="storage-btn" onclick="SyncLogs.pruneRemote()" title="按保留策略删除超期云端数据：教材日志删 3 个月前的、AI 对话只留最近 20 个会话"><i data-lucide="trash" class="lucide-icon" style="width:13px;height:13px;"></i> 按保留策略清理</button>
       <button class="storage-btn storage-btn-danger" onclick="SyncLogs.deleteAllRemote()"><i data-lucide="trash-2" class="lucide-icon" style="width:13px;height:13px;"></i> 从云端删除全部（本地保留）</button>
     </div>`;
 
@@ -821,6 +861,28 @@
     renderPanel();
   }
 
+  // 手动触发：按保留策略清理云端过期数据（教材 3 个月 / AI 最近 20 会话）
+  function pruneRemote() {
+    return _enqueue(async () => {
+      const session = await _session();
+      if (!session) return { deleted: 0 };
+      const c = _client();
+      if (!c) return { deleted: 0 };
+      const before = await _fetchUsage(session, c);
+      await _pruneRemoteTTL(session, c);
+      const after = await _fetchUsage(session, c);
+      const freedMB = ((before - after) / 1048576).toFixed(2);
+      const st = document.getElementById('storageStatus');
+      if (st) {
+        st.textContent = freedMB > 0
+          ? '已清理云端过期数据，释放约 ' + freedMB + ' MB。'
+          : '云端无过期数据可清理。';
+      }
+      renderPanel();
+      return { freedMB };
+    });
+  }
+
   // ── 同步进度通知（面板实时显示「正在同步什么 / 待同步队列」）──
   function _emitProgress(patch) {
     Object.assign(progressState, patch || {});
@@ -845,6 +907,7 @@
         return t;
       case 'outbox': t = '正在补传离线数据' + (p.outbox ? '（' + p.outbox + ' 条）' : '') + '…'; break;
       case 'pulling': t = '正在拉取云端合并…'; break;
+      case 'pruning': t = '正在清理云端过期数据…'; break;
       case 'error': return '同步出错：' + (p.lastError || '未知错误');
       case 'done':
       case 'idle':
@@ -1063,6 +1126,7 @@
     renderPanel: renderPanelSafe,
     setItemEnabled,
     deleteAllRemote,
+    pruneRemote,
     migrateLegacy,
     onStatus,
     onProgress,
