@@ -481,6 +481,68 @@ function bkStudyBindPdfInteractions() {
     aiPanel.addEventListener('mouseenter', bkStudyOpenAiPanel);
     aiPanel.addEventListener('mouseleave', bkStudyScheduleCloseAiPanel);
   }
+
+  // 触屏双指捏合缩放 PDF（iPhone/iPad）
+  bkStudyBindPinchZoom();
+}
+
+// ── 双指捏合缩放 PDF（触屏） ──
+// 在 #bkStudyPdfWrap 上监听两个触点的间距变化，按比例调整 _stPdfScale（退出 fit-width）。
+// 用 document 委托（wrap 每次渲染重建）；单指滚动/翻页不干扰；双指时阻止浏览器原生缩放。
+let _pinch = null; // { d0, scale0 }
+function bkStudyBindPinchZoom() {
+  const canTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!canTouch) return;
+  const wrapSel = '#bkStudyPdfWrap';
+  const isInWrap = (t) => t && t.closest && t.closest(wrapSel);
+
+  document.addEventListener('touchstart', (e) => {
+    if (typeof bkActiveTab !== 'undefined' && bkActiveTab !== 'study') return;
+    if (!isInWrap(e.target)) return;
+    if (e.touches.length >= 2) {
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const d = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      if (d > 0) {
+        _pinch = { d0: d, scale0: _stPdfScale };
+        // 双指捏合时禁止浏览器原生页面缩放
+        try { e.preventDefault(); } catch (err) {}
+      }
+    }
+  }, { passive: false });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!_pinch || typeof bkActiveTab === 'undefined' || bkActiveTab !== 'study') return;
+    if (!isInWrap(e.target)) return;
+    if (e.touches.length >= 2) {
+      try { e.preventDefault(); } catch (err) {} // 阻止浏览器原生缩放/手势
+      const t0 = e.touches[0], t1 = e.touches[1];
+      const d = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
+      if (d > 0 && _pinch.d0 > 0) {
+        const s = Math.min(10, Math.max(0.5, _pinch.scale0 * (d / _pinch.d0)));
+        _stPdfScale = s;
+        _stPdfFitWidth = false;
+        // 实时用 CSS transform 预览缩放（不重渲染，保证流畅）
+        const pageEl = document.querySelector('#bkStudyPdfWrap .bk-study-pdf-page');
+        if (pageEl) {
+          pageEl.style.transform = 'scale(' + s / _pinch.scale0 + ')';
+          pageEl.style.transformOrigin = 'center top';
+        }
+      }
+    }
+  }, { passive: false });
+
+  document.addEventListener('touchend', () => {
+    if (_pinch) {
+      // 手指抬起：按最终比例高清重渲染
+      _pinch = null;
+      _stPdfFitWidth = false;
+      _stRenderPage();
+    }
+  });
+  document.addEventListener('touchcancel', () => {
+    _pinch = null;
+    _stRenderPage(); // 恢复布局
+  });
 }
 
 // ── 右侧侧边栏：学习助手 / 笔记 tab 切换 ──

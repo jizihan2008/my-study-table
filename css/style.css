@@ -9532,9 +9532,10 @@ html.mst-fake-fullscreen .header {
 html.mst-fake-fullscreen .app {
   max-width: none !important; padding: 0 !important; margin: 0 !important;
 }
-/* 教材模块：类全屏时隐藏书架/目录，只留主区，并让主区铺满整屏 */
-html.mst-fake-fullscreen #booksApp .bk-shelf,
-html.mst-fake-fullscreen #booksApp .bk-toc {
+/* 教材模块：类全屏时隐藏书架/目录及其恢复把手，只留主区，并让主区铺满整屏 */
+html.mst-fake-fullscreen #booksApp #bkShelf,
+html.mst-fake-fullscreen #booksApp #bkToc,
+html.mst-fake-fullscreen #booksApp .bk-pane-restore {
   display: none !important;
 }
 html.mst-fake-fullscreen #booksApp .bk-layout {
@@ -9546,6 +9547,11 @@ html.mst-fake-fullscreen #booksApp .bk-main {
 }
 html.mst-fake-fullscreen #booksApp .bk-main-body {
   padding: 0 !important;
+}
+/* 类全屏时隐藏顶部图书信息与标签页栏（章节讲解/学习等） */
+html.mst-fake-fullscreen #booksApp .bk-main-head,
+html.mst-fake-fullscreen #booksApp .bk-main-tabs {
+  display: none !important;
 }
 .bk-study:fullscreen .bk-study-stage,
 .bk-study.fake-fullscreen .bk-study-stage {
@@ -9608,6 +9614,7 @@ html.mst-fake-fullscreen #booksApp .bk-main-body {
   padding: 6px 2px 12px;
   background: var(--hover-bg);
   border-radius: 10px;
+  touch-action: pan-x pan-y; /* 允许单指滚动平移；双指缩放由 JS preventDefault 接管 */
 }
 .bk-study-pdf-loading {
   display: flex; align-items: center; justify-content: center;
