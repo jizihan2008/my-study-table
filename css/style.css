@@ -9610,7 +9610,8 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
 /* PDF 阅读区 */
 .bk-study-stage {
   flex: 1; min-height: 0; overflow: auto;
-  display: flex; justify-content: flex-start; /* 用子元素 margin:auto 居中，保证超宽时可左右滚动 */
+  position: relative; /* 页面 absolute 定位的基准 */
+  display: flex; justify-content: flex-start;
   padding: 6px 2px 12px;
   background: var(--hover-bg);
   border-radius: 10px;
@@ -9623,8 +9624,8 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
   min-height: 200px;
 }
 .bk-study-pdf-page {
-  position: relative;
-  margin: 0 auto; /* flex 中 margin:auto 居中；页面超宽时可左右滚动不裁左 */
+  position: absolute; /* left/top 由 JS 设置（默认居中；捏合平移后保持偏移） */
+  margin: 0;
   box-shadow: 0 6px 24px rgba(0,0,0,0.14);
   border-radius: 4px; overflow: hidden;
   background: #fff;

@@ -26,6 +26,7 @@ let _stPageMax = 1;       // 章节结束页（翻页上限）
 let _stBusy = false;      // AI 板块忙碌
 let _stSelText = '';      // 右键选中的文字
 let _stPdfLoading = false;
+let _stPdfOff = { x: 0, y: 0 }; // 页面相对阅读区的平移偏移（松手后保持捏合位置；切换章节/适应宽度时重置）
 
 // ── 加载 PDF 文档 ──
 async function _stLoadPdf(book, chapter) {
@@ -86,7 +87,12 @@ async function _stRenderPage() {
   const cssH = Math.floor(viewport.height);
 
   // 构建页容器（canvas + textLayer）
-  wrap.innerHTML = `<div class="bk-study-pdf-page" style="width:${cssW}px;height:${cssH}px;">
+  // 页面 position:absolute 定位，默认居中（fit-width），捏合平移后保持偏移（_stPdfOff）
+  const baseLeft = Math.max(0, Math.round((wrap.clientWidth - cssW) / 2));
+  const baseTop = 4;
+  const offX = _stPdfFitWidth ? 0 : _stPdfOff.x;
+  const offY = _stPdfFitWidth ? 0 : _stPdfOff.y;
+  wrap.innerHTML = `<div class="bk-study-pdf-page" style="width:${cssW}px;height:${cssH}px;left:${baseLeft + offX}px;top:${baseTop + offY}px;">
     <canvas class="bk-study-pdf-canvas"></canvas>
     <div class="textLayer bk-study-pdf-text"></div>
   </div>`;
@@ -147,12 +153,12 @@ async function _stRenderPage() {
   if (zoomLabel) zoomLabel.textContent = Math.round(scale * 100) + '%';
 }
 
-// 翻页（限制在章节页范围内）
+// 翻页（限制在章节页范围内；翻页后回到居中位置）
 function bkStudyPdfPrev() {
-  if (_stPdfPage > _stPageMin) { _stPdfPage--; _stRenderPage(); }
+  if (_stPdfPage > _stPageMin) { _stPdfPage--; _stPdfOff = { x: 0, y: 0 }; _stRenderPage(); }
 }
 function bkStudyPdfNext() {
-  if (_stPdfPage < _stPageMax) { _stPdfPage++; _stRenderPage(); }
+  if (_stPdfPage < _stPageMax) { _stPdfPage++; _stPdfOff = { x: 0, y: 0 }; _stRenderPage(); }
 }
 // 跳页：输入框显示章节相对页码（1=章节起始页），内部换算为 PDF 物理页码
 function bkStudyPdfJump() {
@@ -162,6 +168,7 @@ function bkStudyPdfJump() {
   const totalRel = _stPageMax - _stPageMin + 1;
   if (!rel || rel < 1 || rel > totalRel) { input.value = _stPdfPage - _stPageMin + 1; return; }
   _stPdfPage = _stPageMin + rel - 1;
+  _stPdfOff = { x: 0, y: 0 };
   _stRenderPage();
 }
 // 缩放：delta = 1 / -1（放大/缩小）；fitWidth=true 时切回自适应
@@ -172,6 +179,7 @@ function bkStudyPdfZoom(delta) {
 }
 function bkStudyPdfFitWidth() {
   _stPdfFitWidth = true;
+  _stPdfOff = { x: 0, y: 0 };
   _stRenderPage();
 }
 function bkStudyPdfReload() {
@@ -503,7 +511,19 @@ function bkStudyBindPinchZoom() {
       const t0 = e.touches[0], t1 = e.touches[1];
       const d = Math.hypot(t1.clientX - t0.clientX, t1.clientY - t0.clientY);
       if (d > 0) {
-        _pinch = { d0: d, scale0: _stPdfScale };
+        // 记录初始指间距、初始缩放、捏合中心（相对 wrap）与页面元素初始布局位置，
+        // 缩放预览围绕捏合中心进行（手指中心下的内容保持不动）
+        const wrap = document.getElementById('bkStudyPdfWrap');
+        const pageEl = wrap ? wrap.querySelector('.bk-study-pdf-page') : null;
+        const wrapRect = wrap ? wrap.getBoundingClientRect() : null;
+        _pinch = {
+          d0: d,
+          scale0: _stPdfScale,
+          cx0: wrapRect ? ((t0.clientX + t1.clientX) / 2 - wrapRect.left) : 0,
+          cy0: wrapRect ? ((t0.clientY + t1.clientY) / 2 - wrapRect.top) : 0,
+          pageLeft0: pageEl ? pageEl.offsetLeft : 0,
+          pageTop0: pageEl ? pageEl.offsetTop : 0
+        };
         // 双指捏合时禁止浏览器原生页面缩放
         try { e.preventDefault(); } catch (err) {}
       }
@@ -521,11 +541,26 @@ function bkStudyBindPinchZoom() {
         const s = Math.min(10, Math.max(0.5, _pinch.scale0 * (d / _pinch.d0)));
         _stPdfScale = s;
         _stPdfFitWidth = false;
-        // 实时用 CSS transform 预览缩放（不重渲染，保证流畅）
-        const pageEl = document.querySelector('#bkStudyPdfWrap .bk-study-pdf-page');
-        if (pageEl) {
-          pageEl.style.transform = 'scale(' + s / _pinch.scale0 + ')';
-          pageEl.style.transformOrigin = 'center top';
+        // 实时预览：围绕捏合中心缩放 + 随中心平移，保证手指下内容不跑偏。
+        // transform = translate(tx,ty) scale(k)，transform-origin 0 0。
+        const wrap = document.getElementById('bkStudyPdfWrap');
+        const pageEl = wrap ? wrap.querySelector('.bk-study-pdf-page') : null;
+        if (wrap && pageEl) {
+          const k = s / _pinch.scale0;
+          const wrapRect = wrap.getBoundingClientRect();
+          const cx = (t0.clientX + t1.clientX) / 2 - wrapRect.left;
+          const cy = (t0.clientY + t1.clientY) / 2 - wrapRect.top;
+          // 初始捏合中心对应的页面内容点
+          const px = _pinch.cx0 - _pinch.pageLeft0;
+          const py = _pinch.cy0 - _pinch.pageTop0;
+          // 让该内容点出现在当前捏合中心
+          const tx = cx - _pinch.pageLeft0 - px * k;
+          const ty = cy - _pinch.pageTop0 - py * k;
+          pageEl.style.transformOrigin = '0 0';
+          pageEl.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + k + ')';
+          // 记录最终平移，供 touchend 换算成绝对偏移
+          _pinch.lastTx = tx;
+          _pinch.lastTy = ty;
         }
       }
     }
@@ -533,7 +568,23 @@ function bkStudyBindPinchZoom() {
 
   document.addEventListener('touchend', () => {
     if (_pinch) {
-      // 手指抬起：按最终比例高清重渲染
+      // 手指抬起：按最终比例高清重渲染，并保持捏合位置
+      const wrap = document.getElementById('bkStudyPdfWrap');
+      if (wrap && _pinch.lastTx !== undefined) {
+        const pageEl = wrap.querySelector('.bk-study-pdf-page');
+        const k = _stPdfScale / _pinch.scale0;
+        // 页面在 scale0 下的真实 CSS 尺寸（当前元素宽高是 scale 预览后的，需除以 k）
+        const cssW0 = pageEl ? parseFloat(pageEl.style.width || 0) / k : 0;
+        const cssH0 = pageEl ? parseFloat(pageEl.style.height || 0) / k : 0;
+        // 新比例下的 CSS 尺寸
+        const cssWNew = Math.round(cssW0 * k);
+        // 新居中基准
+        const baseLeftNew = Math.max(0, Math.round((wrap.clientWidth - cssWNew) / 2));
+        const baseTopNew = 4;
+        // 换算成相对新居中基准的偏移
+        _stPdfOff.x = (_pinch.pageLeft0 + _pinch.lastTx) - baseLeftNew;
+        _stPdfOff.y = (_pinch.pageTop0 + _pinch.lastTy) - baseTopNew;
+      }
       _pinch = null;
       _stPdfFitWidth = false;
       _stRenderPage();
@@ -541,6 +592,7 @@ function bkStudyBindPinchZoom() {
   });
   document.addEventListener('touchcancel', () => {
     _pinch = null;
+    _stPdfOff = { x: 0, y: 0 };
     _stRenderPage(); // 恢复布局
   });
 }
