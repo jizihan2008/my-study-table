@@ -339,12 +339,16 @@ function renderNoteList() {
              onclick="event.stopPropagation()"
              data-folder-id="${item.id}">`
         : `<span class="ns-name">📁 ${escapeHtml(item.title||'')}</span>`;
+      // 展开状态：用户点击过 → 用持久化值；未点击过 → 按深度默认（<2 展开）。
+      // 原 depth<2 硬编码会在每次重渲染（打开笔记/完成复习等）时重置开合，故持久化修复。
+      const expMap = getNotesExpandedFolders();
+      const isExpanded = expMap.has(item.id) ? expMap.get(item.id) : (depth < 2);
       return `<li class="ns-folder" draggable="true" data-item-id="${item.id}" style="padding-left:${depth*16+4}px">
         <div class="ns-folder-header" onclick="toggleNoteFolder('${expandId}')">
-          <span class="ns-toggle">${children.length>0?'▾':'▸'}</span>
+          <span class="ns-toggle">${(children.length>0&&isExpanded)?'▾':'▸'}</span>
           ${nameHtml}
         </div>
-        <ul class="ns-children" id="${expandId}" style="display:${depth<2?'block':'none'}">${children.map(c=>renderItem(c,depth+1,visited)).join('')}</ul>
+        <ul class="ns-children" id="${expandId}" style="display:${isExpanded?'block':'none'}">${children.map(c=>renderItem(c,depth+1,visited)).join('')}</ul>
       </li>`;
     } else {
       // Apply tag filter
@@ -428,11 +432,36 @@ function renderNoteList() {
   };
 }
 
+// 文件夹展开状态持久化（Map<folderId, bool>，localStorage）。
+// 未记录（用户未点击过）的文件夹在渲染时按深度默认（<2 展开）。
+let _notesExpFolders = null;
+function getNotesExpandedFolders() {
+  if (_notesExpFolders === null) {
+    try {
+      const raw = localStorage.getItem('study_notes_expanded_folders');
+      _notesExpFolders = new Map(raw ? JSON.parse(raw) : []);
+    } catch (e) { _notesExpFolders = new Map(); }
+  }
+  return _notesExpFolders;
+}
+function _saveNotesExpandedFolders() {
+  try {
+    localStorage.setItem('study_notes_expanded_folders', JSON.stringify(Array.from(_notesExpFolders.entries())));
+  } catch (e) { /* 忽略 */ }
+}
+
 function toggleNoteFolder(id) {
   const el = document.getElementById(id);
   if (!el) return;
   const isExpanded = el.style.display !== 'none';
   el.style.display = isExpanded ? 'none' : 'block';
+  // 持久化展开状态（避免重渲染（打开笔记/完成复习等）时重置开合）
+  const fid = id.indexOf('ns-exp-') === 0 ? id.slice(7) : null;
+  if (fid) {
+    const map = getNotesExpandedFolders();
+    map.set(fid, !isExpanded);
+    _saveNotesExpandedFolders();
+  }
   // Update toggle icon (▾ expanded / ▸ collapsed)
   const header = el.parentElement?.querySelector('.ns-folder-header');
   if (header) {

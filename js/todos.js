@@ -1458,13 +1458,18 @@ document.addEventListener('click', function(e) {
   if (!e.target.closest('#todoContextMenu')) closeTodoContextMenu();
 });
 
+// 统一在待办滚动容器 .card-scroll 上监听右键：它撑满卡片剩余高度，覆盖
+// 「列表项 / 列表下方空白 / 空状态」。搜索结果区（#searchResults）走下方独立监听。
 var todoTreeForMenu = document.getElementById('todoTree');
-if (todoTreeForMenu) {
-  todoTreeForMenu.addEventListener('contextmenu', function(e) {
-    // 右键命中待办项 → 弹完整菜单（含编辑/排序/归档等）；
-    // 右键空白处（列表下方的剩余空间）→ 弹通用菜单（撤销~选择待办）。
+var todoScrollForMenu = todoTreeForMenu ? todoTreeForMenu.closest('.card-scroll') : null;
+if (todoScrollForMenu) {
+  todoScrollForMenu.addEventListener('contextmenu', function(e) {
+    // 搜索结果区交给独立监听（提取 .search-result-card 的 id）
+    if (e.target.closest('#searchResults')) return;
+    // 命中待办项 → 弹完整菜单（含编辑/排序/归档等）；
+    // 右键空白处（列表下方剩余空间/空状态）→ 弹通用菜单（撤销~选择待办）。
     var id = null;
-    var li = e.target.closest('[data-id]');
+    var li = e.target.closest('#todoTree [data-id]');
     if (li) {
       var parsed = parseInt(li.dataset.id);
       if (!isNaN(parsed)) id = parsed;
