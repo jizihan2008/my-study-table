@@ -627,7 +627,10 @@ async function syncManualSync() {
   _showSyncProgress('同步', 0);   // 立即显示进度条（防抖闪烁）
   try {
     const res = await window.Sync.manualSync();
-    if (stEl) stEl.textContent = '同步完成。';
+    if (stEl) {
+      const err = (res && res.lastError) || '';
+      stEl.textContent = err ? '同步未完成：' + err : '同步完成。';
+    }
   } catch (e) {
     if (stEl) stEl.textContent = '同步出错：' + (e && e.message || e);
   } finally {

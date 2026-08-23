@@ -1259,6 +1259,9 @@ function toggleNotesSidebar() {
     if (typeof lucide !== 'undefined') lucide.createIcons();
   }
   toggle.title = notesSidebarHidden ? '显示笔记列表' : '隐藏笔记列表';
+  // 侧边栏隐藏时显示独立的"展开"浮动按钮，避免无入口可恢复
+  const reopen = document.getElementById('notesSidebarReopen');
+  if (reopen) reopen.style.display = notesSidebarHidden ? '' : 'none';
 }
 
 function renderNotes(){
@@ -1267,6 +1270,9 @@ function renderNotes(){
   const toggle = document.getElementById('notesSidebarToggle');
   if (sidebar) sidebar.classList.toggle('hidden', notesSidebarHidden);
   if (toggle) toggle.title = notesSidebarHidden ? '显示笔记列表' : '隐藏笔记列表';
+  // 隐藏时显示独立"展开"按钮（防止侧边栏折叠后无入口）
+  const reopen = document.getElementById('notesSidebarReopen');
+  if (reopen) reopen.style.display = notesSidebarHidden ? '' : 'none';
   if(notes.filter(n=>n.type==='note').length===0){createNewNote();return;}
   if(!notes.find(n=>n.id===activeNoteId&&n.type==='note')){
     const firstNote=notes.find(n=>n.type==='note');

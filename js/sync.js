@@ -110,6 +110,7 @@
   let realtimeChannel = null;
   let applyingRemote = false;                 // 防止远端写回本地触发再次上报的锁
   let _lastPushAt = 0;                        // 上次主动上传完成时间（抑制自己变更的 realtime 回显）
+  let _lastPullError = '';                    // 最近一次手动同步的失败原因（诊断用）
   let listeners = new Set();                  // 状态监听器（settings 面板刷新用）
 
   // 判断某 key 是否参与同步
@@ -451,10 +452,11 @@
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
   // force: 手动同步时置 true → 若上一次同步仍在执行，等待其完成（最多 15s）而非直接跳过
   async function _pullAll(force) {
-    if (!enabled || !_client()) return;
+    if (!enabled) { _lastPullError = '同步未开启'; return; }
+    if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return; }
     if (applyingRemote) {
       // 上一次同步仍在执行（可能因云端慢/超时阻塞）→ 自动模式跳过；手动模式等待
-      if (!force) return;
+      if (!force) { _lastPullError = '上一次同步仍在进行，本次跳过（稍后重试）'; return; }
       const waitStart = Date.now();
       while (applyingRemote && Date.now() - waitStart < 15000) {
         await new Promise(r => setTimeout(r, 300));
@@ -465,10 +467,14 @@
         console.warn('[sync] 手动同步等待超时，强制复位同步锁');
       }
     }
+    _lastPullError = '';
     const session = await getSession();
-    if (!session) return;
+    if (!session) {
+      _lastPullError = '未登录或登录状态失效（请在「好友」页面重新登录）';
+      return;
+    }
     const c = _client();
-    if (!c) return;
+    if (!c) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return; }
     applyingRemote = true;
     try {
       // 两阶段拉取，避免一次性把超大 value（如 AI 聊天记录）全部拉回导致 statement timeout：
@@ -793,7 +799,8 @@
       autoSync: !!cfg.autoSync,
       loggedIn: !!sess,
       pendingCount: dirtyKeys.size,
-      lastPull: cfg.lastPull || 0
+      lastPull: cfg.lastPull || 0,
+      lastError: _lastPullError || ''
     };
   }
 

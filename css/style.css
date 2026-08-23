@@ -728,6 +728,14 @@ body {
 
 /* ── Notes: multi-note ── */
 .notes-layout { display: flex; gap: 14px; margin-top: 12px; flex: 1; min-height: 0; }
+/* 侧边栏隐藏后的独立展开按钮（竖条，避免折叠后无入口） */
+.notes-sidebar-reopen {
+  align-self: stretch; width: 22px; flex-shrink: 0; border: none;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  border-radius: 6px; transition: var(--transition);
+}
+.notes-sidebar-reopen:hover { background: var(--hover-bg); color: var(--primary); }
 .notes-sidebar-toggle {
   height: 26px; border: none;
   background: transparent; border-radius: 4px;

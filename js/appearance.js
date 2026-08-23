@@ -131,10 +131,10 @@ function safeCssColor(v, fallback) {
   return fallback;
 }
 
-// 仅允许安全的背景图 URL（http(s)/相对路径/位图 data:image），其余返回空串
+// 仅允许安全的背景图 URL（http(s)/相对路径/位图 data:image/blob:），其余返回空串
 function safeBgImageUrl(v) {
   const s = String(v || '').trim();
-  return /^(https?:\/\/|\/|\.\.?\/|data:image\/(png|jpe?g|gif|webp);)/i.test(s) ? s : '';
+  return /^(https?:\/\/|\/|\.\.?\/|data:image\/(png|jpe?g|gif|webp);|blob:)/i.test(s) ? s : '';
 }
 
 function safeCssAngle(v) {
@@ -161,6 +161,34 @@ function isDarkTheme() {
 
 function applyCustomTheme() {
   const cfg = loadCustomTheme();
+  // iOS PWA 启动恢复：cfg 里的 bgImage/bgVideo 可能是 blob: URL（重启后失效），
+  // 从 IndexedDB 取回 Blob 重新生成 URL 并写回，再应用。
+  if (window.BgMediaIDB && (cfg.bgImage || cfg.bgVideo)) {
+    (async () => {
+      try {
+        let changed = false;
+        if (cfg.bgImage && String(cfg.bgImage).indexOf('blob:') === 0) {
+          const img = await window.BgMediaIDB.loadImageUrl();
+          if (img && img.url && img.url !== cfg.bgImage) { cfg.bgImage = img.url; changed = true; }
+        }
+        if (cfg.bgVideo && String(cfg.bgVideo).indexOf('blob:') === 0) {
+          const vid = await window.BgMediaIDB.loadVideoUrl();
+          if (vid && vid.url && vid.url !== cfg.bgVideo) { cfg.bgVideo = vid.url; changed = true; }
+        }
+        if (changed) {
+          saveCustomTheme(cfg);
+          // 重新应用视频背景
+          const eff2 = getEffectiveTheme(cfg);
+          const videoEl = document.querySelector('.app-bg-video');
+          if (eff2.bgType === 'video' && eff2.bgVideo && videoEl) {
+            videoEl.src = eff2.bgVideo;
+            videoEl.classList.add('active');
+            videoEl.play().catch(() => {});
+          }
+        }
+      } catch (e) { /* 忽略恢复失败 */ }
+    })();
+  }
   const eff = getEffectiveTheme(cfg);
 
   // Determine effective accent and background from preset or custom
@@ -918,13 +946,28 @@ function bindAppearanceEvents() {
       saveCustomTheme(cfg);
       applyCustomTheme();
     } else {
-      // Fallback for non-Electron: use hidden file input
+      // Fallback for non-Electron (iOS PWA / 浏览器): 用隐藏 file input + IndexedDB 持久化
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
       fileInput.accept = 'image/*';
-      fileInput.onchange = () => {
+      fileInput.onchange = async () => {
         const file = fileInput.files[0];
         if (!file) return;
+        // iOS: 用 IndexedDB 存 Blob（避免 localStorage base64 超限），生成可跨会话的 blob: URL
+        if (window.BgMediaIDB) {
+          try {
+            const saved = await window.BgMediaIDB.saveImage(file);
+            if (!saved || !saved.url) { alert('保存背景图片失败'); return; }
+            const urlInput = document.getElementById('bgImageUrl');
+            if (urlInput) urlInput.value = saved.url;
+            const cfg = loadCustomTheme();
+            cfg.bgImage = saved.url;
+            saveCustomTheme(cfg);
+            applyCustomTheme();
+            return;
+          } catch (e) { /* 回退到 base64 */ }
+        }
+        // 兜底：转 base64（仅适合小图）
         if (file.size > 6 * 1024 * 1024) { alert('图片较大（>6MB），可能影响性能'); }
         const reader = new FileReader();
         reader.onload = () => {
@@ -973,13 +1016,28 @@ function bindAppearanceEvents() {
         applyCustomTheme();
       }
     } else {
-      // Fallback for non-Electron: use hidden file input
+      // Fallback for non-Electron (iOS PWA / 浏览器): 用隐藏 file input + IndexedDB 持久化
       const fileInput = document.createElement('input');
       fileInput.type = 'file';
       fileInput.accept = 'video/*';
-      fileInput.onchange = () => {
+      fileInput.onchange = async () => {
         const file = fileInput.files[0];
         if (!file) return;
+        // iOS: 用 IndexedDB 存 Blob（URL.createObjectURL 重启后失效，IDB 可跨会话恢复）
+        if (window.BgMediaIDB) {
+          try {
+            const saved = await window.BgMediaIDB.saveVideo(file);
+            if (!saved || !saved.url) { alert('保存背景视频失败'); return; }
+            const urlInput = document.getElementById('bgVideoUrl');
+            if (urlInput) urlInput.value = saved.url;
+            const cfg = loadCustomTheme();
+            cfg.bgVideo = saved.url;
+            saveCustomTheme(cfg);
+            applyCustomTheme();
+            return;
+          } catch (e) { /* 回退到 session 级 objectURL */ }
+        }
+        // 兜底：objectURL（仅当前会话有效）
         const url = URL.createObjectURL(file);
         const urlInput = document.getElementById('bgVideoUrl');
         if (urlInput) urlInput.value = url;
