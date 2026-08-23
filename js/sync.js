@@ -265,7 +265,9 @@
     const payload = value ? JSON.parse(value) : null;
     // 用「服务器时间」作为云端 updated_at（不传该字段 → 数据库 default now()），
     // 避免客户端时钟偏差（手机时间慢于电脑）导致 LWW 判定「云端不新」→ 另一设备永不拉取。
-    let updatedAt = new Date().toISOString();   // select 不可用时兜底
+    // 兜底优先用既有服务器时间（remoteTs），其次才设备时钟——避免 select 失败时把
+    // 设备时钟写进 localTs 造成新的污染（污染值会被 _tsIsFuture 5s 灵敏识别并校准）。
+    let updatedAt = _getRemoteTs()[key] || new Date().toISOString();   // select 不可用时兜底
     let upsertErr = null;
     try {
       const { data, error } = await c.from('user_data')
@@ -276,7 +278,7 @@
       upsertErr = error;
       if (!error && data && data.updated_at) updatedAt = data.updated_at;
     } catch (e) {
-      // upsert 可能已成功但 select/single 抛错（如版本不支持）→ 视为成功，时间用客户端兜底
+      // upsert 可能已成功但 select/single 抛错（如版本不支持）→ 视为成功，时间用服务器兜底
       upsertErr = null;
     }
     if (upsertErr) return { ok: false, reason: upsertErr.message };
@@ -404,9 +406,12 @@
   }
   function _isLocalDirty(key) { return !!_getDirtyMap()[key]; }
   // 判断本地时间戳是否为「未来值」（旧版本用设备时钟写 localTs 的污染残留）：
-  // 若 localTs 比服务器参考时间（本次拉取到的最大 updated_at）快超过 15 分钟 → 时钟污染。
-  // 此时本地时间不可信 → 以云端为权威（拉取覆盖校准），避免「时钟快 → 永不拉取」死循环。
-  const TS_FUTURE_TOLERANCE = 15 * 60 * 1000;   // 15 分钟容忍
+  // localTs 语义 = 服务器 updated_at，理论上永远 ≤ 服务器当前时间。任何明显快于服务器
+  // 参考时间（本次拉取到的最大 updated_at）的值都是污染 → 本地时间不可信 → 以云端为权威
+  // （拉取覆盖校准），避免「iPad 时钟偏快 → 永不拉取」死循环。
+  // 容忍设 5 秒：仅覆盖服务器多实例/查询的极小抖动；原 15 分钟放过 iPad 的小时钟偏差
+  // （快几分钟）→ 残留污染 localTs 仍挡自动拉取（电脑→iPad 不更新的根因）。
+  const TS_FUTURE_TOLERANCE = 5 * 1000;   // 5 秒容忍
   function _tsIsFuture(localTs, remoteMaxTs) {
     if (!localTs || !remoteMaxTs) return false;
     return new Date(localTs).getTime() - new Date(remoteMaxTs).getTime() > TS_FUTURE_TOLERANCE;
