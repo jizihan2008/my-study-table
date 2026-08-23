@@ -123,12 +123,18 @@ function openSidebar() {
   }
 }
 
-function scheduleCloseSidebar() {
-  sidebarCloseTimer = setTimeout(() => {
+// 立即关闭侧边栏（点击外部 / 左滑手势调用，无 hover 延迟）
+function closeSidebar() {
+  if (sidebarCloseTimer) { clearTimeout(sidebarCloseTimer); sidebarCloseTimer = null; }
+  if (sidebarOpen) {
     sidebarOpen = false;
     document.getElementById('sidebar').classList.remove('open');
     localStorage.setItem('study_sidebar_open', false);
-  }, SIDEBAR_HOVER_DELAY);
+  }
+}
+
+function scheduleCloseSidebar() {
+  sidebarCloseTimer = setTimeout(closeSidebar, SIDEBAR_HOVER_DELAY);
 }
 
 function initSidebarHover() {
@@ -146,6 +152,8 @@ function initSidebarHover() {
 
   // 触屏：从屏幕左缘向右滑动打开侧边栏（iPad/触屏平板呼出难问题的解决方案）
   initSidebarEdgeSwipe();
+  // 关闭侧边栏：点击外部 + 侧边栏上左滑（可打断右滑打开）
+  initSidebarDismiss();
 }
 
 // ═══════════ 触屏左缘右滑 → 打开侧边栏 ═══════════
@@ -189,6 +197,60 @@ function initSidebarEdgeSwipe() {
 
   document.addEventListener('touchend', () => { _edgeSwipe = null; });
   document.addEventListener('touchcancel', () => { _edgeSwipe = null; });
+}
+
+// ═══════════ 关闭侧边栏：点击外部 + 左滑 ═══════════
+// ① 点击侧边栏以外区域 → 关闭（当前显示时；移动端 overlay 点击关闭已存在，此处补齐桌面布局）
+// ② 侧边栏上左滑（触发区域为整个侧边栏）→ 关闭；
+//    右滑打开动画未完成时反向左滑也能关闭（打断，起点在左缘 40px 内同样记录手势）
+let _sidebarSwipe = null; // { startX, startY, fired }
+function initSidebarDismiss() {
+  const sidebar = document.getElementById('sidebar');
+
+  // ① 点击外部关闭（两种布局通用）
+  document.addEventListener('click', (e) => {
+    if (!sidebar || !sidebar.classList.contains('open')) return;
+    if (sidebar.contains(e.target)) return;   // 点击侧边栏内部（导航项等）不关闭
+    if (window.innerWidth <= 800) closeMobileDrawer();
+    else closeSidebar();
+  });
+
+  // ② 左滑关闭（触屏）
+  const canTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!canTouch) return;
+  const minDist = 70;      // 最小水平滑动距离（与右滑打开一致）
+  const slope = 1.6;       // 水平/垂直比值阈值（防竖滑误触）
+
+  document.addEventListener('touchstart', (e) => {
+    const t = e.touches && e.touches[0];
+    if (!sidebar || !t) { _sidebarSwipe = null; return; }
+    if (document.documentElement.classList.contains('mst-fake-fullscreen')) { _sidebarSwipe = null; return; }
+    const visible = sidebar.classList.contains('open');
+    // 起点在侧边栏内 → 记录；起点在左缘 40px 内 → 也记录（支持右滑打开过程中反向左滑打断）
+    if ((visible && sidebar.contains(e.target)) || t.clientX <= 40) {
+      _sidebarSwipe = { startX: t.clientX, startY: t.clientY, fired: false };
+    } else {
+      _sidebarSwipe = null;
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', (e) => {
+    if (!_sidebarSwipe || _sidebarSwipe.fired) return;
+    if (!sidebar.classList.contains('open')) return;   // 尚未打开（右滑进行中）不处理
+    const t = e.touches && e.touches[0];
+    if (!t) return;
+    const dx = t.clientX - _sidebarSwipe.startX;
+    const dy = Math.abs(t.clientY - _sidebarSwipe.startY);
+    // 左滑（dx<0）且水平位移达标、明显大于垂直位移 → 关闭
+    if (dx <= -minDist && -dx > dy * slope) {
+      _sidebarSwipe.fired = true;
+      if (window.innerWidth <= 800) closeMobileDrawer();
+      else closeSidebar();
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchend', () => { _sidebarSwipe = null; });
+  document.addEventListener('touchcancel', () => { _sidebarSwipe = null; });
 }
 
 // ═══════════ Dark Mode ═══════════

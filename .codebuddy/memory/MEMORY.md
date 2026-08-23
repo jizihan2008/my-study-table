@@ -9,7 +9,7 @@
 - **笔记数据模型**：AI 创建的笔记必须含 `type:'note'` + `parentId`（非旧 `folderId`）。`renderItem` 限制递归深度 + `visited Set` 防循环；`resolveNoteFolderPath` 避免 self-parent。
 - **AI 记忆画像**：`memory.profileText` 是单段自由文本（AI 每日自动生成），非分段字段；旧分段数据在 `loadAiMemory()` 自动迁移合并。
 - **预设→自定义切换**：`js/settings.js` 的 `switchToCustomMode(cfg)` 是唯一切换入口，所有设置 handler 先调用它再改属性再 save，禁止内联 `cfg.preset='custom'`。
-- **液态玻璃折射**：三独立控制 `glassCurve`（SVG displacement 0~60px）/`glassDeflect`（edge zone 0~0.4）/`glassGlow`（0~1）。`updateLiquidGlass(scale, edgeRatio)` 支持 undefined 跳过单参数。仅 Chromium 支持 `backdrop-filter: url()`。
+- **液态玻璃折射**：三独立控制 `glassCurve`（SVG displacement 0~60px）/`glassDeflect`（edge zone 0~0.4）/`glassGlow`（0~1）。`updateLiquidGlass(scale, edgeRatio)` 支持 undefined 跳过单参数。**仅 Chromium 支持 `backdrop-filter: url()`**；style.css 中带 `url(#liquid-glass-filter)` 的规则会覆盖纯 blur 回退且整条失效（iOS Safari 磨砂不生效的根因），liquid-glass.js 检测 `isChromium`（`Chrome/<版本>` 且非 CriOS/EdgiOS/FxiOS），非 Chromium 注入 `lg-blur-fallback` 纯 blur !important 规则恢复磨砂（2026-08-23 修复）。
 
 ### 同步机制（sync.js 方案 B，2026-08-23 定稿）
 - **核心原则**：localTs 只写**服务器 updated_at**（与 remoteTs 同源可比），**禁止用设备时钟 `new Date()` 写 localTs**（iPad 时钟偏快 → LWW 判定本地更新 → 永不拉取，这是 2026-08 反复排查的根因）。
