@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v59';
+const VERSION = 'mst-v62';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,7 +14,7 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260823-r8',
+  './css/style.css?v=20260823-r9',
   './js/env.js?v=20260811-r1',
   './js/core.js?v=20260823-r2',
   './js/sync.js?v=20260823-r8',

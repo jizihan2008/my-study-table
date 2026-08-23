@@ -341,8 +341,10 @@ function renderNoteList() {
         : `<span class="ns-name">📁 ${escapeHtml(item.title||'')}</span>`;
       // 展开状态：用户点击过 → 用持久化值；未点击过 → 按深度默认（<2 展开）。
       // 原 depth<2 硬编码会在每次重渲染（打开笔记/完成复习等）时重置开合，故持久化修复。
+      // key 统一为数字（genId 返回数字；toggleNoteFolder 保存时已 Number() 归一化）。
       const expMap = getNotesExpandedFolders();
-      const isExpanded = expMap.has(item.id) ? expMap.get(item.id) : (depth < 2);
+      const fid = Number(item.id);
+      const isExpanded = !isNaN(fid) && expMap.has(fid) ? expMap.get(fid) : (depth < 2);
       return `<li class="ns-folder" draggable="true" data-item-id="${item.id}" style="padding-left:${depth*16+4}px">
         <div class="ns-folder-header" onclick="toggleNoteFolder('${expandId}')">
           <span class="ns-toggle">${(children.length>0&&isExpanded)?'▾':'▸'}</span>
@@ -439,7 +441,13 @@ function getNotesExpandedFolders() {
   if (_notesExpFolders === null) {
     try {
       const raw = localStorage.getItem('study_notes_expanded_folders');
-      _notesExpFolders = new Map(raw ? JSON.parse(raw) : []);
+      const arr = raw ? JSON.parse(raw) : [];
+      _notesExpFolders = new Map();
+      // 归一化 key 为数字（genId 返回数字；兼容历史版本的字符串 key 残留）
+      for (let i = 0; i < arr.length; i++) {
+        const k = Number(arr[i][0]);
+        if (!isNaN(k)) _notesExpFolders.set(k, !!arr[i][1]);
+      }
     } catch (e) { _notesExpFolders = new Map(); }
   }
   return _notesExpFolders;
@@ -455,9 +463,15 @@ function toggleNoteFolder(id) {
   if (!el) return;
   const isExpanded = el.style.display !== 'none';
   el.style.display = isExpanded ? 'none' : 'block';
-  // 持久化展开状态（避免重渲染（打开笔记/完成复习等）时重置开合）
-  const fid = id.indexOf('ns-exp-') === 0 ? id.slice(7) : null;
-  if (fid) {
+  // 持久化展开状态（避免重渲染（打开笔记/完成复习等）时重置开合）。
+  // 注意：genId() 返回数字 id，fid 必须转 Number —— 否则存的是字符串 key，
+  // 而读取时 expMap.has(item.id) 用数字 key，Map 严格比较永不命中 → 状态形同未持久化。
+  let fid = null;
+  if (id.indexOf('ns-exp-') === 0) {
+    const n = Number(id.slice(7));
+    if (!isNaN(n)) fid = n;
+  }
+  if (fid !== null) {
     const map = getNotesExpandedFolders();
     map.set(fid, !isExpanded);
     _saveNotesExpandedFolders();
@@ -856,9 +870,9 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd) {
     menu = document.createElement('div');
     menu.id = 'noteAiExplainMenu';
     menu.className = 'context-menu visible';
-    menu.innerHTML = '<div class="context-menu-item" onclick="aiExplainSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>🤖 AI 解释选中文字</div>'
+    menu.innerHTML = '<div class="context-menu-item" onclick="aiExplainSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>AI 解释选中文字</div>'
       + '<div class="context-menu-sep"></div>'
-      + '<div class="context-menu-item" id="noteAiExplainAddAnn" onclick="addAnnFromSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>💬 添加批注</div>';
+      + '<div class="context-menu-item" id="noteAiExplainAddAnn" onclick="addAnnFromSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>添加批注</div>';
     document.body.appendChild(menu);
     document.addEventListener('click', function (e) {
       if (!e.target.closest('#noteAiExplainMenu')) closeNoteAiExplainMenu();
@@ -1328,6 +1342,57 @@ function renderNotes(){
   applyTagFilterBar();
   notesApplyMobileView();
   renderNoteAnnBadge();
+}
+
+// ═══════════ Notes: 侧边栏宽度拖拽调整 ═══════════
+// 拖动 .notes-sidebar-resizer 改变笔记列表宽度，持久化到 localStorage，
+// 重渲染/重新打开应用后保持用户设置的宽度。
+function initNotesResizer() {
+  const sidebar = document.getElementById('notesSidebar');
+  const resizer = document.getElementById('notesSidebarResizer');
+  if (!sidebar || !resizer) return;
+
+  // 应用持久化宽度（默认 240 由 CSS 兜底）
+  try {
+    const saved = parseInt(localStorage.getItem('study_notes_sidebar_width'), 10);
+    if (saved && saved >= 150 && saved <= 600) sidebar.style.width = saved + 'px';
+  } catch (e) { /* 忽略 */ }
+
+  let startX = 0, startW = 0;
+  resizer.addEventListener('pointerdown', function(e) {
+    if (sidebar.classList.contains('hidden')) return;   // 侧边栏隐藏时不拖拽
+    e.preventDefault();
+    startX = e.clientX;
+    startW = sidebar.getBoundingClientRect().width;
+    resizer.classList.add('active');
+    sidebar.classList.add('dragging');   // 禁用过渡，跟手
+    document.body.style.userSelect = 'none';
+    document.body.style.cursor = 'col-resize';
+
+    function onMove(ev) {
+      const maxW = Math.min(520, Math.floor(window.innerWidth * 0.5));
+      const w = Math.max(160, Math.min(maxW, startW + (ev.clientX - startX)));
+      sidebar.style.width = w + 'px';
+    }
+    function onUp() {
+      resizer.classList.remove('active');
+      sidebar.classList.remove('dragging');
+      document.body.style.userSelect = '';
+      document.body.style.cursor = '';
+      try { localStorage.setItem('study_notes_sidebar_width', String(Math.round(sidebar.getBoundingClientRect().width))); } catch (e2) { /* 忽略 */ }
+      window.removeEventListener('pointermove', onMove);
+      window.removeEventListener('pointerup', onUp);
+      window.removeEventListener('pointercancel', onUp);
+    }
+    window.addEventListener('pointermove', onMove);
+    window.addEventListener('pointerup', onUp);
+    window.addEventListener('pointercancel', onUp);
+  });
+}
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initNotesResizer);
+} else {
+  initNotesResizer();
 }
 
 // ═══════════ Notes: Markdown Formatting ═══════════

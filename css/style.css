@@ -754,9 +754,28 @@ body {
   min-height: 0; position: relative;
 }
 .notes-sidebar.hidden {
-  width: 0; opacity: 0; overflow: hidden; pointer-events: none;
+  /* !important 覆盖拖拽写入的内联 style.width，确保隐藏时真正占 0 宽度 */
+  width: 0 !important; opacity: 0; overflow: hidden; pointer-events: none;
   border: none; padding: 0; margin: 0;
 }
+/* ── 笔记侧边栏宽度拖拽手柄 ── */
+.notes-sidebar-resizer {
+  width: 7px; flex-shrink: 0; align-self: stretch; cursor: col-resize;
+  position: relative; z-index: 5; touch-action: none;
+}
+.notes-sidebar-resizer::after {
+  content: ''; position: absolute; top: 50%; left: 50%;
+  transform: translate(-50%, -50%);
+  width: 3px; height: 44px; border-radius: 3px;
+  background: var(--border); opacity: 0;
+  transition: opacity .15s ease, background .15s ease;
+}
+.notes-sidebar-resizer:hover::after,
+.notes-sidebar-resizer.active::after { opacity: 1; background: var(--primary); }
+/* 侧边栏隐藏时手柄同步隐藏（兄弟选择器） */
+.notes-sidebar.hidden + .notes-sidebar-resizer { display: none; }
+/* 拖拽中禁用宽度过渡，保证跟手无延迟 */
+.notes-sidebar.dragging { transition: none !important; }
 .notes-sidebar-header {
   display: flex; align-items: center; justify-content: space-between;
   padding: 12px 14px; border-bottom: 1px solid var(--border);
@@ -2063,6 +2082,7 @@ body {
   .search-result-path { font-size: 10px; }
   .sidebar { width: 200px; }
   .notes-sidebar { max-height: 50vh; }
+  .notes-sidebar-resizer { display: none; }
   .modal { width: 95%; }
   .modal-changelog-entry { flex-direction: column; gap: 4px; }
   .modal-changelog-meta { flex-direction: row; gap: 8px; }
