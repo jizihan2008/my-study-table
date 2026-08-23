@@ -600,11 +600,39 @@ function deleteTodo(id) {
 function archiveTodo(id) {
   const todo = todos.find(t => t.id === id);
   if (!todo) return;
+  // 归档时连同所有子任务一起归档，避免子任务残留导致进度条统计错误
+  const descendantIds = getAllDescendantIds(id);
+  const idsToArchive = [id, ...descendantIds];
   const name = todo.text.slice(0, 30);
-  showCustomConfirm(`确定要归档「${escapeHtml(name)}」吗？<br><small>归档后可从归档页面查看和恢复。</small>`).then(confirmed => {
+  const subCount = descendantIds.length;
+  const confirmText = subCount > 0
+    ? `确定要归档「${escapeHtml(name)}」及其 ${subCount} 个子任务吗？<br><small>归档后可从归档页面查看和恢复。</small>`
+    : `确定要归档「${escapeHtml(name)}」吗？<br><small>归档后可从归档页面查看和恢复。</small>`;
+  showCustomConfirm(confirmText).then(confirmed => {
     if (!confirmed) return;
     pushTodoUndo();
-    if (typeof moveToArchive === 'function') { moveToArchive('todos', todo); }
+    if (typeof moveToArchive === 'function') {
+      // 先取全部要归档的项（父+子），再逐个归档
+      const items = todos.filter(t => idsToArchive.includes(t.id));
+      for (const it of items) {
+        moveToArchive('todos', it);
+      }
+      // 批量归档记录到本地（供 AI 摘要「今日归档」展示，不影响待办完成显示）
+      try {
+        const log = JSON.parse(localStorage.getItem('study_todo_archive_log') || '[]');
+        for (const it of items) {
+          log.push({
+            id: it.id,
+            text: it.text,
+            done: !!it.done,
+            completedAt: it.completedAt || '',
+            archivedAt: new Date().toISOString()
+          });
+        }
+        if (log.length > 500) log.splice(0, log.length - 500);
+        localStorage.setItem('study_todo_archive_log', JSON.stringify(log));
+      } catch (e) { /* 忽略 */ }
+    }
     expandedTodoIds.delete(id); saveExpandedTodoIds();
     renderTodos();
   });

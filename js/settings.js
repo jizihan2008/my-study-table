@@ -3684,6 +3684,30 @@ function collectEveningReportData() {
   const tomorrowDue = todos.filter(t => t.dueDate === tomorrowStr && !t.done);
   const undoneTodos = todos.filter(t => !t.done);
   const totalTodos = todos.length;
+
+  // 归档日志：恢复当天完成但已归档的待办（保证归档不影响"今日完成"显示），并统计当天归档
+  let archivedTodayDone = [];
+  let todayArchived = [];
+  try {
+    const archiveLog = JSON.parse(localStorage.getItem('study_todo_archive_log') || '[]');
+    for (const item of archiveLog) {
+      const ad = (item.archivedAt || '').slice(0, 10);
+      if (ad !== todayStr) continue;
+      todayArchived.push({ text: item.text, id: item.id });
+      // 当天完成且已归档的待办，仍计入"今日完成"（保证归档不影响完成显示）
+      if (item.done && (item.completedAt || '').slice(0, 10) === todayStr) {
+        archivedTodayDone.push({ text: item.text, id: item.id });
+      }
+    }
+  } catch (e) { /* 忽略 */ }
+  // 合并今日完成（当前 + 已归档），按文本去重
+  const todayDoneAll = [...todayDone.map(t => ({ text: t.text, id: t.id })), ...archivedTodayDone];
+  const seenDone = new Set();
+  const todayDoneList = todayDoneAll.filter(t => {
+    if (seenDone.has(t.id)) return false;
+    seenDone.add(t.id);
+    return true;
+  });
   const totalDone = todos.filter(t => t.done).length;
 
   // Today's notes
@@ -3763,7 +3787,8 @@ function collectEveningReportData() {
     focusItems,
     focusDone: focusItems.filter(i => i.done).length,
     focusTotal: focusItems.length,
-    todayDoneTodos: todayDone.map(t => ({ text: t.text, id: t.id })),
+    todayDoneTodos: todayDoneList,
+    todayArchived: todayArchived,
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
     overdueTodos: overdue.map(t => ({ text: t.text, dueDate: t.dueDate, id: t.id })),
     tomorrowDueTodos: tomorrowDue.map(t => ({ text: t.text, id: t.id })),
@@ -3839,6 +3864,10 @@ async function generateEveningReport() {
     ? data.todayDoneTodos.map(t => `  - ✅ ${t.text}`).join('\n')
     : '  （今天还没有完成待办）';
 
+  const archivedTodoLines = data.todayArchived && data.todayArchived.length > 0
+    ? data.todayArchived.map(t => `  - 📦 ${t.text}`).join('\n')
+    : '';
+
   const dueLines = data.todayDueTodos.length > 0
     ? data.todayDueTodos.map(t => `  - 📅 ${t.text}`).join('\n')
     : '  无';
@@ -3879,6 +3908,8 @@ async function generateEveningReport() {
 ${focusLines}
 【今日完成待办】${data.todayDoneTodos.length} 项
 ${doneTodoLines}
+${archivedTodoLines ? `【今日归档】${data.todayArchived.length} 项
+${archivedTodoLines}` : ''}
 【今日截止】${data.todayDueTodos.length} 项
 ${dueLines}
 【今日计时】${data.todayTimerStr}

@@ -451,7 +451,8 @@
 
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
   // force: 手动同步时置 true → 若上一次同步仍在执行，等待其完成（最多 15s）而非直接跳过
-  async function _pullAll(force) {
+  // forceRemote: 手动强制同步 → 云端有数据就拉取（无视时间戳，解决设备时钟偏差导致永不上拉）
+  async function _pullAll(force, forceRemote) {
     if (!enabled) { _lastPullError = '同步未开启'; return; }
     if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return; }
     if (applyingRemote) {
@@ -491,6 +492,7 @@
       // 先逐 key 用元信息（updated_at）判定「是否真正需要云端 value」：
       //   - 本地缺失（localEmpty）→ 需要 value 拉取
       //   - 云端比本地新（remoteTs > localTs，两端都有时间戳）→ 需要 value 拉取
+      //   - forceRemote（手动强制同步）→ 云端有数据就拉，无视时间戳（解决 iPad 时钟偏差导致永不上拉）
       //   - 其余情况（本地有真实数据且更新/无本地时间戳保护）→ 保留本地，只需上传，无需拉 value
       const needValueKeys = [];
       for (const row of syncRows) {
@@ -500,6 +502,8 @@
         const localEmpty = _isEmptyLocalValue(row.key);
         if (localEmpty) {
           needValueKeys.push(row.key);   // 本地缺失 → 拉
+        } else if (forceRemote) {
+          needValueKeys.push(row.key);   // 手动强制同步 → 拉取云端（下面合并逻辑会避免覆盖更新的本地）
         } else if (localTs && remoteTs && new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
           needValueKeys.push(row.key);   // 云端明确更新 → 拉
         } else if (!localTs && remoteTs) {
@@ -549,7 +553,17 @@
             if (remoteHasData && localTs && remoteTs) {
               const localMs = new Date(localTs).getTime();
               const remoteMs = new Date(remoteTs).getTime();
-              if (remoteMs > localMs) {
+              if (forceRemote) {
+                // 手动强制同步：即使本地更新也拉取云端（云端是权威源）
+                // —— 但若本地确实更新（localMs > remoteMs），保留本地待上传（不丢本地改动）
+                if (localMs > remoteMs) {
+                  dirtyKeys.add(row.key);   // 本地更新 → 上传（保留本地）
+                } else {
+                  saveData(row.key, remoteRow.value);
+                  _setRemoteTs(row.key, remoteRow.updated_at);
+                  _setLocalTs(row.key, remoteRow.updated_at);
+                }
+              } else if (remoteMs > localMs) {
                 // 云端明确更新 → 拉取覆盖
                 saveData(row.key, remoteRow.value);
                 _setRemoteTs(row.key, remoteRow.updated_at);
@@ -861,7 +875,7 @@
     const ts = _getRemoteTs();
     const isFirst = Object.keys(ts).length === 0;
     if (isFirst) await _firstSync();
-    else await _pullAll(true);   // 手动同步：force=true，即使上次同步未完成也等待/强制执行
+    else await _pullAll(true, true);   // 手动同步：force=true（等待锁）+ forceRemote=true（强制拉取云端，解决时钟偏差）
     const cfg = getConfig();
     cfg.lastPull = Date.now();
     setConfig(cfg);
