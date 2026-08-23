@@ -1,0 +1,7 @@
+fix: 同步方案B——手动保留强制拉取，自动回退修正后时间戳逻辑
+
+- 新增持久化 dirty 标记（study_sync_dirty_v1）承载本地未上传修改
+- localTs 只写服务器 updated_at，与 remoteTs 同源可比，消除设备时钟偏差污染
+- _tsIsFuture 识别旧版时钟污染残留，自动以云端校准
+- 自动同步路径（Realtime/定时/登录后）回退 _pullAll(true,false)，仅手动同步保留强制拉取
+- sync.js v20260823-r6, service-worker mst-v51

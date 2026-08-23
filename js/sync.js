@@ -252,7 +252,14 @@
     if (value != null && _valueTooLarge(value)) {
       // 超大 value 不上传，避免云端 user_data 超时；本地数据保留，仅警告。
       console.warn('[sync] 跳过上传超大 key:', key, '(len=' + value.length + ')');
-      _setLocalTs(key, new Date().toISOString());  // 标记为「已处理」，避免反复重试上传
+      // 注意：不能用客户端本地时钟写 localTs（iPad 时钟偏差会污染 LWW 比较，
+      // 导致后续其他设备「云端不比本地新」→ 永不拉取）。这里不设置 localTs，
+      // 仅从云端时间戳兜底：若已有 remoteTs 则用 remoteTs 标记已处理。
+      const remoteMap = _getRemoteTs();
+      if (remoteMap[key]) {
+        _setLocalTs(key, remoteMap[key]);
+        _clearLocalDirty(key);   // 超大 key 不参与上传，标记已处理，避免每轮拉取重复入队
+      }
       return { ok: true, skipped: true, reason: 'too-large' };
     }
     const payload = value ? JSON.parse(value) : null;
@@ -278,6 +285,7 @@
     // 同步本地与云端时间戳（以服务器时间为准），标记该 key 本地已是最新
     _setRemoteTs(key, updatedAt);
     _setLocalTs(key, updatedAt);
+    _clearLocalDirty(key);   // 上传成功 → 清除待上传标记
     return { ok: true, updatedAt };
   }
 
@@ -374,6 +382,35 @@
     const map = _getLocalTs();
     if (key in map) { delete map[key]; localStorage.setItem(LOCAL_TS_KEY, JSON.stringify(map)); }
   }
+
+  // ── 本地「待上传修改」标记（方案 B 核心）────────────────────
+  // 历史问题：localTs 用设备时钟写（new Date()），iPad 时钟偏快 → localTs 恒大于云端
+  // updated_at → LWW 判定「本地更新」→ 永不拉取。修复：本地修改不再写时间戳，改用持久化
+  // dirty 标记承载「本地有未上传修改」；localTs 只在与服务器成功交互后写入服务器 updated_at，
+  // 与 remoteTs 同源可比 → 时间戳比较永远可靠，自动同步无需再依赖强制拉取。
+  const DIRTY_KEY = 'study_sync_dirty_v1';   // { [key]: true } 本地有未上传修改
+  function _getDirtyMap() {
+    try { return JSON.parse(localStorage.getItem(DIRTY_KEY)) || {}; }
+    catch (e) { return {}; }
+  }
+  function _markLocalDirty(key) {
+    const map = _getDirtyMap();
+    map[key] = true;
+    localStorage.setItem(DIRTY_KEY, JSON.stringify(map));
+  }
+  function _clearLocalDirty(key) {
+    const map = _getDirtyMap();
+    if (key in map) { delete map[key]; localStorage.setItem(DIRTY_KEY, JSON.stringify(map)); }
+  }
+  function _isLocalDirty(key) { return !!_getDirtyMap()[key]; }
+  // 判断本地时间戳是否为「未来值」（旧版本用设备时钟写 localTs 的污染残留）：
+  // 若 localTs 比服务器参考时间（本次拉取到的最大 updated_at）快超过 15 分钟 → 时钟污染。
+  // 此时本地时间不可信 → 以云端为权威（拉取覆盖校准），避免「时钟快 → 永不拉取」死循环。
+  const TS_FUTURE_TOLERANCE = 15 * 60 * 1000;   // 15 分钟容忍
+  function _tsIsFuture(localTs, remoteMaxTs) {
+    if (!localTs || !remoteMaxTs) return false;
+    return new Date(localTs).getTime() - new Date(remoteMaxTs).getTime() > TS_FUTURE_TOLERANCE;
+  }
   // 冲突队列：本次拉取中「两端都改过」的 key（Steam 式用户决策）
   let _conflictQueue = [];
   let _resolvingConflict = false;   // 弹窗互斥锁，避免多个冲突弹窗叠加
@@ -434,6 +471,7 @@
           saveData(key, remoteRow.value);
           _setRemoteTs(key, remoteRow.updated_at);
           _setLocalTs(key, remoteRow.updated_at);
+          _clearLocalDirty(key);
         } else if (!localEmpty) {
           // 本地有真实数据 → 上传到云（覆盖云端旧值，_uploadKey 内部会跳过超大 value）
           await _uploadKey(key);
@@ -451,7 +489,11 @@
 
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
   // force: 手动同步时置 true → 若上一次同步仍在执行，等待其完成（最多 15s）而非直接跳过
-  // forceRemote: 手动强制同步 → 云端有数据就拉取（无视时间戳，解决设备时钟偏差导致永不上拉）
+  // forceRemote: 手动强制同步 → 云端有数据就拉取（无视时间戳，手动以云端为权威源）。
+  //   「方案 B」：仅手动同步保留 forceRemote=true；自动同步（Realtime / 定时 / 登录后）
+  //   走修正后的时间戳逻辑——localTs 只写服务器 updated_at（与 remoteTs 同源可比）+ 本地
+  //   修改用 dirty 标记承载，不再依赖设备时钟，消除「iPad 时钟偏快 → 永不拉取」的根因，
+  //   同时避免「每次全量强制拉取」的覆盖风险与性能开销。
   async function _pullAll(force, forceRemote) {
     if (!enabled) { _lastPullError = '同步未开启'; return; }
     if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return; }
@@ -489,10 +531,17 @@
       const syncRows = meta.filter(r => isSyncKey(r.key));
       const pullTotal = syncRows.length || 1;
       let pullDone = 0;
+      // 服务器时间参考 = 本次拉取到的最大 updated_at（用于识别「本地时间戳是未来值」的时钟污染残留）
+      let remoteMaxTs = '';
+      syncRows.forEach(r => {
+        if (!remoteMaxTs || new Date(r.updated_at).getTime() > new Date(remoteMaxTs).getTime()) remoteMaxTs = r.updated_at;
+      });
       // 先逐 key 用元信息（updated_at）判定「是否真正需要云端 value」：
       //   - 本地缺失（localEmpty）→ 需要 value 拉取
-      //   - 云端比本地新（remoteTs > localTs，两端都有时间戳）→ 需要 value 拉取
-      //   - forceRemote（手动强制同步）→ 云端有数据就拉，无视时间戳（解决 iPad 时钟偏差导致永不上拉）
+      //   - 本地 dirty（有未上传修改）→ 保护本地，不拉取覆盖，稍后上传
+      //   - 本地时间戳是未来值（旧版时钟污染残留）→ 本地时间不可信，云端为权威 → 拉取校准
+      //   - 云端比本地新（remoteTs > localTs，两端都是服务器时间戳）→ 需要 value 拉取
+      //   - forceRemote（手动强制同步）→ 云端有数据就拉，无视时间戳（手动以云端为权威源）
       //   - 其余情况（本地有真实数据且更新/无本地时间戳保护）→ 保留本地，只需上传，无需拉 value
       const needValueKeys = [];
       for (const row of syncRows) {
@@ -504,6 +553,12 @@
           needValueKeys.push(row.key);   // 本地缺失 → 拉
         } else if (forceRemote) {
           needValueKeys.push(row.key);   // 手动强制同步 → 拉取云端（下面合并逻辑会避免覆盖更新的本地）
+        } else if (_isLocalDirty(row.key)) {
+          // 本地有未上传修改（dirty）→ 保护本地，不拉取覆盖，稍后上传
+          dirtyKeys.add(row.key);
+        } else if (_tsIsFuture(localTs, remoteMaxTs)) {
+          // 本地时间戳是「未来值」（旧版本设备时钟污染残留）→ 本地时间不可信，云端权威 → 拉取校准
+          needValueKeys.push(row.key);
         } else if (localTs && remoteTs && new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
           needValueKeys.push(row.key);   // 云端明确更新 → 拉
         } else if (!localTs && remoteTs) {
@@ -524,14 +579,16 @@
       }
       // ③ 合并应用
       // 说明：遍历的 syncRows 是云端所有匹配 key 的元信息，云端存在该记录。
-      // valueMap[row.key] 只有 needValueKeys（本地空 / 云端明确更新）的 key 才有 value。
-      // 对「本地不晚于云端」的 key，未拉 value（remoteRow undefined），此时不能误判为云端空
-      // 而反复上传；应基于时间戳直接判定：两端一致→跳过，本地更新→上传。
+      // valueMap[row.key] 只有 needValueKeys（本地空 / 时钟污染校准 / forceRemote / 云端明确更新）
+      // 的 key 才有 value。对「本地不晚于云端」的 key，未拉 value（remoteRow undefined），
+      // 此时不能误判为云端空而反复上传；应基于时间戳 + dirty 标记直接判定：两端一致→跳过，
+      // 本地 dirty / 本地更新→上传。
       for (const row of syncRows) {
         const remoteRow = valueMap[row.key];   // 可能 undefined（非 needValueKeys）
         const localTs = _getLocalTs()[row.key];
         const remoteTs = remoteRow ? remoteRow.updated_at : row.updated_at;
         const localEmpty = _isEmptyLocalValue(row.key);
+        const localDirty = _isLocalDirty(row.key);
 
         if (localEmpty) {
           // 本地空：云端有真实数据（需拉 value 的 key 才有 remoteRow）→ 拉取；
@@ -542,6 +599,7 @@
             saveData(row.key, remoteRow.value);
             _setRemoteTs(row.key, remoteRow.updated_at);
             _setLocalTs(row.key, remoteRow.updated_at);
+            _clearLocalDirty(row.key);
           }
         } else {
           // 本地有真实数据。
@@ -562,12 +620,22 @@
                   saveData(row.key, remoteRow.value);
                   _setRemoteTs(row.key, remoteRow.updated_at);
                   _setLocalTs(row.key, remoteRow.updated_at);
+                  _clearLocalDirty(row.key);
                 }
+              } else if (localDirty) {
+                dirtyKeys.add(row.key);   // 本地有未上传修改 → 保护本地，上传
+              } else if (_tsIsFuture(localTs, remoteMaxTs)) {
+                // 本地时间戳是「未来值」（旧版时钟污染残留）→ 本地时间不可信，云端权威 → 覆盖校准
+                saveData(row.key, remoteRow.value);
+                _setRemoteTs(row.key, remoteRow.updated_at);
+                _setLocalTs(row.key, remoteRow.updated_at);
+                _clearLocalDirty(row.key);
               } else if (remoteMs > localMs) {
                 // 云端明确更新 → 拉取覆盖
                 saveData(row.key, remoteRow.value);
                 _setRemoteTs(row.key, remoteRow.updated_at);
                 _setLocalTs(row.key, remoteRow.updated_at);
+                _clearLocalDirty(row.key);
               } else if (localMs > remoteMs) {
                 dirtyKeys.add(row.key);   // 本地明确更新 → 上传本地
               }
@@ -577,10 +645,11 @@
               dirtyKeys.add(row.key);
             }
           } else {
-            // 未拉 value：仅当本地时间戳早于云端时间戳才可能进 needValueKeys，但这里 remoteRow undefined
-            // 说明该 key 不满足「本地空 / 云端明确更新」，即本地不早于云端。
-            // 判定：本地明确更新 → 上传；否则（一致）→ 跳过，避免反复上传。
-            if (localTs && remoteTs && new Date(localTs).getTime() > new Date(remoteTs).getTime()) {
+            // 未拉 value：该 key 不在 needValueKeys（本地空 / 本地 dirty / 云端不新 / 时钟污染未来值）。
+            // 判定：本地 dirty / 本地明确更新 → 上传；否则（一致）→ 跳过，避免反复上传。
+            if (localDirty) {
+              dirtyKeys.add(row.key);   // 本地有未上传修改 → 上传
+            } else if (localTs && remoteTs && new Date(localTs).getTime() > new Date(remoteTs).getTime()) {
               dirtyKeys.add(row.key);   // 本地更新 → 上传
             } else if (!localTs && remoteTs) {
               dirtyKeys.add(row.key);   // 本地有数据无时间戳 → 保护本地，上传
@@ -675,8 +744,11 @@
     }
     if (!isSyncKey(key)) return;
     if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
-    // 无论是否登录都记录本地修改时间（Steam 云存档式合并需要；未登录时修改也会在登录后正确对比）
-    _setLocalTs(key, new Date().toISOString());
+    // 本地修改 → 标记「本地 dirty（有未上传修改）」。
+    // 不再用设备时钟写 localTs：设备时钟偏差（如 iPad 时钟偏快）会污染 LWW 比较，
+    // 导致「云端不比本地新」→ 永不拉取。localTs 只在与服务器成功交互后写入服务器
+    // updated_at（与 remoteTs 同源可比）；本地是否有未上传修改由 dirty 标记承载。
+    _markLocalDirty(key);
     // 自动上传仅在「云同步 + 自动同步」均开启时触发；关掉自动同步后需手动「立即同步/上传全部」
     if (!enabled || !autoSync || !loggedIn || !client) return;
     dirtyKeys.add(key);
@@ -720,7 +792,9 @@
   let pullDebounceTimer = null;
   function _debouncedPull() {
     clearTimeout(pullDebounceTimer);
-    pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) _pullAll(); }, 800);
+    // Realtime 事件 = 云端确有更新的强信号 → 自动模式走修正后的时间戳逻辑（不强制拉取）。
+    // localTs/remoteTs 同源服务器时间戳，比较可靠；本地 dirty 数据不会被覆盖，无需 forceRemote。
+    pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) _pullAll(true, false); }, 800);
   }
 
   // ── 拉取后刷新界面 ─────────────────────────────────
@@ -904,9 +978,9 @@
       const ts = _getRemoteTs();
       const isFirst = Object.keys(ts).length === 0;
       if (isFirst) _firstSync();
-      else _pullAll();
+      else _pullAll(true, false);   // 自动模式：修正后的时间戳逻辑（dirty 保护 + 同源时间戳比较）
       clearTimeout(pullTimer);
-      pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+      pullTimer = setTimeout(() => { _pullAll(true, false); _emitStatus(); }, PULL_INTERVAL);
     }
     _emitStatus();
   }
@@ -917,7 +991,7 @@
     const ts = _getRemoteTs();
     const isFirst = Object.keys(ts).length === 0;
     if (isFirst) _firstSync();
-    else _pullAll();
+    else _pullAll(true, false);   // 自动模式：修正后的时间戳逻辑
   }
 
   function init() {
@@ -943,7 +1017,7 @@
               _doSyncAfterLogin();
               if (autoSync) {
                 clearTimeout(pullTimer);
-                pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+                pullTimer = setTimeout(() => { _pullAll(true, false); _emitStatus(); }, PULL_INTERVAL);
               }
             } else {
               // 事件未带 session，异步获取确认
@@ -953,7 +1027,7 @@
                   _doSyncAfterLogin();
                   if (autoSync) {
                     clearTimeout(pullTimer);
-                    pullTimer = setTimeout(() => { _pullAll(); _emitStatus(); }, PULL_INTERVAL);
+                    pullTimer = setTimeout(() => { _pullAll(true, false); _emitStatus(); }, PULL_INTERVAL);
                   }
                 }
                 _emitStatus();
