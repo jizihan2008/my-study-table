@@ -89,11 +89,19 @@ function resetSupabaseClient() {
 // ═══════════════ 认证状态 ═══════════════
 let friendsAuthUser = null; // 缓存当前登录用户（profile 行）
 
+// 带超时的 Promise.race 包装：Supabase 网络故障（如 504）时 auth.getSession 可能长时间挂起
+function _withTimeout(promise, ms, tag) {
+  return Promise.race([
+    Promise.resolve(promise),
+    new Promise(function(_, reject) { setTimeout(function() { reject(new Error(tag + ' 超时')); }, ms); })
+  ]);
+}
+
 async function friendsGetSession() {
   const client = getSupabaseClient();
   if (!client) return null;
   try {
-    const { data, error } = await client.auth.getSession();
+    const { data, error } = await _withTimeout(client.auth.getSession(), 8000, 'auth.getSession');
     if (error || !data.session) return null;
     return data.session;
   } catch (e) { return null; }
@@ -909,40 +917,61 @@ async function refreshFriendsAll() {
 }
 
 // ═══════════════ 主渲染入口 ═══════════════
+// 整体 try/catch：Supabase 服务端故障（如 504 网关超时）时渲染错误界面+重试按钮，
+// 而不是让 async 链路中断导致 friendsApp 停留在空白。
 async function renderFriends() {
   const container = document.getElementById('friendsApp');
   if (!container) return;
-  if (!isFriendsConfigured()) {
-    container.innerHTML = renderFriendsSetup();
+  try {
+    if (!isFriendsConfigured()) {
+      container.innerHTML = renderFriendsSetup();
+      initFriendsLucide();
+      return;
+    }
+    const session = await friendsGetSession();
+    if (!session) {
+      container.innerHTML = renderFriendsLogin();
+      initFriendsLucide();
+      return;
+    }
+    // 已登录
+    if (!friendsAuthUser) {
+      friendsAuthUser = await _withTimeout(friendsGetMyProfile(), 8000, 'getMyProfile');
+    }
+    if (!friendsAuthUser) {
+      // profile 未建（可能刚注册），尝试重取或登出
+      container.innerHTML = renderFriendsLogin();
+      initFriendsLucide();
+      return;
+    }
+    await friendsLoadAll();
+    if (friendsActivitiesCache.length === 0) await friendsLoadActivities();
+    renderFriendsHome();
+    initFriendsAuth();
+    startFriendsHeartbeat();
+    friendsSubscribeActivities();
+    if (typeof friendsSubscribeAllConversations === 'function') friendsSubscribeAllConversations();
+    if (typeof friendsUpdateSidebarBadge === 'function') friendsUpdateSidebarBadge();
+    // 若进入页面时没有今天的统计，尝试同步
+    syncStudyStats();
+  } catch (e) {
+    console.error('[Friends] renderFriends failed:', e);
+    container.innerHTML = renderFriendsError(e && e.message ? e.message : '未知错误');
     initFriendsLucide();
-    return;
   }
-  const session = await friendsGetSession();
-  if (!session) {
-    container.innerHTML = renderFriendsLogin();
-    initFriendsLucide();
-    return;
-  }
-  // 已登录
-  if (!friendsAuthUser) {
-    friendsAuthUser = await friendsGetMyProfile();
-  }
-  if (!friendsAuthUser) {
-    // profile 未建（可能刚注册），尝试重取或登出
-    container.innerHTML = renderFriendsLogin();
-    initFriendsLucide();
-    return;
-  }
-  await friendsLoadAll();
-  if (friendsActivitiesCache.length === 0) await friendsLoadActivities();
-  renderFriendsHome();
-  initFriendsAuth();
-  startFriendsHeartbeat();
-  friendsSubscribeActivities();
-  if (typeof friendsSubscribeAllConversations === 'function') friendsSubscribeAllConversations();
-  if (typeof friendsUpdateSidebarBadge === 'function') friendsUpdateSidebarBadge();
-  // 若进入页面时没有今天的统计，尝试同步
-  syncStudyStats();
+}
+
+// 好友页错误兜底界面（Supabase 网络故障时展示，含重试按钮）
+function renderFriendsError(msg) {
+  return `
+  <div class="fr-setup-wrap">
+    <div class="fr-setup-card">
+      <i data-lucide="cloud-off" class="lucide-icon fr-setup-icon"></i>
+      <h3>好友服务暂时不可用</h3>
+      <p>无法连接到云端（${msg || '网络错误'}）。请检查网络或稍后重试。</p>
+      <button class="fr-btn fr-btn-primary" onclick="renderFriends()">重新加载</button>
+    </div>
+  </div>`;
 }
 
 // 未配置 Supabase 的引导页（内置默认配置失效时兜底）

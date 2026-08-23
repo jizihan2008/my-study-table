@@ -535,6 +535,8 @@
         }
       } else if (kind === 'ai_conv') {
         if (typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') return;
+        // 防御：本地 study_ai_convs 若被降级写成对象，重置为数组再合并（配合 settings.js 的防御）
+        if (!Array.isArray(aiConvs)) aiConvs = [];
         const id = built.meta ? built.meta.id : itemId;
         const patch = {
           id: id,

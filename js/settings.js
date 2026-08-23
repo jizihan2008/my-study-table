@@ -293,6 +293,10 @@ let convSettingsModalOpen = false;
 
 // Data structure: array of conversations, each has { id, title, systemPrompt, messages: [{role,content},...] }
 let aiConvs = loadData('study_ai_convs');
+// 防御：study_ai_convs 曾被 saveData 降级写成对象（{_saveError:true}），
+// loadData 返回非数组 → 全局 .find/.map 崩溃。这里强制重置为数组；
+// 真实数据会由 SyncLogs 云端拉取自动重建。
+if (!Array.isArray(aiConvs)) aiConvs = [];
 let activeConvId = localStorage.getItem('study_active_conv') ? Number(localStorage.getItem('study_active_conv')) : null;
 let aiLoadingStates = {}; // { [convId]: true/false } — per-conversation loading state
 let aiStopRequests = {};  // { [convId]: true/false } — per-conversation stop request

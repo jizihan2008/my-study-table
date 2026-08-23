@@ -52,9 +52,16 @@ function saveData(key, data) {
     // If all fails, try saving without the problematic conversation
     if (key.startsWith('study_')) {
       try {
-        const fallback = { _saveError: true, _errorTime: new Date().toISOString() };
+        // 数组类 key 降级写空数组 —— 绝不能写成对象 {_saveError:true}：
+        // 否则下次 loadData 解析出对象，调用方 .find/.map 直接崩
+        //（曾导致 "aiConvs.find is not a function" 启动即崩溃）。
+        const ARRAY_KEYS = new Set([
+          'study_ai_convs', 'study_todos_v2', 'study_links_v3', 'study_notes_v2',
+          'study_bk_explain_logs_v1', 'study_bk_qa_logs_v1', 'study_todo_completed_log'
+        ]);
+        const fallback = ARRAY_KEYS.has(key) ? [] : { _saveError: true, _errorTime: new Date().toISOString() };
         localStorage.setItem(key, JSON.stringify(fallback));
-        console.warn('[saveData] 使用降级数据保存');
+        console.warn('[saveData] 使用降级数据保存 (' + key + ')');
       } catch (_) { /* give up */ }
     }
   }
