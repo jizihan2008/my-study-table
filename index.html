@@ -11,7 +11,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260813-r16">
+<link rel="stylesheet" href="css/style.css?v=20260823-r7">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <script src="https://unpkg.com/lucide@0.469.0"></script>
 </head>
@@ -1330,21 +1330,22 @@
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260814-r1"></script>
 <script src="js/ai-tree.js?v=20260804-r3"></script>
-<script src="js/ai-conv.js?v=20260803-r1"></script>
+<script src="js/ai-conv.js?v=20260822-r1"></script>
 <script src="js/ai-attach.js?v=20260807-r1"></script>
-<script src="js/ai-render.js?v=20260814-r7"></script>
-<script src="js/ai-tools.js?v=20260811-r2"></script>
+<script src="js/ai-render.js?v=20260822-r3"></script>
+<script src="js/ai-tools.js?v=20260822-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-api.js?v=20260813-r2"></script>
-<script src="js/ai-send.js?v=20260813-r2"></script>
+<script src="js/ai-send.js?v=20260823-r18"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260812-r3"></script>
 <script src="js/appearance.js?v=20260813-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/settings.js?v=20260814-r6"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
-<!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send -->
-<script src="js/inbox.js?v=20260813-r1"></script>
+<!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
+<script src="js/qq-chats.js?v=20260823-r7"></script>
+<script src="js/inbox.js?v=20260823-r17"></script>
 <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
 <script type="module">
   import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
@@ -1377,7 +1378,7 @@
 <script src="js/codegen.js?v=20260808-r14"></script>
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-<script src="js/sync.js?v=20260814-r3"></script>
+<script src="js/sync.js?v=20260823-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260821-r7"></script>
 <script>
@@ -1547,6 +1548,7 @@ if (typeof lucide !== 'undefined') {
 
 <!-- Right-click context menu for AI chat: save selected text as a note -->
 <div class="context-menu" id="aiChatContextMenu">
+  <div class="context-menu-item" onclick="askAiExplainSelection()"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 仔细讲解</div>
   <div class="context-menu-item" onclick="saveAiSelectionAsNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 保存为笔记</div>
   <div class="context-menu-item" onclick="copyAiSelection()"><i data-lucide="copy" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 复制选中文字</div>
 </div>

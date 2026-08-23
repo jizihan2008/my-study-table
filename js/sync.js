@@ -417,36 +417,54 @@
     //    本地有真实数据 → 上传；本地与云端都空 → 跳过（不产生空占位覆盖）
     const firstTotal = firstKeys.length || 1;
     let firstDone = 0;
-    for (const key of firstKeys) {
-      firstDone++;
-      _emitProgress({ active: true, phase: 'first', current: firstDone, total: firstTotal, key: key, label: SYNC_LABELS[key] || key });
-      const localEmpty = _isEmptyLocalValue(key);
-      const remoteRow = valueMap[key] || null;
-      const remoteHasData = remoteRow && remoteRow.value !== null &&
-        !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
-        !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0) &&
-        !_valueTooLarge(JSON.stringify(remoteRow.value));
+    try {
+      for (const key of firstKeys) {
+        firstDone++;
+        _emitProgress({ active: true, phase: 'first', current: firstDone, total: firstTotal, key: key, label: SYNC_LABELS[key] || key });
+        const localEmpty = _isEmptyLocalValue(key);
+        const remoteRow = valueMap[key] || null;
+        const remoteHasData = remoteRow && remoteRow.value !== null &&
+          !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
+          !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0) &&
+          !_valueTooLarge(JSON.stringify(remoteRow.value));
 
-      if (localEmpty && remoteHasData) {
-        // 本地空、云端有数据 → 拉取云端（避免用本地空数组覆盖云端真实笔记）
-        saveData(key, remoteRow.value);
-        _setRemoteTs(key, remoteRow.updated_at);
-        _setLocalTs(key, remoteRow.updated_at);
-      } else if (!localEmpty) {
-        // 本地有真实数据 → 上传到云（覆盖云端旧值，_uploadKey 内部会跳过超大 value）
-        await _uploadKey(key);
+        if (localEmpty && remoteHasData) {
+          // 本地空、云端有数据 → 拉取云端（避免用本地空数组覆盖云端真实笔记）
+          saveData(key, remoteRow.value);
+          _setRemoteTs(key, remoteRow.updated_at);
+          _setLocalTs(key, remoteRow.updated_at);
+        } else if (!localEmpty) {
+          // 本地有真实数据 → 上传到云（覆盖云端旧值，_uploadKey 内部会跳过超大 value）
+          await _uploadKey(key);
+        }
+        // 本地空 且 云端也空/无记录 → 跳过（不产生任何写入）
       }
-      // 本地空 且 云端也空/无记录 → 跳过（不产生任何写入）
+    } catch (e) { /* 单 key 失败不中断整体 */ }
+    finally {
+      // 无论成功/异常都必须复位锁，否则后续手动同步会被永久跳过（iPad「点同步没反应」）
+      applyingRemote = false;
     }
-    applyingRemote = false;
     _refreshUI();
     _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
   }
 
   // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
-  async function _pullAll() {
+  // force: 手动同步时置 true → 若上一次同步仍在执行，等待其完成（最多 15s）而非直接跳过
+  async function _pullAll(force) {
     if (!enabled || !_client()) return;
-    if (applyingRemote) return;   // 上一次同步仍在执行（可能因云端慢/超时阻塞）→ 跳过本次，避免并发刷屏
+    if (applyingRemote) {
+      // 上一次同步仍在执行（可能因云端慢/超时阻塞）→ 自动模式跳过；手动模式等待
+      if (!force) return;
+      const waitStart = Date.now();
+      while (applyingRemote && Date.now() - waitStart < 15000) {
+        await new Promise(r => setTimeout(r, 300));
+      }
+      if (applyingRemote) {
+        // 等待超时：强制复位锁，继续本次拉取（宁可重新拉，也不让手动同步失效）
+        applyingRemote = false;
+        console.warn('[sync] 手动同步等待超时，强制复位同步锁');
+      }
+    }
     const session = await getSession();
     if (!session) return;
     const c = _client();
@@ -836,7 +854,7 @@
     const ts = _getRemoteTs();
     const isFirst = Object.keys(ts).length === 0;
     if (isFirst) await _firstSync();
-    else await _pullAll();
+    else await _pullAll(true);   // 手动同步：force=true，即使上次同步未完成也等待/强制执行
     const cfg = getConfig();
     cfg.lastPull = Date.now();
     setConfig(cfg);

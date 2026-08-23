@@ -2,10 +2,14 @@
 //  AI 渲染：聊天界面、消息列表、Markdown格式化、LaTeX数学公式
 // ═══════════════════════════════════════════════
 
+let _aiForceScrollBottom = false; // 强制滚动到底部标志（发送/切换对话时置位）
+
 // ═══════════ AI Chat: Rendering ═══════════
 function renderAiChat() {
   const layout = document.getElementById('aiChatLayout');
   if (!layout) return;
+  // 切换/重建对话视图：强制滚动到底部展示最新消息
+  _aiForceScrollBottom = true;
   // 重建前：记录输入框焦点 + 实时保存草稿。避免重渲染（自动标题生成 / 日报完成 / 首次发送命名等
   // 异步完成后调用本函数）把用户正在输入的内容与焦点一并替换，导致"无法输入文字"。
   const _prevInput = document.getElementById('aiInput');
@@ -93,6 +97,8 @@ function renderAiChat() {
         </select>
       </div>
     </div>
+    <div class="ai-queue-indicator" id="aiQueueIndicator" style="display:none;" onclick="toggleAiQueuePanel(event)"></div>
+    <div class="ai-queue-panel" id="aiQueuePanel" style="display:none;"></div>
     <div class="ai-chat-input-wrap">
       <textarea id="aiInput" placeholder="${noKey ? '未配置 AI Key，仅可查看历史记录' : '输入你的问题，回车发送... (可上传 .txt 附件)'}" rows="1"
                 ${noKey ? 'disabled' : ''}
@@ -112,6 +118,8 @@ function renderAiChat() {
   updateAiFileInput(); // Update file input based on current model
   // Restore loading state after DOM rebuild: toggle send/stop button
   updateAiSendButton();
+  // 恢复发送队列指示器
+  if (typeof updateAiQueueIndicator === 'function') updateAiQueueIndicator();
   // 无 API Key 时强制禁用发送/上传/输入（覆盖 updateAiSendButton 可能的 enabled）
   if (noKey) {
     const _inp = document.getElementById('aiInput');
@@ -123,7 +131,14 @@ function renderAiChat() {
   }
   setTimeout(() => {
     const msgs = document.getElementById('aiMessages');
-    if (msgs) msgs.scrollTop = msgs.scrollHeight;
+    if (!msgs) return;
+    // 若切换对话/发送消息触发的整页重建已强制滚动，或用户本就接近底部，才滚到底
+    if (_aiForceScrollBottom) {
+      msgs.scrollTop = msgs.scrollHeight;
+      _aiForceScrollBottom = false;
+    } else if (msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 120) {
+      msgs.scrollTop = msgs.scrollHeight;
+    }
   }, 100);
   // Restore input draft for current conv
   restoreAiDraft();
@@ -165,6 +180,12 @@ function renderAiMessages() {
   if (!container) return;
   const conv = getActiveConv();
   if (!conv) return;
+
+  // ── 滚动位置保持：记录渲染前状态 ──
+  // AI 回复/工具调用会频繁重渲染；若用户正在翻阅历史消息，不应被强制拉到末尾。
+  // 仅当用户本就接近底部（或显式强制）时才在渲染后滚动到底部。
+  const prevScrollTop = container.scrollTop;
+  const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
 
   // 树状对话：conv.messages 是活跃路径的扁平视图（由树引擎同步）。
   // 直接遍历节点序列渲染，同时为每个消息记录其树节点 id（nodeId），
@@ -424,7 +445,13 @@ function renderAiMessages() {
       `;
     }
   }
-  container.scrollTop = container.scrollHeight;
+  // ── 渲染后滚动：仅在接近底部或强制时滚到底，否则保持原位置 ──
+  if (_aiForceScrollBottom || wasNearBottom) {
+    container.scrollTop = container.scrollHeight;
+  } else {
+    container.scrollTop = prevScrollTop;
+  }
+  _aiForceScrollBottom = false;
 }
 
 // ═══════════ 树形导航浮窗（模仿复习浮窗，body 级可拖拽） ═══════════
@@ -852,7 +879,7 @@ function wrapBareLatexSegment(segment) {
   // Wrap known LaTeX command expressions in \( ... \).
   // Captures the command plus a small trailing expression (no unbalanced parens).
   return segment.replace(
-    /\\(sin|cos|tan|log|ln|exp|lim|sup|inf|min|max|frac|sqrt|theta|Theta|Delta|alpha|beta|gamma|delta|lambda|pi|to|cdot|infty|partial)(?![a-zA-Z])(?:\[([^\]]*)\])?(?:\{([^{}]*)\})?(?:\{([^{}]*)\})?(?:([_^])\{([^{}]*)\})?(?:\s*[a-zA-Z0-9+\-*/^_{}\s]*[a-zA-Z0-9}])?/g,
+    /\\(sin|cos|tan|log|ln|exp|lim|sup|inf|min|max|frac|sqrt|theta|Theta|Delta|alpha|beta|gamma|delta|lambda|pi|to|cdot|infty|partial|bar|hat|vec|dot|ddot|tilde|overline|underbrace|mathbb)(?![a-zA-Z])(?:\[([^\]]*)\])?(?:\{([^{}]*)\})?(?:\{([^{}]*)\})?(?:([_^])\{([^{}]*)\})?(?:\s*[a-zA-Z0-9+\-*/^_{}\s]*[a-zA-Z0-9}])?/g,
     '\\($&\\)'
   );
 }
@@ -1196,6 +1223,22 @@ function copyAiSelection() {
     ta.remove();
   }
   showAiToast('已复制选中文字 📋');
+}
+
+// 右键「仔细讲解」：把选中文字作为提问，在当前 AI 对话内发送
+function askAiExplainSelection() {
+  const text = _aiCtxSelection || '';
+  closeAiChatContextMenu();
+  if (!text) return;
+  const input = document.getElementById('aiInput');
+  if (!input) return;
+  const conv = (typeof getActiveConv === 'function') ? getActiveConv() : null;
+  if (!conv) { showAiToast('请先新建或选择一个 AI 对话'); return; }
+  // 拼装提问：引用选中内容 + 指示 AI 深入讲解（在当前对话内继续，保留上下文）
+  input.value = '请仔细讲解下面这段内容，拆解其中涉及的概念，补充直觉、例子与易错点：\n\n' + text;
+  autoResizeAiInput();
+  // 交给统一发送入口（内部处理 loading 时自动进入发送队列，回复完成后自动发送）
+  if (typeof sendAiMessage === 'function') sendAiMessage();
 }
 
 // ── 选区 HTML → Markdown ──

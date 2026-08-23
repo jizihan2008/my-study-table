@@ -8,6 +8,12 @@ function handleAiSendOrStop() {
   if (isAiLoading(convId)) {
     // Stop the AI for this conversation
     setAiStopRequested(convId, true);
+    // 停止当前回复时清空发送队列（停止 = 停止一切），避免回复结束后自动补发排队消息
+    if (_aiSendQueue.length > 0) {
+      _aiSendQueue = [];
+      updateAiQueueIndicator();
+      if (typeof showAiToast === 'function') showAiToast('已停止并清空发送队列');
+    }
     updateAiSendButton();
   } else {
     sendAiMessage();
@@ -33,23 +39,165 @@ function updateAiSendButton() {
   }
 }
 
-async function sendAiMessage() {
-  if (isAiLoading(getActiveConvId())) return null;
+// ═══════════ AI 发送队列：回复中发送的消息排队，回复完成后自动发送下一条 ═══════════
+let _aiSendQueue = [];       // [{ id, convId, text, attachments }]
+let _aiQueueDraining = false; // 防止队列递归触发
+let _aiQueueSeq = 0;         // 队列项唯一 id 序号
+let _aiQueuePanelOpen = false; // 预览面板展开状态
+
+// 队列项文本预览（单行截断）
+function _queueTextPreview(text, maxLen) {
+  const t = String(text || '').replace(/\s+/g, ' ').trim();
+  if (!t) return '（纯附件）';
+  return t.length > (maxLen || 40) ? t.slice(0, maxLen) + '…' : t;
+}
+
+// 更新指示条 + 预览面板
+function updateAiQueueIndicator() {
+  const el = document.getElementById('aiQueueIndicator');
+  if (!el) return;
+  const n = _aiSendQueue.length;
+  if (n > 0) {
+    el.innerHTML = '<i data-lucide="list-ordered" style="width:13px;height:13px;vertical-align:middle;"></i> 发送队列：' + n + ' 条消息等待中' + (_aiQueuePanelOpen ? '（点击收起）' : '（点击查看）');
+    el.style.display = '';
+  } else {
+    el.style.display = 'none';
+    _aiQueuePanelOpen = false;
+    const panel = document.getElementById('aiQueuePanel');
+    if (panel) panel.style.display = 'none';
+  }
+  renderAiQueuePanel();
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+// 渲染预览面板（播放列表风格：每条消息预览 + 删除按钮，底部清空）
+function renderAiQueuePanel() {
+  const panel = document.getElementById('aiQueuePanel');
+  if (!panel) return;
+  if (!_aiQueuePanelOpen) { panel.style.display = 'none'; return; }
+  if (_aiSendQueue.length === 0) {
+    panel.style.display = 'none';
+    _aiQueuePanelOpen = false;
+    updateAiQueueIndicator();
+    return;
+  }
+  const rows = _aiSendQueue.map((item, idx) => `
+    <div class="ai-queue-item">
+      <span class="ai-queue-item-num">${idx + 1}</span>
+      <span class="ai-queue-item-text" title="${String(item.text || '纯附件').replace(/"/g, '&quot;').replace(/\n/g, ' ')}">${_queueTextPreview(item.text, 48)}</span>
+      ${item.attachments && item.attachments.length > 0 ? '<span class="ai-queue-item-attach">📎</span>' : ''}
+      <button class="ai-queue-item-del" onclick="removeAiQueueItem('${item.id}')" title="从队列移除">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>`).join('');
+  panel.innerHTML = `
+    <div class="ai-queue-panel-head">
+      <span>待发送消息（${_aiSendQueue.length}）</span>
+      <button class="ai-queue-clear-btn" onclick="clearAiQueue()">清空全部</button>
+    </div>
+    ${rows}`;
+  panel.style.display = '';
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+// 切换预览面板展开/折叠
+function toggleAiQueuePanel(ev) {
+  if (ev && ev.target.closest('.ai-queue-item-del')) return; // 点击删除按钮不切换
+  _aiQueuePanelOpen = !_aiQueuePanelOpen;
+  renderAiQueuePanel();
+  updateAiQueueIndicator();
+}
+
+// 从队列移除单条（供面板删除按钮调用）
+function removeAiQueueItem(id) {
+  _aiSendQueue = _aiSendQueue.filter(item => item.id !== id);
+  if (_aiSendQueue.length === 0) _aiQueuePanelOpen = false;
+  updateAiQueueIndicator();
+  if (typeof showAiToast === 'function') showAiToast('已从发送队列移除');
+}
+
+// 清空整个发送队列
+function clearAiQueue() {
+  const n = _aiSendQueue.length;
+  if (n === 0) return;
+  if (typeof confirm === 'function' && !confirm('清空全部 ' + n + ' 条待发送消息？')) return;
+  _aiSendQueue = [];
+  _aiQueuePanelOpen = false;
+  updateAiQueueIndicator();
+  if (typeof showAiToast === 'function') showAiToast('已清空发送队列');
+}
+
+async function drainAiSendQueue(convId) {
+  if (_aiQueueDraining) return;
+  // 该会话仍在回复中 → 等 sendAiMessage 完成后再次触发
+  if (isAiLoading(convId)) return;
+  _aiQueueDraining = true;
+  try {
+    // 循环处理该会话的全部排队消息（sendAiMessage 内部也会触发本函数，
+    // 但受 _aiQueueDraining 保护不会重入）
+    while (_aiSendQueue.length > 0) {
+      // 用户已切换到其他会话 → 暂停发送，等切回该会话时（switchConv）再继续
+      if (convId !== getActiveConvId()) break;
+      const idx = _aiSendQueue.findIndex(item => item.convId === convId);
+      if (idx < 0) break;
+      const item = _aiSendQueue.splice(idx, 1)[0];
+      updateAiQueueIndicator();
+      await sendAiMessage(item.text, item.attachments);
+    }
+  } finally {
+    _aiQueueDraining = false;
+    updateAiQueueIndicator();
+  }
+}
+
+// sendAiMessage(externalText, externalAttachments)：
+//   - 不传参：从输入框读取（用户手动发送）。若当前正在回复 → 入队等待，回复完成后自动发送。
+//   - 传参：由队列自动发送（drainAiSendQueue 调用），文本/附件来自队列快照。
+async function sendAiMessage(externalText, externalAttachments) {
+  const convId = getActiveConvId();
+  const fromQueue = externalText !== undefined;
   const input = document.getElementById('aiInput');
-  if (!input) return null;
-  const text = input.value.trim();
+
+  // 用户手动发送但 AI 正在回复 → 加入发送队列（不清空输入框，提示排队）
+  if (!fromQueue && isAiLoading(convId)) {
+    if (!input) return null;
+    const qText = input.value.trim();
+    if (!qText && aiAttachments.length === 0) return null;
+    _aiQueueSeq++;
+    _aiSendQueue.push({ id: 'q' + _aiQueueSeq, convId, text: qText, attachments: [...aiAttachments] });
+    updateAiQueueIndicator();
+    if (typeof showAiToast === 'function') showAiToast('已加入发送队列（' + _aiSendQueue.length + ' 条待发送）');
+    clearAiDraft();
+    input.value = '';
+    input.style.height = 'auto';
+    aiAttachments = [];
+    renderAttachPreview();
+    return null;
+  }
+
+  if (!fromQueue && !input) return null;
+  const text = fromQueue ? String(externalText) : input.value.trim();
   // Allow empty text if there are attachments
-  if (!text && aiAttachments.length === 0) return null;
+  const hasAttach = fromQueue ? (externalAttachments && externalAttachments.length > 0) : aiAttachments.length > 0;
+  if (!text && !hasAttach) return null;
   // Clear draft for this conv before sending
-  clearAiDraft();
+  if (!fromQueue) clearAiDraft();
   const apiCfg = getEffectiveApiConfig();
   if (!apiCfg.apiKey) { openSettingsModal(); return null; }
 
   const conv = getActiveConv();
   if (!conv) return null;
+  // 队列发送防御：若发送期间用户切换了会话，放回队列并停止本次处理
+  // （drainAiSendQueue 检测到会话不匹配时会 break，等待切回后继续）
+  if (fromQueue && conv.id !== convId) {
+    _aiQueueSeq++;
+    _aiSendQueue.unshift({ id: 'q' + _aiQueueSeq, convId, text: String(externalText), attachments: externalAttachments || [] });
+    updateAiQueueIndicator();
+    return null;
+  }
 
   // Snapshot current attachments
-  const currentAttachments = [...aiAttachments];
+  const currentAttachments = fromQueue ? [...(externalAttachments || [])] : [...aiAttachments];
 
   const displayAttachments = currentAttachments.map(a => ({ name: a.name, size: a.size }));
 
@@ -142,9 +290,11 @@ async function sendAiMessage() {
     try { localStorage.setItem('study_ai_pending', JSON.stringify({ convId: conv.id, userNodeId: _pendingUserNodeId, at: Date.now() })); } catch {}
   }
 
-  // Clear attachments
-  aiAttachments = [];
-  renderAttachPreview();
+  // Clear attachments（队列自动发送不清理全局附件，避免打断用户正在准备的新附件）
+  if (!fromQueue) {
+    aiAttachments = [];
+    renderAttachPreview();
+  }
 
   // AI Auto-title — regenerate after every exchange
   const shouldAutoTitle = conv.messages.filter(m => m.role === 'user').length >= 1;
@@ -157,10 +307,11 @@ async function sendAiMessage() {
     renderAiChat();
   }
 
-  if (!didReRender) {
+  if (!didReRender && !fromQueue) {
     input.value = '';
     input.style.height = 'auto';
   }
+  // 发送后滚动交由 renderAiMessages 智能处理：用户接近底部才滚到底，否则保持浏览位置
   setAiLoading(conv.id, true);
   renderAiMessages();
   updateAiSendButton();
@@ -230,6 +381,9 @@ async function sendAiMessage() {
   try { localStorage.removeItem('study_ai_pending'); } catch {}
   renderAiMessages();
   updateAiSendButton();
+
+  // 队列系统：回复完成后自动发送下一条排队消息
+  if (typeof drainAiSendQueue === 'function') drainAiSendQueue(conv.id);
 
   // AI Auto-title: trigger after first AI reply is pushed to conversation
   if (shouldAutoTitle && typeof isAutoTitleEnabled === 'function' && isAutoTitleEnabled()) {

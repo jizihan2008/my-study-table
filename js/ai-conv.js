@@ -90,6 +90,10 @@ function switchConv(id) {
   restoreAiDraft();
   // Update send button to reflect target conv's loading state
   updateAiSendButton();
+  // 切回有排队消息的会话：若该会话未在回复中，自动继续发送队列
+  if (typeof drainAiSendQueue === 'function' && typeof isAiLoading === 'function' && !isAiLoading(id)) {
+    setTimeout(function () { drainAiSendQueue(id); }, 120);
+  }
 }
 
 function deleteConv(id, e) {

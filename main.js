@@ -2292,7 +2292,10 @@ function isInboxPathAllowed(filePath) {
   const allowed = [capturesDir, ...Array.from(allowedInboxDirs)];
   for (const base of allowed) {
     try {
-      if (isPathInside(base, abs)) return true;
+      // 目录自身（abs === base）与目录内部文件都放行：
+      // isPathInside 对"恰好等于 base"返回 false（path.relative 为 ''），
+      // 但选择导出文件夹后读取 manifest 时传的就是目录本身，必须放行。
+      if (abs === base || isPathInside(base, abs)) return true;
     } catch (e) {}
   }
   return false;
@@ -2413,6 +2416,63 @@ ipcMain.handle('capture:read-file-text', async (event, filePath) => {
     let text = await fs.promises.readFile(filePath, 'utf-8');
     if (text.length > 80000) text = text.slice(0, 80000) + '\n\n[内容过长，已截断]';
     return { ok: true, text };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+});
+
+// ═══════════ QQ 聊天 JSONL 导出文件夹读取 ═══════════
+// qq-chat-exporter 流式导出产生「manifest.json + chunks/*.jsonl」，
+// 这里让用户直接选择整个 ..._chunked_jsonl 文件夹，主进程读取 manifest 与全部 chunk。
+
+// IPC: 选择 JSONL 导出文件夹
+ipcMain.handle('qqchat:pick-dir', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: '选择 qq-chat-exporter 导出的 JSONL 文件夹',
+    properties: ['openDirectory']
+  });
+  if (res.canceled || !res.filePaths || !res.filePaths.length) return { ok: false, canceled: true };
+  ensureInboxDirAllowed(res.filePaths[0]);
+  return { ok: true, dir: res.filePaths[0] };
+});
+
+// IPC: 读取 JSONL 导出文件夹的 manifest.json（结构校验 + 返回 chunk 清单）
+ipcMain.handle('qqchat:read-manifest', async (event, dir) => {
+  try {
+    if (!isInboxPathAllowed(dir)) return { ok: false, reason: '路径不在允许范围内' };
+    const manifestPath = path.join(dir, 'manifest.json');
+    if (!fs.existsSync(manifestPath)) return { ok: false, reason: '未找到 manifest.json，请选择 qq-chat-exporter 的 JSONL 导出文件夹' };
+    const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8'));
+    if (!manifest || !manifest.chunked || !Array.isArray(manifest.chunked.chunks)) {
+      return { ok: false, reason: 'manifest.json 格式不正确（缺少 chunked.chunks）' };
+    }
+    const chunksDir = path.join(dir, manifest.chunked.chunksDir || 'chunks');
+    const chunkFiles = [];
+    for (const c of manifest.chunked.chunks) {
+      const rel = c.relativePath || path.join(manifest.chunked.chunksDir || 'chunks', c.fileName);
+      const full = path.resolve(dir, rel);
+      if (fs.existsSync(full)) chunkFiles.push(full);
+    }
+    if (chunkFiles.length === 0) return { ok: false, reason: 'chunks 目录中未找到消息文件' };
+    return { ok: true, manifest, chunkFiles, dir };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+});
+
+// IPC: 读取单个 JSONL chunk 文件的内容（返回数组）
+ipcMain.handle('qqchat:read-chunk', async (event, filePath) => {
+  try {
+    if (!isInboxPathAllowed(filePath)) return { ok: false, reason: '路径不在允许范围内' };
+    if (!fs.existsSync(filePath)) return { ok: false, reason: '文件不存在' };
+    const text = await fs.promises.readFile(filePath, 'utf-8');
+    const items = [];
+    for (const line of text.split('\n')) {
+      const s = String(line || '').trim();
+      if (!s) continue;
+      try { items.push(JSON.parse(s)); } catch (e) { /* 忽略损坏行 */ }
+    }
+    return { ok: true, items };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };
   }

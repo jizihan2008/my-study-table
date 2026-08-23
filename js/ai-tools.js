@@ -187,6 +187,14 @@ const AI_TOOLS = {
   quest_review: {
     description: '复盘任务线：获取当前卡点（长期无进展的任务）、难度失衡、章节进度，并给出下一步行动建议。常用于晚间复盘或用户感到停滞时',
     params: {}
+  },
+  list_chats: {
+    description: '列出用户已导入的 QQ 聊天会话（名称/类型/消息数/时间范围）。用户问"聊天记录/QQ 会话/群聊里说过什么"时使用，先列会话再决定是否检索具体消息',
+    params: {}
+  },
+  search_chat_messages: {
+    description: '在已导入的 QQ 聊天记录中按关键词检索消息。用户问"聊天记录里关于某话题说了什么/某人在群里说过什么"时使用，检索结果按时间倒序返回消息片段',
+    params: { query: '检索关键词（string，必填，支持中文）', chatId: '限定某个会话 ID（string，可选，来自 list_chats 结果）', maxResults: '最多返回条数（number，可选，默认10上限20）' }
   }
 };
 
@@ -234,7 +242,7 @@ function buildToolsSystemPrompt() {
   }
   prompt += '\n规则：\n';
   prompt += '1. 一个回复可以包含多个 <tool_call>，按操作顺序排列，文本说明放在各工具调用的前后\n';
-  prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_links / get_today_status / get_stats / get_todo_stats）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
+  prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_links / get_today_status / get_stats / get_todo_stats / list_chats / search_chat_messages）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
   prompt += '   注意：当前数据快照（═══ 当前数据快照 ═══）与工具返回的数据来自同一数据源，查询结果应完全一致。如果快照已包含足够信息，可不必重复调用 list_todos / list_notes / list_links 等查询工具，直接基于快照回答即可。需要详细信息时才调用 get_todo_detail / get_note_detail。\n';
   prompt += '3. 注意：待办支持多层级（父子任务）。一个顶级任务下可能有子任务、孙任务、甚至更多层。list_todos 会以编号方式展示所有层级（如 [1] → [1.1] → [1.1.1]），请根据编号正确理解层级关系。优先使用 list_todos 获取完整层级，需要详细信息时才调用 get_todo_detail。\n';
   prompt += '4. 定时自动化触发时，你会收到一条以「[🤖 系统自动触发]」开头的消息，其中包含任务内容，请直接执行任务并在回复中向用户说明完成了什么。这条消息不是用户手动发送的，而是系统自动注入的\n';
@@ -408,6 +416,18 @@ function buildToolsSystemPrompt() {
   if (typeof buildAiSummary === 'function') {
     try {
       prompt += '\n' + buildAiSummary();
+    } catch (e) { /* ignore */ }
+  }
+
+  // QQ 聊天会话概览（仅注入数量与名称，具体内容用工具检索）
+  if (typeof window !== 'undefined' && window.QQChats && Array.isArray(window.QQChats.metaCache) && window.QQChats.metaCache.length > 0) {
+    try {
+      const chatMeta = window.QQChats.metaCache;
+      const typeLabel = t => t === 'group' ? '群聊' : (t === 'temp' ? '临时' : '私聊');
+      prompt += `\n📨 已导入 ${chatMeta.length} 个 QQ 聊天会话，可用于回答用户关于聊天记录的问题（如"群里说过什么""某人提到过什么"）：\n`;
+      prompt += chatMeta.slice(0, 8).map(c => `   · ${c.name || '未命名'}（${typeLabel(c.chatType)}，${c.total || 0} 条消息${c.summary ? '，已总结' : ''}）`).join('\n');
+      if (chatMeta.length > 8) prompt += `\n   ...等 ${chatMeta.length} 个会话`;
+      prompt += '\n如需检索具体消息，调用 list_chats 查看全部会话，或 search_chat_messages 按关键词检索消息内容。\n';
     } catch (e) { /* ignore */ }
   }
 
@@ -1718,6 +1738,43 @@ async function executeToolCall(action, params) {
       if (lockedCount > 0) r += `\n🔒 ${lockedCount} 个任务因前置未完成而锁定。\n`;
       r += `\n💡 请基于以上数据给用户 1~3 条下一步行动建议（可配合 add_todo 创建今日待办）。`;
       return r;
+    }
+    case 'list_chats': {
+      if (typeof window.QQChats === 'undefined' || typeof window.QQChats.listChats !== 'function') return '⚠️ QQ 聊天模块未加载（QQChats 不可用）。';
+      try {
+        const chats = await window.QQChats.listChats();
+        if (!chats || chats.length === 0) return '📨 尚未导入任何 QQ 聊天会话。可提示用户在「收件箱 → 导入 QQ 聊天」中导入 qq-chat-exporter 导出的 JSON 文件。';
+        const typeLabel = t => t === 'group' ? '群聊' : (t === 'temp' ? '临时' : '私聊');
+        const timeStr = ts => {
+          if (!ts) return '';
+          const d = new Date(ts);
+          if (isNaN(d.getTime())) return '';
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+        };
+        const lines = chats.map(c => `- [${c.chatId}] ${c.name || '未命名'}（${typeLabel(c.chatType)}，${c.total || 0} 条消息，${timeStr(c.timeStart)} ~ ${timeStr(c.timeEnd)}${c.summary ? '，已总结' : ''}）`);
+        return `📨 已导入 ${chats.length} 个 QQ 聊天会话：\n${lines.join('\n')}\n\n如需检索具体消息内容，使用 search_chat_messages 工具。`;
+      } catch (e) { return '❌ 列出聊天会话失败：' + ((e && e.message) || e); }
+    }
+    case 'search_chat_messages': {
+      if (typeof window.QQChats === 'undefined' || typeof window.QQChats.searchMessages !== 'function') return '⚠️ QQ 聊天模块未加载（QQChats 不可用）。';
+      const query = String(params.query || '').trim();
+      if (!query) return '❌ search_chat_messages: 缺少检索关键词 query。';
+      const chatId = params.chatId || null;
+      const maxResults = Math.min(Number(params.maxResults) || 10, 20);
+      try {
+        const results = await window.QQChats.searchMessages(query, chatId, maxResults);
+        if (!results || results.length === 0) return `🔍 在 QQ 聊天记录中未找到包含「${query}」的消息。`;
+        const timeStr = m => {
+          if (m.time) return m.time;
+          if (!m.timestamp) return '';
+          const d = new Date(m.timestamp);
+          if (isNaN(d.getTime())) return '';
+          return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0') + ' ' + String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
+        };
+        const prefix = chatId ? `🔍 在指定会话中检索「${query}」` : `🔍 在全部 QQ 聊天记录中检索「${query}」`;
+        const lines = results.map(m => `- [${timeStr(m)}] ${m.senderName || '未知'}（${m.chatId || ''}）: ${String(m.text || '').slice(0, 200)}`);
+        return prefix + `，找到 ${results.length} 条消息：\n` + lines.join('\n') + '\n\n请基于以上聊天记录片段回答用户的问题。';
+      } catch (e) { return '❌ 检索聊天消息失败：' + ((e && e.message) || e); }
     }
     default:
       return `错误：未知的工具 "${action}"`;

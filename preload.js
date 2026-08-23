@@ -74,6 +74,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   captureSaveImage: (payload) => ipcRenderer.invoke('capture:save-image', payload),
   captureReadImage: (filePath) => ipcRenderer.invoke('capture:read-image', filePath),
   captureReadFileText: (filePath) => ipcRenderer.invoke('capture:read-file-text', filePath),
+  // ── QQ 聊天 JSONL 导出读取（Electron）──
+  qqchatPickDir: () => ipcRenderer.invoke('qqchat:pick-dir'),
+  qqchatReadManifest: (dir) => ipcRenderer.invoke('qqchat:read-manifest', dir),
+  qqchatReadChunk: (filePath) => ipcRenderer.invoke('qqchat:read-chunk', filePath),
   // ── Web Page Reader IPC (AI 阅读网页) ──
   webRead: (payload) => ipcRenderer.invoke('web:read', payload)
 });
