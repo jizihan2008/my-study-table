@@ -1427,10 +1427,17 @@ function showTodoContextMenu(x, y, id) {
   todoCtxTargetId = id;
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
-  var t = findTodo(id);
+  var needTodo = id != null;
+  var t = needTodo ? findTodo(id) : null;
   var hasKids = t ? getChildren(t.id).length > 0 : false;
+  // 空白处右键（id 为 null）→ 隐藏所有依赖选中待办的菜单项（编辑/子任务/聚焦/排序/归档/删除），
+  // 只留通用操作（撤销/重做/全部展开折叠/隐藏已完成/选择待办）。
+  var needEls = menu.querySelectorAll('.ctx-need-todo');
+  for (var i = 0; i < needEls.length; i++) {
+    needEls[i].style.display = needTodo ? '' : 'none';
+  }
   var sortItems = document.getElementById('todoCtxSortItems');
-  if (sortItems) sortItems.style.display = hasKids ? '' : 'none';
+  if (sortItems) sortItems.style.display = (needTodo && hasKids) ? '' : 'none';
   menu.classList.add('visible');
   // Keep menu inside viewport
   var rect = menu.getBoundingClientRect();
@@ -1454,10 +1461,14 @@ document.addEventListener('click', function(e) {
 var todoTreeForMenu = document.getElementById('todoTree');
 if (todoTreeForMenu) {
   todoTreeForMenu.addEventListener('contextmenu', function(e) {
+    // 右键命中待办项 → 弹完整菜单（含编辑/排序/归档等）；
+    // 右键空白处（列表下方的剩余空间）→ 弹通用菜单（撤销~选择待办）。
+    var id = null;
     var li = e.target.closest('[data-id]');
-    if (!li) return;
-    var id = parseInt(li.dataset.id);
-    if (isNaN(id)) return;
+    if (li) {
+      var parsed = parseInt(li.dataset.id);
+      if (!isNaN(parsed)) id = parsed;
+    }
     e.preventDefault();
     showTodoContextMenu(e.clientX, e.clientY, id);
   });

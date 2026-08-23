@@ -546,6 +546,18 @@ async function renderSyncPanel() {
     const autoTxt = st.autoSync ? '' : '（仅手动同步）';
     statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + autoTxt : '已关闭');
     statusEl.className = 'settings-status';
+    // 诊断行：版本 + 远端记录数 + dirty 残留（排查 iPad 不同步）
+    let diagEl = document.getElementById('syncDiagLine');
+    if (!diagEl) {
+      diagEl = document.createElement('div');
+      diagEl.id = 'syncDiagLine';
+      diagEl.style.cssText = 'font-size:11px;color:var(--text-secondary);margin-top:6px;line-height:1.5;word-break:break-all;';
+      if (statusEl.parentNode) statusEl.parentNode.appendChild(diagEl);
+    }
+    if (diagEl) {
+      const dirtyTxt = st.dirtyKeys && st.dirtyKeys.length ? st.dirtyKeys.join(',') : '无';
+      diagEl.textContent = 'v' + (st.ver || '?') + ' ｜ 远端记录 ' + st.remoteTsCount + ' 项 ｜ dirty[' + dirtyTxt + ']';
+    }
   }
   if (infoEl) {
     // 复用 sync 层 getStatus 的登录态（已兼容 Promise 的 getSession）

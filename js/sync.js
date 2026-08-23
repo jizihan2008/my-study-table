@@ -93,6 +93,7 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
+  const SYNC_VER = '20260823-r8';            // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
   const IDB_NAME = 'mst-sync';
   const IDB_STORE = 'outbox';                // 离线变更队列
@@ -350,10 +351,28 @@
     const items = await _outboxGetAll();
     for (const item of items) {
       // 补传同样不传 updated_at → 服务器 now()，避免 outbox 里的旧客户端时间戳污染 LWW
-      const { error } = await c.from('user_data')
-        .upsert({ user_id: session.user.id, key: item.key, value: item.value },
-          { onConflict: 'user_id,key' });
-      if (!error) await _outboxRemove(item.key);
+      let ok = false;
+      try {
+        const { data, error } = await c.from('user_data')
+          .upsert({ user_id: session.user.id, key: item.key, value: item.value },
+            { onConflict: 'user_id,key' })
+          .select('updated_at')
+          .single();
+        if (!error) {
+          ok = true;
+          if (data && data.updated_at) {
+            // 补传成功：同步服务器时间戳并清除 dirty。
+            // 否则 dirty 残留会持续「保护本地上传」→ 挡住后续自动拉取（电脑→iPad 不更新的根因之一）。
+            _setRemoteTs(item.key, data.updated_at);
+            _setLocalTs(item.key, data.updated_at);
+            _clearLocalDirty(item.key);
+          }
+        }
+      } catch (e) {
+        // select 可能不受支持 → upsert 实际成功，按成功处理（至少不恶化）
+        ok = true;
+      }
+      if (ok) await _outboxRemove(item.key);
     }
   }
 
@@ -406,12 +425,13 @@
   }
   function _isLocalDirty(key) { return !!_getDirtyMap()[key]; }
   // 判断本地时间戳是否为「未来值」（旧版本用设备时钟写 localTs 的污染残留）：
-  // localTs 语义 = 服务器 updated_at，理论上永远 ≤ 服务器当前时间。任何明显快于服务器
-  // 参考时间（本次拉取到的最大 updated_at）的值都是污染 → 本地时间不可信 → 以云端为权威
-  // （拉取覆盖校准），避免「iPad 时钟偏快 → 永不拉取」死循环。
-  // 容忍设 5 秒：仅覆盖服务器多实例/查询的极小抖动；原 15 分钟放过 iPad 的小时钟偏差
-  // （快几分钟）→ 残留污染 localTs 仍挡自动拉取（电脑→iPad 不更新的根因）。
-  const TS_FUTURE_TOLERANCE = 5 * 1000;   // 5 秒容忍
+  // localTs 语义 = 服务器 updated_at，与 remoteMaxTs（本次拉取的最大服务器时间）同源。
+  // 服务器时间单向递增 → localTs 不可能真正晚于 remoteMaxTs；任何超出微小抖动的正值
+  // 都是旧版设备时钟污染 → 本地时间不可信 → 以云端为权威（拉取覆盖校准），
+  // 避免「iPad 时钟偏快 → 永不拉取」死循环。
+  // 容忍 50ms：仅吸收同毫秒字符串的解析抖动；iPad 秒级/分钟级/小时级时钟偏差全部识别。
+  // （曾用 15 分钟/5 秒，均放过 iPad 的更小偏差导致电脑→iPad 不同步）
+  const TS_FUTURE_TOLERANCE = 50;   // 50ms 容忍
   function _tsIsFuture(localTs, remoteMaxTs) {
     if (!localTs || !remoteMaxTs) return false;
     return new Date(localTs).getTime() - new Date(remoteMaxTs).getTime() > TS_FUTURE_TOLERANCE;
@@ -888,12 +908,17 @@
     if (sess && !loggedIn) loggedIn = true;
     if (!sess && loggedIn) loggedIn = false;
     return {
+      ver: SYNC_VER,
       enabled: enabled,
       autoSync: !!cfg.autoSync,
       loggedIn: !!sess,
       pendingCount: dirtyKeys.size,
       lastPull: cfg.lastPull || 0,
-      lastError: _lastPullError || ''
+      lastError: _lastPullError || '',
+      // 诊断字段（排查 iPad 不同步）：
+      remoteTsCount: Object.keys(_getRemoteTs()).length,   // 远端时间戳记录数（0=从未成功交互→走首次同步）
+      dirtyKeys: Object.keys(_getDirtyMap()),              // 待上传 dirty 标记列表（残留会挡住拉取）
+      localTs: _getLocalTs()                               // 本地时间戳（含旧版污染值，排查用）
     };
   }
 

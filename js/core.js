@@ -225,9 +225,13 @@ function initSidebarDismiss() {
     const t = e.touches && e.touches[0];
     if (!sidebar || !t) { _sidebarSwipe = null; return; }
     if (document.documentElement.classList.contains('mst-fake-fullscreen')) { _sidebarSwipe = null; return; }
-    const visible = sidebar.classList.contains('open');
-    // 起点在侧边栏内 → 记录；起点在左缘 40px 内 → 也记录（支持右滑打开过程中反向左滑打断）
-    if ((visible && sidebar.contains(e.target)) || t.clientX <= 40) {
+    // 触发区 = 侧边栏本体 + 其右侧一条窄带（40px），提升左滑关闭的命中面积。
+    // 用 getBoundingClientRect 动态计算：侧边栏未打开（transform 移出屏外）时 rect.right=0
+    // → 退化为左缘 40px（支持右滑打开动画中反向左滑打断）；display:none（rect.width=0）
+    // 时同样退化为左缘 40px。
+    const rect = sidebar.getBoundingClientRect();
+    const swipeRightEdge = rect.width > 0 ? rect.right + 40 : 40;
+    if (t.clientX <= swipeRightEdge) {
       _sidebarSwipe = { startX: t.clientX, startY: t.clientY, fired: false };
     } else {
       _sidebarSwipe = null;

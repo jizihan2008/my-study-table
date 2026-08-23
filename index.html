@@ -1324,9 +1324,9 @@
 <script src="lib/katex/katex.min.js"></script>
 <script src="js/env.js?v=20260811-r1"></script>
 <script src="js/liquid-glass.js?v=20260823-r1"></script>
-<script src="js/core.js?v=20260823-r1"></script>
+<script src="js/core.js?v=20260823-r2"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
-<script src="js/todos.js?v=20260823-r1"></script>
+<script src="js/todos.js?v=20260823-r2"></script>
 <script src="js/notes.js?v=20260823-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20260814-r1"></script>
@@ -1345,7 +1345,7 @@
 <script src="js/bg-media-idb.js?v=20260823-r1"></script>
 <script src="js/appearance.js?v=20260823-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260823-r3"></script>
+<script src="js/settings.js?v=20260823-r4"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260823-r7"></script>
@@ -1382,7 +1382,7 @@
 <script src="js/codegen.js?v=20260808-r14"></script>
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-<script src="js/sync.js?v=20260823-r7"></script>
+<script src="js/sync.js?v=20260823-r8"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260821-r7"></script>
 <script>
@@ -1497,19 +1497,19 @@ if (typeof lucide !== 'undefined') {
   <div class="context-menu-item" onclick="collapseAllTodos();closeTodoContextMenu();"><i data-lucide="chevrons-up" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 全部折叠</div>
   <div class="context-menu-item" id="todoCtxToggleDone" onclick="toggleTodoHideDone();closeTodoContextMenu();"><i data-lucide="eye-off" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 隐藏已完成</div>
   <div class="context-menu-item" onclick="toggleTodoMultiSelect();closeTodoContextMenu();"><i data-lucide="check-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择待办</div>
-  <div class="context-menu-sep"></div>
-  <div class="context-menu-item" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
-  <div class="context-menu-item" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
-  <div class="context-menu-sep"></div>
-  <div class="context-menu-item" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加至今日聚焦</div>
-  <div id="todoCtxSortItems">
+  <div class="context-menu-sep ctx-need-todo"></div>
+  <div class="context-menu-item ctx-need-todo" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
+  <div class="context-menu-item ctx-need-todo" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
+  <div class="context-menu-sep ctx-need-todo"></div>
+  <div class="context-menu-item ctx-need-todo" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加至今日聚焦</div>
+  <div id="todoCtxSortItems" class="ctx-need-todo">
     <div class="context-menu-sep"></div>
     <div class="context-menu-item" onclick="todoCtxSort('alpha')"><i data-lucide="arrow-up-a-z" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按标题排序</div>
     <div class="context-menu-item" onclick="todoCtxSort('recent')"><i data-lucide="clock" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按时间排序（新→旧）</div>
   </div>
-  <div class="context-menu-sep"></div>
-  <div class="context-menu-item" onclick="todoCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
-  <div class="context-menu-item danger" onclick="todoCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
+  <div class="context-menu-sep ctx-need-todo"></div>
+  <div class="context-menu-item ctx-need-todo" onclick="todoCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
+  <div class="context-menu-item danger ctx-need-todo" onclick="todoCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
 </div>
 
 <!-- Right-click context menu for taskline graph -->
