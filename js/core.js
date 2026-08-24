@@ -320,7 +320,14 @@ function switchTab(tab) {
   if (tab === 'timer') renderTimer();
   if (tab === 'habits') renderHabits();
   if (tab === 'inbox') { if (typeof window.Inbox !== 'undefined' && window.Inbox.render) window.Inbox.render(); }
-  if (tab === 'friends') { if (typeof renderFriends === 'function') renderFriends(); }
+  if (tab === 'friends') {
+    if (typeof renderFriends === 'function') renderFriends();
+    // 降 IO：回到好友页恢复心跳（心跳自身也仅好友页可见时写库）
+    if (typeof startFriendsHeartbeat === 'function') startFriendsHeartbeat();
+  } else {
+    // 降 IO：离开好友页停止心跳（避免后台每分钟 auth.getUser()+profiles.update 空耗磁盘 IO）
+    if (typeof stopFriendsHeartbeat === 'function') stopFriendsHeartbeat();
+  }
   if (tab === 'trash') { if (typeof renderTrash === 'function') renderTrash(); }
   if (tab === 'archive') { if (typeof renderArchive === 'function') renderArchive(); }
   // links / music / stats 由内置扩展（builtin-links / builtin-music / builtin-stats）负责渲染

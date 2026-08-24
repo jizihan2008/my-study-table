@@ -670,7 +670,9 @@ async function syncStudyStats() {
     cloud = data;
   } catch (e) {}
 
-  // upsert 聚合统计
+  // upsert 聚合统计 —— 增量写入（降 IO）：
+  // 云端今日记录已存在且所有字段与本地完全一致 → 跳过 upsert（避免每次进入好友页/刷新
+  // 都写一次库，这是磁盘 IO 预算消耗的主要来源之一）。
   const row = {
     user_id: me.id,
     date: stats.date,
@@ -680,14 +682,21 @@ async function syncStudyStats() {
     habit_count: stats.habitCount,
     streak: stats.streak
   };
-  let upsertError = null;
-  try {
-    const { error } = await client.from('study_stats').upsert(row, { onConflict: 'user_id,date' });
-    upsertError = error;
-  } catch (e) { upsertError = e; }
-  if (upsertError) {
-    console.warn('[Friends] sync stats failed:', upsertError.message);
-    return;
+  const statsUnchanged = cloud && cloud.checkin === stats.checkin &&
+    cloud.focus_ms === stats.focusMs &&
+    cloud.todos_done === stats.todosDone &&
+    cloud.habit_count === stats.habitCount &&
+    cloud.streak === stats.streak;
+  if (!statsUnchanged) {
+    let upsertError = null;
+    try {
+      const { error } = await client.from('study_stats').upsert(row, { onConflict: 'user_id,date' });
+      upsertError = error;
+    } catch (e) { upsertError = e; }
+    if (upsertError) {
+      console.warn('[Friends] sync stats failed:', upsertError.message);
+      return;
+    }
   }
 
   // 生成动态（每天每种仅发布一次）
@@ -861,29 +870,32 @@ function friendsUnsubscribeAll() {
 }
 
 // ═══════════════ 在线心跳 ═══════════════
+// 降 IO（2026-08-24）：心跳 60s→5min，且仅当好友页可见时才写 profiles。
+// 此前每分钟无条件 auth.getUser()+profiles.update 会持续消耗 Supabase 磁盘 IO，
+// 是免费实例磁盘 IO 预算耗尽（504/ERR_CONNECTION_CLOSED）的主要嫌疑源。
 let friendsHeartbeatTimer = null;
 async function friendsHeartbeat() {
   const client = getSupabaseClient();
   if (!client) return;
+  const visible = document.getElementById('section-friends')?.classList.contains('active');
   try {
+    if (!visible) return;   // 好友页不可见时不更新在线状态（不在场不写库）
     const { data: { user } } = await client.auth.getUser();
     if (!user) return;
     await client.from('profiles')
       .update({ last_seen: new Date().toISOString(), online_status: 'online' })
       .eq('id', user.id);
-    // 刷新好友在线状态（若好友页可见）
-    if (document.getElementById('section-friends')?.classList.contains('active')) {
-      if (friendsMainView === 'feed' && document.getElementById('friendsMainView')) {
-        document.getElementById('friendsMainView').innerHTML = renderFriendsFeedView();
-        initFriendsLucide();
-      }
-      renderFriendList();
+    // 刷新好友在线状态
+    if (friendsMainView === 'feed' && document.getElementById('friendsMainView')) {
+      document.getElementById('friendsMainView').innerHTML = renderFriendsFeedView();
+      initFriendsLucide();
     }
+    renderFriendList();
   } catch (e) {}
 }
 function startFriendsHeartbeat() {
   stopFriendsHeartbeat();
-  friendsHeartbeatTimer = setInterval(friendsHeartbeat, 60000);
+  friendsHeartbeatTimer = setInterval(friendsHeartbeat, 5 * 60 * 1000);   // 5 分钟
   friendsHeartbeat();
 }
 function stopFriendsHeartbeat() {
