@@ -1,22 +1,50 @@
-const { app, BrowserWindow, ipcMain, Notification, shell, Tray, Menu, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell, Tray, Menu, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
+const {
+  isPathInside,
+  normalizeExtensionId,
+  parseExternalUrl,
+  parsePublicWebUrl
+} = require('./electron/security');
+const { registerBackupIpc } = require('./electron/register-backup-ipc');
+const { registerDiagnostics } = require('./electron/diagnostics');
+const { registerExtensionIpc } = require('./electron/register-extension-ipc');
+const { registerLibraryIpc } = require('./electron/register-library-ipc');
+const { registerSecretIpc } = require('./electron/register-secret-ipc');
+const { registerUpdaterIpc } = require('./electron/register-updater-ipc');
 
 // 屏蔽 Qt/log4cplus 等系统级无关警告
 process.env.QT_LOGGING_RULES = '*.debug=false;*.warning=false';
 process.env.QT_LOGGING_CONF = '';
 
 // 设置固定的用户数据目录，避免默认路径权限问题
-const userDataPath = path.join(app.getPath('home'), '.my-study-table');
+const userDataPath = process.env.MST_E2E === '1' && process.env.MST_USER_DATA_PATH
+  ? path.resolve(process.env.MST_USER_DATA_PATH)
+  : path.join(app.getPath('home'), '.my-study-table');
 app.setPath('userData', userDataPath);
+
+let mainWindow;
+registerBackupIpc({ ipcMain, shell, userDataPath });
+const diagnostics = registerDiagnostics({ app, ipcMain, userDataPath });
+const extensionService = registerExtensionIpc({
+  dialog,
+  ipcMain,
+  shell,
+  userDataPath,
+  getMainWindow: () => mainWindow
+});
+const { extensionsDir, ensureExtensionsDir } = extensionService;
+registerLibraryIpc({ app, dialog, ipcMain, userDataPath, getMainWindow: () => mainWindow });
+registerSecretIpc({ ipcMain, safeStorage, userDataPath });
+const updaterService = registerUpdaterIpc({ app, ipcMain, getMainWindow: () => mainWindow });
 
 // 禁用 GPU 缓存（解决 cache_util_win 拒绝访问错误）
 app.commandLine.appendSwitch('disable-gpu-shader-disk-cache');
 app.commandLine.appendSwitch('disable-gpu-program-cache');
 
-let mainWindow;
 let tray = null;
 let isQuitting = false;
 
@@ -171,13 +199,23 @@ function createWindow() {
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       contextIsolation: true,
-      nodeIntegration: false
+      nodeIntegration: false,
+      sandbox: true
     },
     autoHideMenuBar: true,
     show: false
   });
 
   mainWindow.loadFile('index.html');
+
+  mainWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
+  mainWindow.webContents.on('will-navigate', (event, targetUrl) => {
+    const currentUrl = mainWindow && mainWindow.webContents.getURL();
+    if (currentUrl && targetUrl !== currentUrl) event.preventDefault();
+  });
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
+  mainWindow.webContents.session.setPermissionCheckHandler(() => false);
+  mainWindow.webContents.on('render-process-gone', (_event, details) => diagnostics.write('render-process-gone', details));
 
   mainWindow.once('ready-to-show', () => {
     mainWindow.show();
@@ -209,10 +247,12 @@ if (!gotTheLock) {
     }
   });
   app.whenReady().then(() => {
-    createTray();
+    if (process.env.MST_E2E !== '1') createTray();
     createWindow();
-    initAutoUpdater();
-    startConfirmServer(); // 监听 localhost:3000 供 Supabase 确认链接回调
+    if (process.env.MST_E2E !== '1') {
+      updaterService.init();
+      startConfirmServer(); // 监听 localhost:3000 供 Supabase 确认链接回调
+    }
   });
 }
 
@@ -236,10 +276,25 @@ app.on('before-quit', () => {
   }
 });
 
-// IPC: 桌面通知
-ipcMain.handle('show-notification', async (event, { title, body }) => {
+// IPC: 桌面通知（支持点击跳转）
+// payload: { title, body, tag, target } target = { tab, convId } 等跳转意图
+ipcMain.handle('show-notification', async (event, payload) => {
+  const { title, body, tag, target } = payload || {};
   if (Notification.isSupported()) {
-    const notification = new Notification({ title, body });
+    const notification = new Notification({ title, body, silent: false });
+    notification.on('click', () => {
+      // 点击通知 → 回发渲染进程执行跳转（切 tab / 定位对话）
+      if (target && event.sender && !event.sender.isDestroyed()) {
+        event.sender.send('notification-click', target);
+      }
+      // 若窗口最小化/失焦，先恢复焦点
+      const win = mainWindow || BrowserWindow.fromWebContents(event.sender);
+      if (win) {
+        if (win.isMinimized()) win.restore();
+        win.show();
+        win.focus();
+      }
+    });
     notification.show();
     return true;
   }
@@ -249,7 +304,8 @@ ipcMain.handle('show-notification', async (event, { title, body }) => {
 // IPC: 用默认浏览器（Edge）打开外部链接
 ipcMain.handle('open-external', async (event, url) => {
   try {
-    await shell.openExternal(url);
+    const target = parseExternalUrl(url);
+    await shell.openExternal(target.href);
     return true;
   } catch (err) {
     console.error('Failed to open URL:', err);
@@ -273,680 +329,6 @@ ipcMain.handle('focus-window', async () => {
     return true;
   }
   return false;
-});
-
-// IPC: 打开音频文件选择对话框
-ipcMain.handle('open-audio-dialog', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择音频文件',
-    filters: [
-      { name: '音频文件', extensions: ['mp3', 'wav', 'ogg', 'flac', 'aac', 'm4a', 'wma'] },
-      { name: '所有文件', extensions: ['*'] }
-    ],
-    properties: ['openFile', 'multiSelections']
-  });
-  if (result.canceled) return [];
-  return result.filePaths;
-});
-
-// IPC: 打开图片文件选择对话框（返回 Data URL）
-ipcMain.handle('open-image-dialog', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择背景图片',
-    filters: [
-      { name: '图片文件', extensions: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'] },
-      { name: '所有文件', extensions: ['*'] }
-    ],
-    properties: ['openFile']
-  });
-  if (result.canceled || result.filePaths.length === 0) return null;
-  try {
-    const filePath = result.filePaths[0];
-    const ext = path.extname(filePath).toLowerCase();
-    const mimeMap = {
-      '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png',
-      '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp',
-      '.svg': 'image/svg+xml'
-    };
-    const mime = mimeMap[ext] || 'image/png';
-    const buffer = await fs.promises.readFile(filePath);
-    const dataUrl = `data:${mime};base64,${buffer.toString('base64')}`;
-    // Warn if too large (>8MB in base64 ≈ 6MB original)
-    if (buffer.length > 6 * 1024 * 1024) {
-      return { dataUrl, warning: '图片较大（>6MB），可能影响性能' };
-    }
-    return { dataUrl };
-  } catch (err) {
-  console.error('读取图片失败:', err);
-  return null;
-  }
-});
-
-// IPC: 打开视频文件选择对话框（返回文件路径）
-ipcMain.handle('open-video-dialog', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择背景视频',
-    filters: [
-      { name: '视频文件', extensions: ['mp4', 'webm', 'ogg', 'mov', 'avi', 'mkv'] },
-      { name: '所有文件', extensions: ['*'] }
-    ],
-    properties: ['openFile']
-  });
-  if (result.canceled || result.filePaths.length === 0) return null;
-  try {
-    const filePath = result.filePaths[0];
-    // Return as file:// URL for video element
-    const fileUrl = 'file:///' + filePath.replace(/\\/g, '/');
-    return { fileUrl };
-  } catch (err) {
-    console.error('读取视频文件失败:', err);
-    return null;
-  }
-});
-
-// ═══════════ File-based Backup System ═══════════
-const backupDir = path.join(userDataPath, 'backups');
-
-// Ensure backup directory exists
-function ensureBackupDir() {
-  if (!fs.existsSync(backupDir)) {
-    fs.mkdirSync(backupDir, { recursive: true });
-  }
-}
-
-// IPC: 打开备份目录
-ipcMain.handle('open-backup-dir', async () => {
-  ensureBackupDir();
-  await shell.openPath(backupDir);
-  return true;
-});
-
-// IPC: 获取备份目录路径
-ipcMain.handle('get-backup-dir', async () => {
-  ensureBackupDir();
-  return backupDir;
-});
-
-// IPC: 执行一次文件备份
-// Receives all localStorage data from renderer, writes to a file
-ipcMain.handle('perform-backup', async (event, { data, maxFiles }) => {
-  ensureBackupDir();
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const filename = `backup-${timestamp}.json`;
-  const filePath = path.join(backupDir, filename);
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), 'utf-8');
-
-  // Enforce max file count: delete oldest files if over limit
-  let files = fs.readdirSync(backupDir)
-    .filter(f => f.startsWith('backup-') && f.endsWith('.json'))
-    .sort(); // alphabetical = chronological order
-
-  const limit = Math.max(Number(maxFiles) || 30, 1);
-  let deletedCount = 0;
-  while (files.length > limit) {
-    const oldest = files[0];
-    try { fs.unlinkSync(path.join(backupDir, oldest)); deletedCount++; } catch (e) {}
-    files = files.slice(1); // Remove first element (already deleted)
-  }
-
-  // Re-read the actual directory to get accurate count
-  const finalFiles = fs.readdirSync(backupDir)
-    .filter(f => f.startsWith('backup-') && f.endsWith('.json'))
-    .length;
-
-  return {
-    path: filePath,
-    totalFiles: finalFiles,
-    deleted: deletedCount
-  };
-});
-
-// IPC: 获取备份文件列表
-ipcMain.handle('list-backups', async () => {
-  ensureBackupDir();
-  const files = fs.readdirSync(backupDir)
-    .filter(f => f.startsWith('backup-') && f.endsWith('.json'))
-    .sort()
-    .reverse();
-  return files.map(f => {
-    const filePath = path.join(backupDir, f);
-    try {
-      const stat = fs.statSync(filePath);
-      return { name: f, size: stat.size, mtime: stat.mtime.toISOString() };
-    } catch { return null; }
-  }).filter(Boolean);
-});
-
-// IPC: 获取下载目录路径
-ipcMain.handle('get-downloads-path', async () => {
-  return app.getPath('downloads');
-});
-
-// IPC: 读取文件为 base64 Data URL
-ipcMain.handle('read-audio-file', async (event, filePath) => {
-  try {
-    // 先校验扩展名白名单再读盘，避免渲染层传入任意路径读取本地文件
-    const ext = path.extname(String(filePath)).toLowerCase();
-    const mimeMap = {
-      '.mp3': 'audio/mpeg',
-      '.wav': 'audio/wav',
-      '.ogg': 'audio/ogg',
-      '.flac': 'audio/flac',
-      '.aac': 'audio/aac',
-      '.m4a': 'audio/mp4',
-      '.wma': 'audio/x-ms-wma'
-    };
-    const mime = mimeMap[ext];
-    if (!mime) return null;
-    const buffer = await fs.promises.readFile(filePath);
-    const base64 = buffer.toString('base64');
-    return `data:${mime};base64,${base64}`;
-  } catch (err) {
-    console.error('Failed to read audio file:', err);
-    return null;
-  }
-});
-
-// ═══════════ Textbook Learning (教材学习) ═══════════
-// PDF 教材导入 + 正文缓存（正文不进 localStorage，缓存于 <userData>/books/<bookId>.json）
-const booksCacheDir = path.join(userDataPath, 'books');
-function ensureBooksCacheDir() {
-  if (!fs.existsSync(booksCacheDir)) fs.mkdirSync(booksCacheDir, { recursive: true });
-}
-
-// IPC: 打开 PDF 教材选择对话框
-ipcMain.handle('pdf:pick', async () => {
-  const result = await dialog.showOpenDialog(mainWindow, {
-    title: '选择教材 PDF',
-    filters: [
-      { name: 'PDF 文件', extensions: ['pdf'] },
-      { name: '所有文件', extensions: ['*'] }
-    ],
-    properties: ['openFile']
-  });
-  if (result.canceled || !result.filePaths || result.filePaths.length === 0) return null;
-  return result.filePaths[0];
-});
-
-// IPC: 读取 PDF 文件（校验 .pdf 扩展名），返回 Buffer
-ipcMain.handle('pdf:read', async (event, filePath) => {
-  try {
-    const ext = path.extname(String(filePath || '')).toLowerCase();
-    if (ext !== '.pdf') return null;
-    const buffer = await fs.promises.readFile(String(filePath));
-    return buffer;
-  } catch (err) {
-    console.error('Failed to read PDF file:', err);
-    return null;
-  }
-});
-
-// IPC: 保存教材正文缓存（<userData>/books/<bookId>.json，isPathInside 白名单校验）
-ipcMain.handle('books:text-save', async (event, { bookId, data }) => {
-  try {
-    ensureBooksCacheDir();
-    const safeId = String(bookId || '').replace(/[^a-zA-Z0-9_-]/g, '');
-    if (!safeId) return { ok: false, reason: '非法 bookId' };
-    const target = path.join(booksCacheDir, safeId + '.json');
-    if (!isPathInside(booksCacheDir, target)) return { ok: false, reason: '非法路径' };
-    fs.writeFileSync(target, typeof data === 'string' ? data : JSON.stringify(data), 'utf-8');
-    return { ok: true, path: target };
-  } catch (err) {
-    return { ok: false, reason: String((err && err.message) || err) };
-  }
-});
-
-// IPC: 读取教材正文缓存
-ipcMain.handle('books:text-load', async (event, { bookId }) => {
-  try {
-    ensureBooksCacheDir();
-    const safeId = String(bookId || '').replace(/[^a-zA-Z0-9_-]/g, '');
-    if (!safeId) return null;
-    const target = path.join(booksCacheDir, safeId + '.json');
-    if (!isPathInside(booksCacheDir, target)) return null;
-    if (!fs.existsSync(target)) return null;
-    return fs.readFileSync(target, 'utf-8');
-  } catch (err) {
-    return null;
-  }
-});
-
-// IPC: 删除教材正文缓存
-ipcMain.handle('books:text-delete', async (event, { bookId }) => {
-  try {
-    ensureBooksCacheDir();
-    const safeId = String(bookId || '').replace(/[^a-zA-Z0-9_-]/g, '');
-    if (!safeId) return { ok: false };
-    const target = path.join(booksCacheDir, safeId + '.json');
-    if (!isPathInside(booksCacheDir, target)) return { ok: false };
-    if (fs.existsSync(target)) fs.unlinkSync(target);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false };
-  }
-});
-
-// ═══════════ Auto Updater ═══════════
-let autoUpdater = null;
-let updaterSupported = false;
-let updaterChecking = false;
-
-// 转发更新事件到渲染进程
-function sendUpdateEvent(payload) {
-  if (mainWindow && !mainWindow.isDestroyed()) {
-    mainWindow.webContents.send('update:event', payload);
-  }
-}
-
-function initAutoUpdater() {
-  try {
-    ({ autoUpdater } = require('electron-updater'));
-  } catch (err) {
-    console.error('[updater] electron-updater 加载失败:', err);
-    updaterSupported = false;
-    return;
-  }
-  // 仅在打包的 NSIS 安装版中可用；开发模式 / portable / zip 解压版不支持
-  // electron-builder 打包 portable 时会设置 PORTABLE_EXECUTABLE_FILE 环境变量
-  const isPortableBuild = !!process.env.PORTABLE_EXECUTABLE_FILE;
-  try {
-    updaterSupported = app.isPackaged && !isPortableBuild && typeof autoUpdater.isUpdaterActive === 'function' && autoUpdater.isUpdaterActive();
-  } catch (err) {
-    updaterSupported = false;
-  }
-  if (!updaterSupported) {
-    // 通知渲染层：当前版本不支持自动更新，只提供手动下载提示
-    sendUpdateEvent({ type: 'unsupported' });
-    return;
-  }
-
-  autoUpdater.autoDownload = false; // 由渲染层确认后手动下载
-  autoUpdater.autoInstallOnAppQuit = false; // 等用户点击后安装
-
-  autoUpdater.on('checking-for-update', () => {
-    updaterChecking = true;
-    sendUpdateEvent({ type: 'checking' });
-  });
-  autoUpdater.on('update-available', (info) => {
-    updaterChecking = false;
-    sendUpdateEvent({ type: 'available', info });
-  });
-  autoUpdater.on('update-not-available', (info) => {
-    updaterChecking = false;
-    sendUpdateEvent({ type: 'not-available', info });
-  });
-  autoUpdater.on('error', (err) => {
-    updaterChecking = false;
-    sendUpdateEvent({ type: 'error', message: String((err && err.message) || err) });
-  });
-  autoUpdater.on('download-progress', (progressObj) => {
-    sendUpdateEvent({
-      type: 'progress',
-      percent: Math.round(progressObj.percent || 0),
-      transferred: progressObj.transferred || 0,
-      total: progressObj.total || 0,
-      bytesPerSecond: progressObj.bytesPerSecond || 0
-    });
-  });
-  autoUpdater.on('update-downloaded', (info) => {
-    sendUpdateEvent({ type: 'downloaded', info });
-  });
-}
-
-// IPC: 查询更新支持状态
-ipcMain.handle('update:get-state', async () => {
-  return {
-    supported: updaterSupported,
-    currentVersion: app.getVersion(),
-    checking: updaterChecking
-  };
-});
-
-// IPC: 触发检查更新
-ipcMain.handle('update:check', async () => {
-  if (!updaterSupported || !autoUpdater) return { ok: false, reason: 'unsupported' };
-  try {
-    await autoUpdater.checkForUpdates();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, reason: String((err && err.message) || err) };
-  }
-});
-
-// IPC: 开始下载更新
-ipcMain.handle('update:download', async () => {
-  if (!updaterSupported || !autoUpdater) return { ok: false, reason: 'unsupported' };
-  try {
-    await autoUpdater.downloadUpdate();
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, reason: String((err && err.message) || err) };
-  }
-});
-
-// IPC: 安装并重启（仅 NSIS 安装版）
-ipcMain.handle('update:install', async () => {
-  if (!updaterSupported || !autoUpdater) return { ok: false, reason: 'unsupported' };
-  try {
-    autoUpdater.quitAndInstall(false, true);
-    return { ok: true };
-  } catch (err) {
-    return { ok: false, reason: String((err && err.message) || err) };
-  }
-});
-
-// ═══════════ Extension System ═══════════
-// 外部扩展（安全插件 plugin / 源码补丁 patch）统一存放在 <userData>/extensions/<id>/
-// 每个扩展目录：manifest.json + main.js + backup/<时间戳>（应用前自动备份）
-const extensionsDir = path.join(userDataPath, 'extensions');
-
-function ensureExtensionsDir() {
-  if (!fs.existsSync(extensionsDir)) fs.mkdirSync(extensionsDir, { recursive: true });
-}
-
-// 规范化扩展 ID：仅允许字母数字与中划线，防止路径穿越
-function safeExtId(id) {
-  return String(id || '').replace(/[^a-zA-Z0-9_-]/g, '');
-}
-
-function extDir(id) {
-  return path.join(extensionsDir, safeExtId(id));
-}
-
-// 路径安全校验：target 必须位于 base 目录内
-function isPathInside(base, target) {
-  const rel = path.relative(base, target);
-  return rel !== '' && !rel.startsWith('..') && !path.isAbsolute(rel);
-}
-
-// IPC: 列出所有扩展（扫描目录 + 解析 manifest）
-ipcMain.handle('ext:list', async () => {
-  ensureExtensionsDir();
-  const entries = fs.readdirSync(extensionsDir, { withFileTypes: true })
-    .filter(e => e.isDirectory())
-    // 跳过软件内回收站目录与隐藏目录，避免被误认为扩展
-    .filter(e => e.name !== 'trash' && !e.name.startsWith('.'));
-  return entries.map(entry => {
-    const dir = path.join(extensionsDir, entry.name);
-    const manifestPath = path.join(dir, 'manifest.json');
-    const mainPath = path.join(dir, 'main.js');
-    let manifest = null;
-    let error = null;
-    try {
-      manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-    } catch (e) {
-      error = 'manifest 解析失败';
-    }
-    const hasMain = fs.existsSync(mainPath);
-    let size = 0, mtime = null;
-    if (hasMain) {
-      try {
-        const st = fs.statSync(mainPath);
-        size = st.size;
-        mtime = st.mtime.toISOString();
-      } catch (e) {}
-    }
-    return {
-      id: (manifest && manifest.id) || entry.name,
-      dir,
-      manifest,
-      hasMain,
-      hasManifest: !!manifest,
-      type: (manifest && manifest.type) || 'plugin',
-      builtin: false,
-      name: (manifest && manifest.name) || entry.name,
-      version: (manifest && manifest.version) || '1.0.0',
-      author: (manifest && manifest.author) || '',
-      size,
-      mtime,
-      error
-    };
-  });
-});
-
-// IPC: 读取扩展内文件（白名单：仅扩展目录内部）
-ipcMain.handle('ext:read', async (event, { id, file, filename }) => {
-  const dir = extDir(id);
-  const target = path.resolve(dir, String((file || filename) || 'main.js'));
-  if (!isPathInside(dir, target)) throw new Error('非法路径');
-  return fs.readFileSync(target, 'utf-8');
-});
-
-// IPC: 写入扩展（files: { manifest?: object, main?: string }）
-ipcMain.handle('ext:write', async (event, { id, files }) => {
-  const dir = extDir(id);
-  ensureExtensionsDir();
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-  if (files && files.manifest !== undefined) {
-    fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify(files.manifest, null, 2), 'utf-8');
-  }
-  if (files && files.main !== undefined) {
-    fs.writeFileSync(path.join(dir, 'main.js'), String(files.main), 'utf-8');
-  }
-  return { ok: true, dir };
-});
-
-// IPC: 备份扩展当前文件到 backup/<时间戳>/
-ipcMain.handle('ext:backup', async (event, { id }) => {
-  const dir = extDir(id);
-  if (!fs.existsSync(dir)) return { ok: false, reason: '扩展不存在' };
-  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-  const target = path.join(dir, 'backup', ts);
-  if (!fs.existsSync(target)) fs.mkdirSync(target, { recursive: true });
-  const copied = [];
-  for (const f of fs.readdirSync(dir)) {
-    if (f === 'backup') continue;
-    const src = path.join(dir, f);
-    try {
-      if (fs.statSync(src).isFile()) {
-        fs.copyFileSync(src, path.join(target, f));
-        copied.push(f);
-      }
-    } catch (e) {}
-  }
-  return { ok: true, backupPath: target, files: copied };
-});
-
-// IPC: 列出扩展的备份版本
-ipcMain.handle('ext:list-backups', async (event, { id }) => {
-  const backupRoot = path.join(extDir(id), 'backup');
-  if (!fs.existsSync(backupRoot)) return [];
-  return fs.readdirSync(backupRoot)
-    .filter(f => {
-      try { return fs.statSync(path.join(backupRoot, f)).isDirectory(); } catch { return false; }
-    })
-    .sort()
-    .reverse()
-    .map(f => {
-      try {
-        const st = fs.statSync(path.join(backupRoot, f));
-        return { name: f, mtime: st.mtime.toISOString() };
-      } catch { return null; }
-    })
-    .filter(Boolean);
-});
-
-// IPC: 从指定备份恢复扩展（覆盖 manifest.json 与 main.js）
-ipcMain.handle('ext:restore', async (event, { id, backupName }) => {
-  const dir = extDir(id);
-  const backupRoot = path.join(dir, 'backup');
-  const src = path.join(backupRoot, String(backupName || ''));
-  if (!isPathInside(backupRoot, src)) throw new Error('非法路径');
-  if (!fs.existsSync(src)) return { ok: false, reason: '备份不存在' };
-  for (const f of ['manifest.json', 'main.js']) {
-    const s = path.join(src, f);
-    if (fs.existsSync(s)) fs.copyFileSync(s, path.join(dir, f));
-  }
-  return { ok: true };
-});
-
-// IPC: 卸载扩展（移入软件内回收站 extensions/trash/，可从扩展页恢复）
-const extTrashDir = path.join(extensionsDir, 'trash');
-function ensureExtTrashDir() {
-  if (!fs.existsSync(extTrashDir)) fs.mkdirSync(extTrashDir, { recursive: true });
-}
-ipcMain.handle('ext:remove', async (event, { id }) => {
-  const dir = extDir(id);
-  if (!fs.existsSync(dir)) return { ok: true, trashed: false, reason: 'not-exists' };
-  ensureExtTrashDir();
-  const trashName = safeExtId(id) + '-' + Date.now().toString(36);
-  const trashTarget = path.join(extTrashDir, trashName);
-  // 防止重名（极端情况同毫秒）
-  if (fs.existsSync(trashTarget)) {
-    const alt = trashName + '-' + Math.random().toString(36).slice(2, 6);
-    try { fs.renameSync(dir, path.join(extTrashDir, alt)); return { ok: true, trashed: true, trashDir: alt }; }
-    catch (e) { /* fallthrough */ }
-  }
-  try {
-    fs.renameSync(dir, trashTarget);
-    return { ok: true, trashed: true, trashDir: trashName };
-  } catch (e) {
-    // rename 失败（跨盘等）回退复制+删除
-    try {
-      fs.cpSync(dir, trashTarget, { recursive: true, force: true });
-      fs.rmSync(dir, { recursive: true, force: true });
-      return { ok: true, trashed: true, trashDir: trashName };
-    } catch (e2) {
-      return { ok: false, reason: String(e2 && e2.message || e2) };
-    }
-  }
-});
-
-// IPC: 列出软件内回收站中的扩展
-ipcMain.handle('ext:trash-list', async () => {
-  ensureExtTrashDir();
-  return fs.readdirSync(extTrashDir, { withFileTypes: true })
-    .filter(e => e.isDirectory())
-    .map(entry => {
-      const dir = path.join(extTrashDir, entry.name);
-      const manifestPath = path.join(dir, 'manifest.json');
-      let manifest = null, error = null;
-      try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch (e) { error = 'manifest 解析失败'; }
-      // 目录名格式 <id>-<base36 时间戳>
-      const m = entry.name.match(/^(.+)-([a-z0-9]{6,})$/);
-      const originalId = m ? m[1] : entry.name;
-      let deletedAt = null;
-      if (m) {
-        try {
-          const n = parseInt(m[2], 36);
-          if (!isNaN(n)) deletedAt = new Date(n).toISOString();
-        } catch (e) {}
-      }
-      return {
-        id: (manifest && manifest.id) || originalId,
-        trashDir: entry.name,
-        manifest,
-        hasMain: fs.existsSync(path.join(dir, 'main.js')),
-        error,
-        deletedAt
-      };
-    })
-    .sort((a, b) => String(b.deletedAt || '').localeCompare(String(a.deletedAt || '')));
-});
-
-// IPC: 从回收站恢复扩展（校验 id 合法 + 目标不存在）
-ipcMain.handle('ext:trash-restore', async (event, { trashDir }) => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(String(trashDir || ''))) return { ok: false, reason: '非法回收站目录名' };
-  ensureExtTrashDir();
-  const src = path.join(extTrashDir, String(trashDir));
-  if (!isPathInside(extTrashDir, src) || !fs.existsSync(src)) return { ok: false, reason: '回收站项不存在' };
-  const manifestPath = path.join(src, 'manifest.json');
-  let manifest = null;
-  try { manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8')); } catch (e) { return { ok: false, reason: '回收站项缺少有效 manifest.json' }; }
-  const id = safeExtId(manifest.id || '');
-  if (!id) return { ok: false, reason: 'manifest 缺少合法 id' };
-  const dest = extDir(id);
-  if (fs.existsSync(dest)) return { ok: false, reason: '扩展 ' + id + ' 已存在，请先卸载' };
-  try {
-    fs.renameSync(src, dest);
-    return { ok: true, id };
-  } catch (e) {
-    try {
-      fs.mkdirSync(dest, { recursive: true });
-      for (const entry of fs.readdirSync(src)) {
-        fs.cpSync(path.join(src, entry), path.join(dest, entry), { recursive: true, force: true });
-      }
-      fs.rmSync(src, { recursive: true, force: true });
-      return { ok: true, id };
-    } catch (e2) {
-      return { ok: false, reason: String(e2 && e2.message || e2) };
-    }
-  }
-});
-
-// IPC: 从回收站永久删除
-ipcMain.handle('ext:trash-purge', async (event, { trashDir }) => {
-  if (!/^[a-zA-Z0-9_-]+$/.test(String(trashDir || ''))) return { ok: false, reason: '非法回收站目录名' };
-  ensureExtTrashDir();
-  const target = path.join(extTrashDir, String(trashDir));
-  if (!isPathInside(extTrashDir, target)) return { ok: false, reason: '非法路径' };
-  if (fs.existsSync(target)) fs.rmSync(target, { recursive: true, force: true });
-  return { ok: true };
-});
-
-// IPC: 清空扩展回收站（清空 trash 目录全部内容）
-ipcMain.handle('ext:trash-empty', async () => {
-  ensureExtTrashDir();
-  for (const entry of fs.readdirSync(extTrashDir, { withFileTypes: true })) {
-    const target = path.join(extTrashDir, entry.name);
-    if (!isPathInside(extTrashDir, target)) continue;
-    fs.rmSync(target, { recursive: true, force: true });
-  }
-  return { ok: true };
-});
-
-// IPC: 打开扩展目录（资源管理器）
-ipcMain.handle('ext:open-dir', async () => {
-  ensureExtensionsDir();
-  await shell.openPath(extensionsDir);
-  return true;
-});
-
-// IPC: 导入扩展（sourcePath 为空时弹出文件夹选择框）
-// 校验目标目录含 manifest.json + 合法 id 后整体复制到 extensionsDir/<id>
-ipcMain.handle('ext:import', async (event, { sourcePath } = {}) => {
-  ensureExtensionsDir();
-  let src = String(sourcePath || '').trim();
-  if (!src) {
-    const res = await dialog.showOpenDialog(mainWindow, {
-      title: '选择要导入的扩展文件夹',
-      properties: ['openDirectory']
-    });
-    if (res.canceled || !res.filePaths || !res.filePaths.length) return { ok: false, canceled: true };
-    src = res.filePaths[0];
-  }
-  if (!fs.existsSync(src)) return { ok: false, reason: '来源目录不存在: ' + src };
-  const stat = fs.statSync(src);
-  if (!stat.isDirectory()) return { ok: false, reason: '请选择文件夹（每个扩展一个目录，含 manifest.json + main.js）' };
-
-  // 读取 manifest 确定扩展 id（校验防路径穿越）
-  const manifestPath = path.join(src, 'manifest.json');
-  let manifest = null;
-  try {
-    manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
-  } catch (e) {
-    return { ok: false, reason: '所选文件夹缺少有效的 manifest.json（不是扩展目录）' };
-  }
-  const rawId = String(manifest.id || '').trim();
-  const id = safeExtId(rawId);
-  if (!id || id !== rawId) return { ok: false, reason: 'manifest 的 id 不合法（仅允许字母/数字/中划线）: ' + rawId };
-  const dest = extDir(id);
-  if (fs.existsSync(dest)) return { ok: false, reason: '扩展 ' + id + ' 已存在，可先卸载后再导入' };
-
-  // 复制整个目录（含 main.js、backup 等）
-  try {
-    fs.mkdirSync(dest, { recursive: true });
-    for (const entry of fs.readdirSync(src)) {
-      const s = path.join(src, entry);
-      const d = path.join(dest, entry);
-      fs.cpSync(s, d, { recursive: true, force: true });
-    }
-  } catch (e) {
-    // 复制失败时清理残留
-    try { fs.rmSync(dest, { recursive: true, force: true }); } catch (e2) {}
-    return { ok: false, reason: '复制失败: ' + String(e && e.message || e) };
-  }
-  return { ok: true, id, dir: dest };
 });
 
 // IPC: 核心源码文件清单（供 AI 编程助手构建上下文，只读）
@@ -1336,7 +718,7 @@ ipcMain.handle('codebuddy:run', async (event, { prompt, userPath, apiKey, mode }
   }
 
   // 2. 源码只读目录（开发模式=项目根；打包模式=source-snapshot，且已导出）
-  ensureExtensionsDir();
+  await ensureExtensionsDir();
   let sourceDir = __dirname;
   if (app.isPackaged) {
     sourceDir = exportSourceSnapshot();
@@ -2190,10 +1572,7 @@ ipcMain.handle('web:read', async (event, { url, maxChars } = {}) => {
   let win = null;
   try {
     if (!url) return { ok: false, error: '缺少网页 URL' };
-    const target = new URL(String(url).trim());
-    if (target.protocol !== 'http:' && target.protocol !== 'https:') {
-      return { ok: false, error: '仅支持 http/https 协议的网页' };
-    }
+    const target = parsePublicWebUrl(url);
     win = new BrowserWindow({
       show: false,
       webPreferences: {
@@ -2209,6 +1588,16 @@ ipcMain.handle('web:read', async (event, { url, maxChars } = {}) => {
     win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(false));
     win.webContents.session.setPermissionCheckHandler(() => false);
     win.webContents.setUserAgent(WEB_READER_UA);
+    let blockedNavigation = '';
+    const guardWebReaderNavigation = (navigationEvent, navigationUrl) => {
+      try { parsePublicWebUrl(navigationUrl); }
+      catch (error) {
+        blockedNavigation = String((error && error.message) || error);
+        navigationEvent.preventDefault();
+      }
+    };
+    win.webContents.on('will-redirect', guardWebReaderNavigation);
+    win.webContents.on('will-navigate', guardWebReaderNavigation);
 
     const outcome = await Promise.race([
       (async () => {
@@ -2217,7 +1606,9 @@ ipcMain.handle('web:read', async (event, { url, maxChars } = {}) => {
         } catch (e) {
           return { ok: false, error: '页面加载失败：' + String((e && e.message) || e) };
         }
+        if (blockedNavigation) return { ok: false, error: '页面跳转已被拦截：' + blockedNavigation };
         await waitWebReaderStable(win.webContents);
+        if (blockedNavigation) return { ok: false, error: '页面跳转已被拦截：' + blockedNavigation };
         const raw = await win.webContents.executeJavaScript(webReaderExtractScript());
         const data = JSON.parse(raw || '{}');
         if (data.error) return { ok: false, error: '页面内容提取失败：' + data.error };

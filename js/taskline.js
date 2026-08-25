@@ -122,9 +122,9 @@ function tlAddQuest({ lineId, title, goal = '', meaning = '', output = '', desc,
     sort: lineQuests.length > 0 ? Math.max(...lineQuests.map(q => q.sort || 0)) + 1 : 0,
     createdAt: Date.now()
   };
-  // 手动画布位置（画布绝对坐标 {x,y}，仅在该章节存在手动布局时生效）
+  // 手动画布位置（画布绝对坐标 {x,y}，可为负：节点可放左/上边界外）
   if (pos && typeof pos === 'object' && typeof pos.x === 'number' && isFinite(pos.x) && typeof pos.y === 'number' && isFinite(pos.y)) {
-    quest.pos = { x: Math.max(0, Math.round(pos.x)), y: Math.max(0, Math.round(pos.y)) };
+    quest.pos = { x: Math.round(pos.x), y: Math.round(pos.y) };
   }
   store.quests.push(quest);
   saveTaskLineStore(store);
@@ -146,7 +146,7 @@ function tlUpdateQuest(id, patch) {
     if (patch.pos === null || patch.pos === false) {
       delete q.pos; // 清除手动位置，回退自动布局
     } else if (typeof patch.pos === 'object' && typeof patch.pos.x === 'number' && isFinite(patch.pos.x) && typeof patch.pos.y === 'number' && isFinite(patch.pos.y)) {
-      q.pos = { x: Math.max(0, Math.round(patch.pos.x)), y: Math.max(0, Math.round(patch.pos.y)) };
+      q.pos = { x: Math.round(patch.pos.x), y: Math.round(patch.pos.y) };
     }
   }
   saveTaskLineStore(store);
@@ -583,6 +583,7 @@ function tlLineProgress(line) {
 let tlActiveLineId = null;
 let tlDragMode = true; // 拖拽模式：默认开启，可直接拖动节点（点击=打开详情，按住拖动=移动）
 let tlSuppressClick = false; // 拖动后抑制节点 click（避免误开详情）
+let tlDraggingQuestId = null; // 拖拽锁：拖拽中跳过 renderTaskLine 重绘（防同步重绘导致节点回弹）
 const TL_NODE_H = 52;
 const TL_GAP_X = 56;
 const TL_GAP_Y = 20;
@@ -692,10 +693,12 @@ function tlLayoutGraph(quests, extQuests) {
       });
     }
   }
-  return { width: maxX + TL_PAD, height: maxY + TL_PAD, nodes, edges, manual: false };
+  return { width: maxX + TL_PAD, height: maxY + TL_PAD, nodes, edges, manual: false, minX: 0, minY: 0 };
 }
 
-// 手动布局：有 pos 的任务按坐标放置，无 pos 的任务排到默认区，外部占位节点放最左侧，箭头仍按 deps 自动连接
+// 手动布局：有 pos 的任务按坐标放置，无 pos 的任务排到默认区，外部占位节点放最左侧，箭头仍按 deps 自动连接。
+// 坐标允许为负（节点可拖到画布左/上边界外）：计算内容范围 minX/minY/maxX/maxY，
+// 渲染时 SVG viewBox 与 nodes 容器据此平移，使负坐标区域同样可见。
 function tlLayoutGraphManual(quests, extList, all) {
   const nodeW = {};
   for (const q of all) {
@@ -703,32 +706,34 @@ function tlLayoutGraphManual(quests, extList, all) {
     nodeW[q.id] = Math.min(230, Math.max(110, len * 14 + 56));
   }
   const nodes = {};
-  let maxX = TL_PAD, maxY = TL_PAD;
-  // 1) 有 pos 的任务：按坐标放置
+  let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+  const track = (x, y, w) => {
+    minX = Math.min(minX, x); minY = Math.min(minY, y);
+    maxX = Math.max(maxX, x + w); maxY = Math.max(maxY, y + TL_NODE_H);
+  };
+  // 1) 有 pos 的任务：按坐标放置（pos 可为负 → x/y 可为负）
   for (const q of quests) {
     if (!q.pos || typeof q.pos.x !== 'number' || typeof q.pos.y !== 'number') continue;
     const x = TL_PAD + q.pos.x;
     const y = TL_PAD + q.pos.y;
     nodes[q.id] = { x, y, w: nodeW[q.id], h: TL_NODE_H, manual: true };
-    maxX = Math.max(maxX, x + nodeW[q.id]);
-    maxY = Math.max(maxY, y + TL_NODE_H);
+    track(x, y, nodeW[q.id]);
   }
   // 2) 外部占位节点：放最左侧一列
   let extY = TL_PAD;
   for (const ext of extList) {
     const x = TL_PAD;
     nodes[ext.id] = { x, y: extY, w: nodeW[ext.id], h: TL_NODE_H, manual: true };
-    maxX = Math.max(maxX, x + nodeW[ext.id]);
-    maxY = Math.max(maxY, extY + TL_NODE_H);
+    track(x, extY, nodeW[ext.id]);
     extY += TL_NODE_H + TL_GAP_Y;
   }
   // 3) 无 pos 的任务：排到默认区（右下依次排列）
   const noPos = quests.filter(q => !q.pos || typeof q.pos.x !== 'number');
-  let autoX = TL_PAD, autoY = maxY + TL_GAP_Y;
+  let autoY = (maxY === -Infinity ? TL_PAD : maxY) + TL_GAP_Y;
+  let autoX = TL_PAD;
   for (const q of noPos) {
     nodes[q.id] = { x: autoX, y: autoY, w: nodeW[q.id], h: TL_NODE_H, manual: true };
-    maxX = Math.max(maxX, autoX + nodeW[q.id]);
-    maxY = Math.max(maxY, autoY + TL_NODE_H);
+    track(autoX, autoY, nodeW[q.id]);
     autoX += nodeW[q.id] + TL_GAP_X;
   }
   // 4) 依赖连线（箭头跟随 deps，位置自由）
@@ -748,13 +753,20 @@ function tlLayoutGraphManual(quests, extList, all) {
       });
     }
   }
-  return { width: maxX + TL_PAD, height: maxY + TL_PAD, nodes, edges, manual: true };
+  if (minX === Infinity) { minX = TL_PAD; minY = TL_PAD; maxX = TL_PAD; maxY = TL_PAD; }
+  // 内容范围含负坐标：宽高覆盖 min..max，并记录 minX/minY 供渲染平移 viewBox/nodes
+  const width = (maxX - minX) + TL_PAD;
+  const height = (maxY - minY) + TL_PAD;
+  return { width, height, nodes, edges, manual: true, minX, minY };
 }
 
 // ─────────────────────── UI 渲染（GTNH 任务图 + 章节目录浮窗） ───────────────────────
 function renderTaskLine() {
   const app = document.getElementById('tasklineApp');
   if (!app) return;
+  // 拖拽锁：拖拽过程中跳过重绘。sync.js 的 _refreshUI 会调用 renderTaskLine()，
+  // 若拖拽中（未松手）同步/Realtime 触发重绘，会重建 DOM 并把节点重置回原位置 → 视觉"回弹"。
+  if (tlDraggingQuestId !== null) return;
   if (typeof tlRefreshAll === 'function') tlRefreshAll();
   tlDrainFeedbackAndNotify();
   const store = loadTaskLineStore();
@@ -897,14 +909,18 @@ function tlRenderGraph(store, line) {
     ${extCount > 0 ? `<span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-ext"></span>跨章节依赖</span>` : ''}
   </div>`;
   const lockedBanner = isLocked ? `<div class="tl-locked-banner tl-locked-banner-float"><i data-lucide="lock" class="lucide-icon" style="width:14px;height:14px;"></i> 前置章节未完成，本章节任务已锁定</div>` : '';
+  // 内容可能含负坐标（拖到左/上边界外）：nodes 容器与 SVG 整体平移 -minX/-minY，
+  // 使负坐标区域落入画布可视范围；viewBox 起点为 (minX, minY) 保持连线坐标对应。
+  const shiftX = -(layout.minX || 0), shiftY = -(layout.minY || 0);
+  const vbX = layout.minX || 0, vbY = layout.minY || 0;
   return `<div class="tl-graph-wrap" id="tlGraphWrap" oncontextmenu="tlShowGraphContextMenu(event, ${line.id})">
     <div class="tl-graph-canvas" onmousedown="tlGraphCanvasDown(event)" ontouchstart="tlGraphCanvasTouchStart(event)" onwheel="tlGraphCanvasWheel(event)">
       <div class="tl-graph-inner" style="width:${layout.width}px;height:${layout.height}px;">
-        <svg class="tl-graph-svg" width="${layout.width}" height="${layout.height}" viewBox="0 0 ${layout.width} ${layout.height}">
+        <svg class="tl-graph-svg" width="${layout.width}" height="${layout.height}" viewBox="${vbX} ${vbY} ${layout.width} ${layout.height}">
           <defs><marker id="tlArrow" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="var(--primary)"/></marker></defs>
           ${edgesHtml}
         </svg>
-        <div class="tl-graph-nodes">${nodesHtml}</div>
+        <div class="tl-graph-nodes" style="left:${shiftX}px;top:${shiftY}px;">${nodesHtml}</div>
       </div>
     </div>
     ${lockedBanner}
@@ -1190,8 +1206,15 @@ let tlGraphView = { scale: 1, left: 0, top: 0 };
 function tlClampGraphView(inner, canvas) {
   const cw = canvas.clientWidth, ch = canvas.clientHeight;
   const iw = inner.offsetWidth * tlGraphView.scale, ih = inner.offsetHeight * tlGraphView.scale;
-  const nl = Math.min(cw + TL_PAN_MARGIN, Math.max(-(iw + TL_PAN_MARGIN), tlGraphView.left));
-  const nt = Math.min(ch + TL_PAN_MARGIN, Math.max(-(ih + TL_PAN_MARGIN), tlGraphView.top));
+  // 钳制范围：允许内容两侧各留 TL_PAN_MARGIN 余量，但必须保证内容右缘/下缘能滚入视口——
+  // 旧公式下界 -(iw+margin) 会把内容右缘推到视口左侧外，导致右侧节点永远无法滚进视口
+  // （拖拽跟随被钳制 → 节点"弹回来"）。
+  const minL = Math.min(0, cw - iw) - TL_PAN_MARGIN;
+  const maxL = Math.max(0, cw - iw) + TL_PAN_MARGIN;
+  const minT = Math.min(0, ch - ih) - TL_PAN_MARGIN;
+  const maxT = Math.max(0, ch - ih) + TL_PAN_MARGIN;
+  const nl = Math.max(minL, Math.min(maxL, tlGraphView.left));
+  const nt = Math.max(minT, Math.min(maxT, tlGraphView.top));
   tlGraphView.left = nl;
   tlGraphView.top = nt;
 }
@@ -1357,6 +1380,50 @@ document.addEventListener('contextmenu', function (e) {
   if (!e.target.closest('#tlTaskContextMenu') && !e.target.closest('#tlQuestContextMenu')) tlCloseAllContextMenus();
 });
 // 拖拽开始（节点 onmousedown 触发；tlDragMode 关闭时返回 true 放行点击）
+// 说明：节点四方向均可拖出画布边界（含负坐标），画布边界与 viewBox 在松手重绘时
+// 由 tlLayoutGraphManual 一次性计算；拖拽过程中保持 nodes 平移/viewBox 不变以避免闪烁。
+// 拖拽/落点后：若节点超出当前视口（.tl-graph-canvas）可视区，自动平移视图跟随，
+// 保证"放出去的节点"始终可见（否则会被 overflow hidden 裁剪导致节点"消失"）。
+// skipClamp=true（拖拽中使用）：跳过钳制，允许视口平移到负区域/边界外，
+// 使拖到左/上边界外的节点仍可见；同时拖拽中不修改 nodes 平移与 viewBox，
+// 避免所有节点视觉位置逐帧跳动（画布闪烁）。
+function tlFollowNodeInView(nodeEl, skipClamp) {
+  const canvas = nodeEl.closest('.tl-graph-canvas');
+  const inner = nodeEl.closest('.tl-graph-inner');
+  if (!canvas || !inner) return;
+  const scale = tlGraphView.scale;
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  // nodes 容器平移量（负坐标偏移），节点视口坐标 = inner 平移 + nodes 平移 + 节点在 nodes 内坐标 × 缩放
+  const nodesEl = inner.querySelector('.tl-graph-nodes');
+  const shiftX = nodesEl ? (parseFloat(nodesEl.style.left) || 0) : 0;
+  const shiftY = nodesEl ? (parseFloat(nodesEl.style.top) || 0) : 0;
+  const nx = tlGraphView.left + (nodeEl.offsetLeft + shiftX) * scale;
+  const ny = tlGraphView.top + (nodeEl.offsetTop + shiftY) * scale;
+  const nw = nodeEl.offsetWidth * scale, nh = nodeEl.offsetHeight * scale;
+  let dl = 0, dt = 0;
+  if (nx < 24) dl = 24 - nx;
+  else if (nx + nw > cw - 24) dl = (cw - 24) - (nx + nw);
+  if (ny < 24) dt = 24 - ny;
+  else if (ny + nh > ch - 24) dt = (ch - 24) - (ny + nh);
+  if (dl !== 0 || dt !== 0) {
+    // left/top 单位即屏幕像素（transform scale 只缩放内容不缩放 left/top），
+    // dl/dt 已是屏幕像素位移，直接累加即可
+    tlGraphView.left += dl;
+    tlGraphView.top += dt;
+    if (!skipClamp) tlClampGraphView(inner, canvas);
+    inner.style.left = tlGraphView.left + 'px';
+    inner.style.top = tlGraphView.top + 'px';
+  }
+}
+// 重绘后保证节点可见（复用跟随逻辑，对重绘后的新节点元素调用）
+function tlEnsureNodeVisible(questId) {
+  if (tlMainView !== 'graph') return;
+  const wrap = document.getElementById('tlGraphWrap');
+  const canvas = wrap ? wrap.querySelector('.tl-graph-canvas') : null;
+  const node = canvas ? canvas.querySelector('.tl-node[data-qid="' + questId + '"]') : null;
+  if (!canvas || !node) return;
+  tlFollowNodeInView(node);
+}
 function tlNodeDragStart(ev, questId) {
   // 右键（button 2）不启动节点拖拽，留给右键菜单
   if (ev.button === 2) return true;
@@ -1376,21 +1443,33 @@ function tlNodeDragStart(ev, questId) {
     el.style.top = (origTop + dy / tlGraphView.scale) + 'px';
     el.style.zIndex = 50;
     dragging = true;
+    tlDraggingQuestId = questId; // 拖拽锁：拖拽中跳过 renderTaskLine 重绘
+    // 节点超出视口时自动平移跟随（跳过钳制：允许平移到负区域/边界外），
+    // 拖拽过程中不修改 nodes 平移与 viewBox，避免画布闪烁
+    tlFollowNodeInView(el, true);
   }
   function onUp() {
     document.removeEventListener('mousemove', onMove);
     document.removeEventListener('mouseup', onUp);
     if (!dragging) return; // 未拖动 = 点击，onclick 会打开详情
+    tlDraggingQuestId = null; // 解除拖拽锁
     tlSuppressClick = true; // 拖动过：抑制随后的 click 事件
     setTimeout(function () { tlSuppressClick = false; }, 0);
-    // 写入画布坐标（减去 TL_PAD，与手动布局坐标一致）
+    // 写入画布坐标（减去 TL_PAD，与手动布局坐标一致）。
+    // 直接读取节点实际布局位置（el.offsetLeft）而非累加 moved.x：
+    // 若最后一次 mousemove 未触发（快速拖拽/鼠标移出窗口），moved.x 会滞后，
+    // 保存坐标偏小 → 重绘后节点"弹回"。offsetLeft 反映真实落点。
+    // 允许负坐标：节点可拖到画布左/上边界外（渲染时 nodes/SVG 平移使负区域可见）。
     const q = tlGetQuest(questId);
     if (q) {
-      const newX = Math.max(0, Math.round(origLeft + moved.x / tlGraphView.scale - TL_PAD));
-      const newY = Math.max(0, Math.round(origTop + moved.y / tlGraphView.scale - TL_PAD));
+      const newX = Math.round(el.offsetLeft - TL_PAD);
+      const newY = Math.round(el.offsetTop - TL_PAD);
       tlUpdateQuest(questId, { pos: { x: newX, y: newY } });
     }
     renderTaskLine(); // 重绘，重新计算连线
+    // 重绘后 inner 尺寸已包含新落点（tlLayoutGraphManual 按 min/max 计算）；
+    // 若落点仍落在当前视口外，自动平移视图让节点可见
+    tlEnsureNodeVisible(questId);
   }
   document.addEventListener('mousemove', onMove);
   document.addEventListener('mouseup', onUp);
@@ -1422,6 +1501,10 @@ function tlNodeDragTouchStart(ev, questId) {
     el.style.top = (origTop + dy / tlGraphView.scale) + 'px';
     el.style.zIndex = 50;
     dragging = true;
+    tlDraggingQuestId = questId; // 拖拽锁：拖拽中跳过 renderTaskLine 重绘
+    // 节点超出视口时自动平移跟随（跳过钳制：允许平移到负区域/边界外），
+    // 拖拽过程中不修改 nodes 平移与 viewBox，避免画布闪烁
+    tlFollowNodeInView(el, true);
   }
   function onUp() {
     clearTimeout(longTimer);
@@ -1429,15 +1512,20 @@ function tlNodeDragTouchStart(ev, questId) {
     document.removeEventListener('touchend', onUp);
     document.removeEventListener('touchcancel', onUp);
     if (!dragging) return; // 未拖动 = 点击，onclick 打开详情
+    tlDraggingQuestId = null; // 解除拖拽锁
     tlSuppressClick = true;
     setTimeout(function() { tlSuppressClick = false; }, 0);
+    // 同鼠标版：直接读取节点实际布局位置，避免最后 touchmove 未触发导致坐标滞后回弹
+    // 允许负坐标：节点可拖到画布左/上边界外
     const q = tlGetQuest(questId);
     if (q) {
-      const newX = Math.max(0, Math.round(origLeft + moved.x / tlGraphView.scale - TL_PAD));
-      const newY = Math.max(0, Math.round(origTop + moved.y / tlGraphView.scale - TL_PAD));
+      const newX = Math.round(el.offsetLeft - TL_PAD);
+      const newY = Math.round(el.offsetTop - TL_PAD);
       tlUpdateQuest(questId, { pos: { x: newX, y: newY } });
     }
     renderTaskLine();
+    // 重绘后 inner 尺寸已包含新落点；若落点仍超出视口，自动平移视图让节点可见
+    tlEnsureNodeVisible(questId);
   }
   document.addEventListener('touchmove', onMove, { passive: false });
   document.addEventListener('touchend', onUp);
@@ -1510,7 +1598,7 @@ function tlOpenQuestForm(lineId, canvasPos) {
   if (!line) return;
   // 从「相对 inner 左上角」的点击位置换算为任务画布绝对坐标（pos 需减去 TL_PAD 内边距）
   tlQuestFormPos = canvasPos
-    ? { x: Math.max(0, Math.round(canvasPos.x - TL_PAD)), y: Math.max(0, Math.round(canvasPos.y - TL_PAD)) }
+    ? { x: Math.round(canvasPos.x - TL_PAD), y: Math.round(canvasPos.y - TL_PAD) }
     : null;
   const body = document.getElementById('editModalBody');
   const title = document.getElementById('editModalTitle');

@@ -50,6 +50,7 @@ window.Inbox = (function () {
 
   // ── 存储 ──
   function loadJSON(key, fallback) {
+    if (key === MAIL_KEY && typeof SecretVault !== 'undefined') return SecretVault.getJson(key, fallback);
     try { return JSON.parse(localStorage.getItem(key)) || fallback; }
     catch (e) { return fallback; }
   }
@@ -57,7 +58,10 @@ window.Inbox = (function () {
     try { localStorage.setItem(MSG_KEY, JSON.stringify(messages.slice(0, MAX_MESSAGES))); } catch (e) {}
   }
   function saveMailAccounts() {
-    try { localStorage.setItem(MAIL_KEY, JSON.stringify(mailAccounts)); } catch (e) {}
+    try {
+      if (typeof SecretVault !== 'undefined') SecretVault.setJson(MAIL_KEY, mailAccounts).catch(console.warn);
+      else localStorage.setItem(MAIL_KEY, JSON.stringify(mailAccounts));
+    } catch (e) {}
   }
   function saveWatchDirs() {
     try { localStorage.setItem(WATCH_KEY, JSON.stringify(watchDirs)); } catch (e) {}

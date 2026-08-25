@@ -369,9 +369,13 @@ function getSettings() {
 
 // ─── Multi Key support ───
 function loadApiKeys() {
+  if (typeof SecretVault !== 'undefined') return SecretVault.getJson('study_api_keys', []);
   try { return JSON.parse(localStorage.getItem('study_api_keys')) || []; } catch { return []; }
 }
-function saveApiKeys(keys) { localStorage.setItem('study_api_keys', JSON.stringify(keys)); }
+function saveApiKeys(keys) {
+  if (typeof SecretVault !== 'undefined') SecretVault.setJson('study_api_keys', keys).catch(console.warn);
+  else localStorage.setItem('study_api_keys', JSON.stringify(keys));
+}
 function getActiveApiKeyId() {
   return localStorage.getItem('study_active_api_key_id') || '';
 }
@@ -1688,6 +1692,34 @@ function saveSettings() {
 }
 
 // ─── Multi Key Management ───
+// 复制一份 API Key（克隆一个配置完全相同的 Key 条目，原 Key 不动）
+// 新建条目：新 id、name 加「（副本）」后缀，key/baseUrl/model/temperature/deepThink/
+// maxTokens/contextLimit/titleContextCount 全部复制原值。
+function duplicateApiKey(id) {
+  const keys = loadApiKeys();
+  const k = keys.find(k => k.id === id);
+  if (!k) { showSettingsStatus('未找到该 Key', true); return; }
+  const baseName = (k.name || '未命名').replace(/\s*（副本）\d*$/, '');   // 去上次副本后缀，避免叠叠乐
+  const copies = keys.filter(x => x.name === baseName + '（副本）' || x.name.startsWith(baseName + '（副本）')).length;
+  const newName = copies === 0 ? baseName + '（副本）' : baseName + '（副本）' + (copies + 1);
+  keys.push({
+    id: 'key_' + genId(),
+    name: newName,
+    key: k.key || '',
+    baseUrl: k.baseUrl || 'https://api.openai.com/v1',
+    model: k.model || 'gpt-3.5-turbo',
+    temperature: (typeof k.temperature === 'number') ? k.temperature : 0.7,
+    deepThink: k.deepThink === true,
+    maxTokens: k.maxTokens || undefined,
+    contextLimit: Math.max(5, k.contextLimit || 20),
+    titleContextCount: Math.max(2, k.titleContextCount || 4),
+    createdAt: new Date().toISOString()
+  });
+  saveApiKeys(keys);
+  renderApiKeyList();
+  showSettingsStatus('✅ 已复制一份「' + (k.name || '') + '」的配置');
+}
+
 function renderApiKeyList() {
   const el = document.getElementById('apiKeyList');
   if (!el) return;
@@ -1708,6 +1740,7 @@ function renderApiKeyList() {
         <div style="color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🔑 ${escapeHtml(k.name)} ${isActive ? '<span style="color:var(--primary);font-size:10px;">(当前使用)</span>' : ''}</div>
         <div style="color:var(--text-secondary);font-size:11px;">${escapeHtml(k.key.slice(0,12))}… | ${escapeHtml(modelName)} | ${k.baseUrl ? escapeHtml(k.baseUrl.replace(/\/+$/,'').replace(/https?:\/\//,'')) : 'openai'}</div>
       </div>
+      <button onclick="duplicateApiKey('${k.id}')" style="background:var(--todo-hover);color:var(--text);border:none;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:10px;" title="复制一份（克隆配置）">📋</button>
       <button onclick="setActiveApiKey('${k.id}')" style="background:${isActive ? 'var(--done)' : 'var(--border)'};color:${isActive ? '#fff' : 'var(--text)'};border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:10px;white-space:nowrap;" title="设为当前使用">${isActive ? '✅ 使用中' : '启用'}</button>
       <button onclick="editApiKey('${k.id}')" style="background:var(--primary);color:#fff;border:none;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:10px;" title="编辑">✏️</button>
       <button onclick="deleteApiKey('${k.id}')" style="background:var(--danger);color:#fff;border:none;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:10px;" title="删除">🗑️</button>
@@ -2249,7 +2282,8 @@ async function executeAutomation(conv, auto) {
     sendNotification(
       '🤖 自动化任务已执行',
       '「' + taskPreview + '」\n点击切换到对应对话查看结果',
-      'auto-' + auto.id
+      'auto-' + auto.id,
+      { tab: 'ai', convId: conv.id }
     );
 
   } catch (err) {
@@ -2358,11 +2392,14 @@ function saveWebSearchSettings() {
   const engine = document.getElementById('settingsWebSearchEngine').value;
   const key = document.getElementById('settingsWebSearchKey').value.trim();
   localStorage.setItem('study_web_search_engine', engine);
-  localStorage.setItem('study_web_search_key', key);
+  if (typeof SecretVault !== 'undefined') SecretVault.set('study_web_search_key', key).catch(console.warn);
+  else localStorage.setItem('study_web_search_key', key);
 }
 function loadWebSearchSettings() {
   const engine = localStorage.getItem('study_web_search_engine') || 'duckduckgo';
-  const key = localStorage.getItem('study_web_search_key') || '';
+  const key = typeof SecretVault !== 'undefined'
+    ? SecretVault.get('study_web_search_key', '')
+    : (localStorage.getItem('study_web_search_key') || '');
   const engineEl = document.getElementById('settingsWebSearchEngine');
   const keyEl = document.getElementById('settingsWebSearchKey');
   if (engineEl) engineEl.value = engine;
@@ -2687,15 +2724,27 @@ const MIGRATION_KEYS = [
   'study_api_keys', 'study_active_api_key_id', 'study_developer_mode', 'study_debug_mode',
   'study_automations'
 ];
+const SENSITIVE_MIGRATION_KEYS = new Set([
+  'study_api_keys',
+  'study_ai_api_key',
+  'study_web_search_key',
+  'study_mail_accounts',
+  'study_mail_config',
+  'study_inbox_config',
+  'study_supabase_config',
+  'study_codegen_api_key',
+  'study_codebuddy_api_key'
+]);
+const SAFE_MIGRATION_KEYS = MIGRATION_KEYS.filter(key => !SENSITIVE_MIGRATION_KEYS.has(key));
 
 function exportAllData() {
   const data = {};
-  for (const key of MIGRATION_KEYS) {
+  for (const key of SAFE_MIGRATION_KEYS) {
     const val = localStorage.getItem(key);
     if (val !== null) data[key] = val;
   }
   downloadJsonFile(data, 'study-table-backup-' + new Date().toISOString().slice(0, 10) + '.json');
-  showMigrateMsg('✅ 数据已导出', '#10b981');
+  showMigrateMsg('✅ 数据已导出（未包含 API Key 等敏感凭据）', '#10b981');
 }
 
 function downloadJsonFile(data, filename) {
@@ -2766,7 +2815,7 @@ function showMigrateMsg(msg, color) {
 
 // ═══════════ Auto Backup (file-based) ═══════════
 let backupTimer = null;
-const MIGRATION_KEYS_BACKUP = MIGRATION_KEYS; // reuse from global scope
+const MIGRATION_KEYS_BACKUP = SAFE_MIGRATION_KEYS;
 
 // Collect all app data for backup
 function collectAllBackupData() {
@@ -3603,7 +3652,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
         renderAiChat();
       }
       // Send Windows notification
-      sendNotification('📋 晨间日报已生成', '你的 ' + data.todayStr + ' 晨间回顾已就绪 ☀️', 'daily-report');
+      sendNotification('📋 晨间日报已生成', '你的 ' + data.todayStr + ' 晨间回顾已就绪 ☀️', 'daily-report', { tab: 'ai', convId: conv.id });
       showMiniToast('☀️ 晨间日报已生成');
       return { ok: true };
     }
@@ -3999,7 +4048,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       saveData('study_ai_convs', aiConvs);
       // Send Windows notification (before render/mark to ensure delivery)
       try {
-        sendNotification('🌙 晚间日报已生成', '你的 ' + todayStr + ' 晚间回顾已就绪', 'evening-report');
+        sendNotification('🌙 晚间日报已生成', '你的 ' + todayStr + ' 晚间回顾已就绪', 'evening-report', { tab: 'ai', convId: conv.id });
       } catch { /* notification best-effort, don't block report flow */ }
       showMiniToast('🌙 晚间日报已生成');
       if (activeConvId === conv.id) {

@@ -227,6 +227,10 @@ create policy "conv_update" on public.conversations
   for update using (auth.uid() = user_a or auth.uid() = user_b)
   with check (auth.uid() = user_a or auth.uid() = user_b);
 
+-- 参与者只能触碰 updated_at；user_a/user_b 创建后不可变，避免把历史会话转交给第三人。
+revoke update on table public.conversations from anon, authenticated;
+grant update (updated_at) on table public.conversations to authenticated;
+
 -- messages：会话参与者可读，发送者本人可写
 drop policy if exists "messages_readable" on public.messages;
 create policy "messages_readable" on public.messages
@@ -254,6 +258,10 @@ create policy "messages_update" on public.messages
     )
   );
 
+-- 消息身份与正文不可修改；参与者更新仅用于已读时间。
+revoke update on table public.messages from anon, authenticated;
+grant update (read_at) on table public.messages to authenticated;
+
 -- ═══════════════════════════════════════════════════════════════════
 -- 授权 Data API 角色（anon / authenticated / service_role）
 -- 若新建项目时关闭了 "Automatically expose new tables"，此段必不可少；
@@ -265,9 +273,17 @@ grant all on table public.friend_groups to anon, authenticated, service_role;
 grant all on table public.friendships to anon, authenticated, service_role;
 grant all on table public.study_stats to anon, authenticated, service_role;
 grant all on table public.activities to anon, authenticated, service_role;
-grant all on table public.conversations to anon, authenticated, service_role;
-grant all on table public.messages to anon, authenticated, service_role;
-grant all on sequence public.messages_id_seq to anon, authenticated, service_role;
+revoke all on table public.conversations from anon, authenticated;
+grant select, insert on table public.conversations to authenticated;
+grant update (updated_at) on table public.conversations to authenticated;
+grant all on table public.conversations to service_role;
+revoke all on table public.messages from anon, authenticated;
+grant select, insert on table public.messages to authenticated;
+grant update (read_at) on table public.messages to authenticated;
+grant all on table public.messages to service_role;
+revoke all on sequence public.messages_id_seq from anon;
+grant usage, select on sequence public.messages_id_seq to authenticated;
+grant all on sequence public.messages_id_seq to service_role;
 grant all on table public.weekly_focus_todos to anon, authenticated, service_role;
 
 -- ═══════════════════════════════════════════════════════════════════
@@ -325,9 +341,11 @@ create table if not exists public.plugin_store_items (
   rating     real default 0,                        -- 平均评分 0~5
   status     text not null default 'pending' check (status in ('pending','approved','rejected')),
   file_path  text not null,                         -- Storage 路径
+  file_sha256 text not null default '',             -- 安装前校验包完整性
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now()
 );
+alter table public.plugin_store_items add column if not exists file_sha256 text not null default '';
 
 -- 索引
 create index if not exists idx_plugin_store_status  on public.plugin_store_items (status);
@@ -342,6 +360,15 @@ create table if not exists public.plugin_downloads (
   created_at timestamptz not null default now()
 );
 create index if not exists idx_plugin_downloads_plugin on public.plugin_downloads (plugin_id);
+-- 每个账号只记录一次下载，避免刷下载量。
+delete from public.plugin_downloads a
+using public.plugin_downloads b
+where a.plugin_id = b.plugin_id
+  and a.user_id = b.user_id
+  and a.id::text > b.id::text;
+create unique index if not exists plugin_downloads_unique_user
+  on public.plugin_downloads (plugin_id, user_id)
+  where user_id is not null;
 
 -- 下载量自增 RPC（security definer 绕过 RLS，因下载者非作者无法直接 UPDATE）
 create or replace function public.increment_downloads(target_plugin_id uuid)
@@ -354,6 +381,28 @@ as $$
      set downloads = downloads + 1
    where id = target_plugin_id;
 $$;
+revoke all on function public.increment_downloads(uuid) from public, anon, authenticated;
+grant execute on function public.increment_downloads(uuid) to service_role;
+
+-- 下载记录落库后由数据库维护计数，客户端不能直接调用自增函数。
+create or replace function public.on_plugin_download_created()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  update public.plugin_store_items
+     set downloads = downloads + 1
+   where id = new.plugin_id;
+  return new;
+end;
+$$;
+revoke all on function public.on_plugin_download_created() from public, anon, authenticated;
+drop trigger if exists trg_plugin_download_created on public.plugin_downloads;
+create trigger trg_plugin_download_created
+  after insert on public.plugin_downloads
+  for each row execute function public.on_plugin_download_created();
 
 -- 评分
 create table if not exists public.plugin_ratings (
@@ -376,8 +425,13 @@ create policy "Anyone can read approved plugins" on public.plugin_store_items
   for select using (status = 'approved');
 
 drop policy if exists "Author can manage own plugins" on public.plugin_store_items;
-create policy "Author can manage own plugins" on public.plugin_store_items
-  for all using (author_id = auth.uid()) with check (author_id = auth.uid());
+drop policy if exists "Author can insert pending plugins" on public.plugin_store_items;
+create policy "Author can insert pending plugins" on public.plugin_store_items
+  for insert with check (author_id = auth.uid() and status = 'pending');
+drop policy if exists "Author can update own plugins" on public.plugin_store_items;
+drop policy if exists "Author can delete own plugins" on public.plugin_store_items;
+create policy "Author can delete own plugins" on public.plugin_store_items
+  for delete using (author_id = auth.uid());
 
 -- 下载记录：本人可读/写
 drop policy if exists "Users can read own downloads" on public.plugin_downloads;
@@ -398,9 +452,14 @@ create policy "Users can manage own ratings" on public.plugin_ratings
   for all using (user_id = auth.uid()) with check (user_id = auth.uid());
 
 -- 权限：授权 anon/authenticated 访问这三张表（PostgREST 不会自动识别新表）
-grant all on public.plugin_store_items to anon, authenticated;
-grant all on public.plugin_downloads  to anon, authenticated;
-grant all on public.plugin_ratings    to anon, authenticated;
+revoke all on public.plugin_store_items from anon, authenticated;
+grant select on public.plugin_store_items to anon, authenticated;
+grant insert, delete on public.plugin_store_items to authenticated;
+revoke all on public.plugin_downloads from anon, authenticated;
+grant select, insert on public.plugin_downloads to authenticated;
+revoke all on public.plugin_ratings from anon, authenticated;
+grant select on public.plugin_ratings to anon, authenticated;
+grant insert, update, delete on public.plugin_ratings to authenticated;
 
 -- Storage 存储桶：插件市场文件
 insert into storage.buckets (id, name, public)
@@ -410,10 +469,19 @@ on conflict (id) do nothing;
 -- Storage RLS：插件上传/更新/删除 + 读取
 -- 注意：上传用 upsert:true，文件已存在时会走 UPDATE，必须有 for all（覆盖 UPDATE）而非仅 for insert
 drop policy if exists "Authenticated users can manage plugin files" on storage.objects;
-create policy "Authenticated users can manage plugin files" on storage.objects
+drop policy if exists "Authors can manage own plugin files" on storage.objects;
+create policy "Authors can manage own plugin files" on storage.objects
   for all
-  using (bucket_id = 'plugin-store' and auth.role() = 'authenticated')
-  with check (bucket_id = 'plugin-store' and auth.role() = 'authenticated');
+  using (
+    bucket_id = 'plugin-store'
+    and auth.role() = 'authenticated'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  )
+  with check (
+    bucket_id = 'plugin-store'
+    and auth.role() = 'authenticated'
+    and (storage.foldername(name))[1] = auth.uid()::text
+  );
 
 drop policy if exists "Anyone can read plugin files" on storage.objects;
 create policy "Anyone can read plugin files" on storage.objects

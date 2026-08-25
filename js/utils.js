@@ -100,28 +100,5 @@ document.addEventListener('scroll', showScrollbars, { passive: true, capture: tr
 // 也监听 wheel 事件，因为有些容器自己滚动不会冒泡到 document
 document.addEventListener('wheel', showScrollbars, { passive: true, capture: true });
 
-applyTheme(getTheme());
-// Restore sidebar state (hover-triggered — just restore open class)
-if (localStorage.getItem('study_sidebar_open') === 'true') {
-  sidebarOpen = true;
-  document.getElementById('sidebar').classList.add('open');
-}
-// Initialize sidebar hover trigger
-if (typeof initSidebarHover === 'function') initSidebarHover();
-initChangelog();
-// Initialize each module independently so one failing renderer doesn't break the rest
-function safeInit(fn, name) {
-  try { fn(); }
-  catch (e) { console.error('[init] ' + name + ' failed:', e); }
-}
-safeInit(renderTodos, 'renderTodos');
-safeInit(refreshRepeatTodos, 'refreshRepeatTodos');
-safeInit(renderNotes, 'renderNotes');
-safeInit(renderAiChat, 'renderAiChat');
-safeInit(renderToday, 'renderToday');
-// 快捷访问 / 音乐播放器 / 学习统计 已内置扩展化（builtin-links / builtin-music / builtin-stats），
-// 由扩展管理器在装载后通过 switchTab 的 render 回调渲染，不再在此初始化。
-// Trigger daily memory integration on app start
-if (typeof checkDailyIntegration === 'function') {
-  setTimeout(checkDailyIntegration, 3000);
-}
+// Application startup is centralized in bootstrap.js so feature initialization order
+// is explicit and independently observable.

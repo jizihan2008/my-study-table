@@ -1,7 +1,12 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
-  showNotification: (title, body) => ipcRenderer.invoke('show-notification', { title, body }),
+  showNotification: (payload) => ipcRenderer.invoke('show-notification', payload),
+  onNotificationClick: (callback) => {
+    const listener = (_event, target) => callback(target);
+    ipcRenderer.on('notification-click', listener);
+    return () => ipcRenderer.removeListener('notification-click', listener);
+  },
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   quitApp: () => ipcRenderer.invoke('quit-app'),
   focusWindow: () => ipcRenderer.invoke('focus-window'),
@@ -12,6 +17,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   performBackup: (data) => ipcRenderer.invoke('perform-backup', data),
   listBackups: () => ipcRenderer.invoke('list-backups'),
   getDownloadsPath: () => ipcRenderer.invoke('get-downloads-path'),
+  secretStatus: () => ipcRenderer.invoke('secret:status'),
+  secretLoadAll: () => ipcRenderer.invoke('secret:load-all'),
+  secretSet: (payload) => ipcRenderer.invoke('secret:set', payload),
+  secretDelete: (payload) => ipcRenderer.invoke('secret:delete', payload),
+  secretMigrate: (values) => ipcRenderer.invoke('secret:migrate', values),
+  reportDiagnostic: (payload) => ipcRenderer.invoke('diagnostic:renderer', payload),
+  getDiagnosticPath: () => ipcRenderer.invoke('diagnostic:path'),
   isElectron: true,
   openImageDialog: () => ipcRenderer.invoke('open-image-dialog'),
   openVideoDialog: () => ipcRenderer.invoke('open-video-dialog'),

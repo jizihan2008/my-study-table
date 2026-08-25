@@ -1,6 +1,11 @@
 
 // ═══════════ Data ═══════════
-function loadData(key) { try { return JSON.parse(localStorage.getItem(key)) || []; } catch { return []; } }
+function loadData(key) {
+  const value = (typeof StudyPlatform !== 'undefined')
+    ? StudyPlatform.storage.getJson(key, [])
+    : (() => { try { return JSON.parse(localStorage.getItem(key)) || []; } catch { return []; } })();
+  return Array.isArray(value) ? value : [];
+}
 // Generate a globally-unique numeric ID. Monotonic (newest = largest value) so any
 // time-based ordering is preserved, and collision-resistant even when many IDs are
 // created within the same millisecond (global sequence suffix).
@@ -19,10 +24,16 @@ function saveExpandedTodoIds() {
 }
 function saveData(key, data) {
   try {
-    localStorage.setItem(key, JSON.stringify(data));
+    const result = (typeof StudyPlatform !== 'undefined')
+      ? StudyPlatform.storage.setJson(key, data)
+      : (() => { localStorage.setItem(key, JSON.stringify(data)); return { ok: true }; })();
+    if (!result.ok) throw result.error;
     // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步）
     if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
       try { window.Sync.onLocalChange(key); } catch (e) { /* 同步层错误不影响主流程 */ }
+    }
+    if (typeof StudyPlatform !== 'undefined') {
+      StudyPlatform.events.emit('storage:changed', { key, value: data });
     }
   } catch (e) {
     console.error('[saveData] 序列化失败 (' + key + '):', e.message);

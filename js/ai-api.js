@@ -6,6 +6,10 @@
 // Returns { cleanText, toolCalls, reasoning } or throws on error
 // If conv is provided, raw API request/response are appended to conv._rawLogs
 async function callAiApi(apiMessages, apiCfg, conv) {
+  if (typeof AIClient !== 'undefined') {
+    const allowed = await AIClient.confirmSensitiveContent(apiMessages);
+    if (!allowed) throw new Error('已取消发送敏感信息');
+  }
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
   const deepThinkParams = buildDeepThinkParams(apiCfg);
 
@@ -41,14 +45,17 @@ async function callAiApi(apiMessages, apiCfg, conv) {
 
   const requestTime = new Date().toISOString();
 
-  const response = await fetch(baseUrl + '/chat/completions', {
+  const requestOptions = {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': 'Bearer ' + apiCfg.apiKey
     },
     body: JSON.stringify(requestBody)
-  });
+  };
+  const response = typeof AIClient !== 'undefined'
+    ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', requestOptions, { scope: conv && conv.id, timeoutMs: apiCfg.timeoutMs })
+    : await fetch(baseUrl + '/chat/completions', requestOptions);
 
   if (!response.ok) {
     const err = await response.json().catch(() => ({}));
@@ -68,6 +75,7 @@ async function callAiApi(apiMessages, apiCfg, conv) {
 
   const responseTime = new Date().toISOString();
   const data = await response.json();
+  if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage);
   const choice = data.choices?.[0]?.message;
   const reply = choice?.content || '';
   const reasoning = (apiCfg.deepThink === true) ? (choice?.reasoning_content || '') : '';
@@ -129,17 +137,21 @@ async function callAiApi(apiMessages, apiCfg, conv) {
       max_tokens: maxTokens
     };
 
-    const followUpResp = await fetch(baseUrl + '/chat/completions', {
+    const followUpOptions = {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         'Authorization': 'Bearer ' + apiCfg.apiKey
       },
       body: JSON.stringify(followUpBody)
-    });
+    };
+    const followUpResp = typeof AIClient !== 'undefined'
+      ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', followUpOptions, { scope: conv && conv.id, timeoutMs: apiCfg.timeoutMs })
+      : await fetch(baseUrl + '/chat/completions', followUpOptions);
 
     if (followUpResp.ok) {
       const followUpData = await followUpResp.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, followUpData.usage);
       const followUpChoice = followUpData.choices?.[0]?.message;
       const finalReply = followUpChoice?.content || '';
       // Push tool messages and final reply to conversation
@@ -186,7 +198,7 @@ function buildApiMessages(conv, extraSystemMsgs) {
     } else if (m.role === 'user') {
       // Build multimodal content if vision files are present
       let userContent;
-      if (m.visionFiles && m.visionFiles.length > 0 && isKimiModel()) {
+      if (m.visionFiles && m.visionFiles.length > 0 && isMultimodalModel()) {
         userContent = [];
         // Add text part first
         if (m.content && m.content.trim()) {

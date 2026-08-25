@@ -836,24 +836,57 @@ function requestNotificationPermission() {
   }
 }
 
-function sendNotification(title, body, tag) {
+// 统一通知入口：支持点击跳转
+// target: { tab, convId } — 点击系统通知后切到对应界面（Electron 走 IPC 回发，
+// PWA/iOS 用 Notification.onclick）。无 target 时点击仅聚焦窗口。
+function sendNotification(title, body, tag, target) {
   if (isElectronEnv) {
-    window.electronAPI.showNotification(title, body);
+    window.electronAPI.showNotification({ title, body, tag: tag || undefined, target: target || null });
     return;
   }
   if (!('Notification' in window)) return;
   if (Notification.permission !== 'granted') return;
   try {
-    new Notification(title, { body, tag: tag || 'study-table' });
+    const n = new Notification(title, { body, tag: tag || 'study-table' });
+    if (target) {
+      n.onclick = function() {
+        try {
+          if (typeof switchTab === 'function') switchTab(target.tab);
+          window.focus();
+        } catch (e) { console.warn('[Notify] click handler failed:', e); }
+      };
+    }
     console.log('[Notify] Sent:', title);
   } catch (e) {
     console.log('[Notify] Failed:', e);
   }
 }
 
+// ═══════════ 通知点击跳转 ═══════════
+// 点击系统通知 → 切到对应界面（适配 Windows Electron 与 iOS PWA）。
+// target = { tab, convId }；tab: ai/todo/notes/calendar/habits/taskline...
+function handleNotificationClick(target) {
+  try {
+    if (!target || !target.tab) return;
+    if (typeof switchTab === 'function') switchTab(target.tab);
+    // AI 通知：切到指定对话（convId 有效时），否则保持当前
+    if (target.tab === 'ai' && target.convId && typeof switchConv === 'function') {
+      const id = Number(target.convId);
+      if (!isNaN(id)) switchConv(id);
+    }
+    window.focus();
+  } catch (e) {
+    console.warn('[Notify] click jump failed:', e);
+  }
+}
+// Electron：主进程点击通知后经 IPC 回发 target
+if (isElectronEnv && window.electronAPI && typeof window.electronAPI.onNotificationClick === 'function') {
+  try { window.electronAPI.onNotificationClick(handleNotificationClick); } catch (e) { console.warn('[Notify] init click listener failed:', e); }
+}
+
 function debugTestNotify() {
   if (isElectronEnv) {
-    window.electronAPI.showNotification('测试通知', '如果你看到这条消息，说明通知功能正常！');
+    window.electronAPI.showNotification({ title: '测试通知', body: '如果你看到这条消息，说明通知功能正常！' });
     return;
   }
   if (Notification.permission === 'granted') {

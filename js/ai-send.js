@@ -8,6 +8,7 @@ function handleAiSendOrStop() {
   if (isAiLoading(convId)) {
     // Stop the AI for this conversation
     setAiStopRequested(convId, true);
+    if (typeof AIClient !== 'undefined') AIClient.cancel(convId);
     // 停止当前回复时清空发送队列（停止 = 停止一切），避免回复结束后自动补发排队消息
     if (_aiSendQueue.length > 0) {
       _aiSendQueue = [];
@@ -204,7 +205,8 @@ async function sendAiMessage(externalText, externalAttachments) {
   // Process attachments: for Kimi use file upload API, for others read as txt
   let docTexts = '';
   const isKimi = isKimiModel();
-  if (isDebugMode()) console.log('[DEBUG sendAiMessage] isKimi:', isKimi, 'attachments:', currentAttachments.length);
+  const isVision = isVisionModel();
+  if (isDebugMode()) console.log('[DEBUG sendAiMessage] isKimi:', isKimi, 'isVision:', isVision, 'attachments:', currentAttachments.length);
   // Collect vision file references (base64 data URLs) for multimodal content
   let visionFiles = [];
   for (const a of currentAttachments) {
@@ -244,6 +246,37 @@ async function sendAiMessage(externalText, externalAttachments) {
           // Document: use file-extract for text/OCR extraction
           const content = await uploadToKimi(a.file);
           const maxLen = 80000;
+          const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
+          docTexts += `\n\n[附件：${a.name}]\n` + truncated;
+          const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
+          if (idx >= 0) displayAttachments[idx].content = truncated;
+        }
+      } else if (isVision) {
+        // 视觉模型（DeepSeek V4 Vision 等）：图片 → base64 image_url 内联；其他文件 → 文本读取
+        const imgExt = '.' + (a.file.name.split('.').pop() || '').toLowerCase();
+        if (isImageFile(a.file) && imgExt === '.bmp') {
+          // DeepSeek Vision 官方仅支持 webp/png/jpeg/gif（不含 bmp）→ 明确提示
+          docTexts += `\n\n[附件：${a.name} — 当前模型不支持 bmp 图片，请转换为 png/jpeg 后重试]`;
+        } else if (isImageFile(a.file)) {
+          if (isDebugMode()) console.log('[DEBUG] Vision path: reading image as base64', a.name);
+          const dataUrl = await readFileAsDataURL(a.file);
+          visionFiles.push({
+            dataUrl: dataUrl,
+            name: a.name,
+            type: 'image_url'
+          });
+        } else if (isVideoFile(a.file)) {
+          // 视觉模型不支持视频内联，提示跳过
+          docTexts += `\n\n[附件：${a.name} — 当前模型不支持视频分析]`;
+        } else {
+          // 非图片文件按文本读取
+          const content = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = e => resolve(e.target.result);
+            reader.onerror = reject;
+            reader.readAsText(a.file);
+          });
+          const maxLen = 8000;
           const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
           docTexts += `\n\n[附件：${a.name}]\n` + truncated;
           const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
@@ -304,6 +337,9 @@ async function sendAiMessage(externalText, externalAttachments) {
     conv.title = text ? (text.length > 20 ? text.slice(0, 20) + '…' : text) : '附件对话';
     safeSaveAiConvs();
     didReRender = true;
+    // 关键：必须先清空输入框再全量重渲染。renderAiChat() 内部会 saveAiDraft()+restoreAiDraft()，
+    // 若输入框仍残留刚发送的文本，会被当作草稿恢复回输入框（Enter 后对话框保留草稿的 bug）。
+    if (input) { input.value = ''; input.style.height = 'auto'; }
     renderAiChat();
   }
 

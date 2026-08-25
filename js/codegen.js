@@ -17,10 +17,17 @@ window.Codegen = (function () {
     try { return localStorage.getItem('study_codebuddy_cli_path') || ''; } catch (e) { return ''; }
   }
   function getCodebuddyApiKey() {
-    try { return localStorage.getItem('study_codebuddy_api_key') || ''; } catch (e) { return ''; }
+    try {
+      return typeof SecretVault !== 'undefined'
+        ? SecretVault.get('study_codebuddy_api_key', '')
+        : (localStorage.getItem('study_codebuddy_api_key') || '');
+    } catch (e) { return ''; }
   }
   function setCodebuddyApiKey(key) {
-    try { localStorage.setItem('study_codebuddy_api_key', key); } catch (e) {}
+    try {
+      if (typeof SecretVault !== 'undefined') SecretVault.set('study_codebuddy_api_key', key).catch(console.warn);
+      else localStorage.setItem('study_codebuddy_api_key', key);
+    } catch (e) {}
   }
 
   // 探测 CLI 状态（缓存避免频繁探测）

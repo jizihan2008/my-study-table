@@ -3,6 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; connect-src 'self' https: http: wss:; img-src 'self' data: blob: https:; media-src 'self' data: blob: file:; font-src 'self' data:; worker-src 'self' blob:; frame-src https: http:; object-src 'none'; base-uri 'none';">
 <title>My Study Table</title>
 <link rel="manifest" href="manifest.webmanifest">
 <meta name="theme-color" content="#4F6EF7">
@@ -13,7 +14,7 @@
 <link rel="apple-touch-icon" href="icons/icon-192.png">
 <link rel="stylesheet" href="css/style.css?v=20260823-r9">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
-<script src="https://unpkg.com/lucide@0.469.0"></script>
+<script src="lib/lucide/lucide.min.js"></script>
 </head>
 <body>
 
@@ -1025,7 +1026,7 @@
           <button class="btn-save-settings" onclick="exportAllData()" style="background:#10b981;margin-top:0;padding:6px 20px;width:auto;flex:1;"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导出数据</button>
           <button class="btn-save-settings" onclick="document.getElementById('importFileInput').click()" style="background:#6366f1;margin-top:0;padding:6px 20px;width:auto;flex:1;"><i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导入数据</button>
         </div>
-        <span class="hint" style="display:block;">导出所有数据为 JSON 文件，用于迁移到其他设备。</span>
+        <span class="hint" style="display:block;">导出学习数据用于迁移；API Key、邮箱授权码等敏感凭据不会写入备份文件。</span>
         <input type="file" id="importFileInput" accept=".json" style="display:none;" onchange="importAllData(event)">
         <div class="settings-status" id="migrateStatus"></div>
         <div style="margin:16px 0;border-top:1px solid var(--border);"></div>
@@ -1323,6 +1324,10 @@
 </div>
 
 <script src="lib/katex/katex.min.js"></script>
+<script src="js/platform.js?v=20260825-r1"></script>
+<script src="js/secrets.js?v=20260825-r1"></script>
+<script src="js/data-store.js?v=20260825-r1"></script>
+<script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260811-r1"></script>
 <script src="js/liquid-glass.js?v=20260823-r1"></script>
 <script src="js/core.js?v=20260824-r1"></script>
@@ -1330,23 +1335,24 @@
 <script src="js/todos.js?v=20260823-r3"></script>
 <script src="js/notes.js?v=20260823-r5"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260814-r1"></script>
+<script src="js/today.js?v=20260824-r2"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260814-r1"></script>
 <script src="js/ai-tree.js?v=20260804-r3"></script>
 <script src="js/ai-conv.js?v=20260822-r1"></script>
-<script src="js/ai-attach.js?v=20260807-r1"></script>
+<script src="js/ai-attach.js?v=20260824-r3"></script>
 <script src="js/ai-render.js?v=20260822-r3"></script>
 <script src="js/ai-tools.js?v=20260822-r1"></script>
 <script src="js/ai-search.js"></script>
-<script src="js/ai-api.js?v=20260813-r2"></script>
-<script src="js/ai-send.js?v=20260823-r18"></script>
+<script src="js/ai-client.js?v=20260825-r1"></script>
+<script src="js/ai-api.js?v=20260824-r1"></script>
+<script src="js/ai-send.js?v=20260824-r3"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260812-r3"></script>
 <script src="js/bg-media-idb.js?v=20260823-r1"></script>
 <script src="js/appearance.js?v=20260823-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260823-r5"></script>
+<script src="js/settings.js?v=20260824-r4"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260823-r7"></script>
@@ -1366,7 +1372,7 @@
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
 <script src="js/calendar.js?v=20260724-r7"></script>
-<script src="js/taskline.js?v=20260812-r27"></script>
+<script src="js/taskline.js?v=20260824-r8"></script>
 <script src="js/timer.js?v=20260814-r1"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
 <script src="js/stats.js?v=20260724-r1"></script>
@@ -1377,66 +1383,17 @@
 <script src="js/friends-chat.js?v=20260805-r2"></script>
 <!-- 扩展系统 -->
 <script src="js/ext-api.js?v=20260804-r1"></script>
+<script src="js/ext-sandbox.js?v=20260825-r1"></script>
 <script src="js/patch-engine.js?v=20260804-r1"></script>
 <script src="js/builtin-extensions.js?v=20260804-r1"></script>
 <script src="js/ext-manager.js?v=20260804-r2"></script>
 <script src="js/codegen.js?v=20260808-r14"></script>
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-<script src="js/sync.js?v=20260823-r8"></script>
+<script src="js/sync.js?v=20260825-r9"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260823-r1"></script>
-<script>
-// Initialize sidebar nav and switch to home tab on page load
-setTimeout(async function() {
-  // 先装载已启用的扩展（插件 / 补丁）
-  if (typeof window.ExtManager !== 'undefined' && window.ExtManager.init) {
-    try { await window.ExtManager.init(); } catch (e) { console.error('扩展初始化失败:', e); }
-  }
-  if (typeof renderSidebarNav === 'function') renderSidebarNav();
-  // Switch to configured home tab
-  if (typeof loadNavConfig === 'function' && typeof switchTab === 'function') {
-    const cfg = loadNavConfig();
-    if (cfg.homeTab) switchTab(cfg.homeTab);
-  }
-  if (typeof updateSidebarAiBadge === 'function') updateSidebarAiBadge();
-  // 初始化数据云同步（手机端 PWA 与桌面端共用）
-  if (typeof window.Sync !== 'undefined' && window.Sync.init) {
-    try { window.Sync.init(); } catch (e) { console.error('[sync] 初始化失败:', e); }
-  }
-  // Initialize calendar event color picker
-  if (typeof CAL_EVENT_COLORS !== 'undefined') {
-    const picker = document.getElementById('calEventColorPicker');
-    if (picker) {
-      let radioHtml = '';
-      CAL_EVENT_COLORS.forEach((c, i) => {
-        radioHtml += `<label class="cal-event-color-swatch" style="background:${c.dot}" title="${c.key}">
-          <input type="radio" name="calEventColor" value="${c.key}" ${i === 4 ? 'checked' : ''}>
-        </label>`;
-      });
-      picker.innerHTML = radioHtml;
-    }
-  }
-}, 0);
-
-// Initialize Lucide icons
-if (typeof lucide !== 'undefined') {
-  lucide.createIcons();
-}
-
-// ── PWA：注册 Service Worker（仅 HTTP/HTTPS 环境，file:// 下跳过）──
-(function() {
-  if (typeof Env !== 'undefined' && !Env.isElectron && location.protocol.indexOf('http') === 0) {
-    if ('serviceWorker' in navigator) {
-      window.addEventListener('load', function() {
-        navigator.serviceWorker.register('service-worker.js').catch(function(err) {
-          console.warn('[PWA] Service Worker 注册失败:', err);
-        });
-      });
-    }
-  }
-})();
-</script>
+<script src="js/sync-logs.js?v=20260824-r2"></script>
+<script src="js/bootstrap.js?v=20260825-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
 <div class="context-menu" id="notesContextMenu">

@@ -206,6 +206,12 @@ window.Store = (function () {
 
     // 2. 解压 zip：采用 JSZip 或按需自行实现简单逻辑
     const zipBuf = await data.arrayBuffer();
+    if (item.file_sha256) {
+      const actualHash = await _sha256Hex(zipBuf);
+      if (actualHash !== String(item.file_sha256).toLowerCase()) {
+        throw new Error('插件包完整性校验失败，已拒绝安装');
+      }
+    }
     const files = await _unzip(zipBuf);
     const manifestRaw = files['manifest.json'];
     const mainRaw = files['main.js'];
@@ -215,10 +221,17 @@ window.Store = (function () {
     try { manifest = JSON.parse(manifestRaw); } catch (e) { throw new Error('manifest.json 解析失败'); }
     if (!manifest.id || !manifest.name || !manifest.type) throw new Error('manifest.json 缺少必要字段');
     const extId = manifest.id;
+    const installedManifest = {
+      ...manifest,
+      enabled: false,
+      source: 'plugin-store',
+      sourceItemId: item.id,
+      sourceSha256: item.file_sha256 || ''
+    };
 
     // 3. 写入本地扩展目录（ext:write 只接受 files: { manifest, main } 格式）
     try {
-      await window.electronAPI.extWrite({ id: extId, files: { manifest, main: mainRaw } });
+      await window.electronAPI.extWrite({ id: extId, files: { manifest: installedManifest, main: mainRaw } });
     } catch (e) {
       console.warn('[store] extWrite error', e);
       throw new Error('写入扩展文件失败: ' + e.message);
@@ -235,11 +248,10 @@ window.Store = (function () {
       const user = await ensureStoreAuth();
       if (user) {
         await sb.from('plugin_downloads').insert({ plugin_id: item.id, user_id: user.id });
-        await sb.rpc('increment_downloads', { target_plugin_id: item.id });
       }
     } catch (e) { /* 非关键 */ }
 
-    return { ok: true, extId, name: manifest.name };
+    return { ok: true, extId, name: manifest.name, enabled: false };
   }
 
   // ── 上传 ──
@@ -268,7 +280,9 @@ window.Store = (function () {
     const zipBlob = await _zip(manifestRaw, mainRaw || '', manifest.id);
 
     // 3. 上传到 Storage
-    const filePath = `${extId}/1.0.0/${extId}.zip`;
+    const version = manifest.version || '1.0.0';
+    const filePath = `${user.id}/${extId}/${version}/${extId}.zip`;
+    const fileSha256 = await _sha256Hex(await zipBlob.arrayBuffer());
     const { error: uploadErr } = await sb.storage.from('plugin-store').upload(filePath, zipBlob, {
       contentType: 'application/zip',
       upsert: true
@@ -285,23 +299,22 @@ window.Store = (function () {
       ext_id: extId,
       name: manifest.name || extId,
       type: manifest.type,
-      version: manifest.version || '1.0.0',
+      version,
       description: manifest.description || '',
       tags: _extractTags(manifest),
       file_path: filePath,
-      status: 'approved',
+      file_sha256: fileSha256,
       updated_at: new Date().toISOString()
     };
 
     if (existing) {
-      const { error: updErr } = await sb.from('plugin_store_items').update(itemData).eq('id', existing.id);
-      if (updErr) throw new Error('更新记录失败: ' + updErr.message);
-    } else {
-      const { error: insErr } = await sb.from('plugin_store_items').insert(itemData);
-      if (insErr) throw new Error('上传记录失败: ' + insErr.message);
+      const { error: deleteErr } = await sb.from('plugin_store_items').delete().eq('id', existing.id);
+      if (deleteErr) throw new Error('旧版本下架失败: ' + deleteErr.message);
     }
+    const { error: insErr } = await sb.from('plugin_store_items').insert({ ...itemData, status: 'pending' });
+    if (insErr) throw new Error('上传记录失败: ' + insErr.message);
 
-    return { ok: true, message: '上传成功，已发布到市场' };
+    return { ok: true, message: '上传成功，正在等待审核' };
   }
 
   function _extractTags(manifest) {
@@ -372,6 +385,14 @@ window.Store = (function () {
     return new Blob([json], { type: 'application/json' });
   }
 
+  async function _sha256Hex(data) {
+    if (!globalThis.crypto || !globalThis.crypto.subtle) {
+      throw new Error('当前环境不支持插件完整性校验');
+    }
+    const digest = await globalThis.crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(digest), b => b.toString(16).padStart(2, '0')).join('');
+  }
+
   async function _unzip(arrayBuf) {
     // 尝试 JSZip 解析
     if (typeof window.JSZip !== 'undefined') {
@@ -425,8 +446,9 @@ window.Store = (function () {
           try { manifest = JSON.parse(manifestRaw); } catch (err) { throw new Error('manifest.json 解析失败'); }
           if (!manifest.id || !manifest.name || !manifest.type) throw new Error('manifest.json 字段不完整');
 
-          // 写入本地（ext:write 只接受 files: { manifest, main } 格式）
-          await window.electronAPI.extWrite({ id: manifest.id, files: { manifest, main: mainRaw } });
+          // 新导入代码默认禁用，用户检查后再从扩展页手动启用。
+          const installedManifest = { ...manifest, enabled: false, source: 'local-zip' };
+          await window.electronAPI.extWrite({ id: manifest.id, files: { manifest: installedManifest, main: mainRaw } });
 
           // 重装载
           if (typeof window.ExtManager !== 'undefined') {
@@ -672,7 +694,7 @@ window.Store = (function () {
     showStoreToast('正在下载 ' + _esc(item.name) + '…', 'info');
     try {
       const res = await downloadPlugin(item);
-      showStoreToast(res.name + ' 安装成功！', 'success');
+      showStoreToast(res.name + ' 已安装但未启用；请在扩展页检查后手动启用。', 'success');
       _pluginsCache = null;
       _renderPluginGrid();
     } catch (e) {

@@ -48,14 +48,22 @@ function sendAiNotification(conv, messageText, keyName) {
   const preview = (messageText || '').replace(/<[^>]+>/g, '').slice(0, 120);
   const body = keyName ? `[${keyName}] ${preview}` : preview;
 
-  try { new Notification(title, { body }); } catch (e) {}
+  // 点击通知 → 切到 AI tab 并打开对应对话（convId）
+  const target = { tab: 'ai', convId: conv ? conv.id : null };
+  if (typeof sendNotification === 'function') {
+    sendNotification(title, body, 'ai-reply-' + (conv ? conv.id : 'x'), target);
+  } else {
+    try { new Notification(title, { body }); } catch (e) {}
+  }
 }
 
 // ═══════════ Web Search (multi-engine) ═══════════
 // Supported engines: DuckDuckGo (free), Brave, Tavily, Exa, SearchAPI
 async function performWebSearch(query, maxResults) {
   const engine = localStorage.getItem('study_web_search_engine') || 'duckduckgo';
-  const apiKey = localStorage.getItem('study_web_search_key') || '';
+  const apiKey = typeof SecretVault !== 'undefined'
+    ? SecretVault.get('study_web_search_key', '')
+    : (localStorage.getItem('study_web_search_key') || '');
   const q = encodeURIComponent(query);
 
   // ── Brave Search ──

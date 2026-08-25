@@ -271,7 +271,8 @@
           title: conv.title || '',
           systemPrompt: conv.systemPrompt || '',
           createdAt: conv.createdAt || 0,
-          autoTitled: !!conv.autoTitled
+          autoTitled: !!conv.autoTitled,
+          daily: !!conv._dailyReport   // 日报会话标记：拉取侧据此合并而非新建
         },
         tree: conv.tree || null,
         activePath: conv.activePath || null,
@@ -559,8 +560,49 @@
           }
         }
         if (!found) {
-          const newConv = Object.assign({ tree: built.tree || null, activePath: built.activePath || null }, patch);
-          aiConvs.push(newConv);
+          // 日报会话特殊处理：不同设备各自用 genId() 创建日报 → id 必然不同，
+          // 若按 id 匹配不到就 push 会产生「两个每日日报 tab」。这里识别日报会话
+          // （meta.daily 标记 或 标题含「日报」），合并到本地已有日报会话，不新建。
+          const isDaily = !!(built.meta && (built.meta.daily || /日报/.test(built.meta.title || '')));
+          if (isDaily) {
+            let localDaily = null;
+            for (let i = 0; i < aiConvs.length; i++) {
+              const c = aiConvs[i];
+              if (c && (c._dailyReport || c.title === '📋 每日日报' || c.title === '☀️ 晨间日报')) {
+                localDaily = c;
+                break;
+              }
+            }
+            if (localDaily) {
+              // 回填标记 + 统一标题（与 settings.getOrCreateDailyReportConv 保持一致）
+              if (!localDaily._dailyReport) localDaily._dailyReport = true;
+              if (localDaily.title === '☀️ 晨间日报') localDaily.title = '📋 每日日报';
+              // 合并远端消息：按 id 去重；无 id 按 role+content 去重
+              if (!Array.isArray(localDaily.messages)) localDaily.messages = [];
+              const keys = new Set(localDaily.messages.map(m =>
+                m && m.id ? 'id:' + m.id : 'c:' + (m.role || '') + ':' + (m.content || '')));
+              const remoteMsgs = Array.isArray(built.items) ? built.items : [];
+              for (const m of remoteMsgs) {
+                const key = m && m.id ? 'id:' + m.id : 'c:' + (m && m.role || '') + ':' + (m && m.content || '');
+                if (!keys.has(key)) { localDaily.messages.push(m); keys.add(key); }
+              }
+              // 按时间排序，保证跨设备合并后顺序正确
+              localDaily.messages.sort((a, b) => (a && a.createdAt || 0) - (b && b.createdAt || 0));
+              // 树状分支：本地缺失时补远端（日报一般无分支树，防御性合并）
+              if (!localDaily.tree && built.tree) localDaily.tree = built.tree;
+              if (!localDaily.activePath && built.activePath) localDaily.activePath = built.activePath;
+            } else {
+              // 本地无日报会话 → 创建（带标记，标题统一）
+              const newConv = Object.assign({ tree: built.tree || null, activePath: built.activePath || null }, patch);
+              newConv._dailyReport = true;
+              newConv.autoTitled = true;
+              newConv.title = '📋 每日日报';
+              aiConvs.push(newConv);
+            }
+          } else {
+            const newConv = Object.assign({ tree: built.tree || null, activePath: built.activePath || null }, patch);
+            aiConvs.push(newConv);
+          }
         }
         safeSaveAiConvs();
       }

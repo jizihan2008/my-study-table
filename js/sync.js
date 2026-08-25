@@ -93,7 +93,8 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260823-r8';            // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260825-r9';            // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
   const IDB_NAME = 'mst-sync';
   const IDB_STORE = 'outbox';                // 离线变更队列
@@ -579,8 +580,8 @@
         } else if (forceRemote) {
           needValueKeys.push(row.key);   // 手动强制同步 → 拉取云端（下面合并逻辑会避免覆盖更新的本地）
         } else if (_isLocalDirty(row.key)) {
-          // 本地有未上传修改（dirty）→ 保护本地，不拉取覆盖，稍后上传
-          dirtyKeys.add(row.key);
+          // 本地和云端可能同时变化：拉取云端值以进行显式冲突比较。
+          needValueKeys.push(row.key);
         } else if (_tsIsFuture(localTs, remoteMaxTs)) {
           // 本地时间戳是「未来值」（旧版本设备时钟污染残留）→ 本地时间不可信，云端权威 → 拉取校准
           needValueKeys.push(row.key);
@@ -648,7 +649,7 @@
                   _clearLocalDirty(row.key);
                 }
               } else if (localDirty) {
-                dirtyKeys.add(row.key);   // 本地有未上传修改 → 保护本地，上传
+                if (!_conflictQueue.includes(row.key)) _conflictQueue.push(row.key);
               } else if (_tsIsFuture(localTs, remoteMaxTs)) {
                 // 本地时间戳是「未来值」（旧版时钟污染残留）→ 本地时间不可信，云端权威 → 覆盖校准
                 saveData(row.key, remoteRow.value);
@@ -709,7 +710,8 @@
         const key = _conflictQueue.shift();
         let ok;
         try { ok = await _askConflictChoice(key); } catch (e) { ok = null; }
-        if (ok === null) { continue; }
+        _recordConflict(key, ok || 'skipped');
+        if (ok === null) { dirtyKeys.add(key); continue; }
         if (ok === 'local') {
           // 用本地版：上传本地覆盖云端，并同步时间戳
           if (client2 && session) await _uploadKey(key);
@@ -729,6 +731,32 @@
       }
       _resolvingConflict = false;
     })();
+  }
+
+  function _getConflictHistory() {
+    try { return JSON.parse(localStorage.getItem(CONFLICT_HISTORY_KEY)) || []; }
+    catch (e) { return []; }
+  }
+
+  function _recordConflict(key, choice) {
+    const raw = localStorage.getItem(key) || '';
+    let deviceId = localStorage.getItem('study_device_id');
+    if (!deviceId) {
+      deviceId = 'device_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+      localStorage.setItem('study_device_id', deviceId);
+    }
+    const history = _getConflictHistory();
+    history.unshift({
+      key,
+      label: SYNC_LABELS[key] || key,
+      choice,
+      deviceId,
+      localUpdatedAt: _getLocalTs()[key] || null,
+      remoteUpdatedAt: _getRemoteTs()[key] || null,
+      localHash: global.StudyData ? global.StudyData.hashText(raw) : null,
+      resolvedAt: new Date().toISOString()
+    });
+    localStorage.setItem(CONFLICT_HISTORY_KEY, JSON.stringify(history.slice(0, 100)));
   }
 
   // 冲突弹窗：返回 'local' | 'remote' | null（null 表示用户关闭/跳过）
@@ -918,7 +946,8 @@
       // 诊断字段（排查 iPad 不同步）：
       remoteTsCount: Object.keys(_getRemoteTs()).length,   // 远端时间戳记录数（0=从未成功交互→走首次同步）
       dirtyKeys: Object.keys(_getDirtyMap()),              // 待上传 dirty 标记列表（残留会挡住拉取）
-      localTs: _getLocalTs()                               // 本地时间戳（含旧版污染值，排查用）
+      localTs: _getLocalTs(),                              // 本地时间戳（含旧版污染值，排查用）
+      conflictCount: _getConflictHistory().length
     };
   }
 
@@ -1084,10 +1113,15 @@
     manualSync,
     uploadAll,
     getStatus,
+    getConflictHistory: _getConflictHistory,
+    clearConflictHistory() { localStorage.removeItem(CONFLICT_HISTORY_KEY); },
     onStatus,
     onProgress,
     get enabled() { return enabled; },
     get autoSync() { return autoSync; },
     get loggedIn() { return loggedIn; }
   };
+  if (global.StudyPlatform && !global.StudyPlatform.getModule('sync')) {
+    global.StudyPlatform.defineModule('sync', global.Sync);
+  }
 })(typeof window !== 'undefined' ? window : globalThis);

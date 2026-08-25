@@ -54,6 +54,10 @@
     return 'study_ext_' + ctx().id + '_' + key;
   }
 
+  function _boundDataKey(extId, key) {
+    return 'study_ext_' + extId + '_' + key;
+  }
+
   function getData(key) {
     try {
       return JSON.parse(localStorage.getItem(_extDataKey(key)));
@@ -82,7 +86,7 @@
   function notify(title, body) {
     try {
       if (typeof window.electronAPI !== 'undefined' && window.electronAPI.showNotification) {
-        window.electronAPI.showNotification(String(title), String(body || ''))
+        window.electronAPI.showNotification({ title: String(title), body: String(body || ''), target: null })
           .catch(err => console.warn('[extAPI] 通知失败:', err));
       } else if (typeof Notification !== 'undefined' && typeof Notification === 'function') {
         new Notification(String(title), { body: String(body || '') });
@@ -135,6 +139,57 @@
     }
   }
 
+  // 将扩展身份绑定到 API 实例。异步回调执行时不再依赖全局 __extCtx，
+  // 避免上下文清空后写入 study_ext__* 或串到其他扩展命名空间。
+  function forExtension(extId) {
+    const id = String(extId || '').trim();
+    if (!/^[a-zA-Z0-9_-]+$/.test(id)) throw new Error('非法扩展 id');
+    return Object.freeze({
+      _extId: () => id,
+      registerNavItem(config) {
+        return window.ExtManager && window.ExtManager.addNavItem
+          ? window.ExtManager.addNavItem(id, config)
+          : { ok: false, reason: 'ExtManager 未就绪' };
+      },
+      registerSection(config) {
+        return window.ExtManager && window.ExtManager.addSection
+          ? window.ExtManager.addSection(id, config)
+          : { ok: false, reason: 'ExtManager 未就绪' };
+      },
+      addToolbarButton(config) {
+        return window.ExtManager && window.ExtManager.addToolbarButton
+          ? window.ExtManager.addToolbarButton(id, config)
+          : { ok: false, reason: 'ExtManager 未就绪' };
+      },
+      on(event, handler) {
+        return window.ExtBus && window.ExtBus.on
+          ? window.ExtBus.on(id, event, handler)
+          : { ok: false, reason: 'ExtBus 未就绪' };
+      },
+      emit,
+      getData(key) {
+        try { return JSON.parse(localStorage.getItem(_boundDataKey(id, key))); }
+        catch (_) { return null; }
+      },
+      setData(key, value) {
+        try {
+          localStorage.setItem(_boundDataKey(id, key), JSON.stringify(value));
+          return { ok: true };
+        } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+      },
+      removeData(key) {
+        try { localStorage.removeItem(_boundDataKey(id, key)); return { ok: true }; }
+        catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+      },
+      notify,
+      log: (...args) => console.log('[ext:' + id + ']', ...args),
+      warn: (...args) => console.warn('[ext:' + id + ']', ...args),
+      error: (...args) => console.error('[ext:' + id + ']', ...args),
+      callCore,
+      openExternal
+    });
+  }
+
   window.extAPI = {
     _extId: function () { return ctx().id; },
     registerNavItem,
@@ -150,7 +205,8 @@
     warn,
     error,
     callCore,
-    openExternal
+    openExternal,
+    forExtension
   };
 
   // 暴露事件总线（供核心模块 emit 应用事件）

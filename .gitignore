@@ -4,3 +4,5 @@ out/
 publish_log*.txt
 .cg-verify-*
 .codebuddy/plans/
+test-results/
+playwright-report/

@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v65';
+const VERSION = 'mst-v77';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -15,11 +15,20 @@ const PRECACHE_URLS = [
   './index.html',
   './manifest.webmanifest',
   './css/style.css?v=20260823-r9',
+  './lib/lucide/lucide.min.js',
+  './js/platform.js?v=20260825-r1',
+  './js/secrets.js?v=20260825-r1',
+  './js/data-store.js?v=20260825-r1',
+  './js/diagnostics.js?v=20260825-r1',
+  './js/ext-sandbox.js?v=20260825-r1',
+  './js/ai-client.js?v=20260825-r1',
   './js/env.js?v=20260811-r1',
   './js/core.js?v=20260824-r1',
-  './js/sync.js?v=20260823-r8',
+  './js/sync.js?v=20260825-r9',
   './js/bg-media-idb.js?v=20260823-r1',
   './js/qq-chats.js?v=20260823-r7',
+  './js/taskline.js?v=20260824-r8',
+  './js/bootstrap.js?v=20260825-r1',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

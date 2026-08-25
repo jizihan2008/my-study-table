@@ -83,12 +83,22 @@ window.ExtManager = (function () {
     const ext = _registry[id];
     if (!ext) return { ok: false, reason: '扩展不存在: ' + id };
     if (!ext.enabled) return { ok: false, reason: '扩展已禁用' };
+    if (ext.error) return { ok: false, reason: ext.error };
+    if (!ext.builtin && ext.meta && ext.meta.type === 'patch') {
+      ext.error = '外部 patch 扩展已被安全策略禁用；请改用沙箱 plugin API';
+      return { ok: false, reason: ext.error };
+    }
     // 先卸载旧的状态（若已执行过）
     unmount(id);
     ext.error = null;
     window.__extCtx = { id, name: ext.meta.name || id };
     try {
-      executeCode(ext.mainCode, id);
+      if (!ext.builtin) {
+        if (!window.ExtSandbox || typeof window.ExtSandbox.mount !== 'function') throw new Error('插件沙箱不可用');
+        await window.ExtSandbox.mount(id, ext.mainCode, ext.meta || {});
+      } else {
+        executeCode(ext.mainCode, id);
+      }
       // 装载后调用扩展的生命周期钩子 mount（若存在，通过 extAPI 全局对象识别）
       if (typeof window[ext.id + '_mount'] === 'function') {
         window[ext.id + '_mount']();
@@ -109,7 +119,8 @@ window.ExtManager = (function () {
     // 扩展代码末尾可定义 window.<id>_mount 生命周期函数
     try {
       const fn = new Function('extAPI', 'ExtManager', 'PatchEngine', 'ExtBus', code + '\n;return true;');
-      fn(window.extAPI, window.ExtManager, window.PatchEngine, window.ExtBus);
+      const extensionApi = window.extAPI.forExtension(id);
+      fn(extensionApi, window.ExtManager, window.PatchEngine, window.ExtBus);
     } catch (e) {
       throw e;
     }
@@ -119,6 +130,7 @@ window.ExtManager = (function () {
   function unmount(id) {
     const ext = _registry[id];
     if (!ext) return { ok: false, reason: '扩展不存在: ' + id };
+    if (!ext.builtin && window.ExtSandbox) window.ExtSandbox.unmount(id);
     // 恢复补丁覆盖
     if (typeof window.PatchEngine !== 'undefined' && window.PatchEngine.revertExt) {
       window.PatchEngine.revertExt(id);
@@ -152,7 +164,8 @@ window.ExtManager = (function () {
       } catch (e) { /* 忽略持久化错误 */ }
     }
     if (enabled) {
-      await mount(id);
+      const mounted = await mount(id);
+      if (!mounted || !mounted.ok) return mounted || { ok: false, reason: '扩展装载失败' };
     } else {
       unmount(id);
     }
@@ -193,10 +206,12 @@ window.ExtManager = (function () {
   function addNavItem(extId, config) {
     const ext = _registry[extId];
     if (!ext) return { ok: false, reason: '扩展未注册' };
-    if (!config || !config.id || !config.label) {
+    if (!config || !/^[a-zA-Z0-9_-]{1,64}$/.test(String(config.id || '')) || !config.label) {
       return { ok: false, reason: 'config 需含 id 和 label' };
     }
-    const item = { extId, id: config.id, icon: config.icon || 'puzzle', label: config.label };
+    const cleanText = value => String(value || '').slice(0, 80).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+    const icon = /^[a-zA-Z0-9_-]{1,48}$/.test(String(config.icon || '')) ? String(config.icon) : 'puzzle';
+    const item = { extId, id: String(config.id), icon, label: ext.builtin ? String(config.label) : cleanText(config.label) };
     _allNavItems.push(item);
     ext.navItems.push(item);
     if (typeof renderSidebarNav === 'function') renderSidebarNav();
@@ -206,10 +221,15 @@ window.ExtManager = (function () {
   function addSection(extId, config) {
     const ext = _registry[extId];
     if (!ext) return { ok: false, reason: '扩展未注册' };
-    if (!config || !config.id || !config.html) {
+    if (!config || !/^[a-zA-Z0-9_-]{1,64}$/.test(String(config.id || '')) || !config.html) {
       return { ok: false, reason: 'config 需含 id 和 html' };
     }
-    const section = { extId, id: config.id, html: config.html, render: config.render || null };
+    const section = {
+      extId,
+      id: String(config.id),
+      html: ext.builtin ? String(config.html) : sanitizeExtensionHtml(config.html),
+      render: config.render || null
+    };
     _allSections.push(section);
     ext.sections.push(section);
     // 把 section DOM 插入页面
@@ -229,11 +249,29 @@ window.ExtManager = (function () {
     if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
   }
 
+  function sanitizeExtensionHtml(html) {
+    const doc = new DOMParser().parseFromString(String(html || ''), 'text/html');
+    doc.querySelectorAll('script,iframe,object,embed,link,meta,base,form').forEach(node => node.remove());
+    doc.body.querySelectorAll('*').forEach(node => {
+      for (const attribute of Array.from(node.attributes)) {
+        const name = attribute.name.toLowerCase();
+        const value = attribute.value.trim().toLowerCase();
+        if (name.startsWith('on') || name === 'srcdoc' ||
+          ((name === 'href' || name === 'src') && /^(javascript|file|data:text\/html):/.test(value))) {
+          node.removeAttribute(attribute.name);
+        }
+      }
+    });
+    return doc.body.innerHTML;
+  }
+
   function addToolbarButton(extId, config) {
     const ext = _registry[extId];
     if (!ext) return { ok: false, reason: '扩展未注册' };
     if (!config || !config.label) return { ok: false, reason: 'config 需含 label' };
-    const btn = { extId, label: config.label, icon: config.icon || 'puzzle', onclick: config.onclick || null };
+    const cleanText = value => String(value || '').slice(0, 80).replace(/[&<>"']/g, char => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char]);
+    const icon = /^[a-zA-Z0-9_-]{1,48}$/.test(String(config.icon || '')) ? String(config.icon) : 'puzzle';
+    const btn = { extId, label: ext.builtin ? String(config.label) : cleanText(config.label), icon, onclick: config.onclick || null };
     _allToolbarButtons.push(btn);
     ext.toolbarButtons.push(btn);
     renderToolbarButtons();

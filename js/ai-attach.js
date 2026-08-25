@@ -34,8 +34,9 @@ function addAiAttachmentFiles(fileList) {
       alert(`文件 "${file.name}" 超过 ${sizeLabel} 限制，已跳过`);
       continue;
     }
-    // 非视觉模型只接受文本类文件（发送时按纯文本读取，二进制会乱码）
-    if (!isKimiModel() && !isTextFile(file)) {
+    // 非多模态模型只接受文本类文件（发送时按纯文本读取，二进制会乱码）。
+    // 视觉模型（deepseek-v4-flash-vision-exp 等）放行图片（走 image_url base64 内联）。
+    if (!isMultimodalModel() && !isTextFile(file)) {
       alert(`当前模型（${getEffectiveApiConfig().model || '未知'}）不支持 "${file.name}"，仅支持文本类文件（.txt / .md / .json / 代码文件等）`);
       continue;
     }
@@ -134,6 +135,17 @@ function isKimiModel() {
   return (apiCfg.model || '').toLowerCase().includes('kimi');
 }
 
+// 是否视觉模型（如 DeepSeek V4 Flash Vision 等）：支持 OpenAI 兼容的 image_url 多模态
+function isVisionModel() {
+  const apiCfg = getEffectiveApiConfig();
+  return (apiCfg.model || '').toLowerCase().includes('vision');
+}
+
+// 是否多模态模型（Kimi 或视觉模型）：图片可走 base64 image_url 内联分析
+function isMultimodalModel() {
+  return isKimiModel() || isVisionModel();
+}
+
 // Update file input accept and placeholder based on current model
 function updateAiFileInput() {
   const input = document.getElementById('aiFileInput');
@@ -142,6 +154,10 @@ function updateAiFileInput() {
   if (isKimiModel()) {
     input.accept = '';
     placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF / Word / Excel / 图片 / 视频等文件)';
+  } else if (isVisionModel()) {
+    // 视觉模型（DeepSeek V4 Vision 等）：图片支持内联分析，其他文件按文本读取
+    input.accept = '';
+    placeholder.placeholder = '输入你的问题，回车发送... (支持图片分析 / .txt / .md / .json / 代码文件等)';
   } else {
     // 非视觉模型（DeepSeek 等）：文本类文件按纯文本读取，支持常见文本格式
     input.accept = TEXT_FILE_EXTS.join(',');
@@ -213,10 +229,29 @@ async function uploadVideoToKimi(file) {
 }
 
 // Read an image/video file as base64 data URL for inline vision analysis
+// 图片扩展名 → MIME 映射（DeepSeek Vision 支持 webp/png/jpeg/gif，Kimi 额外支持 bmp）
+const IMG_EXT_MIME = {
+  '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg',
+  '.gif': 'image/gif', '.webp': 'image/webp', '.bmp': 'image/bmp'
+};
 function readFileAsDataURL(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
-    reader.onload = e => resolve(e.target.result);
+    reader.onload = e => {
+      let result = e.target.result;
+      // 部分来源的文件 file.type 为空 → FileReader 生成 "data:;base64,..."（无 MIME 前缀），
+      // DeepSeek Vision 等服务端嗅探不到格式会报 "unsupported image"。
+      // 这里按扩展名强制修正 data URL 的 MIME 前缀（若原本已有正确 MIME 则不动）。
+      if (typeof result === 'string' && result.startsWith('data:')) {
+        const comma = result.indexOf(',');
+        const ext = '.' + (file.name.split('.').pop() || '').toLowerCase();
+        const mime = IMG_EXT_MIME[ext];
+        if (mime && !result.slice(0, comma).includes(mime)) {
+          result = 'data:' + mime + ';base64,' + result.slice(comma + 1);
+        }
+      }
+      resolve(result);
+    };
     reader.onerror = reject;
     reader.readAsDataURL(file);
   });
