@@ -85,6 +85,24 @@ test('AI policy detects secrets and records token usage', async () => {
   expect(Object.values(result.store)[0].requests).toBeGreaterThan(0);
 });
 
+test('calendar and task-line writes enter the persistent sync queue', async () => {
+  const result = await page.evaluate(async () => {
+    window.Sync.setEnabled(true);
+    window.Sync.setAutoSync(false);
+    window.addCalendarEvent('2026-08-25', '同步回归测试', '09:00', 'blue', '');
+    window.tlAddLine({ name: '同步测试任务线', type: 'quality' });
+    const status = await window.Sync.getStatus();
+    return {
+      calendar: JSON.parse(localStorage.getItem('study_calendar_events') || '[]'),
+      taskLine: JSON.parse(localStorage.getItem('study_taskline_v1') || '{}'),
+      dirtyKeys: status.dirtyKeys
+    };
+  });
+  expect(result.calendar.some(item => item.title === '同步回归测试')).toBe(true);
+  expect(result.taskLine.lines.some(item => item.name === '同步测试任务线')).toBe(true);
+  expect(result.dirtyKeys).toEqual(expect.arrayContaining(['study_calendar_events', 'study_taskline_v1']));
+});
+
 test('third-party plugin runs in an opaque sandbox with declared permissions', async () => {
   const result = await page.evaluate(async () => {
     await window.electronAPI.extWrite({

@@ -7,6 +7,8 @@ let calendarEditingEventId = null; // Track which event is being edited in modal
 
 // Week day headers
 const CALENDAR_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
+const CALENDAR_STORAGE_KEY = 'study_calendar_events';
+const LEGACY_CALENDAR_STORAGE_KEY = 'calendar_events';
 
 // ── Calendar Events Data Layer ──
 const CAL_EVENT_COLORS = [
@@ -22,12 +24,17 @@ const CAL_EVENT_COLORS = [
 
 function loadCalendarEvents() {
   try {
-    return JSON.parse(localStorage.getItem('calendar_events') || '[]');
+    const current = localStorage.getItem(CALENDAR_STORAGE_KEY);
+    if (current !== null) return JSON.parse(current || '[]');
+    const legacy = JSON.parse(localStorage.getItem(LEGACY_CALENDAR_STORAGE_KEY) || '[]');
+    if (Array.isArray(legacy) && legacy.length) saveCalendarEvents(legacy);
+    return Array.isArray(legacy) ? legacy : [];
   } catch { return []; }
 }
 
 function saveCalendarEvents(events) {
-  localStorage.setItem('calendar_events', JSON.stringify(events));
+  if (typeof saveData === 'function') saveData(CALENDAR_STORAGE_KEY, events);
+  else localStorage.setItem(CALENDAR_STORAGE_KEY, JSON.stringify(events));
 }
 
 function getCalColor(key) {

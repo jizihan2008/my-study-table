@@ -9,6 +9,7 @@
 - `js/data-store.js`：IndexedDB 版本化主副本；localStorage 作为同步兼容缓存，旧数据会自动迁移。
 - `js/secrets.js`：同步内存凭据接口；Electron 环境下由系统 `safeStorage` 加密落盘。
 - `js/ai-client.js`：AI 请求超时、退避重试、取消、敏感信息提醒和 Token/费用统计。
+- `js/sync-policy.js`：无副作用的同步合并决策与非重叠周期调度器；普通数据和日志通道共享。
 - `js/ext-sandbox.js`：第三方插件的 opaque-origin iframe 运行时和权限桥。
 - `js/bootstrap.js`：页面启动编排；新增模块应注册初始化任务，不应再创建独立的 `DOMContentLoaded` 链。
 - `js/core.js`：应用核心状态，通过 `StudyPlatform.storage` 持久化，并发布 `storage:changed` 事件。
@@ -25,7 +26,7 @@
 
 ## 数据与服务端迁移
 
-业务数据会写入带 revision、内容哈希、更新时间和删除墓碑的 IndexedDB 记录，同时保留原 localStorage 键以兼容尚未模块化的界面。云同步继续使用离线 outbox，并记录最近 100 次冲突选择用于诊断。`supabase/schema.sql` 包含收紧后的行级策略、插件审核流程、下载计数和存储路径规则；发布服务端变更前，需要在 Supabase 项目中审阅并执行该脚本。
+业务数据会写入带 revision、内容哈希、更新时间和删除墓碑的 IndexedDB 记录，同时保留原 localStorage 键以兼容尚未模块化的界面。云同步以持久化 dirty/outbox 为事实来源，上传前校验云端基准版本；两端都变化或首次遇到两份非空数据时必须由用户解决冲突。周期任务在每次运行完成后重新调度，联网恢复和重新回到前台都会触发补传。`supabase/schema.sql` 由数据库触发器维护同步行的服务器时间戳，并包含行级策略、插件审核流程、下载计数和存储路径规则；发布服务端变更前，需要在 Supabase 项目中审阅并执行该脚本。
 
 ## 验证
 

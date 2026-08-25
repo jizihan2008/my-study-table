@@ -551,8 +551,9 @@ async function renderSyncPanel() {
   if (statusEl) {
     const loggedTxt = st.loggedIn ? '已登录' : '未登录';
     const pendingTxt = st.pendingCount > 0 ? '，待上传 ' + st.pendingCount + ' 项' : '';
+    const conflictTxt = st.pendingConflictCount > 0 ? '，待处理冲突 ' + st.pendingConflictCount + ' 项' : '';
     const autoTxt = st.autoSync ? '' : '（仅手动同步）';
-    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + autoTxt : '已关闭');
+    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + conflictTxt + autoTxt : '已关闭');
     statusEl.className = 'settings-status';
     // 诊断行：版本 + 远端记录数 + dirty 残留（排查 iPad 不同步）
     let diagEl = document.getElementById('syncDiagLine');
@@ -649,7 +650,9 @@ async function syncManualSync() {
     const res = await window.Sync.manualSync();
     if (stEl) {
       const err = (res && res.lastError) || '';
-      stEl.textContent = err ? '同步未完成：' + err : '同步完成。';
+      stEl.textContent = err
+        ? '同步未完成：' + err
+        : (res && res.pendingConflictCount > 0 ? '同步暂停：请处理冲突选择。' : '同步完成。');
     }
   } catch (e) {
     if (stEl) stEl.textContent = '同步出错：' + (e && e.message || e);

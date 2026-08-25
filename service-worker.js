@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v77';
+const VERSION = 'mst-v78';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -24,10 +24,12 @@ const PRECACHE_URLS = [
   './js/ai-client.js?v=20260825-r1',
   './js/env.js?v=20260811-r1',
   './js/core.js?v=20260824-r1',
-  './js/sync.js?v=20260825-r9',
+  './js/sync-policy.js?v=20260825-r1',
+  './js/sync.js?v=20260825-r10',
   './js/bg-media-idb.js?v=20260823-r1',
   './js/qq-chats.js?v=20260823-r7',
-  './js/taskline.js?v=20260824-r8',
+  './js/taskline.js?v=20260825-r9',
+  './js/calendar.js?v=20260825-r8',
   './js/bootstrap.js?v=20260825-r1',
   './icons/icon-192.png',
   './icons/icon-512.png'

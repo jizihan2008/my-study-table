@@ -38,7 +38,10 @@ function loadTaskLineStore() {
   return { version: 3, spent: 0, lines: [], quests: [], badges: [], rewards: [], toggle: {} };
 }
 function saveTaskLineStore(store) {
-  try { localStorage.setItem(TASkLINE_KEY, JSON.stringify(store)); } catch (e) { console.error('[任务线] 保存失败:', e); }
+  try {
+    if (typeof saveData === 'function') saveData(TASkLINE_KEY, store);
+    else localStorage.setItem(TASkLINE_KEY, JSON.stringify(store));
+  } catch (e) { console.error('[任务线] 保存失败:', e); }
 }
 function tlGetLines() { return loadTaskLineStore().lines; }
 function tlGetQuests() { return loadTaskLineStore().quests; }

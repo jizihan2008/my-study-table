@@ -516,6 +516,19 @@ create table if not exists public.user_data (
   updated_at timestamptz not null default now(),
   constraint user_data_unique_key unique (user_id, key)
 );
+
+-- updated_at 必须由数据库维护；客户端时钟可能漂移，不能作为跨设备 LWW 基准。
+create or replace function public.set_row_updated_at()
+returns trigger language plpgsql as $$
+begin
+  new.updated_at = now();
+  return new;
+end;
+$$;
+drop trigger if exists trg_user_data_updated_at on public.user_data;
+create trigger trg_user_data_updated_at
+  before insert or update on public.user_data
+  for each row execute function public.set_row_updated_at();
 create index if not exists idx_user_data_user on public.user_data (user_id, updated_at desc);
 alter table public.user_data enable row level security;
 
@@ -548,6 +561,10 @@ create table if not exists public.user_sync_items (
   updated_at timestamptz not null default now(),
   constraint user_sync_items_unique unique (user_id, kind, item_id)
 );
+drop trigger if exists trg_user_sync_items_updated_at on public.user_sync_items;
+create trigger trg_user_sync_items_updated_at
+  before insert or update on public.user_sync_items
+  for each row execute function public.set_row_updated_at();
 create index if not exists idx_user_sync_items_user on public.user_sync_items (user_id, updated_at desc);
 alter table public.user_sync_items enable row level security;
 

@@ -22,6 +22,9 @@
 (function (global) {
   'use strict';
 
+  const policy = global.SyncPolicy;
+  if (!policy) throw new Error('SyncPolicy must be loaded before sync-logs.js');
+
   // ── 常量 ──────────────────────────────────────────────
   const LOG_KEYS = {
     'study_ai_convs': 'ai_conv',
@@ -54,11 +57,14 @@
   let loggedIn = false;
   let applyingRemote = false;
   let uploadTimer = null;
-  let pullTimer = null;
   let realtimeChannel = null;
   let pullDebounceTimer = null;
   let listeners = new Set();
   let progressListeners = new Set();
+  const pullScheduler = policy.createRecurringTask(
+    () => _enqueue(() => _flushLogs()),
+    PULL_INTERVAL
+  );
   // 同步进度状态（面板「同步」区块实时显示；见 _emitProgress / _statusLine）
   let progressState = {
     phase: 'idle',        // idle | quota | uploading | outbox | pulling | done | error
@@ -122,14 +128,14 @@
     return !!(global.Sync && global.Sync.enabled);
   }
   function _autoSyncOn() {
-    return !!cfg.autoSync && _enabled();
+    return !!cfg.autoSync && _enabled() && !!(global.Sync && global.Sync.autoSync);
   }
 
   // ── 变更上报（写点 / saveData 转发调用）────────────────
   function onLocalChange(key) {
     if (!LOG_KEYS[key]) return;
     if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
-    if (!_enabled() || !cfg.autoSync || !loggedIn || !client) return;
+    if (!_autoSyncOn() || !loggedIn || !client) return;
     // 仅置 dirty 标记（不在高频写点里重算 pending，避免流式输出卡顿）
     _emitProgress({ dirtyHint: true });
     scheduleUpload();
@@ -322,20 +328,31 @@
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
     const updatedAt = new Date().toISOString();
-    const { error } = await c.from('user_sync_items')
-      .upsert({
-        user_id: session.user.id,
-        kind: piece.kind,
-        item_id: piece.itemId,
-        data: piece.wrap,
-        bytes: piece.bytes,
-        updated_at: updatedAt
-      }, { onConflict: 'user_id,kind,item_id' });
+    let error = null;
+    let serverUpdatedAt = '';
+    try {
+      const result = await c.from('user_sync_items')
+        .upsert({
+          user_id: session.user.id,
+          kind: piece.kind,
+          item_id: piece.itemId,
+          data: piece.wrap,
+          bytes: piece.bytes,
+          updated_at: updatedAt
+        }, { onConflict: 'user_id,kind,item_id' })
+        .select('updated_at')
+        .single();
+      error = result && result.error;
+      serverUpdatedAt = result && result.data && result.data.updated_at;
+    } catch (e) {
+      error = e || new Error('network-error');
+    }
+    if (!error && !serverUpdatedAt) error = new Error('missing-server-timestamp');
     if (error) {
       await _outboxPut('log:' + key, piece);   // 离线 → 待补传
       return { ok: false, reason: error.message };
     }
-    _setTs(key, updatedAt);
+    _setTs(key, serverUpdatedAt);
     _setHash(key, hash);
     await _outboxRemove('log:' + key);
     return { ok: true };
@@ -452,18 +469,28 @@
       if (typeof it.key !== 'string' || it.key.indexOf('log:') !== 0) continue;
       const p = it.value;
       if (!p) continue;
-      const { error } = await c.from('user_sync_items')
-        .upsert({
-          user_id: session.user.id,
-          kind: p.kind,
-          item_id: p.itemId,
-          data: p.wrap,
-          bytes: p.bytes,
-          updated_at: new Date().toISOString()
-        }, { onConflict: 'user_id,kind,item_id' });
-      if (!error) {
+      let error = null;
+      let serverUpdatedAt = '';
+      try {
+        const result = await c.from('user_sync_items')
+          .upsert({
+            user_id: session.user.id,
+            kind: p.kind,
+            item_id: p.itemId,
+            data: p.wrap,
+            bytes: p.bytes,
+            updated_at: new Date().toISOString()
+          }, { onConflict: 'user_id,kind,item_id' })
+          .select('updated_at')
+          .single();
+        error = result && result.error;
+        serverUpdatedAt = result && result.data && result.data.updated_at;
+      } catch (e) {
+        error = e || new Error('network-error');
+      }
+      if (!error && serverUpdatedAt) {
         const key = p.kind + '/' + p.itemId;
-        _setTs(key, new Date().toISOString());
+        _setTs(key, serverUpdatedAt);
         _setHash(key, _hashStr(p.wrap.d));
         await _outboxRemove(it.key);
       }
@@ -757,7 +784,12 @@
   }
   // 独立串行队列：所有手动/自动任务排队执行，不并发
   function _enqueue(fn) {
-    const run = logUploadChain.then(fn).catch((e) => { console.warn('[SyncLogs] 任务异常:', e); });
+    const run = logUploadChain.then(fn).catch((e) => {
+      const message = String((e && e.message) || e || '未知错误');
+      console.warn('[SyncLogs] 任务异常:', e);
+      _emitProgress({ phase: 'error', dirtyHint: true, lastError: message });
+      return { error: message };
+    });
     logUploadChain = run.catch(() => {});
     return run;
   }
@@ -1079,9 +1111,8 @@
     try { await migrateLegacy(); } catch (e) { console.warn('[SyncLogs] 迁移失败:', e); }
     _subscribe();
     if (_autoSyncOn()) {
-      _enqueue(() => _flushLogs());
-      clearTimeout(pullTimer);
-      pullTimer = setTimeout(() => { if (_autoSyncOn()) _enqueue(() => _flushLogs()); }, PULL_INTERVAL);
+      await _enqueue(() => _flushLogs());
+      pullScheduler.start();
     }
     _emitStatus();
   }
@@ -1132,6 +1163,7 @@
             }
           } else if (event === 'SIGNED_OUT') {
             loggedIn = false;
+            pullScheduler.stop();
             if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} realtimeChannel = null; }
             _emitStatus();
           }
@@ -1158,6 +1190,27 @@
     try { renderPanel(); } catch (e) { console.warn('[SyncLogs] 面板渲染失败:', e); }
   }
 
+  function retryPending() {
+    if (!_autoSyncOn() || !loggedIn) return Promise.resolve(false);
+    pullScheduler.start();
+    return pullScheduler.trigger();
+  }
+
+  function refreshAutoSync() {
+    if (_autoSyncOn()) return _init();
+    pullScheduler.stop();
+    clearTimeout(uploadTimer);
+    clearTimeout(pullDebounceTimer);
+    if (realtimeChannel) {
+      try {
+        if (_client() && typeof _client().removeChannel === 'function') _client().removeChannel(realtimeChannel);
+        else realtimeChannel.unsubscribe();
+      } catch (e) {}
+      realtimeChannel = null;
+    }
+    return Promise.resolve();
+  }
+
   // ── 对外暴露 ────────────────────────────────────────
   global.SyncLogs = {
     init,
@@ -1172,6 +1225,8 @@
     deleteAllRemote,
     pruneRemote,
     migrateLegacy,
+    retryPending,
+    refreshAutoSync,
     onStatus,
     onProgress,
     get enabled() { return _enabled(); },

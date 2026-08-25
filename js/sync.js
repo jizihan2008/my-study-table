@@ -17,6 +17,9 @@
 (function (global) {
   'use strict';
 
+  const policy = global.SyncPolicy;
+  if (!policy) throw new Error('SyncPolicy must be loaded before sync.js');
+
   // 单条同步数据大小上限（字节）。超过则不参与云端同步（本地保留），
   // 防止超大 value（如 AI 聊天记录可到几十 MB）导致 user_data 查询/写入 statement timeout。
   // 用 JSON.stringify 长度近似（UTF-8 中文约 3 字节，取 0.8MB 字符串长度≈2MB 实际 → 保守）
@@ -93,7 +96,7 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260825-r9';            // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260825-r10';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
   const IDB_NAME = 'mst-sync';
@@ -108,12 +111,16 @@
   let loggedIn = false;
   let dirtyKeys = new Set();                  // 待上传的 key
   let uploadTimer = null;
-  let pullTimer = null;
   let realtimeChannel = null;
-  let applyingRemote = false;                 // 防止远端写回本地触发再次上报的锁
+  let syncInProgress = false;                 // 拉取/合并互斥锁
+  let remoteApplyDepth = 0;                   // 仅抑制远端写回产生的本地变更通知
   let _lastPushAt = 0;                        // 上次主动上传完成时间（抑制自己变更的 realtime 回显）
   let _lastPullError = '';                    // 最近一次手动同步的失败原因（诊断用）
   let listeners = new Set();                  // 状态监听器（settings 面板刷新用）
+  const pullScheduler = policy.createRecurringTask(
+    () => _pullAll(false),
+    PULL_INTERVAL
+  );
 
   // 判断某 key 是否参与同步
   function isSyncKey(key) {
@@ -264,26 +271,30 @@
       }
       return { ok: true, skipped: true, reason: 'too-large' };
     }
-    const payload = value ? JSON.parse(value) : null;
+    let payload = null;
+    try {
+      payload = value ? JSON.parse(value) : null;
+    } catch (e) {
+      return { ok: false, reason: 'invalid-local-json' };
+    }
     // 用「服务器时间」作为云端 updated_at（不传该字段 → 数据库 default now()），
     // 避免客户端时钟偏差（手机时间慢于电脑）导致 LWW 判定「云端不新」→ 另一设备永不拉取。
     // 兜底优先用既有服务器时间（remoteTs），其次才设备时钟——避免 select 失败时把
     // 设备时钟写进 localTs 造成新的污染（污染值会被 _tsIsFuture 5s 灵敏识别并校准）。
-    let updatedAt = _getRemoteTs()[key] || new Date().toISOString();   // select 不可用时兜底
-    let upsertErr = null;
+    let updatedAt = '';
     try {
       const { data, error } = await c.from('user_data')
         .upsert({ user_id: session.user.id, key, value: payload },
           { onConflict: 'user_id,key' })
         .select('updated_at')
         .single();
-      upsertErr = error;
-      if (!error && data && data.updated_at) updatedAt = data.updated_at;
+      if (error) return { ok: false, reason: error.message || 'upload-failed' };
+      if (!data || !data.updated_at) return { ok: false, reason: 'missing-server-timestamp' };
+      updatedAt = data.updated_at;
     } catch (e) {
-      // upsert 可能已成功但 select/single 抛错（如版本不支持）→ 视为成功，时间用服务器兜底
-      upsertErr = null;
+      // 网络异常的结果是不确定的，绝不能按成功清除 dirty/outbox。
+      return { ok: false, reason: String((e && e.message) || e || 'network-error') };
     }
-    if (upsertErr) return { ok: false, reason: upsertErr.message };
     // 成功上传后清掉对应 outbox
     await _outboxRemove(key);
     // 同步本地与云端时间戳（以服务器时间为准），标记该 key 本地已是最新
@@ -299,7 +310,55 @@
   let queuePending = 0;        // 队列中等待执行的任务数（用于可视化）
   const MAX_QUEUE = 20;        // 队列长度上限，防止极端情况下无限堆积
 
-  function _flush() {
+  async function _restoreOutboxDirtyKeys() {
+    const items = await _outboxGetAll();
+    for (const item of items) {
+      if (!item || !isSyncKey(item.key)) continue;
+      _markLocalDirty(item.key);
+      dirtyKeys.add(item.key);
+    }
+  }
+
+  async function _storeFailedUpload(key, reason) {
+    let payload = null;
+    const raw = localStorage.getItem(key);
+    try { payload = raw ? JSON.parse(raw) : null; } catch (e) {}
+    _markLocalDirty(key);
+    dirtyKeys.add(key);
+    await _outboxPut(key, payload, new Date().toISOString());
+    _lastPullError = reason || '上传失败，已加入离线队列';
+  }
+
+  async function _findUploadConflicts(keys) {
+    if (!keys.length) return { ok: true, conflicts: new Set() };
+    const session = await getSession();
+    const c = _client();
+    if (!session || !c) return { ok: false, reason: '未登录或 Supabase 客户端不可用' };
+    try {
+      const { data, error } = await c.from('user_data')
+        .select('key,updated_at')
+        .eq('user_id', session.user.id)
+        .in('key', keys);
+      if (error) return { ok: false, reason: error.message || '无法检查云端版本' };
+      const remoteMap = {};
+      (data || []).forEach(row => { remoteMap[row.key] = row.updated_at; });
+      const localMap = _getLocalTs();
+      const conflicts = new Set();
+      for (const key of keys) {
+        const remoteTs = remoteMap[key];
+        if (!remoteTs) continue;
+        const baseTs = localMap[key];
+        const compared = policy.compareTimestamps(remoteTs, baseTs);
+        if (!baseTs || compared === null || compared > 0) conflicts.add(key);
+      }
+      return { ok: true, conflicts };
+    } catch (e) {
+      return { ok: false, reason: String((e && e.message) || e || '网络异常') };
+    }
+  }
+
+  function _flush(options = {}) {
+    const forceUpload = !!options.forceUpload;
     // 已积压大量任务时丢弃最旧的积压，避免队列无限增长
     if (queuePending > MAX_QUEUE) return uploadChain;
     queuePending++;
@@ -307,15 +366,29 @@
     uploadChain = uploadChain.then(async () => {
       queuePending--;
       if (!enabled || !loggedIn || !_client()) return;
-      // 优先处理离线队列（网络恢复后自动补传）
-      if (dirtyKeys.size === 0) {
-        await _flushOutbox();
-        return;
-      }
+      // 持久化 dirty/outbox 是事实来源，应用重启后也必须恢复到运行时队列。
+      _hydrateDirtyKeys();
+      await _restoreOutboxDirtyKeys();
       // 取出当前所有脏 key 作为本次批次；本地变更/其他触发在本次执行期间新加入的 key
       // 会留在 dirtyKeys，由后续入队任务处理，不会丢失
-      const keys = Array.from(dirtyKeys);
-      dirtyKeys.clear();
+      const keys = Array.from(dirtyKeys).filter(key => isSyncKey(key) && !_conflictKeys.has(key));
+      keys.forEach(key => dirtyKeys.delete(key));
+      if (!keys.length) return;
+
+      if (!forceUpload) {
+        const checked = await _findUploadConflicts(keys);
+        if (!checked.ok) {
+          for (const key of keys) await _storeFailedUpload(key, checked.reason);
+          return;
+        }
+        for (const key of checked.conflicts) {
+          _queueConflict(key);
+          const index = keys.indexOf(key);
+          if (index >= 0) keys.splice(index, 1);
+        }
+        if (_conflictQueue.length) void _resolveConflicts();
+      }
+
       let okCount = 0;
       const total = keys.filter(k => isSyncKey(k)).length || 1;
       let done = 0;
@@ -324,57 +397,22 @@
         _emitProgress({ active: true, phase: 'upload', current: done + 1, total: total, key: key, label: SYNC_LABELS[key] || key, queuePending: queuePending });
         const res = await _uploadKey(key);
         if (res.ok) okCount++;
-        else {
-          // 上传失败（可能离线）：写入 outbox 等待恢复后重传
-          const value = localStorage.getItem(key);
-          await _outboxPut(key, value ? JSON.parse(value) : null, res.updatedAt || new Date().toISOString());
-        }
+        else await _storeFailedUpload(key, res.reason);
         done++;
       }
       if (okCount > 0) {
         _emitStatus();
         _lastPushAt = Date.now();
       }
-    }).catch(() => {})
+    }).catch((e) => {
+      _lastPullError = String((e && e.message) || e || '上传队列异常');
+      console.warn('[sync] 上传队列异常:', e);
+    })
       .finally(() => {
         // 队列已全部处理完时才显示空闲；否则保持等待（下一个任务会继续更新）
         if (queuePending <= 0) _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '', queuePending: 0 });
       });
     return uploadChain;
-  }
-
-  async function _flushOutbox() {
-    if (!_client()) return;
-    const session = await getSession();
-    if (!session) return;
-    const c = _client();
-    if (!c) return;
-    const items = await _outboxGetAll();
-    for (const item of items) {
-      // 补传同样不传 updated_at → 服务器 now()，避免 outbox 里的旧客户端时间戳污染 LWW
-      let ok = false;
-      try {
-        const { data, error } = await c.from('user_data')
-          .upsert({ user_id: session.user.id, key: item.key, value: item.value },
-            { onConflict: 'user_id,key' })
-          .select('updated_at')
-          .single();
-        if (!error) {
-          ok = true;
-          if (data && data.updated_at) {
-            // 补传成功：同步服务器时间戳并清除 dirty。
-            // 否则 dirty 残留会持续「保护本地上传」→ 挡住后续自动拉取（电脑→iPad 不更新的根因之一）。
-            _setRemoteTs(item.key, data.updated_at);
-            _setLocalTs(item.key, data.updated_at);
-            _clearLocalDirty(item.key);
-          }
-        }
-      } catch (e) {
-        // select 可能不受支持 → upsert 实际成功，按成功处理（至少不恶化）
-        ok = true;
-      }
-      if (ok) await _outboxRemove(item.key);
-    }
   }
 
   // ── 远端时间戳记录（独立存储，不污染业务数据）────────
@@ -425,6 +463,24 @@
     if (key in map) { delete map[key]; localStorage.setItem(DIRTY_KEY, JSON.stringify(map)); }
   }
   function _isLocalDirty(key) { return !!_getDirtyMap()[key]; }
+  function _hydrateDirtyKeys() {
+    const map = _getDirtyMap();
+    Object.keys(map).filter(isSyncKey).forEach(key => dirtyKeys.add(key));
+  }
+
+  async function _applyRemoteValue(key, value, updatedAt) {
+    remoteApplyDepth++;
+    try {
+      saveData(key, value);
+    } finally {
+      remoteApplyDepth--;
+    }
+    _setRemoteTs(key, updatedAt);
+    _setLocalTs(key, updatedAt);
+    _clearLocalDirty(key);
+    dirtyKeys.delete(key);
+    await _outboxRemove(key);
+  }
   // 判断本地时间戳是否为「未来值」（旧版本用设备时钟写 localTs 的污染残留）：
   // localTs 语义 = 服务器 updated_at，与 remoteMaxTs（本次拉取的最大服务器时间）同源。
   // 服务器时间单向递增 → localTs 不可能真正晚于 remoteMaxTs；任何超出微小抖动的正值
@@ -439,261 +495,140 @@
   }
   // 冲突队列：本次拉取中「两端都改过」的 key（Steam 式用户决策）
   let _conflictQueue = [];
+  const _conflictKeys = new Set();
   let _resolvingConflict = false;   // 弹窗互斥锁，避免多个冲突弹窗叠加
 
-  // ── 首次同步：本地有数据则上传（桌面→云），本地缺失则拉取（云→手机）──
-  // 避免手机端首次同步时用空数据覆盖云端。
-  async function _firstSync() {
-    if (!enabled || !_client()) return;
-    if (applyingRemote) return;   // 上一次同步仍在执行 → 跳过本次，避免并发
-    const session = await getSession();
-    if (!session) return;
-    const c = _client();
-    if (!c) return;
-
-    // 1. 先拉取云端 key 的轻量元信息（不含 value，避免超大 value 导致 statement timeout）
-    let remoteMeta = [];
-    applyingRemote = true;
-    try {
-      const { data, error } = await c.from('user_data')
-        .select('key,updated_at')
-        .eq('user_id', session.user.id);
-      if (!error && data) remoteMeta = data;
-    } catch (e) { /* 忽略 */ }
-    const remoteMetaMap = {};
-    remoteMeta.forEach(r => { remoteMetaMap[r.key] = r; });
-
-    // 2. 找出「本地空 且 云端有数据」的 key，按需拉取其 value（避免全量拉取）
-    const firstKeys = SYNC_KEYS.filter(k => isSyncKey(k));
-    const needValueKeys = firstKeys.filter(k => _isEmptyLocalValue(k) && remoteMetaMap[k]);
-    const valueMap = {};
-    if (needValueKeys.length) {
-      try {
-        const { data: vals, error: vErr } = await c.from('user_data')
-          .select('key,value,updated_at')
-          .eq('user_id', session.user.id)
-          .in('key', needValueKeys);
-        if (!vErr && vals) vals.forEach(v => { valueMap[v.key] = v; });
-      } catch (e) { /* 忽略 */ }
-    }
-
-    // 3. 合并策略：云端有非空数据且本地为空 → 拉取云端；
-    //    本地有真实数据 → 上传；本地与云端都空 → 跳过（不产生空占位覆盖）
-    const firstTotal = firstKeys.length || 1;
-    let firstDone = 0;
-    try {
-      for (const key of firstKeys) {
-        firstDone++;
-        _emitProgress({ active: true, phase: 'first', current: firstDone, total: firstTotal, key: key, label: SYNC_LABELS[key] || key });
-        const localEmpty = _isEmptyLocalValue(key);
-        const remoteRow = valueMap[key] || null;
-        const remoteHasData = remoteRow && remoteRow.value !== null &&
-          !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
-          !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0) &&
-          !_valueTooLarge(JSON.stringify(remoteRow.value));
-
-        if (localEmpty && remoteHasData) {
-          // 本地空、云端有数据 → 拉取云端（避免用本地空数组覆盖云端真实笔记）
-          saveData(key, remoteRow.value);
-          _setRemoteTs(key, remoteRow.updated_at);
-          _setLocalTs(key, remoteRow.updated_at);
-          _clearLocalDirty(key);
-        } else if (!localEmpty) {
-          // 本地有真实数据 → 上传到云（覆盖云端旧值，_uploadKey 内部会跳过超大 value）
-          await _uploadKey(key);
-        }
-        // 本地空 且 云端也空/无记录 → 跳过（不产生任何写入）
-      }
-    } catch (e) { /* 单 key 失败不中断整体 */ }
-    finally {
-      // 无论成功/异常都必须复位锁，否则后续手动同步会被永久跳过（iPad「点同步没反应」）
-      applyingRemote = false;
-    }
-    _refreshUI();
-    _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
+  function _queueConflict(key) {
+    if (_conflictKeys.has(key)) return;
+    _conflictKeys.add(key);
+    _conflictQueue.push(key);
   }
 
-  // ── 常规拉取合并：仅当本地缺失时拉取（避免覆盖本地编辑）────
-  // force: 手动同步时置 true → 若上一次同步仍在执行，等待其完成（最多 15s）而非直接跳过
-  // forceRemote: 手动强制同步 → 云端有数据就拉取（无视时间戳，手动以云端为权威源）。
-  //   「方案 B」：仅手动同步保留 forceRemote=true；自动同步（Realtime / 定时 / 登录后）
-  //   走修正后的时间戳逻辑——localTs 只写服务器 updated_at（与 remoteTs 同源可比）+ 本地
-  //   修改用 dirty 标记承载，不再依赖设备时钟，消除「iPad 时钟偏快 → 永不拉取」的根因，
-  //   同时避免「每次全量强制拉取」的覆盖风险与性能开销。
-  async function _pullAll(force, forceRemote) {
-    if (!enabled) { _lastPullError = '同步未开启'; return; }
-    if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return; }
-    if (applyingRemote) {
-      // 上一次同步仍在执行（可能因云端慢/超时阻塞）→ 自动模式跳过；手动模式等待
-      if (!force) { _lastPullError = '上一次同步仍在进行，本次跳过（稍后重试）'; return; }
+
+  // Safe merge cycle. force=true only waits for an active cycle; it never means
+  // that the cloud may silently overwrite unsent local edits.
+  async function _pullAll(force) {
+    if (!enabled) { _lastPullError = '同步未开启'; return false; }
+    if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return false; }
+    if (syncInProgress) {
+      if (!force) return false;
       const waitStart = Date.now();
-      while (applyingRemote && Date.now() - waitStart < 15000) {
-        await new Promise(r => setTimeout(r, 300));
+      while (syncInProgress && Date.now() - waitStart < 15000) {
+        await new Promise(resolve => setTimeout(resolve, 300));
       }
-      if (applyingRemote) {
-        // 等待超时：强制复位锁，继续本次拉取（宁可重新拉，也不让手动同步失效）
-        applyingRemote = false;
-        console.warn('[sync] 手动同步等待超时，强制复位同步锁');
+      if (syncInProgress) {
+        _lastPullError = '上一次同步仍未完成，请稍后重试';
+        return false;
       }
     }
+
     _lastPullError = '';
     const session = await getSession();
     if (!session) {
       _lastPullError = '未登录或登录状态失效（请在「好友」页面重新登录）';
-      return;
+      return false;
     }
     const c = _client();
-    if (!c) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return; }
-    applyingRemote = true;
+    if (!c) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return false; }
+
+    syncInProgress = true;
     try {
-      // 两阶段拉取，避免一次性把超大 value（如 AI 聊天记录）全部拉回导致 statement timeout：
-      // ① 先只取轻量的 key/updated_at 判断差异；② 仅对「确实需要 value」的 key 单独取 value。
+      _hydrateDirtyKeys();
       const { data: meta, error } = await c.from('user_data')
         .select('key,updated_at')
         .eq('user_id', session.user.id);
-      if (error) { console.warn('[sync] 拉取失败:', error.message); return; }
-      if (!meta) return;
-      _conflictQueue = [];
-      const syncRows = meta.filter(r => isSyncKey(r.key));
-      const pullTotal = syncRows.length || 1;
-      let pullDone = 0;
-      // 服务器时间参考 = 本次拉取到的最大 updated_at（用于识别「本地时间戳是未来值」的时钟污染残留）
+      if (error) {
+        _lastPullError = error.message || '拉取云端元数据失败';
+        return false;
+      }
+
+      const syncRows = (meta || []).filter(row => isSyncKey(row.key));
+      const remoteKeys = new Set(syncRows.map(row => row.key));
+      const localTsMap = _getLocalTs();
       let remoteMaxTs = '';
-      syncRows.forEach(r => {
-        if (!remoteMaxTs || new Date(r.updated_at).getTime() > new Date(remoteMaxTs).getTime()) remoteMaxTs = r.updated_at;
-      });
-      // 先逐 key 用元信息（updated_at）判定「是否真正需要云端 value」：
-      //   - 本地缺失（localEmpty）→ 需要 value 拉取
-      //   - 本地 dirty（有未上传修改）→ 保护本地，不拉取覆盖，稍后上传
-      //   - 本地时间戳是未来值（旧版时钟污染残留）→ 本地时间不可信，云端为权威 → 拉取校准
-      //   - 云端比本地新（remoteTs > localTs，两端都是服务器时间戳）→ 需要 value 拉取
-      //   - forceRemote（手动强制同步）→ 云端有数据就拉，无视时间戳（手动以云端为权威源）
-      //   - 其余情况（本地有真实数据且更新/无本地时间戳保护）→ 保留本地，只需上传，无需拉 value
+      for (const row of syncRows) {
+        if (!remoteMaxTs || policy.compareTimestamps(row.updated_at, remoteMaxTs) > 0) remoteMaxTs = row.updated_at;
+      }
+
       const needValueKeys = [];
       for (const row of syncRows) {
-        pullDone++;
-        const localTs = _getLocalTs()[row.key];
-        const remoteTs = row.updated_at;
-        const localEmpty = _isEmptyLocalValue(row.key);
-        if (localEmpty) {
-          needValueKeys.push(row.key);   // 本地缺失 → 拉
-        } else if (forceRemote) {
-          needValueKeys.push(row.key);   // 手动强制同步 → 拉取云端（下面合并逻辑会避免覆盖更新的本地）
-        } else if (_isLocalDirty(row.key)) {
-          // 本地和云端可能同时变化：拉取云端值以进行显式冲突比较。
+        const localTs = localTsMap[row.key];
+        const compared = policy.compareTimestamps(row.updated_at, localTs);
+        if (_isEmptyLocalValue(row.key) || _isLocalDirty(row.key) || !localTs ||
+          compared === null || compared !== 0 || _tsIsFuture(localTs, remoteMaxTs)) {
           needValueKeys.push(row.key);
-        } else if (_tsIsFuture(localTs, remoteMaxTs)) {
-          // 本地时间戳是「未来值」（旧版本设备时钟污染残留）→ 本地时间不可信，云端权威 → 拉取校准
-          needValueKeys.push(row.key);
-        } else if (localTs && remoteTs && new Date(remoteTs).getTime() > new Date(localTs).getTime()) {
-          needValueKeys.push(row.key);   // 云端明确更新 → 拉
-        } else if (!localTs && remoteTs) {
-          // 本地有真实数据但无本地时间戳（备份恢复保护）→ 不上传拉取，保留本地并上传
-          dirtyKeys.add(row.key);
         }
       }
-      // ② 一次性批量取「需要 value」的 key（仍可能含大 value，但只拉必要项，避免全量）
+
       const valueMap = {};
       if (needValueKeys.length) {
-        const { data: vals, error: vErr } = await c.from('user_data')
+        const { data: values, error: valueError } = await c.from('user_data')
           .select('key,value,updated_at')
           .eq('user_id', session.user.id)
           .in('key', needValueKeys);
-        if (!vErr && vals) {
-          vals.forEach(v => { valueMap[v.key] = v; });
+        if (valueError) {
+          _lastPullError = valueError.message || '拉取云端数据失败';
+          return false;
         }
+        (values || []).forEach(row => { valueMap[row.key] = row; });
       }
-      // ③ 合并应用
-      // 说明：遍历的 syncRows 是云端所有匹配 key 的元信息，云端存在该记录。
-      // valueMap[row.key] 只有 needValueKeys（本地空 / 时钟污染校准 / forceRemote / 云端明确更新）
-      // 的 key 才有 value。对「本地不晚于云端」的 key，未拉 value（remoteRow undefined），
-      // 此时不能误判为云端空而反复上传；应基于时间戳 + dirty 标记直接判定：两端一致→跳过，
-      // 本地 dirty / 本地更新→上传。
+
+      const total = syncRows.length || 1;
+      let current = 0;
       for (const row of syncRows) {
-        const remoteRow = valueMap[row.key];   // 可能 undefined（非 needValueKeys）
-        const localTs = _getLocalTs()[row.key];
-        const remoteTs = remoteRow ? remoteRow.updated_at : row.updated_at;
+        current++;
+        const remoteRow = valueMap[row.key];
         const localEmpty = _isEmptyLocalValue(row.key);
         const localDirty = _isLocalDirty(row.key);
+        const localTs = localTsMap[row.key];
+        const futureTimestamp = _tsIsFuture(localTs, remoteMaxTs);
+        const remoteHasData = !!remoteRow && !_isEmptyValue(remoteRow.value);
+        let action;
 
-        if (localEmpty) {
-          // 本地空：云端有真实数据（需拉 value 的 key 才有 remoteRow）→ 拉取；
-          // 云端也空/无记录 → 跳过（不产生空占位）。未拉 value 的 key 不会走进这里。
-          if (remoteRow && remoteRow.value !== null &&
-            !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
-            !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0)) {
-            saveData(row.key, remoteRow.value);
-            _setRemoteTs(row.key, remoteRow.updated_at);
-            _setLocalTs(row.key, remoteRow.updated_at);
-            _clearLocalDirty(row.key);
-          }
+        if (!remoteRow) {
+          const compared = policy.compareTimestamps(row.updated_at, localTs);
+          action = localDirty ? 'upload' : (compared === 0 ? 'noop' : 'conflict');
+        } else if (futureTimestamp) {
+          action = localDirty ? 'conflict' : (remoteHasData ? 'pull' : 'upload');
         } else {
-          // 本地有真实数据。
-          if (remoteRow) {
-            // 拉到了云端 value：云端有真实数据 → 谁新用谁；云端空 → 上传本地。
-            const remoteHasData = remoteRow.value !== null &&
-              !(Array.isArray(remoteRow.value) && remoteRow.value.length === 0) &&
-              !(remoteRow.value && typeof remoteRow.value === 'object' && !Array.isArray(remoteRow.value) && Object.keys(remoteRow.value).length === 0);
-            if (remoteHasData && localTs && remoteTs) {
-              const localMs = new Date(localTs).getTime();
-              const remoteMs = new Date(remoteTs).getTime();
-              if (forceRemote) {
-                // 手动强制同步：即使本地更新也拉取云端（云端是权威源）
-                // —— 但若本地确实更新（localMs > remoteMs），保留本地待上传（不丢本地改动）
-                if (localMs > remoteMs) {
-                  dirtyKeys.add(row.key);   // 本地更新 → 上传（保留本地）
-                } else {
-                  saveData(row.key, remoteRow.value);
-                  _setRemoteTs(row.key, remoteRow.updated_at);
-                  _setLocalTs(row.key, remoteRow.updated_at);
-                  _clearLocalDirty(row.key);
-                }
-              } else if (localDirty) {
-                if (!_conflictQueue.includes(row.key)) _conflictQueue.push(row.key);
-              } else if (_tsIsFuture(localTs, remoteMaxTs)) {
-                // 本地时间戳是「未来值」（旧版时钟污染残留）→ 本地时间不可信，云端权威 → 覆盖校准
-                saveData(row.key, remoteRow.value);
-                _setRemoteTs(row.key, remoteRow.updated_at);
-                _setLocalTs(row.key, remoteRow.updated_at);
-                _clearLocalDirty(row.key);
-              } else if (remoteMs > localMs) {
-                // 云端明确更新 → 拉取覆盖
-                saveData(row.key, remoteRow.value);
-                _setRemoteTs(row.key, remoteRow.updated_at);
-                _setLocalTs(row.key, remoteRow.updated_at);
-                _clearLocalDirty(row.key);
-              } else if (localMs > remoteMs) {
-                dirtyKeys.add(row.key);   // 本地明确更新 → 上传本地
-              }
-              // localMs === remoteMs：两端时间戳相同 → 数据已一致，跳过（避免反复上传）
-            } else {
-              // 云端空，或本地无时间戳（备份恢复保护），或边缘情况 → 上传本地保护
-              dirtyKeys.add(row.key);
-            }
-          } else {
-            // 未拉 value：该 key 不在 needValueKeys（本地空 / 本地 dirty / 云端不新 / 时钟污染未来值）。
-            // 判定：本地 dirty / 本地明确更新 → 上传；否则（一致）→ 跳过，避免反复上传。
-            if (localDirty) {
-              dirtyKeys.add(row.key);   // 本地有未上传修改 → 上传
-            } else if (localTs && remoteTs && new Date(localTs).getTime() > new Date(remoteTs).getTime()) {
-              dirtyKeys.add(row.key);   // 本地更新 → 上传
-            } else if (!localTs && remoteTs) {
-              dirtyKeys.add(row.key);   // 本地有数据无时间戳 → 保护本地，上传
-            }
-            // localTs >= remoteTs（含相等）→ 数据一致或本地不更新，跳过
-          }
+          action = policy.decideMerge({
+            localEmpty,
+            localDirty,
+            baseTimestamp: localTs,
+            remoteExists: true,
+            remoteHasData,
+            remoteTimestamp: remoteRow.updated_at
+          });
         }
-        _emitProgress({ active: true, phase: 'pull', current: pullDone, total: pullTotal, key: row.key, label: SYNC_LABELS[row.key] || row.key });
+
+        if (action === 'pull') {
+          await _applyRemoteValue(row.key, remoteRow.value, remoteRow.updated_at);
+        } else if (action === 'upload') {
+          _markLocalDirty(row.key);
+          dirtyKeys.add(row.key);
+        } else if (action === 'conflict') {
+          _markLocalDirty(row.key);
+          _queueConflict(row.key);
+        }
+
+        _emitProgress({ active: true, phase: 'pull', current, total, key: row.key, label: SYNC_LABELS[row.key] || row.key });
       }
-      // 拉取完成，若存在冲突则提示用户选择（异步，不阻塞后续）
-      if (_conflictQueue.length) _resolveConflicts();
+
+      for (const key of SYNC_KEYS) {
+        if (remoteKeys.has(key) || _isEmptyLocalValue(key)) continue;
+        _markLocalDirty(key);
+        dirtyKeys.add(key);
+      }
+
+      if (_conflictQueue.length) void _resolveConflicts();
+      return true;
     } catch (e) {
+      _lastPullError = String((e && e.message) || e || '拉取异常');
       console.warn('[sync] 拉取异常:', e);
+      return false;
     } finally {
-      applyingRemote = false;
-      // 拉取中标记的「本地待保护」dirtyKeys（本地有真实数据需上传）在此一并上传，
-      // 确保恢复备份后本地真实数据能推回云端，而不是被云端旧/空数据清空。
-      try { if (dirtyKeys.size > 0) await _flush(); } catch (e) { console.warn('[sync] 上传失败:', e); }
+      syncInProgress = false;
+      try { await _flush(); } catch (e) { console.warn('[sync] 上传失败:', e); }
       _refreshUI();
       _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
     }
@@ -711,25 +646,33 @@
         let ok;
         try { ok = await _askConflictChoice(key); } catch (e) { ok = null; }
         _recordConflict(key, ok || 'skipped');
-        if (ok === null) { dirtyKeys.add(key); continue; }
+        if (ok === null) { continue; }
         if (ok === 'local') {
           // 用本地版：上传本地覆盖云端，并同步时间戳
-          if (client2 && session) await _uploadKey(key);
-          else dirtyKeys.add(key);
+          _conflictKeys.delete(key);
+          if (client2 && session) {
+            const result = await _uploadKey(key);
+            if (!result.ok) await _storeFailedUpload(key, result.reason);
+          } else {
+            _markLocalDirty(key);
+            dirtyKeys.add(key);
+          }
         } else {
           // 用云端版：拉取云端覆盖本地
           if (client2 && session) {
-            const { data } = await client2.from('user_data')
+            const { data, error } = await client2.from('user_data')
               .select('key,value,updated_at').eq('user_id', session.user.id).eq('key', key).maybeSingle();
-            if (data && data.value !== null) {
-              saveData(data.key, data.value);
-              _setRemoteTs(data.key, data.updated_at);
-              _setLocalTs(data.key, data.updated_at);
+            if (!error && data && data.value !== null) {
+              await _applyRemoteValue(data.key, data.value, data.updated_at);
+              _conflictKeys.delete(key);
+            } else {
+              _lastPullError = (error && error.message) || '读取冲突的云端版本失败';
             }
           }
         }
       }
       _resolvingConflict = false;
+      _emitStatus();
     })();
   }
 
@@ -764,7 +707,7 @@
     return new Promise((resolve) => {
       const overlay = document.getElementById('syncConflictOverlay');
       const body = document.getElementById('syncConflictBody');
-      if (!overlay || !body) { resolve('remote'); return; }   // 无弹窗时默认用云端
+      if (!overlay || !body) { resolve(null); return; }
       const label = SYNC_LABELS && SYNC_LABELS[key] ? SYNC_LABELS[key] : key;
       body.innerHTML = `“<b>${escapeHtml(label)}</b>”在本地与云端都做了修改，无法自动合并。<br>请选择保留哪个版本：<br><span style="font-size:11px;opacity:.7">本地 ${new Date(_getLocalTs()[key]||'').toLocaleString()} ｜ 云端 ${new Date(_getRemoteTs()[key]||'').toLocaleString()}</span>`;
       overlay.style.display = 'flex';
@@ -796,12 +739,13 @@
       return;
     }
     if (!isSyncKey(key)) return;
-    if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
+    if (remoteApplyDepth > 0) return;   // 远端写回本地不触发回传，防循环
     // 本地修改 → 标记「本地 dirty（有未上传修改）」。
     // 不再用设备时钟写 localTs：设备时钟偏差（如 iPad 时钟偏快）会污染 LWW 比较，
     // 导致「云端不比本地新」→ 永不拉取。localTs 只在与服务器成功交互后写入服务器
     // updated_at（与 remoteTs 同源可比）；本地是否有未上传修改由 dirty 标记承载。
     _markLocalDirty(key);
+    dirtyKeys.add(key);
     // 自动上传仅在「云同步 + 自动同步」均开启时触发；关掉自动同步后需手动「立即同步/上传全部」
     if (!enabled || !autoSync || !loggedIn || !client) return;
     dirtyKeys.add(key);
@@ -846,8 +790,8 @@
   function _debouncedPull() {
     clearTimeout(pullDebounceTimer);
     // Realtime 事件 = 云端确有更新的强信号 → 自动模式走修正后的时间戳逻辑（不强制拉取）。
-    // localTs/remoteTs 同源服务器时间戳，比较可靠；本地 dirty 数据不会被覆盖，无需 forceRemote。
-    pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) _pullAll(true, false); }, 800);
+    // localTs/remoteTs 同源服务器时间戳，本地 dirty 数据不会被静默覆盖。
+    pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) _pullAll(false); }, 800);
   }
 
   // ── 拉取后刷新界面 ─────────────────────────────────
@@ -940,14 +884,15 @@
       enabled: enabled,
       autoSync: !!cfg.autoSync,
       loggedIn: !!sess,
-      pendingCount: dirtyKeys.size,
+      pendingCount: Object.keys(_getDirtyMap()).filter(isSyncKey).length,
       lastPull: cfg.lastPull || 0,
       lastError: _lastPullError || '',
       // 诊断字段（排查 iPad 不同步）：
       remoteTsCount: Object.keys(_getRemoteTs()).length,   // 远端时间戳记录数（0=从未成功交互→走首次同步）
       dirtyKeys: Object.keys(_getDirtyMap()),              // 待上传 dirty 标记列表（残留会挡住拉取）
       localTs: _getLocalTs(),                              // 本地时间戳（含旧版污染值，排查用）
-      conflictCount: _getConflictHistory().length
+      conflictCount: _getConflictHistory().length,
+      pendingConflictCount: _conflictKeys.size
     };
   }
 
@@ -965,6 +910,9 @@
     } else {
       _stopAutoSync();
     }
+    if (global.SyncLogs && typeof global.SyncLogs.refreshAutoSync === 'function') {
+      void global.SyncLogs.refreshAutoSync();
+    }
     _emitStatus();
   }
 
@@ -981,6 +929,9 @@
     } else {
       _stopAutoSync();
     }
+    if (global.SyncLogs && typeof global.SyncLogs.refreshAutoSync === 'function') {
+      void global.SyncLogs.refreshAutoSync();
+    }
     _emitStatus();
   }
 
@@ -994,30 +945,29 @@
       realtimeChannel = null;
     }
     clearTimeout(uploadTimer);
-    clearTimeout(pullTimer);
+    pullScheduler.stop();
     clearTimeout(pullDebounceTimer);
     pullDebounceTimer = null;
-    dirtyKeys.clear();
+    // 持久化 dirty/outbox 必须保留，重新开启后继续补传。
     // 复位进度条（避免界面一直显示「上传中」）
     _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
   }
 
   // ── 手动触发 ────────────────────────────────────────
   async function manualSync() {
-    await _flush();
-    const ts = _getRemoteTs();
-    const isFirst = Object.keys(ts).length === 0;
-    if (isFirst) await _firstSync();
-    else await _pullAll(true, true);   // 手动同步：force=true（等待锁）+ forceRemote=true（强制拉取云端，解决时钟偏差）
-    const cfg = getConfig();
-    cfg.lastPull = Date.now();
-    setConfig(cfg);
+    const completed = await _pullAll(true);
+    if (completed) {
+      const cfg = getConfig();
+      cfg.lastPull = Date.now();
+      setConfig(cfg);
+    }
     _emitStatus();
     return getStatus();
   }
   async function uploadAll() {
     dirtyKeys = new Set(SYNC_KEYS.filter(k => localStorage.getItem(k) !== null));
-    await _flush();
+    dirtyKeys.forEach(_markLocalDirty);
+    await _flush({ forceUpload: true });
     _emitStatus();
     return getStatus();
   }
@@ -1033,13 +983,8 @@
     loggedIn = !!session;
     if (loggedIn) {
       _subscribe();
-      // 首次同步（无任何远端时间戳记录）走 _firstSync，否则常规拉取
-      const ts = _getRemoteTs();
-      const isFirst = Object.keys(ts).length === 0;
-      if (isFirst) _firstSync();
-      else _pullAll(true, false);   // 自动模式：修正后的时间戳逻辑（dirty 保护 + 同源时间戳比较）
-      clearTimeout(pullTimer);
-      pullTimer = setTimeout(() => { _pullAll(true, false); _emitStatus(); }, PULL_INTERVAL);
+      await _pullAll(true);
+      pullScheduler.start();
     }
     _emitStatus();
   }
@@ -1047,16 +992,37 @@
   async function _doSyncAfterLogin() {
     if (!enabled || !autoSync || !loggedIn || !_client()) return;
     _subscribe();
-    const ts = _getRemoteTs();
-    const isFirst = Object.keys(ts).length === 0;
-    if (isFirst) _firstSync();
-    else _pullAll(true, false);   // 自动模式：修正后的时间戳逻辑
+    await _pullAll(true);
+    pullScheduler.start();
+  }
+
+  let lifecycleBound = false;
+  function _bindLifecycleSync() {
+    if (lifecycleBound || typeof global.addEventListener !== 'function') return;
+    lifecycleBound = true;
+    global.addEventListener('online', function () {
+      if (!enabled || !autoSync || !loggedIn) return;
+      _hydrateDirtyKeys();
+      void pullScheduler.trigger();
+      if (global.SyncLogs && typeof global.SyncLogs.retryPending === 'function') {
+        void global.SyncLogs.retryPending();
+      }
+    });
+    if (global.document && typeof global.document.addEventListener === 'function') {
+      global.document.addEventListener('visibilitychange', function () {
+        if (global.document.visibilityState === 'visible' && enabled && autoSync && loggedIn) {
+          void pullScheduler.trigger();
+        }
+      });
+    }
   }
 
   function init() {
     const cfg = getConfig();
     enabled = !!cfg.enabled;
     autoSync = !!cfg.autoSync;
+    _hydrateDirtyKeys();
+    _bindLifecycleSync();
     if (enabled) {
       setTimeout(_init, 1500);   // 等 friends.js 客户端就绪
     }
@@ -1074,20 +1040,12 @@
             if (session) {
               loggedIn = true;
               _doSyncAfterLogin();
-              if (autoSync) {
-                clearTimeout(pullTimer);
-                pullTimer = setTimeout(() => { _pullAll(true, false); _emitStatus(); }, PULL_INTERVAL);
-              }
             } else {
               // 事件未带 session，异步获取确认
               getSession().then(function (s) {
                 loggedIn = !!s;
                 if (loggedIn) {
                   _doSyncAfterLogin();
-                  if (autoSync) {
-                    clearTimeout(pullTimer);
-                    pullTimer = setTimeout(() => { _pullAll(true, false); _emitStatus(); }, PULL_INTERVAL);
-                  }
                 }
                 _emitStatus();
               });
@@ -1095,6 +1053,7 @@
             _emitStatus();
           } else if (event === 'SIGNED_OUT') {
             loggedIn = false;
+            pullScheduler.stop();
             if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} realtimeChannel = null; }
             _emitStatus();
           }
