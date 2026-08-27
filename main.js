@@ -15,6 +15,8 @@ const { registerExtensionIpc } = require('./electron/register-extension-ipc');
 const { registerLibraryIpc } = require('./electron/register-library-ipc');
 const { registerSecretIpc } = require('./electron/register-secret-ipc');
 const { registerUpdaterIpc } = require('./electron/register-updater-ipc');
+const { resolveQQChatChunks } = require('./electron/qq-chat-policy');
+const { createQQChatAutoSyncService } = require('./electron/qq-chat-auto-sync');
 
 // 屏蔽 Qt/log4cplus 等系统级无关警告
 process.env.QT_LOGGING_RULES = '*.debug=false;*.warning=false';
@@ -253,6 +255,7 @@ if (!gotTheLock) {
       updaterService.init();
       startConfirmServer(); // 监听 localhost:3000 供 Supabase 确认链接回调
     }
+    qqChatAutoSyncService.restore().catch(() => {});
   });
 }
 
@@ -270,6 +273,7 @@ app.on('activate', () => {
 // 确保真正退出时清理托盘与本地确认服务器
 app.on('before-quit', () => {
   isQuitting = true;
+  qqChatAutoSyncService.close();
   if (confirmServer) {
     try { confirmServer.close(); } catch (e) {}
     confirmServer = null;
@@ -1816,6 +1820,79 @@ ipcMain.handle('capture:read-file-text', async (event, filePath) => {
 // qq-chat-exporter 流式导出产生「manifest.json + chunks/*.jsonl」，
 // 这里让用户直接选择整个 ..._chunked_jsonl 文件夹，主进程读取 manifest 与全部 chunk。
 
+const QQCHAT_MAX_MANIFEST_BYTES = 2 * 1024 * 1024;
+const QQCHAT_MAX_CHUNK_BYTES = 32 * 1024 * 1024;
+const QQCHAT_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
+const QQCHAT_MAX_LINES_PER_CHUNK = 250000;
+const QQCHAT_MAX_TOTAL_MESSAGES = 500000;
+const allowedQQChatChunkFiles = new Set();
+let qqChatMessagesRead = 0;
+const qqChatMetaBackupDir = path.join(userDataPath, 'qq-chat-backups');
+const qqChatAutoConfigPath = path.join(userDataPath, 'qq-chat-auto-sync.json');
+
+async function readValidatedQQChatManifest(dir, authorize) {
+  const exportRoot = path.resolve(String(dir || ''));
+  if (!exportRoot || !fs.existsSync(exportRoot)) throw new Error('QQ 导出目录不存在或不可访问');
+  const rootStat = await fs.promises.lstat(exportRoot);
+  if (!rootStat.isDirectory() || rootStat.isSymbolicLink()) throw new Error('QQ 导出目录必须是普通文件夹');
+  if (authorize) ensureInboxDirAllowed(exportRoot);
+  if (!isInboxPathAllowed(exportRoot)) throw new Error('路径不在允许范围内');
+  const manifestPath = path.join(exportRoot, 'manifest.json');
+  if (!fs.existsSync(manifestPath)) throw new Error('未找到 manifest.json，请选择 qq-chat-exporter 的 JSONL 导出文件夹');
+  const manifestStat = await fs.promises.lstat(manifestPath);
+  if (!manifestStat.isFile() || manifestStat.isSymbolicLink()) throw new Error('manifest.json 必须是导出目录中的普通文件');
+  if (manifestStat.size > QQCHAT_MAX_MANIFEST_BYTES) throw new Error('manifest.json 过大，拒绝读取');
+  const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8'));
+  if (!manifest || !manifest.chunked || !Array.isArray(manifest.chunked.chunks)) {
+    throw new Error('manifest.json 格式不正确（缺少 chunked.chunks）');
+  }
+  const resolved = await resolveQQChatChunks({
+    exportRoot,
+    manifest,
+    fs,
+    path,
+    isPathInside,
+    maxChunkBytes: QQCHAT_MAX_CHUNK_BYTES,
+    maxTotalBytes: QQCHAT_MAX_TOTAL_BYTES
+  });
+  allowedQQChatChunkFiles.clear();
+  for (const filePath of resolved.chunkFiles) allowedQQChatChunkFiles.add(filePath);
+  qqChatMessagesRead = 0;
+  return { manifest, chunkFiles: resolved.chunkFiles, chunksDir: resolved.realChunksDir, dir: exportRoot };
+}
+
+const qqChatAutoSyncService = createQQChatAutoSyncService({
+  fs,
+  path,
+  configPath: qqChatAutoConfigPath,
+  debounceMs: 4000,
+  validateDirectory: function (dir) { return readValidatedQQChatManifest(dir, true); },
+  onChanged: function (payload) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('qqchat:auto-changed', payload);
+  }
+});
+
+// 自动保存轻量元数据/日报快照；完整消息由收件箱中的“备份 QQ”手动导出。
+ipcMain.handle('qqchat:backup-meta', async (event, payload = {}) => {
+  try {
+    const chats = Array.isArray(payload.chats) ? payload.chats.slice(0, 5000) : [];
+    const snapshot = { format: 'mst-qqchats-meta-backup', version: 1, reason: String(payload.reason || 'update').slice(0, 60), createdAt: new Date().toISOString(), chats };
+    const text = JSON.stringify(snapshot);
+    if (Buffer.byteLength(text, 'utf8') > 20 * 1024 * 1024) return { ok: false, reason: 'QQ 元数据备份超过 20 MB' };
+    await fs.promises.mkdir(qqChatMetaBackupDir, { recursive: true });
+    const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const filePath = path.join(qqChatMetaBackupDir, 'qq-meta-' + stamp + '.json');
+    await fs.promises.writeFile(filePath, text, 'utf8');
+    const files = (await fs.promises.readdir(qqChatMetaBackupDir)).filter(name => /^qq-meta-.*\.json$/i.test(name)).sort();
+    for (const name of files.slice(0, Math.max(0, files.length - 20))) {
+      await fs.promises.unlink(path.join(qqChatMetaBackupDir, name)).catch(function () {});
+    }
+    return { ok: true, path: filePath };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+});
+
 // IPC: 选择 JSONL 导出文件夹
 ipcMain.handle('qqchat:pick-dir', async () => {
   const res = await dialog.showOpenDialog(mainWindow, {
@@ -1827,25 +1904,36 @@ ipcMain.handle('qqchat:pick-dir', async () => {
   return { ok: true, dir: res.filePaths[0] };
 });
 
+// 自动同步只监听用户明确选择的导出目录，不启动、注入或控制 QQ 进程。
+ipcMain.handle('qqchat:auto-pick', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: '选择要自动同步的 QQ JSONL 导出文件夹',
+    properties: ['openDirectory']
+  });
+  if (res.canceled || !res.filePaths || !res.filePaths.length) return { ok: false, canceled: true };
+  try {
+    const syncStatus = await qqChatAutoSyncService.enable(res.filePaths[0]);
+    return { ok: true, status: syncStatus };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('qqchat:auto-status', async () => ({ ok: true, status: qqChatAutoSyncService.status() }));
+ipcMain.handle('qqchat:auto-disable', async () => {
+  try { return { ok: true, status: await qqChatAutoSyncService.disable() }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:auto-report', async (event, result) => {
+  try { return { ok: true, status: await qqChatAutoSyncService.report(result || {}) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+
 // IPC: 读取 JSONL 导出文件夹的 manifest.json（结构校验 + 返回 chunk 清单）
 ipcMain.handle('qqchat:read-manifest', async (event, dir) => {
   try {
-    if (!isInboxPathAllowed(dir)) return { ok: false, reason: '路径不在允许范围内' };
-    const manifestPath = path.join(dir, 'manifest.json');
-    if (!fs.existsSync(manifestPath)) return { ok: false, reason: '未找到 manifest.json，请选择 qq-chat-exporter 的 JSONL 导出文件夹' };
-    const manifest = JSON.parse(await fs.promises.readFile(manifestPath, 'utf-8'));
-    if (!manifest || !manifest.chunked || !Array.isArray(manifest.chunked.chunks)) {
-      return { ok: false, reason: 'manifest.json 格式不正确（缺少 chunked.chunks）' };
-    }
-    const chunksDir = path.join(dir, manifest.chunked.chunksDir || 'chunks');
-    const chunkFiles = [];
-    for (const c of manifest.chunked.chunks) {
-      const rel = c.relativePath || path.join(manifest.chunked.chunksDir || 'chunks', c.fileName);
-      const full = path.resolve(dir, rel);
-      if (fs.existsSync(full)) chunkFiles.push(full);
-    }
-    if (chunkFiles.length === 0) return { ok: false, reason: 'chunks 目录中未找到消息文件' };
-    return { ok: true, manifest, chunkFiles, dir };
+    const result = await readValidatedQQChatManifest(dir, false);
+    return { ok: true, manifest: result.manifest, chunkFiles: result.chunkFiles, dir: result.dir };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };
   }
@@ -1854,16 +1942,27 @@ ipcMain.handle('qqchat:read-manifest', async (event, dir) => {
 // IPC: 读取单个 JSONL chunk 文件的内容（返回数组）
 ipcMain.handle('qqchat:read-chunk', async (event, filePath) => {
   try {
-    if (!isInboxPathAllowed(filePath)) return { ok: false, reason: '路径不在允许范围内' };
-    if (!fs.existsSync(filePath)) return { ok: false, reason: '文件不存在' };
-    const text = await fs.promises.readFile(filePath, 'utf-8');
+    const requestedPath = path.resolve(String(filePath || ''));
+    if (!fs.existsSync(requestedPath)) return { ok: false, reason: '文件不存在' };
+    const realFilePath = await fs.promises.realpath(requestedPath);
+    if (!allowedQQChatChunkFiles.has(realFilePath)) return { ok: false, reason: '该文件不在本次已验证的分片清单中' };
+    const st = await fs.promises.lstat(requestedPath);
+    if (!st.isFile() || st.isSymbolicLink() || st.size > QQCHAT_MAX_CHUNK_BYTES) return { ok: false, reason: '分片文件类型或大小无效' };
+    const text = await fs.promises.readFile(realFilePath, 'utf-8');
+    const lines = text.split(/\r?\n/);
+    if (lines.length > QQCHAT_MAX_LINES_PER_CHUNK) return { ok: false, reason: '单个消息分片行数过多，拒绝读取' };
     const items = [];
-    for (const line of text.split('\n')) {
+    let invalidLines = 0;
+    for (const line of lines) {
       const s = String(line || '').trim();
       if (!s) continue;
-      try { items.push(JSON.parse(s)); } catch (e) { /* 忽略损坏行 */ }
+      try { items.push(JSON.parse(s)); } catch (e) { invalidLines++; }
     }
-    return { ok: true, items };
+    if (qqChatMessagesRead + items.length > QQCHAT_MAX_TOTAL_MESSAGES) {
+      return { ok: false, reason: '本次导入消息超过 50 万条，请拆分后导入' };
+    }
+    qqChatMessagesRead += items.length;
+    return { ok: true, items, invalidLines };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };
   }

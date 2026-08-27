@@ -10104,3 +10104,44 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
   .bk-study { height: auto; }
   .bk-study-ai { margin: 0 -12px; padding: 0 12px; }
 }
+/* QQ 聊天检索 */
+.chat-search-bar {
+  display: grid;
+  grid-template-columns: minmax(140px, 2fr) minmax(110px, 1fr) 135px 135px auto auto;
+  gap: 7px;
+  align-items: center;
+  margin-bottom: 12px;
+}
+.chat-search-input {
+  min-width: 0;
+  height: 32px;
+  padding: 5px 9px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+}
+.chat-search-input:focus { outline: none; border-color: var(--primary); }
+.chat-search-results { display: flex; flex-direction: column; gap: 7px; }
+.chat-search-result {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 9px;
+  background: var(--card-bg);
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+.chat-search-result:hover { border-color: var(--primary); background: var(--hover-bg); }
+.chat-search-result-head { color: var(--text-secondary); font-size: 11px; }
+.chat-search-result-text { font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; word-break: break-word; }
+.chat-search-result-text mark { padding: 0 2px; border-radius: 3px; background: rgba(245,158,11,.3); color: inherit; }
+@media (max-width: 900px) {
+  .chat-search-bar { grid-template-columns: 1fr 1fr; }
+}

@@ -90,6 +90,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   qqchatPickDir: () => ipcRenderer.invoke('qqchat:pick-dir'),
   qqchatReadManifest: (dir) => ipcRenderer.invoke('qqchat:read-manifest', dir),
   qqchatReadChunk: (filePath) => ipcRenderer.invoke('qqchat:read-chunk', filePath),
+  qqchatBackupMeta: (payload) => ipcRenderer.invoke('qqchat:backup-meta', payload),
+  qqchatAutoPick: () => ipcRenderer.invoke('qqchat:auto-pick'),
+  qqchatAutoStatus: () => ipcRenderer.invoke('qqchat:auto-status'),
+  qqchatAutoDisable: () => ipcRenderer.invoke('qqchat:auto-disable'),
+  qqchatAutoReport: (payload) => ipcRenderer.invoke('qqchat:auto-report', payload),
+  onQQChatAutoChanged: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('qqchat:auto-changed', listener);
+    return () => ipcRenderer.removeListener('qqchat:auto-changed', listener);
+  },
   // ── Web Page Reader IPC (AI 阅读网页) ──
   webRead: (payload) => ipcRenderer.invoke('web:read', payload)
 });
