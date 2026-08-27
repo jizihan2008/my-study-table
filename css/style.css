@@ -10104,6 +10104,116 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
   .bk-study { height: auto; }
   .bk-study-ai { margin: 0 -12px; padding: 0 12px; }
 }
+
+/* 同步设置：内嵌待处理冲突列表 */
+.sync-conflict-panel {
+  margin-top: 14px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, #f59e0b 48%, var(--border));
+  border-radius: 12px;
+  background: color-mix(in srgb, #f59e0b 7%, var(--card));
+}
+.sync-conflict-panel-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text);
+  font-size: 14px;
+  font-weight: 700;
+}
+.sync-conflict-panel-title > span:first-child {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+}
+.sync-conflict-panel-title .lucide-icon { width: 16px; height: 16px; color: #d97706; }
+.sync-conflict-count {
+  flex-shrink: 0;
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: color-mix(in srgb, #f59e0b 18%, transparent);
+  color: #b45309;
+  font-size: 11px;
+  font-weight: 700;
+}
+.sync-conflict-guide {
+  margin: 8px 0 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+  line-height: 1.65;
+}
+.sync-conflict-list { display: flex; flex-direction: column; gap: 9px; }
+.sync-conflict-item {
+  padding: 11px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+}
+.sync-conflict-item-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+.sync-conflict-item-head > div { min-width: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 6px; }
+.sync-conflict-item-head strong { color: var(--text); font-size: 13px; }
+.sync-conflict-item-head code {
+  color: var(--text-secondary);
+  font-size: 10.5px;
+  overflow-wrap: anywhere;
+}
+.sync-conflict-state {
+  flex-shrink: 0;
+  color: #b45309;
+  font-size: 10.5px;
+  font-weight: 600;
+}
+.sync-conflict-reason { margin: 7px 0; color: var(--text-secondary); font-size: 12px; line-height: 1.55; }
+.sync-conflict-meta {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+  margin: 0 0 10px;
+}
+.sync-conflict-meta > div {
+  padding: 6px 7px;
+  border-radius: 7px;
+  background: var(--hover-bg);
+  min-width: 0;
+}
+.sync-conflict-meta dt { color: var(--text-secondary); font-size: 10px; }
+.sync-conflict-meta dd { margin: 2px 0 0; color: var(--text); font-size: 10.5px; overflow-wrap: anywhere; }
+.sync-conflict-actions { display: flex; gap: 7px; flex-wrap: wrap; }
+.sync-conflict-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  min-height: 31px;
+  padding: 6px 10px;
+  border: 1px solid var(--border);
+  border-radius: 7px;
+  background: var(--input-bg);
+  color: var(--text);
+  font: inherit;
+  font-size: 11.5px;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.sync-conflict-btn .lucide { width: 13px; height: 13px; }
+.sync-conflict-btn-local { border-color: color-mix(in srgb, #6366f1 55%, var(--border)); color: #4f46e5; }
+.sync-conflict-btn-remote { border-color: color-mix(in srgb, #10b981 55%, var(--border)); color: #059669; }
+.sync-conflict-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow); }
+.sync-conflict-btn:disabled { opacity: .5; cursor: not-allowed; }
+.sync-conflict-login-hint { margin: 7px 0 0; color: var(--text-secondary); font-size: 10.5px; }
+
+@media (max-width: 640px) {
+  .sync-conflict-meta { grid-template-columns: 1fr; }
+  .sync-conflict-actions { flex-direction: column; }
+  .sync-conflict-btn { width: 100%; }
+}
+
 /* QQ 聊天检索 */
 .chat-search-bar {
   display: grid;

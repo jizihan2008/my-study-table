@@ -70,7 +70,7 @@
     'study_inbox_config'
   ];
 
-  // 同步数据在冲突弹窗中显示的可读名称
+  // 同步数据在冲突列表中显示的可读名称
   const SYNC_LABELS = {
     'study_todos_v2': '待办事项',
     'study_todos': '待办事项（旧版）',
@@ -96,14 +96,16 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260825-r10';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260826-r12';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
+  const PENDING_CONFLICTS_KEY = 'study_sync_pending_conflicts_v1';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
   const IDB_NAME = 'mst-sync';
   const IDB_STORE = 'outbox';                // 离线变更队列
   const OUTBOX_KEY = 'pending';              // 单条记录 key
   const UPLOAD_DEBOUNCE = 2000;              // 变更后等待上传的毫秒数
   const PULL_INTERVAL = 30 * 60 * 1000;      // 定时全量拉取间隔（30 分钟）
+  const FULL_RECONCILE_INTERVAL = 24 * 60 * 60 * 1000; // 每天做一次完整对账，其余走增量游标
 
   let client = null;                          // Supabase 客户端
   let enabled = false;                        // 是否开启云同步（总开关）
@@ -304,6 +306,61 @@
     return { ok: true, updatedAt };
   }
 
+  // 同一轮有多个 dirty key 时一次 upsert，减少逐 key 往返；单 key 仍走原路径，
+  // 便于保留精确错误信息和兼容旧版 Supabase/PostgREST 行为。
+  async function _uploadKeys(keys) {
+    const list = Array.from(new Set((keys || []).filter(isSyncKey)));
+    if (list.length <= 1) {
+      const only = list[0];
+      return only ? { [only]: await _uploadKey(only) } : {};
+    }
+    const session = await getSession();
+    const c = _client();
+    if (!session || !c) {
+      return Object.fromEntries(list.map(key => [key, { ok: false, reason: !session ? 'not-logged-in' : 'no-client' }]));
+    }
+
+    const results = {};
+    const rows = [];
+    for (const key of list) {
+      const raw = localStorage.getItem(key);
+      if (raw != null && _valueTooLarge(raw)) {
+        results[key] = await _uploadKey(key); // 本地完成“超大值跳过”处理，不产生网络写入
+        continue;
+      }
+      try {
+        rows.push({ user_id: session.user.id, key, value: raw ? JSON.parse(raw) : null });
+      } catch (e) {
+        results[key] = { ok: false, reason: 'invalid-local-json' };
+      }
+    }
+    if (!rows.length) return results;
+
+    try {
+      const { data, error } = await c.from('user_data')
+        .upsert(rows, { onConflict: 'user_id,key' })
+        .select('key,updated_at');
+      if (error) throw new Error(error.message || 'batch-upload-failed');
+      const returned = new Map((data || []).map(row => [row.key, row.updated_at]));
+      for (const row of rows) {
+        const updatedAt = returned.get(row.key);
+        if (!updatedAt) {
+          results[row.key] = { ok: false, reason: 'missing-server-timestamp' };
+          continue;
+        }
+        await _outboxRemove(row.key);
+        _setRemoteTs(row.key, updatedAt);
+        _setLocalTs(row.key, updatedAt);
+        _clearLocalDirty(row.key);
+        results[row.key] = { ok: true, updatedAt };
+      }
+    } catch (e) {
+      const reason = String((e && e.message) || e || 'network-error');
+      for (const row of rows) results[row.key] = { ok: false, reason };
+    }
+    return results;
+  }
+
   // ── 批量上传所有脏 key（队列：串行排队，同时只允许一个上传进程） ──
   // 用 Promise 链实现队列：所有 _flush 请求追加到队列尾部，逐个串行执行，不丢失任何请求
   let uploadChain = Promise.resolve();
@@ -330,7 +387,7 @@
   }
 
   async function _findUploadConflicts(keys) {
-    if (!keys.length) return { ok: true, conflicts: new Set() };
+    if (!keys.length) return { ok: true, conflicts: new Map() };
     const session = await getSession();
     const c = _client();
     if (!session || !c) return { ok: false, reason: '未登录或 Supabase 客户端不可用' };
@@ -343,13 +400,13 @@
       const remoteMap = {};
       (data || []).forEach(row => { remoteMap[row.key] = row.updated_at; });
       const localMap = _getLocalTs();
-      const conflicts = new Set();
+      const conflicts = new Map();
       for (const key of keys) {
         const remoteTs = remoteMap[key];
         if (!remoteTs) continue;
         const baseTs = localMap[key];
         const compared = policy.compareTimestamps(remoteTs, baseTs);
-        if (!baseTs || compared === null || compared > 0) conflicts.add(key);
+        if (!baseTs || compared === null || compared > 0) conflicts.set(key, remoteTs);
       }
       return { ok: true, conflicts };
     } catch (e) {
@@ -381,21 +438,22 @@
           for (const key of keys) await _storeFailedUpload(key, checked.reason);
           return;
         }
-        for (const key of checked.conflicts) {
-          _queueConflict(key);
+        for (const [key, remoteTimestamp] of checked.conflicts) {
+          _queueConflict(key, remoteTimestamp, _getLocalTs()[key] ? 'cloud-newer-than-base' : 'missing-sync-base');
           const index = keys.indexOf(key);
           if (index >= 0) keys.splice(index, 1);
         }
-        if (_conflictQueue.length) void _resolveConflicts();
       }
 
       let okCount = 0;
       const total = keys.filter(k => isSyncKey(k)).length || 1;
+      if (keys.length) {
+        _emitProgress({ active: true, phase: 'upload', current: 1, total, key: keys[0], label: keys.length > 1 ? ('批量上传 ' + keys.length + ' 项') : (SYNC_LABELS[keys[0]] || keys[0]), queuePending });
+      }
+      const results = await _uploadKeys(keys);
       let done = 0;
       for (const key of keys) {
-        if (!isSyncKey(key)) continue;
-        _emitProgress({ active: true, phase: 'upload', current: done + 1, total: total, key: key, label: SYNC_LABELS[key] || key, queuePending: queuePending });
-        const res = await _uploadKey(key);
+        const res = results[key] || { ok: false, reason: 'missing-upload-result' };
         if (res.ok) okCount++;
         else await _storeFailedUpload(key, res.reason);
         done++;
@@ -493,21 +551,80 @@
     if (!localTs || !remoteMaxTs) return false;
     return new Date(localTs).getTime() - new Date(remoteMaxTs).getTime() > TS_FUTURE_TOLERANCE;
   }
-  // 冲突队列：本次拉取中「两端都改过」的 key（Steam 式用户决策）
-  let _conflictQueue = [];
+  // 待处理冲突持久化在 localStorage；自动同步只暂停冲突项，不主动打断用户。
   const _conflictKeys = new Set();
-  let _resolvingConflict = false;   // 弹窗互斥锁，避免多个冲突弹窗叠加
+  const _resolvingConflictKeys = new Set();
 
-  function _queueConflict(key) {
-    if (_conflictKeys.has(key)) return;
+  function _getPendingConflictMap() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(PENDING_CONFLICTS_KEY)) || {};
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+    } catch (e) { return {}; }
+  }
+
+  function _savePendingConflictMap(map) {
+    localStorage.setItem(PENDING_CONFLICTS_KEY, JSON.stringify(map));
+  }
+
+  function _hydratePendingConflicts() {
+    _conflictKeys.clear();
+    const map = _getPendingConflictMap();
+    let changed = false;
+    Object.keys(map).forEach(key => {
+      if (isSyncKey(key)) _conflictKeys.add(key);
+      else { delete map[key]; changed = true; }
+    });
+    if (changed) _savePendingConflictMap(map);
+  }
+
+  function _queueConflict(key, remoteTimestamp, reason) {
+    if (!isSyncKey(key)) return;
+    const map = _getPendingConflictMap();
+    const existing = map[key] || {};
+    map[key] = {
+      key,
+      label: SYNC_LABELS[key] || key,
+      reason: reason || existing.reason || 'both-changed',
+      baseTimestamp: existing.baseTimestamp || _getLocalTs()[key] || null,
+      remoteTimestamp: remoteTimestamp || existing.remoteTimestamp || _getRemoteTs()[key] || null,
+      detectedAt: existing.detectedAt || new Date().toISOString(),
+      localHash: existing.localHash || (global.StudyData ? global.StudyData.hashText(localStorage.getItem(key) || '') : null)
+    };
+    _savePendingConflictMap(map);
     _conflictKeys.add(key);
-    _conflictQueue.push(key);
+    _emitStatus();
+  }
+
+  function _clearPendingConflict(key) {
+    const map = _getPendingConflictMap();
+    if (key in map) {
+      delete map[key];
+      _savePendingConflictMap(map);
+    }
+    _conflictKeys.delete(key);
+  }
+
+  function getPendingConflicts() {
+    const map = _getPendingConflictMap();
+    return Object.keys(map)
+      .filter(isSyncKey)
+      .map(key => ({
+        key,
+        label: SYNC_LABELS[key] || key,
+        reason: map[key].reason || 'both-changed',
+        baseTimestamp: map[key].baseTimestamp || null,
+        remoteTimestamp: map[key].remoteTimestamp || null,
+        detectedAt: map[key].detectedAt || null,
+        localHash: map[key].localHash || null,
+        resolving: _resolvingConflictKeys.has(key)
+      }))
+      .sort((a, b) => String(a.detectedAt || '').localeCompare(String(b.detectedAt || '')));
   }
 
 
   // Safe merge cycle. force=true only waits for an active cycle; it never means
   // that the cloud may silently overwrite unsent local edits.
-  async function _pullAll(force) {
+  async function _pullAll(force, targetKeys) {
     if (!enabled) { _lastPullError = '同步未开启'; return false; }
     if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return false; }
     if (syncInProgress) {
@@ -534,9 +651,17 @@
     syncInProgress = true;
     try {
       _hydrateDirtyKeys();
-      const { data: meta, error } = await c.from('user_data')
+      const targeted = Array.isArray(targetKeys) && targetKeys.length > 0;
+      const cfg = getConfig();
+      const fullReconcile = !targeted && (force || !cfg.syncCursor || !cfg.lastFullReconcile ||
+        Date.now() - cfg.lastFullReconcile >= FULL_RECONCILE_INTERVAL);
+      const incremental = !targeted && !fullReconcile;
+      let metaQuery = c.from('user_data')
         .select('key,updated_at')
         .eq('user_id', session.user.id);
+      if (targeted) metaQuery = metaQuery.in('key', targetKeys.filter(isSyncKey));
+      else if (incremental && typeof metaQuery.gte === 'function') metaQuery = metaQuery.gte('updated_at', cfg.syncCursor);
+      const { data: meta, error } = await metaQuery;
       if (error) {
         _lastPullError = error.message || '拉取云端元数据失败';
         return false;
@@ -608,19 +733,28 @@
           dirtyKeys.add(row.key);
         } else if (action === 'conflict') {
           _markLocalDirty(row.key);
-          _queueConflict(row.key);
+          _queueConflict(
+            row.key,
+            (remoteRow && remoteRow.updated_at) || row.updated_at,
+            futureTimestamp ? 'timestamp-uncertain' : (!localTs ? 'missing-sync-base' : 'both-changed')
+          );
         }
 
         _emitProgress({ active: true, phase: 'pull', current, total, key: row.key, label: SYNC_LABELS[row.key] || row.key });
       }
 
-      for (const key of SYNC_KEYS) {
-        if (remoteKeys.has(key) || _isEmptyLocalValue(key)) continue;
-        _markLocalDirty(key);
-        dirtyKeys.add(key);
+      if (fullReconcile) {
+        for (const key of SYNC_KEYS) {
+          if (remoteKeys.has(key) || _isEmptyLocalValue(key)) continue;
+          _markLocalDirty(key);
+          dirtyKeys.add(key);
+        }
       }
 
-      if (_conflictQueue.length) void _resolveConflicts();
+      if (remoteMaxTs) cfg.syncCursor = remoteMaxTs;
+      if (fullReconcile) cfg.lastFullReconcile = Date.now();
+      setConfig(cfg);
+
       return true;
     } catch (e) {
       _lastPullError = String((e && e.message) || e || '拉取异常');
@@ -634,54 +768,12 @@
     }
   }
 
-  // ── 冲突解决：弹窗让用户选择本地版 / 云端版（Steam 云存档式）────────
-  function _resolveConflicts() {
-    if (_resolvingConflict) return;   // 已在弹窗中，避免叠加
-    _resolvingConflict = true;
-    (async () => {
-      const client2 = _client();
-      const session = await getSession();
-      while (_conflictQueue.length) {
-        const key = _conflictQueue.shift();
-        let ok;
-        try { ok = await _askConflictChoice(key); } catch (e) { ok = null; }
-        _recordConflict(key, ok || 'skipped');
-        if (ok === null) { continue; }
-        if (ok === 'local') {
-          // 用本地版：上传本地覆盖云端，并同步时间戳
-          _conflictKeys.delete(key);
-          if (client2 && session) {
-            const result = await _uploadKey(key);
-            if (!result.ok) await _storeFailedUpload(key, result.reason);
-          } else {
-            _markLocalDirty(key);
-            dirtyKeys.add(key);
-          }
-        } else {
-          // 用云端版：拉取云端覆盖本地
-          if (client2 && session) {
-            const { data, error } = await client2.from('user_data')
-              .select('key,value,updated_at').eq('user_id', session.user.id).eq('key', key).maybeSingle();
-            if (!error && data && data.value !== null) {
-              await _applyRemoteValue(data.key, data.value, data.updated_at);
-              _conflictKeys.delete(key);
-            } else {
-              _lastPullError = (error && error.message) || '读取冲突的云端版本失败';
-            }
-          }
-        }
-      }
-      _resolvingConflict = false;
-      _emitStatus();
-    })();
-  }
-
   function _getConflictHistory() {
     try { return JSON.parse(localStorage.getItem(CONFLICT_HISTORY_KEY)) || []; }
     catch (e) { return []; }
   }
 
-  function _recordConflict(key, choice) {
+  function _recordConflict(key, choice, conflict) {
     const raw = localStorage.getItem(key) || '';
     let deviceId = localStorage.getItem('study_device_id');
     if (!deviceId) {
@@ -694,38 +786,54 @@
       label: SYNC_LABELS[key] || key,
       choice,
       deviceId,
-      localUpdatedAt: _getLocalTs()[key] || null,
-      remoteUpdatedAt: _getRemoteTs()[key] || null,
-      localHash: global.StudyData ? global.StudyData.hashText(raw) : null,
+      localUpdatedAt: (conflict && conflict.baseTimestamp) || _getLocalTs()[key] || null,
+      remoteUpdatedAt: (conflict && conflict.remoteTimestamp) || _getRemoteTs()[key] || null,
+      localHash: (conflict && conflict.localHash) || (global.StudyData ? global.StudyData.hashText(raw) : null),
       resolvedAt: new Date().toISOString()
     });
     localStorage.setItem(CONFLICT_HISTORY_KEY, JSON.stringify(history.slice(0, 100)));
   }
 
-  // 冲突弹窗：返回 'local' | 'remote' | null（null 表示用户关闭/跳过）
-  function _askConflictChoice(key) {
-    return new Promise((resolve) => {
-      const overlay = document.getElementById('syncConflictOverlay');
-      const body = document.getElementById('syncConflictBody');
-      if (!overlay || !body) { resolve(null); return; }
-      const label = SYNC_LABELS && SYNC_LABELS[key] ? SYNC_LABELS[key] : key;
-      body.innerHTML = `“<b>${escapeHtml(label)}</b>”在本地与云端都做了修改，无法自动合并。<br>请选择保留哪个版本：<br><span style="font-size:11px;opacity:.7">本地 ${new Date(_getLocalTs()[key]||'').toLocaleString()} ｜ 云端 ${new Date(_getRemoteTs()[key]||'').toLocaleString()}</span>`;
-      overlay.style.display = 'flex';
-      if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
-      const done = (val) => {
-        overlay.style.display = 'none';
-        const l = document.getElementById('syncConflictLocal');
-        const r = document.getElementById('syncConflictRemote');
-        if (l) l.onclick = null;
-        if (r) r.onclick = null;
-        resolve(val);
-      };
-      const l = document.getElementById('syncConflictLocal');
-      const r = document.getElementById('syncConflictRemote');
-      if (l) l.onclick = function() { done('local'); };
-      if (r) r.onclick = function() { done('remote'); };
-      // 若用户未点选（如切换页面），不清除 resolve，避免悬空 Promise
-    });
+  async function resolveConflict(key, choice) {
+    const conflicts = _getPendingConflictMap();
+    const conflict = conflicts[key];
+    if (!conflict || !isSyncKey(key)) return { ok: false, reason: '该冲突已不存在或已处理' };
+    if (choice !== 'local' && choice !== 'remote') return { ok: false, reason: '无效的冲突处理方式' };
+    if (_resolvingConflictKeys.has(key)) return { ok: false, reason: '该冲突正在处理中' };
+
+    _resolvingConflictKeys.add(key);
+    _emitStatus();
+    try {
+      const session = await getSession();
+      const c = _client();
+      if (!session || !c) throw new Error('未登录或 Supabase 客户端不可用');
+
+      if (choice === 'local') {
+        const result = await _uploadKey(key);
+        if (!result.ok || result.skipped) {
+          if (!result.skipped) await _storeFailedUpload(key, result.reason);
+          throw new Error(result.skipped ? '该类本地数据过大，无法上传覆盖云端' : (result.reason || '上传本地版本失败'));
+        }
+      } else {
+        const { data, error } = await c.from('user_data')
+          .select('key,value,updated_at').eq('user_id', session.user.id).eq('key', key).maybeSingle();
+        if (error) throw new Error(error.message || '读取云端版本失败');
+        if (!data || !data.updated_at) throw new Error('云端版本已不存在，暂时无法覆盖本地');
+        await _applyRemoteValue(data.key, data.value, data.updated_at);
+      }
+
+      _recordConflict(key, choice, conflict);
+      _clearPendingConflict(key);
+      _lastPullError = '';
+      return { ok: true, key, choice };
+    } catch (e) {
+      const reason = String((e && e.message) || e || '处理冲突失败');
+      _lastPullError = reason;
+      return { ok: false, key, choice, reason };
+    } finally {
+      _resolvingConflictKeys.delete(key);
+      _emitStatus();
+    }
   }
 
   // ── 变更上报（saveData 钩子调用）─────────────────────
@@ -772,10 +880,10 @@
       const channel = c.channel('mst-user-data')
         .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
-          () => _debouncedPull())
+          payload => _debouncedPull(payload))
         .on('postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
-          () => _debouncedPull());
+          payload => _debouncedPull(payload));
       channel.subscribe();
       realtimeChannel = channel;
     } catch (e) {
@@ -787,11 +895,25 @@
   }
 
   let pullDebounceTimer = null;
-  function _debouncedPull() {
+  const pendingRealtimeRows = new Map();
+  function _isOwnRealtimeChange(key, updatedAt) {
+    return !!key && !!updatedAt && _getRemoteTs()[key] === updatedAt;
+  }
+  function _debouncedPull(payload) {
+    const row = payload && payload.new;
+    if (row && isSyncKey(row.key)) pendingRealtimeRows.set(row.key, row.updated_at || '');
     clearTimeout(pullDebounceTimer);
-    // Realtime 事件 = 云端确有更新的强信号 → 自动模式走修正后的时间戳逻辑（不强制拉取）。
-    // localTs/remoteTs 同源服务器时间戳，本地 dirty 数据不会被静默覆盖。
-    pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) _pullAll(false); }, 800);
+    pullDebounceTimer = setTimeout(() => {
+      if (!enabled || !autoSync) return;
+      const known = _getRemoteTs();
+      const keys = [];
+      for (const [key, updatedAt] of pendingRealtimeRows) {
+        // 自身 upsert 的 Realtime 回显与刚记录的服务器时间戳一致，直接忽略。
+        if (!updatedAt || known[key] !== updatedAt) keys.push(key);
+      }
+      pendingRealtimeRows.clear();
+      if (keys.length) void _pullAll(false, keys);
+    }, 250);
   }
 
   // ── 拉取后刷新界面 ─────────────────────────────────
@@ -892,7 +1014,7 @@
       dirtyKeys: Object.keys(_getDirtyMap()),              // 待上传 dirty 标记列表（残留会挡住拉取）
       localTs: _getLocalTs(),                              // 本地时间戳（含旧版污染值，排查用）
       conflictCount: _getConflictHistory().length,
-      pendingConflictCount: _conflictKeys.size
+      pendingConflictCount: getPendingConflicts().length
     };
   }
 
@@ -1022,6 +1144,7 @@
     enabled = !!cfg.enabled;
     autoSync = !!cfg.autoSync;
     _hydrateDirtyKeys();
+    _hydratePendingConflicts();
     _bindLifecycleSync();
     if (enabled) {
       setTimeout(_init, 1500);   // 等 friends.js 客户端就绪
@@ -1072,6 +1195,8 @@
     manualSync,
     uploadAll,
     getStatus,
+    getPendingConflicts,
+    resolveConflict,
     getConflictHistory: _getConflictHistory,
     clearConflictHistory() { localStorage.removeItem(CONFLICT_HISTORY_KEY); },
     onStatus,
@@ -1080,6 +1205,9 @@
     get autoSync() { return autoSync; },
     get loggedIn() { return loggedIn; }
   };
+  if (global.__MST_TEST__) {
+    global.Sync.__test = { isOwnRealtimeChange: _isOwnRealtimeChange, uploadKeys: _uploadKeys };
+  }
   if (global.StudyPlatform && !global.StudyPlatform.getModule('sync')) {
     global.StudyPlatform.defineModule('sync', global.Sync);
   }

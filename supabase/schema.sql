@@ -545,7 +545,7 @@ grant all on table public.user_data to anon, authenticated, service_role;
 do $$ begin alter publication supabase_realtime add table public.user_data; exception when duplicate_object then null; end $$;
 
 -- ═══════════════════════════════════════════════════════════════════
--- 日志类数据独立云存储（v0.4.1 云存储管理面板）
+-- 日志类数据独立云存储（v0.6 增量同步）
 -- 存 AI 对话、教材章节讲解日志、全书问答日志，与普通同步（user_data）分离，
 -- 按 item 粒度分片增量上传，每行一个 item（data 为 gzip 压缩串包装 {v,c,d}），
 -- bytes 记录压缩后字节数供每用户配额聚合（默认 50MB，可配置）。
@@ -561,11 +561,18 @@ create table if not exists public.user_sync_items (
   updated_at timestamptz not null default now(),
   constraint user_sync_items_unique unique (user_id, kind, item_id)
 );
+-- 分片的基础 item id 由数据库统一生成，客户端可精确查询一条对话的全部分片，
+-- 避免每次本地保存都扫描或下载当前用户的整张日志表。
+alter table public.user_sync_items
+  add column if not exists base_item_id text
+  generated always as (regexp_replace(item_id, '(_p[0-9]+)+$', '')) stored;
 drop trigger if exists trg_user_sync_items_updated_at on public.user_sync_items;
 create trigger trg_user_sync_items_updated_at
   before insert or update on public.user_sync_items
   for each row execute function public.set_row_updated_at();
 create index if not exists idx_user_sync_items_user on public.user_sync_items (user_id, updated_at desc);
+create index if not exists idx_user_sync_items_base
+  on public.user_sync_items (user_id, kind, base_item_id, updated_at desc);
 alter table public.user_sync_items enable row level security;
 
 -- RLS：仅本人可读可写
@@ -576,6 +583,20 @@ create policy "user_sync_items_self_all" on public.user_sync_items
 
 -- 授权 Data API 角色
 grant all on table public.user_sync_items to anon, authenticated, service_role;
+
+-- 服务端完成配额聚合，只返回每个 kind 的汇总行，避免客户端拉取所有 bytes 行。
+create or replace function public.get_user_sync_usage()
+returns table(kind text, total_bytes bigint)
+language sql stable security invoker
+set search_path = public
+as $$
+  select item.kind, coalesce(sum(item.bytes), 0)::bigint
+  from public.user_sync_items item
+  where item.user_id = auth.uid()
+  group by item.kind;
+$$;
+revoke all on function public.get_user_sync_usage() from public, anon;
+grant execute on function public.get_user_sync_usage() to authenticated, service_role;
 
 -- 启用 Realtime（远端变更实时推送，供其他设备合并回本地）
 do $$ begin alter publication supabase_realtime add table public.user_sync_items; exception when duplicate_object then null; end $$;

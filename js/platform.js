@@ -28,9 +28,10 @@
     setRaw(key, value) {
       const raw = String(value);
       try {
+        if (localStorage.getItem(key) === raw) return { ok: true, changed: false };
         localStorage.setItem(key, raw);
         if (global.StudyData) global.StudyData.put(key, raw);
-        return { ok: true };
+        return { ok: true, changed: true };
       } catch (error) {
         if (global.StudyData) {
           global.StudyData.put(key, raw);
@@ -43,9 +44,10 @@
       let raw;
       try {
         raw = JSON.stringify(value);
+        if (localStorage.getItem(key) === raw) return { ok: true, changed: false };
         localStorage.setItem(key, raw);
         if (global.StudyData) global.StudyData.put(key, raw);
-        return { ok: true };
+        return { ok: true, changed: true };
       } catch (error) {
         if (raw !== undefined && global.StudyData) {
           global.StudyData.put(key, raw);

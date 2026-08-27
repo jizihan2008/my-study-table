@@ -133,6 +133,10 @@ function deleteConv(id, e) {
       if (automations.length === 0 || automations.every(a => a.enabled === false)) stopAutomationTimer();
     }
 
+    // 云同步删除墓碑必须在本地数组移除前写入，防止其他设备/下次拉取将对话复活。
+    if (window.SyncLogs && typeof window.SyncLogs.markItemDeleted === 'function') {
+      window.SyncLogs.markItemDeleted('ai_conv', id);
+    }
     aiConvs = aiConvs.filter(c => c.id !== id);
     if (activeConvId === id) activeConvId = aiConvs[0].id;
     localStorage.setItem('study_active_conv', activeConvId);

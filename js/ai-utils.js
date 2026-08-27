@@ -20,9 +20,13 @@ function safeJsonStringify(obj, space) {
 
 // Helper: safely save aiConvs, cleaning _rawLogs if JSON.stringify fails
 function safeSaveAiConvs() {
+  let changed = false;
   try {
     const json = JSON.stringify(aiConvs);
-    localStorage.setItem('study_ai_convs', json);
+    if (localStorage.getItem('study_ai_convs') !== json) {
+      localStorage.setItem('study_ai_convs', json);
+      changed = true;
+    }
   } catch (e) {
     console.warn('[safeSaveAiConvs] JSON.stringify failed:', e.message, '— retrying after cleanup');
     try {
@@ -47,19 +51,30 @@ function safeSaveAiConvs() {
         }
         return c;
       });
-      localStorage.setItem('study_ai_convs', JSON.stringify(cleaned));
+      const cleanedJson = JSON.stringify(cleaned);
+      if (localStorage.getItem('study_ai_convs') !== cleanedJson) {
+        localStorage.setItem('study_ai_convs', cleanedJson);
+        changed = true;
+      }
       console.warn('[safeSaveAiConvs] 清理后保存成功');
     } catch (e2) {
       // Last resort: save minimal data
       console.error('[safeSaveAiConvs] 彻底失败:', e2.message);
       const minimal = aiConvs.map(c => ({ id: c.id, title: c.title, systemPrompt: '', messages: c.messages || [], autoTitled: c.autoTitled }));
-      try { localStorage.setItem('study_ai_convs', JSON.stringify(minimal)); } catch (_) {}
+      try {
+        const minimalJson = JSON.stringify(minimal);
+        if (localStorage.getItem('study_ai_convs') !== minimalJson) {
+          localStorage.setItem('study_ai_convs', minimalJson);
+          changed = true;
+        }
+      } catch (_) {}
     }
   }
   // 上报日志同步通道（js/sync-logs.js，按会话 id 拆分 + 分片 + 配额）
-  if (typeof SyncLogs !== 'undefined' && SyncLogs.onLocalChange) {
+  if (changed && typeof SyncLogs !== 'undefined' && SyncLogs.onLocalChange) {
     try { SyncLogs.onLocalChange('study_ai_convs'); } catch (e) {}
   }
+  return changed;
 }
 
 // ═══════════ Custom Confirm Dialog (replaces native confirm to avoid Electron focus bugs) ═══════════

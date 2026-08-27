@@ -553,8 +553,9 @@ async function renderSyncPanel() {
     const pendingTxt = st.pendingCount > 0 ? '，待上传 ' + st.pendingCount + ' 项' : '';
     const conflictTxt = st.pendingConflictCount > 0 ? '，待处理冲突 ' + st.pendingConflictCount + ' 项' : '';
     const autoTxt = st.autoSync ? '' : '（仅手动同步）';
-    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + conflictTxt + autoTxt : '已关闭');
-    statusEl.className = 'settings-status';
+    const errorTxt = st.lastError ? '，最近错误：' + st.lastError : '';
+    statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + conflictTxt + autoTxt + errorTxt : '已关闭');
+    statusEl.className = st.lastError ? 'settings-status error' : 'settings-status';
     // 诊断行：版本 + 远端记录数 + dirty 残留（排查 iPad 不同步）
     let diagEl = document.getElementById('syncDiagLine');
     if (!diagEl) {
@@ -588,7 +589,89 @@ async function renderSyncPanel() {
     }
     if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
   }
+  renderSyncConflicts(st);
   ensureSyncProgressListener();
+  ensureSyncStatusListener();
+}
+
+function _formatSyncConflictTime(value, emptyText) {
+  if (!value) return emptyText || '暂无记录';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? '时间格式异常' : date.toLocaleString('zh-CN', { hour12: false });
+}
+
+function _syncConflictReasonText(reason) {
+  const descriptions = {
+    'both-changed': '本机存在未上传修改，同时云端版本也已变化。',
+    'cloud-newer-than-base': '准备上传时发现云端比本机上次同步基准更新。',
+    'missing-sync-base': '首次同步或同步基准缺失，本机与云端都存在数据。',
+    'timestamp-uncertain': '检测到旧版时间戳或设备时间异常，无法安全自动判断新旧。'
+  };
+  return descriptions[reason] || '本机与云端版本无法安全自动合并。';
+}
+
+function renderSyncConflicts(status) {
+  const panel = document.getElementById('syncConflictPanel');
+  const list = document.getElementById('syncConflictList');
+  const count = document.getElementById('syncConflictCount');
+  if (!panel || !list || typeof window.Sync === 'undefined' || typeof window.Sync.getPendingConflicts !== 'function') return;
+
+  const conflicts = window.Sync.getPendingConflicts();
+  if (!conflicts.length) {
+    panel.style.display = 'none';
+    list.innerHTML = '';
+    if (count) count.textContent = '0 项';
+    return;
+  }
+
+  panel.style.display = 'block';
+  if (count) count.textContent = conflicts.length + ' 项';
+  const canResolve = !!(status && status.loggedIn);
+  list.innerHTML = conflicts.map(item => {
+    const disabled = item.resolving || !canResolve;
+    const disabledAttr = disabled ? ' disabled' : '';
+    const buttonTitle = !canResolve ? '请先登录同步账号' : (item.resolving ? '正在处理' : '');
+    return '<article class="sync-conflict-item">' +
+      '<div class="sync-conflict-item-head"><div><strong>' + escapeHtml(item.label || item.key) + '</strong>' +
+      '<code>' + escapeHtml(item.key) + '</code></div><span class="sync-conflict-state">需要选择</span></div>' +
+      '<p class="sync-conflict-reason">' + escapeHtml(_syncConflictReasonText(item.reason)) + '</p>' +
+      '<dl class="sync-conflict-meta">' +
+      '<div><dt>本机同步基准</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.baseTimestamp, '无（首次同步）')) + '</dd></div>' +
+      '<div><dt>云端更新时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.remoteTimestamp, '未知')) + '</dd></div>' +
+      '<div><dt>检测时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.detectedAt, '未知')) + '</dd></div>' +
+      '</dl>' +
+      '<div class="sync-conflict-actions">' +
+      '<button class="sync-conflict-btn sync-conflict-btn-local" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'local\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="upload"></i> 保留本地并上传</button>' +
+      '<button class="sync-conflict-btn sync-conflict-btn-remote" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'remote\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="cloud-download"></i> 使用云端并覆盖本地</button>' +
+      '</div>' +
+      (!canResolve ? '<p class="sync-conflict-login-hint">请先在“好友”页面登录，再处理此冲突。</p>' : '') +
+      '</article>';
+  }).join('');
+  if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+}
+
+let _syncStatusBound = false;
+let _syncStatusRenderQueued = false;
+function ensureSyncStatusListener() {
+  if (typeof window.Sync === 'undefined' || _syncStatusBound || typeof window.Sync.onStatus !== 'function') return;
+  _syncStatusBound = true;
+  window.Sync.onStatus(function () {
+    if (_settingsTab !== 'sync' || _syncStatusRenderQueued) return;
+    _syncStatusRenderQueued = true;
+    Promise.resolve().then(() => renderSyncPanel()).finally(() => { _syncStatusRenderQueued = false; });
+  });
+}
+
+async function syncResolveConflict(key, choice) {
+  const statusEl = document.getElementById('syncStatus');
+  if (typeof window.Sync === 'undefined' || typeof window.Sync.resolveConflict !== 'function') return;
+  if (statusEl) statusEl.textContent = choice === 'local' ? '正在用本地版本覆盖云端…' : '正在用云端版本覆盖本机…';
+  const result = await window.Sync.resolveConflict(key, choice);
+  await renderSyncPanel();
+  if (!result.ok && statusEl) {
+    statusEl.textContent = '冲突处理失败：' + (result.reason || '未知错误') + '。冲突仍保留，可稍后重试。';
+    statusEl.className = 'settings-status error';
+  }
 }
 
 // ── 同步进度条（上传/拉取）────────────────────────

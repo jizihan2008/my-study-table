@@ -26,8 +26,14 @@ function saveData(key, data) {
   try {
     const result = (typeof StudyPlatform !== 'undefined')
       ? StudyPlatform.storage.setJson(key, data)
-      : (() => { localStorage.setItem(key, JSON.stringify(data)); return { ok: true }; })();
+      : (() => {
+          const raw = JSON.stringify(data);
+          if (localStorage.getItem(key) === raw) return { ok: true, changed: false };
+          localStorage.setItem(key, raw);
+          return { ok: true, changed: true };
+        })();
     if (!result.ok) throw result.error;
+    if (result.changed === false) return false;
     // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步）
     if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
       try { window.Sync.onLocalChange(key); } catch (e) { /* 同步层错误不影响主流程 */ }
@@ -35,6 +41,7 @@ function saveData(key, data) {
     if (typeof StudyPlatform !== 'undefined') {
       StudyPlatform.events.emit('storage:changed', { key, value: data });
     }
+    return true;
   } catch (e) {
     console.error('[saveData] 序列化失败 (' + key + '):', e.message);
     // Fallback: try removing problematic _rawLogs and _ prefixed fields before retry

@@ -39,9 +39,16 @@ function loadTaskLineStore() {
 }
 function saveTaskLineStore(store) {
   try {
+    const serialized = JSON.stringify(store);
+    // 渲染和状态刷新可能会走到保存入口；内容未变化时不要重复标记同步 dirty。
+    if (localStorage.getItem(TASkLINE_KEY) === serialized) return false;
     if (typeof saveData === 'function') saveData(TASkLINE_KEY, store);
-    else localStorage.setItem(TASkLINE_KEY, JSON.stringify(store));
-  } catch (e) { console.error('[任务线] 保存失败:', e); }
+    else localStorage.setItem(TASkLINE_KEY, serialized);
+    return true;
+  } catch (e) {
+    console.error('[任务线] 保存失败:', e);
+    return false;
+  }
 }
 function tlGetLines() { return loadTaskLineStore().lines; }
 function tlGetQuests() { return loadTaskLineStore().quests; }
@@ -549,7 +556,8 @@ function buildAiSummary() {
 // ─────────────────────── 即时反馈队列 ───────────────────────
 function tlDrainFeedback() {
   const store = loadTaskLineStore();
-  const fb = store._feedback || [];
+  const fb = Array.isArray(store._feedback) ? store._feedback : [];
+  if (fb.length === 0) return [];
   delete store._feedback;
   saveTaskLineStore(store);
   return fb;

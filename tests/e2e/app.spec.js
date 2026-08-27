@@ -103,6 +103,61 @@ test('calendar and task-line writes enter the persistent sync queue', async () =
   expect(result.dirtyKeys).toEqual(expect.arrayContaining(['study_calendar_events', 'study_taskline_v1']));
 });
 
+test('rendering an unchanged task line does not mark it dirty', async () => {
+  const dirtyKeys = await page.evaluate(async () => {
+    localStorage.setItem('study_sync_dirty_v1', '{}');
+    window.renderTaskLine();
+    window.renderTaskLine();
+    return (await window.Sync.getStatus()).dirtyKeys;
+  });
+  expect(dirtyKeys).not.toContain('study_taskline_v1');
+});
+
+test('sync conflicts render inside settings without a popup', async () => {
+  const result = await page.evaluate(async () => {
+    localStorage.setItem('study_sync_pending_conflicts_v1', JSON.stringify({
+      study_notes_v2: {
+        key: 'study_notes_v2',
+        reason: 'both-changed',
+        baseTimestamp: '2026-08-25T08:00:00.000Z',
+        remoteTimestamp: '2026-08-25T08:05:00.000Z',
+        detectedAt: '2026-08-25T08:06:00.000Z'
+      }
+    }));
+    localStorage.setItem('study_sync_logs_conflicts_v2', JSON.stringify({
+      'ai_conv/9': {
+        kind: 'ai_conv', itemId: '9', name: '云端对话测试', reason: 'both-changed',
+        baseTimestamp: '2026-08-25T08:00:00.000Z',
+        remoteTimestamp: '2026-08-25T08:05:00.000Z',
+        detectedAt: '2026-08-25T08:06:00.000Z'
+      }
+    }));
+    await window.renderSyncPanel();
+    await window.SyncLogs.renderPanel();
+    const panel = document.getElementById('syncConflictPanel');
+    const storagePanel = document.getElementById('storagePanelRoot');
+    return {
+      legacyPopupCount: document.querySelectorAll('#syncConflictOverlay').length,
+      panelDisplay: panel.style.display,
+      panelText: panel.textContent,
+      actionCount: panel.querySelectorAll('.sync-conflict-btn').length,
+      pendingCount: window.Sync.getPendingConflicts().length,
+      storageText: storagePanel.textContent,
+      storageConflictActions: storagePanel.querySelectorAll('.sync-conflict-btn').length
+    };
+  });
+  expect(result.legacyPopupCount).toBe(0);
+  expect(result.panelDisplay).toBe('block');
+  expect(result.panelText).toContain('笔记');
+  expect(result.panelText).toContain('保留本地并上传');
+  expect(result.panelText).toContain('使用云端并覆盖本地');
+  expect(result.actionCount).toBe(2);
+  expect(result.pendingCount).toBe(1);
+  expect(result.storageText).toContain('对话云存储冲突');
+  expect(result.storageText).toContain('云端对话测试');
+  expect(result.storageConflictActions).toBe(2);
+});
+
 test('third-party plugin runs in an opaque sandbox with declared permissions', async () => {
   const result = await page.evaluate(async () => {
     await window.electronAPI.extWrite({

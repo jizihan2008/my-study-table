@@ -25,6 +25,15 @@ test('renderer storage returns typed fallbacks for invalid JSON', () => {
   assert.equal(JSON.stringify(platform.storage.getJson('missing', { enabled: true })), '{"enabled":true}');
 });
 
+test('renderer storage skips byte-identical writes', () => {
+  const { platform, values } = loadPlatform({ same: '{"value":1}' });
+  const unchanged = platform.storage.setJson('same', { value: 1 });
+  const changed = platform.storage.setJson('same', { value: 2 });
+  assert.equal(unchanged.changed, false);
+  assert.equal(changed.changed, true);
+  assert.equal(values.get('same'), '{"value":2}');
+});
+
 test('renderer initialization is ordered and isolates failures', async () => {
   const { platform } = loadPlatform();
   const order = [];

@@ -1071,6 +1071,14 @@
           <button class="btn-save-settings" onclick="syncManualSync()" style="background:#10b981;padding:6px 16px;width:auto;"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 立即同步</button>
           <button class="btn-save-settings" onclick="syncUploadAll()" style="background:#6366f1;padding:6px 16px;width:auto;"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 上传全部</button>
         </div>
+        <section id="syncConflictPanel" class="sync-conflict-panel" style="display:none;" aria-live="polite">
+          <div class="sync-conflict-panel-title">
+            <span><i data-lucide="git-merge" class="lucide-icon"></i> 待处理冲突</span>
+            <span id="syncConflictCount" class="sync-conflict-count">0 项</span>
+          </div>
+          <p class="sync-conflict-guide">自动同步已暂停下列数据类别，其他数据仍会继续同步。请逐项确认：选择“保留本地”会用当前设备的数据覆盖云端；选择“使用云端”会用云端数据覆盖当前设备，覆盖后无法在应用内撤销。</p>
+          <div id="syncConflictList" class="sync-conflict-list"></div>
+        </section>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="log-in" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 登录</div>
         <span class="hint" style="display:block;margin-bottom:8px;">同步使用与「好友」系统相同的 Supabase 账号。请先在「Supabase 连接」中配置项目，并在「好友」页面登录。</span>
@@ -1263,18 +1271,6 @@
     </div>
   </div>
 
-<!-- 云同步冲突解决弹窗（Steam 云存档式：用户选择用本地版/云端版） -->
-<div class="confirm-overlay" id="syncConflictOverlay" style="display:none;">
-  <div class="confirm-dialog">
-    <div class="confirm-icon"><i data-lucide="git-merge" class="lucide-icon" style="width:40px;height:40px;color:var(--warn, #f59e0b);"></i></div>
-    <div class="confirm-msg" style="font-weight:600;">同步冲突</div>
-    <div id="syncConflictBody" style="font-size:13px;color:var(--text-secondary);margin:8px 0;text-align:left;"></div>
-    <div class="confirm-actions" style="flex-direction:column;gap:6px;">
-      <button class="confirm-btn confirm-btn-ok" id="syncConflictLocal" style="width:100%;">使用本地版本</button>
-      <button class="confirm-btn" id="syncConflictRemote" style="width:100%;border-color:var(--primary);color:var(--primary);">使用云端版本</button>
-    </div>
-  </div>
-</div>
 </div>
 
 <!-- Custom Prompt Dialog (for Electron compatibility) -->
@@ -1324,22 +1320,22 @@
 </div>
 
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/platform.js?v=20260825-r1"></script>
+<script src="js/platform.js?v=20260826-r2"></script>
 <script src="js/secrets.js?v=20260825-r1"></script>
 <script src="js/data-store.js?v=20260825-r1"></script>
 <script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260811-r1"></script>
 <script src="js/liquid-glass.js?v=20260823-r1"></script>
-<script src="js/core.js?v=20260824-r1"></script>
+<script src="js/core.js?v=20260826-r2"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260823-r3"></script>
 <script src="js/notes.js?v=20260823-r5"></script>
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20260824-r2"></script>
 <!-- AI 模块（按依赖顺序加载） -->
-<script src="js/ai-utils.js?v=20260814-r1"></script>
+<script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260804-r3"></script>
-<script src="js/ai-conv.js?v=20260822-r1"></script>
+<script src="js/ai-conv.js?v=20260825-r2"></script>
 <script src="js/ai-attach.js?v=20260824-r3"></script>
 <script src="js/ai-render.js?v=20260822-r3"></script>
 <script src="js/ai-tools.js?v=20260822-r1"></script>
@@ -1352,7 +1348,7 @@
 <script src="js/bg-media-idb.js?v=20260823-r1"></script>
 <script src="js/appearance.js?v=20260823-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260824-r4"></script>
+<script src="js/settings.js?v=20260825-r5"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r1"></script>
@@ -1372,7 +1368,7 @@
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
 <script src="js/calendar.js?v=20260825-r8"></script>
-<script src="js/taskline.js?v=20260825-r9"></script>
+<script src="js/taskline.js?v=20260825-r10"></script>
 <script src="js/timer.js?v=20260814-r1"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
 <script src="js/stats.js?v=20260724-r1"></script>
@@ -1391,9 +1387,9 @@
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260825-r10"></script>
+<script src="js/sync.js?v=20260826-r12"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260825-r3"></script>
+<script src="js/sync-logs.js?v=20260826-r5"></script>
 <script src="js/bootstrap.js?v=20260825-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->

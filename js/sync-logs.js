@@ -1,5 +1,5 @@
 // ═══════════════════════════════════════════════════════════════════
-// js/sync-logs.js — 日志类数据独立云同步通道（v0.4.2，新增云端 TTL 自动清理）
+// js/sync-logs.js — 日志类数据独立云同步通道（v0.6.0，定向增量同步）
 // 将三类「大数据」从通用同步（sync.js → user_data）中剥离：
 //   - ai_conv     AI 对话（study_ai_convs）
 //   - bk_explain  教材章节讲解日志（study_bk_explain_logs_v1）
@@ -42,12 +42,21 @@
   const CFG_KEY = 'study_sync_logs_cfg';       // { quotaMB, autoSync }
   const TS_KEY = 'study_sync_logs_ts';         // { [kind/itemId]: ISO }
   const HASH_KEY = 'study_sync_logs_hash';     // { [kind/itemId]: base64 哈希 }
+  const CONTENT_HASH_KEY = 'study_sync_logs_content_hash_v2'; // { [kind/itemId]: 内容哈希 }
+  const DIRTY_KEY = 'study_sync_logs_dirty_v2';               // { [kind/itemId|kind/*]: true }
+  const TOMBSTONE_KEY = 'study_sync_logs_tombstones_v2';       // { [kind/itemId]: { deletedAt } }
+  const KNOWN_ITEMS_KEY = 'study_sync_logs_known_items_v2';    // { [kind]: [itemId] }
+  const CONFLICTS_KEY = 'study_sync_logs_conflicts_v2';        // { [kind/itemId]: conflict }
   const MARKS_KEY = 'study_sync_logs_marks';   // { [kind/itemId]: boolean 是否上传 }
   const MIGRATED_KEY = 'study_sync_logs_migrated'; // 旧数据迁移完成标记
   const IDB_NAME = 'mst-sync-logs';
   const IDB_STORE = 'outbox';
   const UPLOAD_DEBOUNCE = 2000;
   const PULL_INTERVAL = 30 * 60 * 1000;
+  const FULL_PULL_INTERVAL = 24 * 60 * 60 * 1000;
+  const MAINTENANCE_INTERVAL = 24 * 60 * 60 * 1000;
+  const USAGE_CACHE_MS = 5 * 60 * 1000;
+  const USAGE_CACHE_KEY = 'study_sync_logs_usage_cache_v1';
   const BK_TTL_MS = 90 * 24 * 3600 * 1000;     // 教材日志云端保留 3 个月
   const AI_MAX_CONVS = 20;                     // AI 会话云端保留最近 20 个
   const DEFAULT_QUOTA_MB = 50;
@@ -62,7 +71,7 @@
   let listeners = new Set();
   let progressListeners = new Set();
   const pullScheduler = policy.createRecurringTask(
-    () => _enqueue(() => _flushLogs()),
+    () => _enqueue(() => _flushLogs({ pullMode: 'incremental', maintenance: true })),
     PULL_INTERVAL
   );
   // 同步进度状态（面板「同步」区块实时显示；见 _emitProgress / _statusLine）
@@ -99,12 +108,62 @@
     _setLocal(MARKS_KEY, m);
   }
 
+  function _baseKey(kind, itemId) { return kind + '/' + String(itemId); }
+  function _getDirtyMap() { return _getLocal(DIRTY_KEY, {}); }
+  function _setDirtyMap(map) { _setLocal(DIRTY_KEY, map); }
+  function _markKindDirty(kind) {
+    const map = _getDirtyMap();
+    map[kind + '/*'] = true;
+    _setDirtyMap(map);
+  }
+  function _markItemDirty(kind, itemId) {
+    const map = _getDirtyMap();
+    map[_baseKey(kind, itemId)] = true;
+    _setDirtyMap(map);
+  }
+  function _clearItemDirty(kind, itemId) {
+    const map = _getDirtyMap();
+    delete map[_baseKey(kind, itemId)];
+    _setDirtyMap(map);
+  }
+  function _isItemDirty(kind, itemId) { return !!_getDirtyMap()[_baseKey(kind, itemId)]; }
+  function _getTombstones() { return _getLocal(TOMBSTONE_KEY, {}); }
+  function _getKnownItems() { return _getLocal(KNOWN_ITEMS_KEY, {}); }
+  function _getConflicts() { return _getLocal(CONFLICTS_KEY, {}); }
+  function _saveConflicts(map) { _setLocal(CONFLICTS_KEY, map); }
+  function _isConflicted(kind, itemId) { return !!_getConflicts()[_baseKey(kind, itemId)]; }
+  function _clearConflict(kind, itemId) {
+    const map = _getConflicts();
+    delete map[_baseKey(kind, itemId)];
+    _saveConflicts(map);
+  }
+  function _queueConflict(kind, itemId, details) {
+    const key = _baseKey(kind, itemId);
+    const map = _getConflicts();
+    const existing = map[key] || {};
+    map[key] = Object.assign({
+      kind,
+      itemId: String(itemId),
+      label: KIND_LABELS[kind] || kind,
+      detectedAt: existing.detectedAt || new Date().toISOString()
+    }, existing, details || {});
+    _saveConflicts(map);
+    _emitStatus();
+    if (typeof document !== 'undefined') {
+      const panel = document.getElementById('settingsPanelSync');
+      if (panel && panel.classList.contains('active')) setTimeout(() => renderPanelSafe(), 0);
+    }
+  }
+  function getPendingConflicts() {
+    const map = _getConflicts();
+    return Object.keys(map).map(key => Object.assign({ key }, map[key]))
+      .sort((a, b) => String(a.detectedAt || '').localeCompare(String(b.detectedAt || '')));
+  }
+
   function _loadCfg() {
     cfg = Object.assign({ quotaMB: DEFAULT_QUOTA_MB, autoSync: true }, _getLocal(CFG_KEY, {}));
     if (typeof cfg.quotaMB !== 'number' || !(cfg.quotaMB > 0)) cfg.quotaMB = DEFAULT_QUOTA_MB;
   }
-  function _saveCfg() { _setLocal(CFG_KEY, cfg); }
-
   // ── Supabase 会话与客户端 ─────────────────────────────
   async function _session() {
     try {
@@ -133,11 +192,14 @@
 
   // ── 变更上报（写点 / saveData 转发调用）────────────────
   function onLocalChange(key) {
-    if (!LOG_KEYS[key]) return;
+    const kind = LOG_KEYS[key];
+    if (!kind) return;
     if (applyingRemote) return;   // 远端写回本地不触发回传，防循环
-    if (!_autoSyncOn() || !loggedIn || !client) return;
-    // 仅置 dirty 标记（不在高频写点里重算 pending，避免流式输出卡顿）
+    // 持久化类别级 dirty：即使离线、未登录或关闭自动同步也不能丢失变更。
+    // 真正同步前再按 item 内容哈希细化，避免高频写点压缩整份对话造成卡顿。
+    _markKindDirty(kind);
     _emitProgress({ dirtyHint: true });
+    if (!_autoSyncOn() || !loggedIn || !_client()) return;
     scheduleUpload();
   }
 
@@ -148,7 +210,7 @@
     clearTimeout(uploadTimer);
     uploadTimer = setTimeout(() => {
       scheduled = false;
-      _flushLogs();
+      _enqueue(() => _flushLogs({ pullMode: 'none', maintenance: false }));
     }, UPLOAD_DEBOUNCE);
   }
 
@@ -265,7 +327,8 @@
     let arr = [];
     try { arr = JSON.parse(localStorage.getItem('study_ai_convs')) || []; } catch (e) {}
     if (!Array.isArray(arr)) return [];
-    const recent = arr.slice(-AI_MAX_CONVS);   // TTL：仅最近 20 个会话上传
+    // 标签页允许拖拽排序，数组尾部不等于“最近使用”。按消息/会话活动时间选最近 20 个。
+    const recent = arr.slice().sort((a, b) => _conversationActivity(a) - _conversationActivity(b)).slice(-AI_MAX_CONVS);
     const out = [];
     for (const conv of recent) {
       if (!conv || conv.id == null) continue;
@@ -286,6 +349,27 @@
       });
     }
     return out;
+  }
+  function _conversationActivity(conv) {
+    if (!conv || typeof conv !== 'object') return 0;
+    const candidates = [conv.updatedAt, conv.createdAt];
+    const messages = Array.isArray(conv.messages) ? conv.messages : [];
+    if (messages.length) {
+      const last = messages[messages.length - 1] || {};
+      candidates.push(last.updatedAt, last.createdAt, last.ts, last.timestamp);
+    }
+    let max = 0;
+    for (const value of candidates) {
+      const n = typeof value === 'number' ? value : new Date(value || 0).getTime();
+      if (Number.isFinite(n) && n > max) max = n;
+    }
+    // genId() = Date.now() * 1000 + seq；旧 ID 也常为毫秒时间戳。
+    const idNum = Number(conv.id);
+    if (Number.isFinite(idNum)) {
+      const idTime = idNum > 1e14 ? Math.floor(idNum / 1000) : idNum;
+      if (idTime > max) max = idTime;
+    }
+    return max;
   }
   function _extractAll() {
     const items = [];
@@ -316,6 +400,72 @@
     return _packRec(item.itemId, item.meta, item.tree, item.activePath || null, item.items, 0);
   }
 
+  function _contentHash(item) {
+    try {
+      return _hashStr(JSON.stringify({
+        meta: item.meta || null,
+        tree: item.tree || null,
+        activePath: item.activePath || null,
+        items: Array.isArray(item.items) ? item.items : []
+      }));
+    } catch (e) { return null; }
+  }
+
+  // 将类别级 dirty 细化为 item 级，同时识别本地删除并写入墓碑。
+  async function _refreshLocalState(forceAll) {
+    const allItems = _extractAll();
+    const byKind = {};
+    allItems.forEach(item => { (byKind[item.kind] = byKind[item.kind] || []).push(item); });
+    const dirty = _getDirtyMap();
+    const tombstones = _getTombstones();
+    const known = _getKnownItems();
+    const contentHashes = _getLocal(CONTENT_HASH_KEY, {});
+    const pieceHashes = _getLocal(HASH_KEY, {});
+    const packed = new Map();
+
+    for (const kind of Object.values(LOG_KEYS)) {
+      const scanKind = !!forceAll || !!dirty[kind + '/*'];
+      if (!scanKind) continue;
+      const items = byKind[kind] || [];
+      const currentIds = new Set(items.map(item => String(item.itemId)));
+      const previousIds = Array.isArray(known[kind]) ? known[kind].map(String) : [];
+
+      for (const item of items) {
+        const key = _baseKey(kind, item.itemId);
+        const hash = _contentHash(item);
+        let changed = !hash || contentHashes[key] !== hash;
+        // 从旧版平滑迁移：若尚无内容哈希，但当前压缩分片哈希与最近成功上传完全一致，则视为干净。
+        if (changed && !contentHashes[key]) {
+          try {
+            const pieces = await _packItem(item);
+            pieces.forEach(piece => { piece.kind = kind; });
+            packed.set(key, pieces);
+            changed = !pieces.length || pieces.some(piece => pieceHashes[_baseKey(kind, piece.itemId)] !== _hashStr(piece.wrap.d));
+            if (!changed && hash) contentHashes[key] = hash;
+          } catch (e) { changed = true; }
+        }
+        if (changed) dirty[key] = true;
+        else delete dirty[key];
+        delete tombstones[key];
+      }
+
+      for (const oldId of previousIds) {
+        if (currentIds.has(oldId)) continue;
+        const key = _baseKey(kind, oldId);
+        tombstones[key] = tombstones[key] || { kind, itemId: oldId, deletedAt: new Date().toISOString() };
+        dirty[key] = true;
+      }
+      known[kind] = Array.from(currentIds);
+      delete dirty[kind + '/*'];
+    }
+
+    _setLocal(CONTENT_HASH_KEY, contentHashes);
+    _setDirtyMap(dirty);
+    _setLocal(TOMBSTONE_KEY, tombstones);
+    _setLocal(KNOWN_ITEMS_KEY, known);
+    return { items: allItems, packed };
+  }
+
   // ── 上传单 item（含 hash 增量跳过、离线队列）────────────
   // force=true（「上传全部」）：跳过 hash 增量判断，强制 upsert。
   // 增量（force=false）跳过条件 = hash 相同 **且** 云端该行仍存在（remoteSet 含此 piece）——
@@ -327,7 +477,6 @@
     if (!force && _getHash(key) === hash && remoteHas) return { ok: true, skipped: true };
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
-    const updatedAt = new Date().toISOString();
     let error = null;
     let serverUpdatedAt = '';
     try {
@@ -337,8 +486,7 @@
           kind: piece.kind,
           item_id: piece.itemId,
           data: piece.wrap,
-          bytes: piece.bytes,
-          updated_at: updatedAt
+          bytes: piece.bytes
         }, { onConflict: 'user_id,kind,item_id' })
         .select('updated_at')
         .single();
@@ -355,164 +503,439 @@
     _setTs(key, serverUpdatedAt);
     _setHash(key, hash);
     await _outboxRemove('log:' + key);
+    return { ok: true, updatedAt: serverUpdatedAt };
+  }
+
+  function _baseIdFromRemoteId(itemId) {
+    return String(itemId).replace(/_(p\d+)+$/, '');
+  }
+  function _remoteBaseKey(kind, itemId) { return _baseKey(kind, _baseIdFromRemoteId(itemId)); }
+  function _latestTimestamp(rows) {
+    let latest = null;
+    for (const row of rows || []) {
+      if (!latest || policy.compareTimestamps(row.updated_at, latest) > 0) latest = row.updated_at;
+    }
+    return latest;
+  }
+  function _normalizeTargets(targets) {
+    const map = new Map();
+    for (const target of targets || []) {
+      if (!target || !KIND_LABELS[target.kind] || target.itemId == null) continue;
+      map.set(_baseKey(target.kind, target.itemId), { kind: target.kind, itemId: String(target.itemId) });
+    }
+    return Array.from(map.values());
+  }
+
+  function _targetsFromPending(localState) {
+    const dirty = _getDirtyMap();
+    const targets = [];
+    const addKey = key => {
+      const slash = String(key).indexOf('/');
+      if (slash <= 0) return;
+      const kind = String(key).slice(0, slash);
+      const itemId = String(key).slice(slash + 1);
+      if (itemId !== '*' && KIND_LABELS[kind]) targets.push({ kind, itemId });
+    };
+    Object.keys(dirty).forEach(addKey);
+    Object.keys(_getTombstones()).forEach(addKey);
+    for (const item of (localState && localState.items) || []) {
+      if (_isItemDirty(item.kind, item.itemId)) targets.push({ kind: item.kind, itemId: String(item.itemId) });
+    }
+    return _normalizeTargets(targets);
+  }
+
+  async function _fetchRemoteInventory(session, c, targets) {
+    const wanted = _normalizeTargets(targets);
+    let rows = [];
+    if (wanted.length) {
+      try {
+        const byKind = new Map();
+        wanted.forEach(target => {
+          const ids = byKind.get(target.kind) || [];
+          ids.push(target.itemId);
+          byKind.set(target.kind, ids);
+        });
+        for (const [kind, ids] of byKind) {
+          const { data, error } = await c.from('user_sync_items')
+            .select('id,kind,item_id,base_item_id,bytes,updated_at')
+            .eq('user_id', session.user.id)
+            .eq('kind', kind)
+            .in('base_item_id', ids);
+          if (error) throw new Error(error.message || 'target-inventory-failed');
+          rows.push(...(data || []));
+        }
+      } catch (e) {
+        // 旧数据库还没有 base_item_id 时保持兼容：退回一次轻量元数据扫描，
+        // 再在客户端按基础 item id 精确过滤。
+        const { data, error } = await c.from('user_sync_items')
+          .select('id,kind,item_id,bytes,updated_at')
+          .eq('user_id', session.user.id);
+        if (error) throw new Error(error.message || '读取云端对话版本失败');
+        const wantedSet = new Set(wanted.map(target => _baseKey(target.kind, target.itemId)));
+        rows = (data || []).filter(row => wantedSet.has(_remoteBaseKey(row.kind, row.item_id)));
+      }
+    } else {
+      const { data, error } = await c.from('user_sync_items')
+        .select('id,kind,item_id,bytes,updated_at')
+        .eq('user_id', session.user.id);
+      if (error) throw new Error(error.message || '读取云端对话版本失败');
+      rows = Array.isArray(data) ? data : [];
+    }
+    const groups = {};
+    const set = new Set();
+    rows.forEach(row => {
+      const key = _remoteBaseKey(row.kind, row.item_id);
+      (groups[key] = groups[key] || []).push(row);
+      set.add(_baseKey(row.kind, row.item_id));
+    });
+    return { rows, groups, set };
+  }
+
+  function _hasRemoteAdvanced(remoteTimestamp, baseTimestamp) {
+    if (!remoteTimestamp) return false;
+    if (!baseTimestamp) return true;
+    const compared = policy.compareTimestamps(remoteTimestamp, baseTimestamp);
+    return compared === null || compared > 0;
+  }
+
+  async function _deleteRowsById(c, rows) {
+    const ids = (rows || []).map(row => row && row.id).filter(Boolean);
+    for (let i = 0; i < ids.length; i += 300) {
+      const { error } = await c.from('user_sync_items').delete().in('id', ids.slice(i, i + 300));
+      if (error) throw new Error(error.message || '清理旧云端分片失败');
+    }
+  }
+
+  async function _removeOutboxForBase(kind, itemId) {
+    const items = await _outboxGetAll();
+    const base = String(itemId);
+    for (const entry of items) {
+      if (!entry || typeof entry.key !== 'string' || entry.key.indexOf('log:') !== 0) continue;
+      const piece = entry.value;
+      if (piece && piece.kind === kind && _baseIdFromRemoteId(piece.itemId) === base) {
+        await _outboxRemove(entry.key);
+      }
+    }
+  }
+
+  function _deriveBaseTimestamp(kind, itemId, remoteRows) {
+    const key = _baseKey(kind, itemId);
+    let base = _getTs(key);
+    if (base) return base;
+    for (const row of remoteRows || []) {
+      const pieceTs = _getTs(_baseKey(kind, row.item_id));
+      if (pieceTs && (!base || policy.compareTimestamps(pieceTs, base) > 0)) base = pieceTs;
+    }
+    if (base) _setTs(key, base);
+    return base;
+  }
+
+  async function _uploadPreparedItem(session, c, item, pieces, inventory, force) {
+    const key = _baseKey(item.kind, item.itemId);
+    const remoteRows = inventory.groups[key] || [];
+    const remoteUpdated = _latestTimestamp(remoteRows);
+    const baseTimestamp = _deriveBaseTimestamp(item.kind, item.itemId, remoteRows);
+    const dirty = _isItemDirty(item.kind, item.itemId);
+    if (!force && dirty && _hasRemoteAdvanced(remoteUpdated, baseTimestamp)) {
+      _queueConflict(item.kind, item.itemId, {
+        name: _itemName(item.kind, item),
+        reason: baseTimestamp ? 'both-changed' : 'missing-sync-base',
+        localDeleted: false,
+        baseTimestamp: baseTimestamp || null,
+        remoteTimestamp: remoteUpdated || null
+      });
+      return { ok: false, conflict: true };
+    }
+
+    const currentIds = new Set();
+    let latestUploaded = remoteUpdated;
+    let latestWriteTimestamp = null;
+    for (const piece of pieces) {
+      piece.kind = item.kind;
+      currentIds.add(_baseKey(item.kind, piece.itemId));
+      const result = await _uploadPiece(session, piece, !!force, inventory.set);
+      if (!result.ok) return result;
+      if (result.updatedAt && (!latestUploaded || policy.compareTimestamps(result.updatedAt, latestUploaded) > 0)) {
+        latestUploaded = result.updatedAt;
+      }
+      if (result.updatedAt && (!latestWriteTimestamp || policy.compareTimestamps(result.updatedAt, latestWriteTimestamp) > 0)) {
+        latestWriteTimestamp = result.updatedAt;
+      }
+    }
+    if (dirty && remoteUpdated && (!latestWriteTimestamp || policy.compareTimestamps(latestWriteTimestamp, remoteUpdated) <= 0)) {
+      return {
+        ok: false,
+        reason: '云端更新时间未推进，请在 Supabase 执行最新版 schema.sql 以安装 updated_at 触发器'
+      };
+    }
+
+    // 新分片全部写入成功后，再删除同一对话不再使用的旧分片，避免清空/缩小后旧消息复活。
+    const staleRows = remoteRows.filter(row => !currentIds.has(_baseKey(item.kind, row.item_id)));
+    await _deleteRowsById(c, staleRows);
+    await _removeOutboxForBase(item.kind, item.itemId);
+    if (latestUploaded) _setTs(key, latestUploaded);
+    const hashes = _getLocal(CONTENT_HASH_KEY, {});
+    hashes[key] = _contentHash(item);
+    _setLocal(CONTENT_HASH_KEY, hashes);
+    _clearItemDirty(item.kind, item.itemId);
+    _clearConflict(item.kind, item.itemId);
     return { ok: true };
   }
 
-  // ── 云端 item 集合（轻量：只查 kind+item_id，不拉 data，供增量判断"云端是否还有此行"）──
-  async function _fetchRemoteSet(session, c) {
-    try {
-      const { data, error } = await c.from('user_sync_items')
-        .select('kind,item_id')
-        .eq('user_id', session.user.id);
-      if (error || !data) return null;
-      const set = new Set();
-      data.forEach(r => set.add(r.kind + '/' + r.item_id));
-      return set;
-    } catch (e) { return null; }
+  async function _processTombstone(session, c, tombstone, inventory, force) {
+    const kind = tombstone.kind;
+    const itemId = String(tombstone.itemId);
+    const key = _baseKey(kind, itemId);
+    const remoteRows = inventory.groups[key] || [];
+    const remoteUpdated = _latestTimestamp(remoteRows);
+    const baseTimestamp = _deriveBaseTimestamp(kind, itemId, remoteRows);
+    if (!force && remoteRows.length && _hasRemoteAdvanced(remoteUpdated, baseTimestamp)) {
+      _queueConflict(kind, itemId, {
+        name: (KIND_LABELS[kind] || kind) + ' ' + itemId.slice(-8),
+        reason: 'delete-versus-remote-change',
+        localDeleted: true,
+        baseTimestamp: baseTimestamp || null,
+        remoteTimestamp: remoteUpdated || null
+      });
+      return { ok: false, conflict: true };
+    }
+    await _deleteRowsById(c, remoteRows);
+    await _removeOutboxForBase(kind, itemId);
+    const tombstones = _getTombstones();
+    delete tombstones[key];
+    _setLocal(TOMBSTONE_KEY, tombstones);
+    const dirty = _getDirtyMap();
+    delete dirty[key];
+    _setDirtyMap(dirty);
+    const hashes = _getLocal(CONTENT_HASH_KEY, {});
+    delete hashes[key];
+    _setLocal(CONTENT_HASH_KEY, hashes);
+    _clearConflict(kind, itemId);
+    return { ok: true, deleted: true };
   }
 
-  // ── 一次完整同步：配额检查 → 提取 → 压缩 → 上传 → 补传 → 拉取 → 清理 ──
+  // ── 一次完整安全同步：识别本地变化 → 检查远端版本 → 上传/删除 → 拉取 ──
   let logUploadChain = Promise.resolve();
-  async function _flushLogs() {
-    if (!_enabled() || !loggedIn || !client) return;
+  async function _flushLogs(options = {}) {
+    const pullMode = options.pullMode || 'none'; // none | incremental | full
+    if (!_enabled()) return { ok: false, reason: '同步未开启' };
     const session = await _session();
-    if (!session) return;
+    loggedIn = !!session;
+    if (!session) {
+      _emitProgress({ phase: 'error', dirtyHint: _computePendingCount() > 0, lastError: '未登录或登录状态失效' });
+      return { ok: false, reason: '未登录或登录状态失效' };
+    }
     const c = _client();
-    if (!c) return;
+    if (!c) {
+      _emitProgress({ phase: 'error', dirtyHint: true, lastError: 'Supabase 客户端不可用' });
+      return { ok: false, reason: 'Supabase 客户端不可用' };
+    }
     let syncHadError = '';
 
-    // ① 配额软护栏：已用 ≥ 配额则跳过上传（新日志自动停止上传，本地保留），
-    //    仍执行拉取合并；避免配额无限增长。用户删除云端内容后自动恢复。
+    const localState = await _refreshLocalState(false);
+    const pendingTargets = _targetsFromPending(localState);
+    const inventory = pendingTargets.length
+      ? await _fetchRemoteInventory(session, c, pendingTargets)
+      : { rows: [], groups: {}, set: new Set() };
+
+    // ① 本地删除墓碑优先处理；删除可释放空间，不受上传配额限制。
+    const tombstones = Object.values(_getTombstones());
+    for (const tombstone of tombstones) {
+      try {
+        const result = await _processTombstone(session, c, tombstone, inventory, false);
+        if (!result.ok && !result.conflict) syncHadError = result.reason || '删除云端对话失败';
+      } catch (e) {
+        syncHadError = String((e && e.message) || e || '删除云端对话失败');
+      }
+    }
+
+    // ② 配额软护栏：已用 ≥ 配额则暂停新上传，但仍检查冲突并拉取安全的远端更新。
     _emitProgress({ phase: 'quota', current: '', uploaded: 0, total: 0 });
     let quotaExceeded = false;
-    try {
-      const usedBytes = await _fetchUsage(session, c);
-      quotaExceeded = usedBytes >= cfg.quotaMB * 1024 * 1024;
-    } catch (e) {}
+    const usedBytes = pendingTargets.length ? await _fetchUsage(session, c, false) : 0;
+    quotaExceeded = usedBytes >= cfg.quotaMB * 1024 * 1024;
 
-    // 增量同步前先取云端 item 集合（轻量），判断"hash 相同但云端行已消失"→ 强制补齐
-    let remoteSet = null;
     if (!quotaExceeded) {
-      remoteSet = await _fetchRemoteSet(session, c);
-    }
-    const retainedBase = new Set();   // 本次应保留的云端基础 id（供 TTL 清理）
-    if (!quotaExceeded) {
-      // ② 提取所有 item（TTL 过滤），仅上传「用户开启 + 数据有变化」的 item；
-      //    先全部压缩收集（得到总片数供进度统计），再逐片串行上传
-      const items = _extractAll();
+      // ③ 仅为已开启的 item 打包；真正上传前逐项检查远端是否越过同步基准。
+      const items = localState.items;
       const queue = [];   // [{ kind, name, pieces }]
       for (const item of items) {
-        retainedBase.add(item.kind + '/' + item.itemId);
         if (!_isItemOn(item.kind, item.itemId)) continue;   // 用户关闭 → 本地保留、跳过上传
+        const baseKey = _baseKey(item.kind, item.itemId);
+        if (!_isItemDirty(item.kind, item.itemId)) continue;
         let pieces;
         try {
-          pieces = await _packItem(item);
+          pieces = localState.packed.get(baseKey) || await _packItem(item);
         } catch (e) {
           console.warn('[SyncLogs] 压缩失败:', item.kind + '/' + item.itemId, e);
+          syncHadError = '压缩失败：' + _itemName(item.kind, item);
           continue;
         }
-        queue.push({ kind: item.kind, name: _itemName(item.kind, item), pieces });
+        queue.push({ item, kind: item.kind, name: _itemName(item.kind, item), pieces });
       }
       let totalPieces = 0;
       queue.forEach(q => { totalPieces += q.pieces.length; });
 
-      // ③ 逐片串行上传（进度：正在同步「名称」（i/N））
-      //    增量跳过条件：hash 相同 且 云端仍有该行（remoteSet）——云端缺失会自动重传补齐
+      // ④ 逐个对话安全上传；有并发修改时写入待处理冲突，不覆盖任何一端。
       let done = 0;
       for (const q of queue) {
-        for (const p of q.pieces) {
-          done++;
-          p.kind = q.kind;
-          _emitProgress({ phase: 'uploading', current: q.name, uploaded: done, total: totalPieces });
-          const r = await _uploadPiece(session, p, false, remoteSet);
-          if (!r.ok) syncHadError = r.reason || '上传失败';
-        }
+        _emitProgress({ phase: 'uploading', current: q.name, uploaded: done + 1, total: totalPieces });
+        const r = await _uploadPreparedItem(session, c, q.item, q.pieces, inventory, false);
+        done += q.pieces.length;
+        if (!r.ok && !r.conflict) syncHadError = r.reason || '上传失败';
       }
 
-      // ④ 补传离线队列（网络恢复自动重传）
-      const outboxAll = await _outboxGetAll();
-      const outboxCount = outboxAll.filter(it => typeof it.key === 'string' && it.key.indexOf('log:') === 0).length;
-      _emitProgress({ phase: 'outbox', outbox: outboxCount, current: '', uploaded: 0, total: 0 });
-      await _flushOutbox(session, c);
-
-      // ⑤ TTL 清理：按云端 updated_at 时间戳跨设备安全清理。
-      // 旧 _pruneRemote 用「本机提取集合」判断云端行是否保留，跨设备会误删（手机只有 4 会话、
-      // 电脑 7 会话，手机一同步就删掉云端"本地没有"的）。现改为纯云端时间戳策略：
-      //   - 教材日志（bk_explain/bk_qa）：updated_at 超过 3 个月删除
-      //   - AI 对话（ai_conv）：只保留最近 AI_MAX_CONVS（20）个会话（按基础 item_id 分组取
-      //     最新 updated_at 排序）
-      // 不依赖本地数据，任何设备同步时都安全。
-      await _pruneRemoteTTL(session, c);
     }
 
-    // ⑥ 拉取远端合并（LWW：远端新于本地才写回；不受配额限制）
-    _emitProgress({ phase: 'pulling', current: '', uploaded: 0, total: 0 });
-    await _pullItems(session, c);
+    // ⑤ TTL 清理每天最多一次；即使已超配额也允许执行，以便释放空间。
+    const maintenanceDue = !!options.maintenance &&
+      (!cfg.lastMaintenanceAt || Date.now() - cfg.lastMaintenanceAt >= MAINTENANCE_INTERVAL);
+    if (maintenanceDue) {
+      const maintenanceInventory = await _fetchRemoteInventory(session, c);
+      await _pruneRemoteTTL(session, c, maintenanceInventory.rows);
+      cfg.lastMaintenanceAt = Date.now();
+      _setLocal(CFG_KEY, cfg);
+    }
+
+    // ⑥ 本地快速保存不做全量下载；Realtime 定向拉取，轮询走游标增量，
+    // 首次/手动同步才完整对账。
+    if (pullMode !== 'none') {
+      _emitProgress({ phase: 'pulling', current: '', uploaded: 0, total: 0 });
+      if (pullMode === 'full') await _pullItems(session, c);
+      else await _pullIncremental(session, c);
+    }
 
     // ⑦ 完成：汇总待同步数（仍未上传的项）并清除 dirty 标记
     const nowStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const outboxAll = await _outboxGetAll();
+    const outboxCount = outboxAll.filter(it => typeof it.key === 'string' && it.key.indexOf('log:') === 0).length;
+    const pending = _computePendingCount();
     _emitProgress({
       phase: 'done',
       current: '', uploaded: 0, total: 0,
-      pending: _computePendingCount(),
-      dirtyHint: false,
-      outbox: 0,
+      pending,
+      dirtyHint: pending > 0,
+      outbox: outboxCount,
       lastSyncAt: nowStr,
       lastError: syncHadError
     });
     _emitStatus();
   }
 
-  async function _flushOutbox(session, c) {
-    const items = await _outboxGetAll();
-    for (const it of items) {
-      if (typeof it.key !== 'string' || it.key.indexOf('log:') !== 0) continue;
-      const p = it.value;
-      if (!p) continue;
-      let error = null;
-      let serverUpdatedAt = '';
-      try {
-        const result = await c.from('user_sync_items')
-          .upsert({
-            user_id: session.user.id,
-            kind: p.kind,
-            item_id: p.itemId,
-            data: p.wrap,
-            bytes: p.bytes,
-            updated_at: new Date().toISOString()
-          }, { onConflict: 'user_id,kind,item_id' })
-          .select('updated_at')
-          .single();
-        error = result && result.error;
-        serverUpdatedAt = result && result.data && result.data.updated_at;
-      } catch (e) {
-        error = e || new Error('network-error');
+  // ── 拉取合并 ─────────────────────────────────────────
+  function _selectCurrentRows(rows) {
+    const latestById = new Map();
+    for (const row of rows || []) {
+      const current = latestById.get(row.item_id);
+      if (!current || policy.compareTimestamps(row.updated_at, current.updated_at) > 0) latestById.set(row.item_id, row);
+    }
+    const unique = Array.from(latestById.values());
+    const baseRows = unique.filter(row => !/_(p\d+)+$/.test(row.item_id));
+    const pieceRows = unique.filter(row => /_(p\d+)+$/.test(row.item_id));
+    if (baseRows.length) {
+      const base = baseRows.sort((a, b) => policy.compareTimestamps(b.updated_at, a.updated_at))[0];
+      const newestPiece = _latestTimestamp(pieceRows);
+      if (!newestPiece || policy.compareTimestamps(base.updated_at, newestPiece) >= 0) return [base];
+    }
+
+    // 历史分片树可能同时残留父片与子片。父片较新则丢弃旧子片；子片较新则丢弃旧父片。
+    const selected = new Set(pieceRows);
+    const byDepth = pieceRows.slice().sort((a, b) => String(a.item_id).length - String(b.item_id).length);
+    for (const ancestor of byDepth) {
+      if (!selected.has(ancestor)) continue;
+      const descendants = Array.from(selected).filter(row => row !== ancestor && String(row.item_id).startsWith(String(ancestor.item_id) + '_p'));
+      if (!descendants.length) continue;
+      const allDescendantsNewer = descendants.every(row => policy.compareTimestamps(row.updated_at, ancestor.updated_at) > 0);
+      if (allDescendantsNewer) selected.delete(ancestor);
+      else descendants.forEach(row => selected.delete(row));
+    }
+    return Array.from(selected);
+  }
+
+  function _recordPulledContent(kind, itemId) {
+    const item = _extractAll().find(candidate => candidate.kind === kind && String(candidate.itemId) === String(itemId));
+    if (item) {
+      const hashes = _getLocal(CONTENT_HASH_KEY, {});
+      hashes[_baseKey(kind, itemId)] = _contentHash(item);
+      _setLocal(CONTENT_HASH_KEY, hashes);
+      const known = _getKnownItems();
+      const ids = new Set(Array.isArray(known[kind]) ? known[kind].map(String) : []);
+      ids.add(String(itemId));
+      known[kind] = Array.from(ids);
+      _setLocal(KNOWN_ITEMS_KEY, known);
+    }
+    _clearItemDirty(kind, itemId);
+    _clearConflict(kind, itemId);
+  }
+
+  async function _fetchRemoteItemRows(session, c, targets) {
+    const wanted = _normalizeTargets(targets);
+    if (!wanted.length) {
+      const { data, error } = await c.from('user_sync_items')
+        .select('kind,item_id,data,updated_at')
+        .eq('user_id', session.user.id);
+      if (error) throw new Error(error.message || '拉取云端对话失败');
+      return data || [];
+    }
+    try {
+      const rows = [];
+      const byKind = new Map();
+      wanted.forEach(target => {
+        const ids = byKind.get(target.kind) || [];
+        ids.push(target.itemId);
+        byKind.set(target.kind, ids);
+      });
+      for (const [kind, ids] of byKind) {
+        const { data, error } = await c.from('user_sync_items')
+          .select('kind,item_id,base_item_id,data,updated_at')
+          .eq('user_id', session.user.id)
+          .eq('kind', kind)
+          .in('base_item_id', ids);
+        if (error) throw new Error(error.message || 'target-pull-failed');
+        rows.push(...(data || []));
       }
-      if (!error && serverUpdatedAt) {
-        const key = p.kind + '/' + p.itemId;
-        _setTs(key, serverUpdatedAt);
-        _setHash(key, _hashStr(p.wrap.d));
-        await _outboxRemove(it.key);
-      }
+      return rows;
+    } catch (e) {
+      // 兼容尚未执行新版 schema 的云端。
+      const { data, error } = await c.from('user_sync_items')
+        .select('kind,item_id,data,updated_at')
+        .eq('user_id', session.user.id);
+      if (error) throw new Error(error.message || '拉取云端对话失败');
+      const wantedSet = new Set(wanted.map(target => _baseKey(target.kind, target.itemId)));
+      return (data || []).filter(row => wantedSet.has(_remoteBaseKey(row.kind, row.item_id)));
     }
   }
 
-  // ── 拉取合并 ─────────────────────────────────────────
-  async function _pullItems(session, c) {
-    const { data, error } = await c.from('user_sync_items')
-      .select('kind,item_id,data,updated_at')
+  async function _pullIncremental(session, c) {
+    if (!cfg.pullCursor || !cfg.lastFullPullAt || Date.now() - cfg.lastFullPullAt >= FULL_PULL_INTERVAL) {
+      return _pullItems(session, c);
+    }
+    let query = c.from('user_sync_items')
+      .select('kind,item_id,updated_at')
       .eq('user_id', session.user.id);
-    if (error || !data) return;
-    // 按 kind + 基础 id（去 _pN 分片后缀）分组；
-    // 兼容：若某组既有「基础无后缀单行」又有「分片行」（跨设备 plain/gzip 压缩算法或阈值不同导致
-    // 手机分片 / 电脑单片并存），**忽略无后缀单行**，只按分片重组——否则消息会重复。
+    if (typeof query.gte !== 'function') return _pullItems(session, c);
+    query = query.gte('updated_at', cfg.pullCursor);
+    const { data, error } = await query;
+    if (error) throw new Error(error.message || '读取对话增量版本失败');
+    const targets = _normalizeTargets((data || []).map(row => ({
+      kind: row.kind,
+      itemId: _baseIdFromRemoteId(row.item_id)
+    })));
+    if (!targets.length) return;
+    return _pullItems(session, c, targets);
+  }
+
+  async function _pullItems(session, c, targets) {
+    const wanted = _normalizeTargets(targets);
+    const data = await _fetchRemoteItemRows(session, c, wanted);
+    if (!data) return;
+    // 按 kind + 基础 id（去 _pN 分片后缀）分组；当前分片选择器会按更新时间
+    // 淘汰历史父片/子片，兼容旧版本留下的不同分片形态。
     const grouped = {};
     for (const row of data) {
-      const isPiece = /_(p\d+)+$/.test(row.item_id);
-      const baseId = row.item_id.replace(/_(p\d+)+$/, '');
+      const baseId = _baseIdFromRemoteId(row.item_id);
       const key = row.kind + '/' + baseId;
-      const g = (grouped[key] = grouped[key] || { hasPiece: false, rows: [] });
-      if (isPiece) g.hasPiece = true;
+      const g = (grouped[key] = grouped[key] || { rows: [] });
       g.rows.push(row);
     }
     applyingRemote = true;
@@ -520,9 +943,9 @@
       for (const key of Object.keys(grouped)) {
         const [kind, baseId] = key.split('/');
         const g = grouped[key];
-        const pieces = g.hasPiece
-          ? g.rows.filter(r => /_(p\d+)+$/.test(r.item_id))
-          : g.rows;
+        if (_isItemDirty(kind, baseId) || _getTombstones()[key] || _isConflicted(kind, baseId)) continue;
+        const pieces = _selectCurrentRows(g.rows);
+        if (!pieces.length) continue;
         const remoteUpdated = pieces.reduce((m, p) =>
           new Date(p.updated_at).getTime() > new Date(m).getTime() ? p.updated_at : m, pieces[0].updated_at);
         const localTs = _getTs(key);
@@ -532,10 +955,18 @@
         if (!built) continue;
         _applyToLocal(kind, baseId, built);
         _setTs(key, remoteUpdated);
+        _recordPulledContent(kind, baseId);
       }
     } finally {
       applyingRemote = false;
     }
+    let newest = cfg.pullCursor || null;
+    for (const row of data) {
+      if (!newest || policy.compareTimestamps(row.updated_at, newest) > 0) newest = row.updated_at;
+    }
+    if (newest) cfg.pullCursor = newest;
+    if (!wanted.length) cfg.lastFullPullAt = Date.now();
+    _setLocal(CFG_KEY, cfg);
   }
   async function _rebuildPieces(pieces) {
     const sorted = pieces.slice().sort((a, b) => a.item_id.localeCompare(b.item_id));
@@ -642,17 +1073,24 @@
   //   - AI 对话（ai_conv）：按基础 item_id（去 _pN 分片后缀）分组，取每组最新 updated_at，
   //     只保留最近 AI_MAX_CONVS（20）个会话 → 删除其余（含分片行）
   // 只依据云端 updated_at，不读取本地数据，任何设备同步时都安全、可预期。
-  async function _pruneRemoteTTL(session, c) {
-    const { data, error } = await c.from('user_sync_items')
-      .select('id,kind,item_id,updated_at')
-      .eq('user_id', session.user.id);
-    if (error || !data || !data.length) return;
+  async function _pruneRemoteTTL(session, c, inventoryRows) {
+    let data = Array.isArray(inventoryRows) ? inventoryRows : null;
+    if (!data) {
+      const result = await c.from('user_sync_items')
+        .select('id,kind,item_id,updated_at')
+        .eq('user_id', session.user.id);
+      if (result.error) return;
+      data = result.data || [];
+    }
+    if (!data.length) return;
     const now = Date.now();
     const toDelete = [];
+    const conflictKeys = new Set(Object.keys(_getConflicts()));
 
     // 教材日志：按 TTL 删除过期行
     for (const row of data) {
       if (row.kind === 'bk_explain' || row.kind === 'bk_qa') {
+        if (conflictKeys.has(_remoteBaseKey(row.kind, row.item_id))) continue;
         const t = new Date(row.updated_at).getTime();
         if (now - t > BK_TTL_MS) toDelete.push(row.id);
       }
@@ -672,6 +1110,9 @@
       // 按最新活跃时间降序，保留前 AI_MAX_CONVS 个
       const sorted = [...byConv.entries()].sort((a, b) => b[1] - a[1]);
       const keep = new Set(sorted.slice(0, AI_MAX_CONVS).map(e => e[0]));
+      conflictKeys.forEach(key => {
+        if (key.startsWith('ai_conv/')) keep.add(key.slice('ai_conv/'.length));
+      });
       for (const row of aiRows) {
         const base = row.item_id.replace(/_(p\d+)+$/, '');
         if (!keep.has(base)) toDelete.push(row.id);
@@ -685,19 +1126,44 @@
         const chunk = toDelete.slice(i, i + 300);
         await c.from('user_sync_items').delete().in('id', chunk);
       }
+      localStorage.removeItem(USAGE_CACHE_KEY);
       _emitProgress({ phase: 'pruning', current: '', uploaded: 0, total: toDelete.length });
     } catch (e) { /* 清理失败可容忍，下轮再试 */ }
   }
 
   // ── 配额聚合（bytes 列求和，不拉 data）────────────────
-  async function _fetchUsage(session, c) {
-    const { data, error } = await c.from('user_sync_items')
-      .select('kind,bytes')
-      .eq('user_id', session.user.id);
-    if (error || !data) return 0;
+  async function _fetchUsageSummary(session, c, force) {
+    const cached = _getLocal(USAGE_CACHE_KEY, null);
+    if (!force && cached && cached.at && Date.now() - cached.at < USAGE_CACHE_MS) return cached;
+    let data = null;
+    if (typeof c.rpc === 'function') {
+      try {
+        const result = await c.rpc('get_user_sync_usage');
+        if (!result.error && Array.isArray(result.data)) {
+          data = result.data.map(row => ({ kind: row.kind, bytes: Number(row.total_bytes || row.bytes || 0) }));
+        }
+      } catch (e) { /* 旧 schema 无 RPC，退回轻量列查询 */ }
+    }
+    if (!data) {
+      const result = await c.from('user_sync_items')
+        .select('kind,bytes')
+        .eq('user_id', session.user.id);
+      if (result.error) throw new Error(result.error.message || '读取云存储用量失败');
+      data = result.data || [];
+    }
+    const byKind = { ai_conv: 0, bk_explain: 0, bk_qa: 0 };
     let total = 0;
-    data.forEach(r => { total += (typeof r.bytes === 'number' ? r.bytes : 0); });
-    return total;
+    data.forEach(row => {
+      const bytes = typeof row.bytes === 'number' ? row.bytes : Number(row.bytes || 0);
+      byKind[row.kind] = (byKind[row.kind] || 0) + bytes;
+      total += bytes;
+    });
+    const summary = { total, byKind, at: Date.now() };
+    _setLocal(USAGE_CACHE_KEY, summary);
+    return summary;
+  }
+  async function _fetchUsage(session, c, force) {
+    return (await _fetchUsageSummary(session, c, force)).total;
   }
   async function getUsage() {
     _loadCfg();
@@ -707,36 +1173,125 @@
     const c = _client();
     if (!c) return empty;
     empty.loggedIn = true;
-    const { data, error } = await c.from('user_sync_items')
-      .select('kind,bytes')
-      .eq('user_id', session.user.id);
-    if (error || !data) return empty;
-    const byKind = { 'ai_conv': 0, 'bk_explain': 0, 'bk_qa': 0 };
-    let total = 0;
-    data.forEach(r => {
-      const b = typeof r.bytes === 'number' ? r.bytes : 0;
-      byKind[r.kind] = (byKind[r.kind] || 0) + b;
-      total += b;
-    });
-    return { total, usedMB: total / (1024 * 1024), quotaMB: cfg.quotaMB, byKind, loggedIn: true };
+    try {
+      const summary = await _fetchUsageSummary(session, c, false);
+      return { total: summary.total, usedMB: summary.total / (1024 * 1024), quotaMB: cfg.quotaMB, byKind: summary.byKind, loggedIn: true };
+    } catch (e) { return empty; }
   }
 
   // ── 手动触发 ─────────────────────────────────────────
   function manualSync() {
-    return _enqueue(() => _flushLogs());
+    return _enqueue(() => _flushLogs({ pullMode: 'full', maintenance: true })).then(async result => {
+      await renderPanelSafe();
+      return result;
+    });
   }
-  function uploadAll() {
+
+  function markItemDeleted(kind, itemId) {
+    if (!KIND_LABELS[kind] || itemId == null) return;
+    const key = _baseKey(kind, itemId);
+    const tombstones = _getTombstones();
+    tombstones[key] = tombstones[key] || { kind, itemId: String(itemId), deletedAt: new Date().toISOString() };
+    _setLocal(TOMBSTONE_KEY, tombstones);
+    _markItemDirty(kind, itemId);
+    _emitProgress({ dirtyHint: true, pending: _computePendingCount() });
+    if (_autoSyncOn() && loggedIn && client) scheduleUpload();
+  }
+
+  function resolveConflict(kind, itemId, choice) {
     return _enqueue(async () => {
+      const key = _baseKey(kind, itemId);
+      const conflict = _getConflicts()[key];
+      if (!conflict) return { ok: false, reason: '该对话冲突已不存在或已处理' };
+      if (choice !== 'local' && choice !== 'remote') return { ok: false, reason: '无效的处理方式' };
+      const session = await _session();
+      const c = _client();
+      if (!session || !c) return { ok: false, reason: '未登录或 Supabase 客户端不可用' };
+
+      try {
+        const inventory = await _fetchRemoteInventory(session, c, [{ kind, itemId }]);
+        if (choice === 'local') {
+          if (conflict.localDeleted) {
+            await _processTombstone(session, c, conflict, inventory, true);
+          } else {
+            const item = _extractAll().find(candidate => candidate.kind === kind && String(candidate.itemId) === String(itemId));
+            if (!item) throw new Error('本地对话已不存在，请选择使用云端或重新同步');
+            const pieces = await _packItem(item);
+            const result = await _uploadPreparedItem(session, c, item, pieces, inventory, true);
+            if (!result.ok) throw new Error(result.reason || '上传本地版本失败');
+          }
+        } else {
+          const rows = await _fetchRemoteItemRows(session, c, [{ kind, itemId }]);
+          const selected = _selectCurrentRows(rows);
+          if (!selected.length) throw new Error('云端版本已不存在');
+          const built = await _rebuildPieces(selected);
+          if (!built) throw new Error('云端分片损坏或不完整');
+          applyingRemote = true;
+          try { _applyToLocal(kind, String(itemId), built); }
+          finally { applyingRemote = false; }
+          const tombstones = _getTombstones();
+          delete tombstones[key];
+          _setLocal(TOMBSTONE_KEY, tombstones);
+          _setTs(key, _latestTimestamp(selected));
+          _recordPulledContent(kind, String(itemId));
+        }
+        _clearConflict(kind, itemId);
+        _emitProgress({
+          phase: 'done',
+          pending: _computePendingCount(),
+          dirtyHint: _computePendingCount() > 0,
+          lastError: '',
+          lastSyncAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
+        });
+        _emitStatus();
+        return { ok: true, kind, itemId: String(itemId), choice };
+      } catch (e) {
+        const reason = String((e && e.message) || e || '处理对话冲突失败');
+        _emitProgress({ phase: 'error', dirtyHint: true, lastError: reason });
+        return { ok: false, reason };
+      }
+    });
+  }
+
+  function resolveConflictToken(token, choice) {
+    try {
+      const parsed = JSON.parse(decodeURIComponent(token));
+      return resolveConflict(parsed[0], parsed[1], choice).then(async result => {
+        await renderPanel();
+        return result;
+      });
+    } catch (e) {
+      return Promise.resolve({ ok: false, reason: '冲突标识无效' });
+    }
+  }
+
+  function uploadAll() {
+    const run = _enqueue(async () => {
       const session = await _session();
       if (!session) return { uploaded: 0, skipped: 0, failed: 0, reasons: [] };
-      const items = _extractAll();
+      const c = _client();
+      if (!c) return { uploaded: 0, skipped: 0, failed: 1, reasons: ['Supabase 客户端不可用'] };
+      const localState = await _refreshLocalState(true);
+      const inventory = await _fetchRemoteInventory(session, c);
+      const items = localState.items;
       let uploaded = 0, skipped = 0, failed = 0;
       const reasons = [];
+
+      for (const tombstone of Object.values(_getTombstones())) {
+        try {
+          const result = await _processTombstone(session, c, tombstone, inventory, true);
+          if (result.ok) uploaded++;
+        } catch (e) {
+          failed++;
+          reasons.push('删除 ' + tombstone.kind + '/' + tombstone.itemId + ' 失败：' + String((e && e.message) || e));
+        }
+      }
+
       for (const item of items) {
         if (!_isItemOn(item.kind, item.itemId)) continue;
         let pieces;
         try {
-          pieces = await _packItem(item);
+          pieces = localState.packed.get(_baseKey(item.kind, item.itemId)) || await _packItem(item);
         } catch (e) {
           failed++;
           const msg = '压缩失败: ' + item.kind + '/' + item.itemId + ' ' + (e && e.message ? e.message : e);
@@ -744,24 +1299,17 @@
           console.warn('[SyncLogs] ' + msg);
           continue;
         }
-        for (const p of pieces) {
-          p.kind = item.kind;
-          try {
-            // force=true：跳过 hash 增量判断，确保「全部上传」真正把所有 item 推到云端
-            //（自愈云端曾被误删/清理的行；增量上传仍由自动同步走 _flushLogs）
-            const r = await _uploadPiece(session, p, true);
-            if (r.ok && r.skipped) skipped++;
-            else if (r.ok) uploaded++;
-            else {
-              failed++;
-              const msg = item.kind + '/' + item.itemId + ' ' + (r.reason || '上传失败');
-              reasons.push(msg);
-            }
-          } catch (e) {
+        try {
+          // “上传全部”是用户明确选择本地覆盖云端，因此跳过冲突检查，但仍执行分片清理和状态提交。
+          const result = await _uploadPreparedItem(session, c, item, pieces, inventory, true);
+          if (result.ok) uploaded++;
+          else {
             failed++;
-            const msg = item.kind + '/' + item.itemId + ' 异常: ' + (e && e.message ? e.message : e);
-            reasons.push(msg);
+            reasons.push(item.kind + '/' + item.itemId + ' ' + (result.reason || '上传失败'));
           }
+        } catch (e) {
+          failed++;
+          reasons.push(item.kind + '/' + item.itemId + ' 异常: ' + (e && e.message ? e.message : e));
         }
       }
       // 结果可见：toast + console + 状态条
@@ -778,8 +1326,12 @@
         lastError: failed ? reasons[0] : '',
         lastSyncAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' })
       });
-      if (failed === 0) await _flushLogs();
+      if (failed === 0) await _flushLogs({ pullMode: 'none', maintenance: false });
       return { uploaded, skipped, failed, reasons };
+    });
+    return run.then(async result => {
+      await renderPanelSafe();
+      return result;
     });
   }
   // 独立串行队列：所有手动/自动任务排队执行，不并发
@@ -827,6 +1379,37 @@
         <button class="storage-btn" onclick="SyncLogs.uploadAll()"><i data-lucide="upload-cloud" class="lucide-icon" style="width:13px;height:13px;"></i> 上传全部</button>
         <span class="storage-status" id="storageStatus"></span>
       </div>`;
+
+    const conflicts = getPendingConflicts();
+    if (conflicts.length) {
+      html += `<section class="sync-conflict-panel" style="display:block;margin-bottom:12px;">
+        <div class="sync-conflict-panel-title"><span><i data-lucide="messages-square" class="lucide-icon"></i> 对话云存储冲突</span><span class="sync-conflict-count">${conflicts.length} 项</span></div>
+        <p class="sync-conflict-guide">这些项目已暂停自动同步，其他对话仍会继续。保留本地会覆盖云端；使用云端会覆盖或恢复当前设备中的对应项目。</p>
+        <div class="sync-conflict-list">`;
+      for (const conflict of conflicts) {
+        const token = encodeURIComponent(JSON.stringify([conflict.kind, String(conflict.itemId)]));
+        const reason = conflict.reason === 'delete-versus-remote-change'
+          ? '本机删除后，云端又出现了更新。'
+          : (conflict.reason === 'missing-sync-base'
+            ? '缺少共同同步基准，本机与云端都存在内容。'
+            : '本机和云端都在上次同步后发生了修改。');
+        const localChoice = conflict.localDeleted ? '确认本机删除' : '保留本地并上传';
+        html += `<article class="sync-conflict-item">
+          <div class="sync-conflict-item-head"><div><strong>${escapeHtml(conflict.name || conflict.label || conflict.itemId)}</strong><code>${escapeHtml(conflict.kind + '/' + conflict.itemId)}</code></div><span class="sync-conflict-state">需要选择</span></div>
+          <p class="sync-conflict-reason">${escapeHtml(reason)}</p>
+          <dl class="sync-conflict-meta">
+            <div><dt>本机同步基准</dt><dd>${escapeHtml(_formatTime(conflict.baseTimestamp, '无（首次同步）'))}</dd></div>
+            <div><dt>云端更新时间</dt><dd>${escapeHtml(_formatTime(conflict.remoteTimestamp, '未知'))}</dd></div>
+            <div><dt>检测时间</dt><dd>${escapeHtml(_formatTime(conflict.detectedAt, '未知'))}</dd></div>
+          </dl>
+          <div class="sync-conflict-actions">
+            <button class="sync-conflict-btn sync-conflict-btn-local" onclick="SyncLogs.resolveConflictToken('${escapeHtml(token)}','local')"><i data-lucide="upload"></i> ${localChoice}</button>
+            <button class="sync-conflict-btn sync-conflict-btn-remote" onclick="SyncLogs.resolveConflictToken('${escapeHtml(token)}','remote')"><i data-lucide="cloud-download"></i> 使用云端并覆盖本机</button>
+          </div>
+        </article>`;
+      }
+      html += `</div></section>`;
+    }
 
     // 分组
     const groups = [
@@ -917,6 +1500,11 @@
     for (const m of item.items || []) n += String(m && m.content || '').length;
     return n > 1024 ? (n / 1024).toFixed(1) + 'K 字' : n + ' 字';
   }
+  function _formatTime(value, fallback) {
+    if (!value) return fallback || '未知';
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? (fallback || '未知') : date.toLocaleString('zh-CN', { hour12: false });
+  }
 
   function setItemEnabled(kind, itemId, on) {
     _setItemEnabled(kind, itemId, on);
@@ -925,16 +1513,31 @@
   }
 
   async function deleteAllRemote() {
-    if (!confirm('确定从云端删除全部日志数据？本地数据不受影响，已删除的条目在下次内容变化前不会重新上传。')) return;
+    if (!confirm('确定从云端删除全部日志数据？本地数据不受影响，同时会暂停这些项目的云上传；需要时可在列表中逐项重新开启。')) return;
     const session = await _session();
     if (!session) return;
     const c = _client();
     if (!c) return;
-    await c.from('user_sync_items').delete().eq('user_id', session.user.id);
-    // 保留 ts/hash 状态：数据未变化时不会立即全部重传（增量上传幂等）
+    const { error } = await c.from('user_sync_items').delete().eq('user_id', session.user.id);
+    if (error) {
+      const st = document.getElementById('storageStatus');
+      if (st) st.textContent = '删除失败：' + (error.message || '未知错误');
+      return { ok: false, reason: error.message || '删除失败' };
+    }
+    // 明确关闭当前本地 item 的云上传，防止下一轮“云端缺失自愈”把刚删除的数据重新传回去。
+    for (const item of _extractAll()) _setItemEnabled(item.kind, item.itemId, false);
+    _setLocal(TS_KEY, {});
+    _setLocal(HASH_KEY, {});
+    _saveConflicts({});
+    localStorage.removeItem(USAGE_CACHE_KEY);
+    const outbox = await _outboxGetAll();
+    for (const entry of outbox) {
+      if (entry && typeof entry.key === 'string' && entry.key.indexOf('log:') === 0) await _outboxRemove(entry.key);
+    }
     const st = document.getElementById('storageStatus');
-    if (st) st.textContent = '已删除云端全部日志数据（本地保留）。';
+    if (st) st.textContent = '已删除云端全部日志数据并暂停这些项目的上传（本地保留）。';
     renderPanel();
+    return { ok: true };
   }
 
   // 手动触发：按保留策略清理云端过期数据（教材 3 个月 / AI 最近 20 会话）
@@ -944,9 +1547,9 @@
       if (!session) return { deleted: 0 };
       const c = _client();
       if (!c) return { deleted: 0 };
-      const before = await _fetchUsage(session, c);
+      const before = await _fetchUsage(session, c, true);
       await _pruneRemoteTTL(session, c);
-      const after = await _fetchUsage(session, c);
+      const after = await _fetchUsage(session, c, true);
       const freedMB = ((before - after) / 1048576).toFixed(2);
       const st = document.getElementById('storageStatus');
       if (st) {
@@ -995,16 +1598,22 @@
     }
     return t + ' · ' + pendTxt;
   }
-  // 待同步 item 数：TTL 内、已开启、且从未上传过（hash 缺失）的项（同步计算，不 gzip）
+  // 待同步 item 数：以持久化 dirty / 删除墓碑 / 冲突为事实来源。
   function _computePendingCount() {
-    let n = 0;
-    const hashMap = _getLocal(HASH_KEY, {});
-    const items = _extractAll();
-    for (const item of items) {
-      if (!_isItemOn(item.kind, item.itemId)) continue;
-      if (!hashMap[item.kind + '/' + item.itemId]) n++;
-    }
-    return n;
+    const keys = new Set();
+    const dirty = _getDirtyMap();
+    Object.keys(dirty).forEach(key => {
+      if (key.endsWith('/*')) keys.add(key);
+      else {
+        const slash = key.indexOf('/');
+        const kind = slash > 0 ? key.slice(0, slash) : '';
+        const itemId = slash > 0 ? key.slice(slash + 1) : '';
+        if (!kind || !itemId || _isItemOn(kind, itemId)) keys.add(key);
+      }
+    });
+    Object.keys(_getTombstones()).forEach(key => keys.add(key));
+    Object.keys(_getConflicts()).forEach(key => keys.add(key));
+    return keys.size;
   }
   function onProgress(fn) {
     progressListeners.add(fn);
@@ -1030,7 +1639,10 @@
     return {
       enabled: _enabled(),
       autoSync: !!cfg.autoSync,
-      loggedIn: !!sess
+      loggedIn: !!sess,
+      pendingCount: _computePendingCount(),
+      pendingConflictCount: getPendingConflicts().length,
+      lastError: progressState.lastError || ''
     };
   }
 
@@ -1109,9 +1721,10 @@
     loggedIn = !!session;
     if (!session) return;
     try { await migrateLegacy(); } catch (e) { console.warn('[SyncLogs] 迁移失败:', e); }
+    try { await _refreshLocalState(true); } catch (e) { console.warn('[SyncLogs] 本地同步状态初始化失败:', e); }
     _subscribe();
     if (_autoSyncOn()) {
-      await _enqueue(() => _flushLogs());
+      await _enqueue(() => _flushLogs({ pullMode: 'full', maintenance: true }));
       pullScheduler.start();
     }
     _emitStatus();
@@ -1128,17 +1741,49 @@
       const channel = c.channel('mst-user-sync-items')
         .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'user_sync_items', filter: 'user_id=eq.' + session.user.id },
-          () => _debouncedPull())
+          payload => _debouncedPull(payload))
         .on('postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'user_sync_items', filter: 'user_id=eq.' + session.user.id },
-          () => _debouncedPull());
+          payload => _debouncedPull(payload));
       channel.subscribe();
       realtimeChannel = channel;
     } catch (e) { /* 订阅失败不影响主流程 */ }
   }
-  function _debouncedPull() {
+  const pendingRealtimeItems = new Map();
+  function _debouncedPull(payload) {
+    const row = payload && payload.new;
+    if (row && KIND_LABELS[row.kind] && row.item_id != null) {
+      const baseId = _baseIdFromRemoteId(row.item_id);
+      pendingRealtimeItems.set(_baseKey(row.kind, baseId), {
+        kind: row.kind,
+        itemId: baseId,
+        pieceId: String(row.item_id),
+        updatedAt: row.updated_at || ''
+      });
+    }
     clearTimeout(pullDebounceTimer);
-    pullDebounceTimer = setTimeout(() => { if (_autoSyncOn() && loggedIn) _enqueue(() => _flushLogs()); }, 800);
+    pullDebounceTimer = setTimeout(() => {
+      if (!_autoSyncOn() || !loggedIn) return;
+      const targets = [];
+      for (const target of pendingRealtimeItems.values()) {
+        const exactTs = _getTs(_baseKey(target.kind, target.pieceId));
+        // 本机刚写入的分片已记录同一个服务器时间戳：忽略自身 Realtime 回显。
+        if (!target.updatedAt || exactTs !== target.updatedAt) targets.push(target);
+      }
+      pendingRealtimeItems.clear();
+      if (!targets.length) return;
+      _enqueue(async () => {
+        const session = await _session();
+        const c = _client();
+        if (!session || !c) return;
+        _emitProgress({ phase: 'pulling', current: '', uploaded: 0, total: targets.length });
+        await _pullItems(session, c, targets);
+        _emitProgress({ phase: 'done', current: '', uploaded: 0, total: 0,
+          pending: _computePendingCount(), dirtyHint: _computePendingCount() > 0,
+          lastSyncAt: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) });
+        _emitStatus();
+      });
+    }, 250);
   }
 
   // 登录状态监听（复用 sync.js 的 onAuthStateChange 思路，避免事件时序问题）
@@ -1187,7 +1832,12 @@
 
   // 供 settings.js 在「云存储」tab 打开时调用
   function renderPanelSafe() {
-    try { renderPanel(); } catch (e) { console.warn('[SyncLogs] 面板渲染失败:', e); }
+    try {
+      return Promise.resolve(renderPanel()).catch(e => { console.warn('[SyncLogs] 面板渲染失败:', e); });
+    } catch (e) {
+      console.warn('[SyncLogs] 面板渲染失败:', e);
+      return Promise.resolve();
+    }
   }
 
   function retryPending() {
@@ -1200,6 +1850,7 @@
     if (_autoSyncOn()) return _init();
     pullScheduler.stop();
     clearTimeout(uploadTimer);
+    scheduled = false;
     clearTimeout(pullDebounceTimer);
     if (realtimeChannel) {
       try {
@@ -1220,6 +1871,10 @@
     getStatus,
     getUsage,
     getSyncProgress,
+    getPendingConflicts,
+    resolveConflict,
+    resolveConflictToken,
+    markItemDeleted,
     renderPanel: renderPanelSafe,
     setItemEnabled,
     deleteAllRemote,
@@ -1233,6 +1888,17 @@
     get autoSync() { return !!cfg.autoSync; },
     get loggedIn() { return loggedIn; }
   };
+  if (global.__MST_TEST__) {
+    global.SyncLogs.__test = {
+      baseIdFromRemoteId: _baseIdFromRemoteId,
+      selectCurrentRows: _selectCurrentRows,
+      hasRemoteAdvanced: _hasRemoteAdvanced,
+      refreshLocalState: _refreshLocalState,
+      contentHash: _contentHash,
+      flushLogs: _flushLogs,
+      normalizeTargets: _normalizeTargets
+    };
+  }
 
   // 页面加载后自动初始化
   if (typeof global.addEventListener === 'function') {
