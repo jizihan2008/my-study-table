@@ -441,7 +441,11 @@ revoke all on table public.weekly_focus_todos from anon;
 grant all on table public.weekly_focus_todos to authenticated, service_role;
 
 -- ═══════════════════════════════════════════════════════════════════
--- 触发器：注册用户后自动创建 profile（用户名从 user_metadata 提取）
+-- 触发器：注册用户后自动创建 profile。
+-- CloudBase 的 auth.users 字段与 Supabase 托管版不完全一致：CloudBase 可把
+-- username/name/nickname 存为顶层字段，而部分 Supabase 环境使用
+-- raw_user_meta_data 或 user_metadata。先把 NEW 转成 jsonb 再按键读取，避免
+-- 直接访问不存在的记录字段导致整次注册事务回滚。
 -- ═══════════════════════════════════════════════════════════════════
 create or replace function public.handle_new_user()
 returns trigger
@@ -449,18 +453,40 @@ language plpgsql
 security definer
 set search_path = public
 as $$
+declare
+  user_record jsonb;
+  user_meta jsonb;
+  profile_username text;
+  profile_nickname text;
 begin
+  user_record := to_jsonb(new);
+  user_meta := coalesce(
+    user_record->'user_metadata',
+    user_record->'raw_user_meta_data',
+    user_record->'metadata',
+    '{}'::jsonb
+  );
+
+  profile_username := coalesce(
+    nullif(btrim(user_record->>'username'), ''),
+    nullif(btrim(user_meta->>'username'), ''),
+    'user_' || left(new.id::text, 8)
+  );
+
+  profile_nickname := coalesce(
+    nullif(btrim(user_record->>'nickname'), ''),
+    nullif(btrim(user_record->>'name'), ''),
+    nullif(btrim(user_meta->>'nickname'), ''),
+    nullif(btrim(user_meta->>'nickName'), ''),
+    nullif(btrim(user_meta->>'name'), ''),
+    profile_username
+  );
+
   insert into public.profiles (id, username, nickname)
   values (
     new.id::text,
-    coalesce(new.user_metadata->>'username', 'user_' || left(new.id::text, 8)),
-    coalesce(
-      new.user_metadata->>'nickname',
-      new.user_metadata->>'nickName',
-      new.user_metadata->>'name',
-      new.user_metadata->>'username',
-      ''
-    )
+    profile_username,
+    profile_nickname
   )
   on conflict (id) do nothing;
   return new;
