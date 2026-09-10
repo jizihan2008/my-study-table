@@ -17,6 +17,7 @@ const { registerSecretIpc } = require('./electron/register-secret-ipc');
 const { registerUpdaterIpc } = require('./electron/register-updater-ipc');
 const { resolveQQChatChunks } = require('./electron/qq-chat-policy');
 const { createQQChatAutoSyncService } = require('./electron/qq-chat-auto-sync');
+const { createQQChatExporterIntegration } = require('./electron/qq-chat-exporter-integration');
 
 // 屏蔽 Qt/log4cplus 等系统级无关警告
 process.env.QT_LOGGING_RULES = '*.debug=false;*.warning=false';
@@ -40,7 +41,7 @@ const extensionService = registerExtensionIpc({
 });
 const { extensionsDir, ensureExtensionsDir } = extensionService;
 registerLibraryIpc({ app, dialog, ipcMain, userDataPath, getMainWindow: () => mainWindow });
-registerSecretIpc({ ipcMain, safeStorage, userDataPath });
+const secretService = registerSecretIpc({ ipcMain, safeStorage, userDataPath });
 const updaterService = registerUpdaterIpc({ app, ipcMain, getMainWindow: () => mainWindow });
 
 // 禁用 GPU 缓存（解决 cache_util_win 拒绝访问错误）
@@ -256,6 +257,7 @@ if (!gotTheLock) {
       startConfirmServer(); // 监听 localhost:3000 供 Supabase 确认链接回调
     }
     qqChatAutoSyncService.restore().catch(() => {});
+    restoreQQChatExporterIntegration().catch(() => {});
   });
 }
 
@@ -274,6 +276,7 @@ app.on('activate', () => {
 app.on('before-quit', () => {
   isQuitting = true;
   qqChatAutoSyncService.close();
+  qqChatExporterIntegration.close();
   if (confirmServer) {
     try { confirmServer.close(); } catch (e) {}
     confirmServer = null;
@@ -1829,6 +1832,7 @@ const allowedQQChatChunkFiles = new Set();
 let qqChatMessagesRead = 0;
 const qqChatMetaBackupDir = path.join(userDataPath, 'qq-chat-backups');
 const qqChatAutoConfigPath = path.join(userDataPath, 'qq-chat-auto-sync.json');
+const qqChatExporterConfigPath = path.join(userDataPath, 'qq-chat-exporter-integration.json');
 
 async function readValidatedQQChatManifest(dir, authorize) {
   const exportRoot = path.resolve(String(dir || ''));
@@ -1871,6 +1875,35 @@ const qqChatAutoSyncService = createQQChatAutoSyncService({
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('qqchat:auto-changed', payload);
   }
 });
+
+async function validateQCEOutputRoot(dir) {
+  const root = path.resolve(String(dir || ''));
+  if (!root || !fs.existsSync(root)) throw new Error('QCE 导出目录不存在或不可访问');
+  if (!isInboxPathAllowed(root)) throw new Error('QCE 导出目录尚未经过用户授权');
+  const stat = await fs.promises.lstat(root);
+  if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error('QCE 导出目录必须是普通文件夹');
+  return { dir: await fs.promises.realpath(root) };
+}
+
+const qqChatExporterIntegration = createQQChatExporterIntegration({
+  fs,
+  path,
+  http,
+  configPath: qqChatExporterConfigPath,
+  validateOutputRoot: validateQCEOutputRoot,
+  getToken: function () { return secretService.getSecret('study_qce_access_token'); },
+  onExports: function (files) {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('qqchat:qce-exports', { files });
+  }
+});
+
+async function restoreQQChatExporterIntegration() {
+  try {
+    const saved = JSON.parse(await fs.promises.readFile(qqChatExporterConfigPath, 'utf8'));
+    if (saved && saved.enabled && saved.outputRoot) ensureInboxDirAllowed(saved.outputRoot);
+  } catch (e) {}
+  return qqChatExporterIntegration.restore();
+}
 
 // 自动保存轻量元数据/日报快照；完整消息由收件箱中的“备份 QQ”手动导出。
 ipcMain.handle('qqchat:backup-meta', async (event, payload = {}) => {
@@ -1926,6 +1959,43 @@ ipcMain.handle('qqchat:auto-disable', async () => {
 });
 ipcMain.handle('qqchat:auto-report', async (event, result) => {
   try { return { ok: true, status: await qqChatAutoSyncService.report(result || {}) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+
+ipcMain.handle('qqchat:qce-pick-root', async () => {
+  const res = await dialog.showOpenDialog(mainWindow, {
+    title: '选择 QQChatExporter 的 JSON 导出目录',
+    properties: ['openDirectory']
+  });
+  if (res.canceled || !res.filePaths || !res.filePaths.length) return { ok: false, canceled: true };
+  ensureInboxDirAllowed(res.filePaths[0]);
+  try { return { ok: true, dir: (await validateQCEOutputRoot(res.filePaths[0])).dir }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:qce-status', async () => ({ ok: true, status: qqChatExporterIntegration.publicStatus() }));
+ipcMain.handle('qqchat:qce-test', async (event, endpoint) => {
+  try { return { ok: true, data: await qqChatExporterIntegration.testConnection(endpoint) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:qce-list-schedules', async (event, endpoint) => {
+  try { return { ok: true, schedules: await qqChatExporterIntegration.listSchedules(endpoint) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:qce-configure', async (event, config) => {
+  try { return { ok: true, status: await qqChatExporterIntegration.configure(config || {}) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:qce-disable', async () => {
+  try { return { ok: true, status: await qqChatExporterIntegration.disable() }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:qce-run-now', async () => qqChatExporterIntegration.runNow(true));
+ipcMain.handle('qqchat:qce-read-export', async (event, filePath) => {
+  try { return { ok: true, result: await qqChatExporterIntegration.readExport(filePath) }; }
+  catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
+});
+ipcMain.handle('qqchat:qce-ack-export', async (event, payload) => {
+  try { return { ok: true, status: await qqChatExporterIntegration.acknowledge(payload && payload.filePath, payload && payload.ok) }; }
   catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
 });
 

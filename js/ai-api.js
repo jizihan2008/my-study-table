@@ -5,8 +5,8 @@
 // ═══════════ Core AI call (extracted for tool-call loop reuse) ═══════════
 // Returns { cleanText, toolCalls, reasoning } or throws on error
 // If conv is provided, raw API request/response are appended to conv._rawLogs
-async function callAiApi(apiMessages, apiCfg, conv) {
-  if (typeof AIClient !== 'undefined') {
+async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
+  if (!options.skipSensitiveCheck && typeof AIClient !== 'undefined') {
     const allowed = await AIClient.confirmSensitiveContent(apiMessages);
     if (!allowed) throw new Error('已取消发送敏感信息');
   }
@@ -169,6 +169,170 @@ async function callAiApi(apiMessages, apiCfg, conv) {
   return { cleanText: cleanText || reply || '（未收到回复）', toolCalls, reasoning, rawReply: reply, finishReason: data.choices?.[0]?.finish_reason || '' };
 }
 
+function buildStreamingRequestBody(apiMessages, apiCfg) {
+  const maxTokens = apiCfg.maxTokens || (isKimiModel() ? 8192 : 2048);
+  const modelLower = String(apiCfg.model || '').toLowerCase();
+  const body = {
+    model: apiCfg.model,
+    messages: apiMessages,
+    ...buildDeepThinkParams(apiCfg),
+    stream: true
+  };
+  // Official OpenAI and DeepSeek Chat Completions endpoints support a final
+  // usage chunk. Unknown compatible gateways may reject this optional field.
+  if (/(?:api\.openai\.com|api\.deepseek\.com)/i.test(String(apiCfg.baseUrl || ''))) {
+    body.stream_options = { include_usage: true };
+  }
+  if (modelLower.includes('k3') || modelLower.includes('k2.7')) body.max_completion_tokens = maxTokens;
+  else body.max_tokens = maxTokens;
+  if (!isKimiModel()) body.temperature = apiCfg.temperature;
+  return { body, maxTokens };
+}
+
+function appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, response) {
+  if (!conv) return;
+  if (!conv._rawLogs) conv._rawLogs = [];
+  conv._rawLogs.push({
+    requestTime,
+    request: {
+      url: apiCfg.baseUrl.replace(/\/+$/, '') + '/chat/completions',
+      model: apiCfg.model,
+      messages: apiMessages.map(message => ({ role: message.role, content: message.content, ...(message.name ? { name: message.name } : {}) })),
+      temperature: apiCfg.temperature,
+      max_tokens: maxTokens,
+      stream: true
+    },
+    response,
+    responseTime: new Date().toISOString()
+  });
+  if (conv._rawLogs.length > 5) conv._rawLogs = conv._rawLogs.slice(-5);
+}
+
+function resultFromChatCompletionData(data, apiCfg, onDelta) {
+  const choice = data?.choices?.[0];
+  const message = choice?.message || {};
+  const reply = typeof AIStream !== 'undefined' ? AIStream.readTextParts(message.content) : (message.content || '');
+  const reasoning = apiCfg.deepThink === true
+    ? (message.reasoning_content || message.reasoning || message.thinking || '')
+    : '';
+  if (typeof onDelta === 'function') onDelta({ content: reply, reasoning, contentDelta: reply, reasoningDelta: reasoning });
+  const { cleanText, toolCalls } = extractToolCalls(reply);
+  return {
+    cleanText: cleanText || reply || '（未收到回复）',
+    toolCalls,
+    reasoning,
+    rawReply: reply,
+    finishReason: choice?.finish_reason || ''
+  };
+}
+
+function isStreamingUnsupported(status, message) {
+  return [400, 404, 415, 422].includes(status)
+    && /(?:stream|streaming|server.sent|sse|流式).*(?:unsupported|not support|invalid|unknown|不支持|无效)|(?:unsupported|not support|invalid|unknown|不支持|无效).*(?:stream|streaming|sse|流式)/i.test(String(message || ''));
+}
+
+async function callAiApiStream(apiMessages, apiCfg, conv, options) {
+  if (typeof AIStream === 'undefined') return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
+  const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
+  const { body, maxTokens } = buildStreamingRequestBody(apiMessages, apiCfg);
+  const requestTime = new Date().toISOString();
+  let response;
+  let latest = { content: '', reasoning: '' };
+  try {
+    const requestOptions = {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + apiCfg.apiKey },
+      body: JSON.stringify(body)
+    };
+    response = typeof AIClient !== 'undefined'
+      ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', requestOptions, {
+          scope: conv && conv.id,
+          timeoutMs: apiCfg.timeoutMs,
+          keepAlive: true
+        })
+      : await fetch(baseUrl + '/chat/completions', requestOptions);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      const errorMsg = errorData.error?.message || `请求失败 (HTTP ${response.status})`;
+      if (isStreamingUnsupported(response.status, errorMsg)) {
+        return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
+      }
+      appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, { error: errorMsg, httpStatus: response.status, stream: true });
+      throw new Error(errorMsg);
+    }
+
+    const contentType = String(response.headers?.get('content-type') || '').toLowerCase();
+    if (contentType.includes('application/json')) {
+      const data = await response.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage);
+      const result = resultFromChatCompletionData(data, apiCfg, options.onDelta);
+      appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, { stream: false, compatibilityResponse: data });
+      return result;
+    }
+
+    const streamed = await AIStream.consumeChatCompletionStream(response, snapshot => {
+      latest = apiCfg.deepThink === true ? snapshot : { ...snapshot, reasoning: '', reasoningDelta: '' };
+      if (typeof options.onDelta === 'function') options.onDelta(latest);
+    });
+    if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, streamed.usage);
+    const reply = streamed.content || '';
+    const reasoning = apiCfg.deepThink === true ? (streamed.reasoning || '') : '';
+    const { cleanText, toolCalls } = extractToolCalls(reply);
+    const result = {
+      cleanText: cleanText || reply || '（未收到回复）',
+      toolCalls,
+      reasoning,
+      rawReply: reply,
+      finishReason: streamed.finishReason || ''
+    };
+    appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, {
+      stream: true,
+      content: reply,
+      reasoning,
+      tool_calls: streamed.toolCalls,
+      finish_reason: streamed.finishReason,
+      usage: streamed.usage
+    });
+    return result;
+  } catch (error) {
+    const abortReason = response?._aiRequestControl?.controller?.signal?.reason;
+    if (abortReason?.name === 'TimeoutError') {
+      error = new Error('AI 请求超时，请检查网络或调高超时时间');
+    }
+    if (latest.content || latest.reasoning) {
+      const { cleanText, toolCalls } = extractToolCalls(latest.content || '');
+      error.partialResult = {
+        cleanText: cleanText || latest.content,
+        toolCalls,
+        reasoning: latest.reasoning || '',
+        rawReply: latest.content || '',
+        finishReason: ''
+      };
+    }
+    if (abortReason?.name === 'AbortError' || error.message === 'AI 请求已取消' || (conv && isAiStopRequested(conv.id))) error.isAiAbort = true;
+    throw error;
+  } finally {
+    if (response?._aiRequestControl) response._aiRequestControl.release();
+  }
+}
+
+// Normal chat uses SSE by default. Structured/background callers stay non-streaming
+// unless they explicitly provide an onDelta callback.
+async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
+  if (typeof AIClient !== 'undefined') {
+    const allowed = await AIClient.confirmSensitiveContent(apiMessages);
+    if (!allowed) throw new Error('已取消发送敏感信息');
+  }
+  const activeConv = conv || (typeof getActiveConv === 'function' ? getActiveConv() : null);
+  const kimiNativeSearch = isKimiModel() && activeConv && activeConv._webSearchMode === 'native';
+  const streamEnabled = localStorage.getItem('study_ai_streaming') !== 'false';
+  if (streamEnabled && !kimiNativeSearch && typeof options.onDelta === 'function') {
+    return callAiApiStream(apiMessages, apiCfg, conv, options);
+  }
+  return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
+}
+
 // Build the apiMessages array from conversation history.
 // 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
 // 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
@@ -252,7 +416,7 @@ function buildApiMessages(conv, extraSystemMsgs) {
 // ═══════════ Tool call loop: keep calling AI until no more tool_calls ═══════════
 // Executes tools internally, injects results as system context, re-calls AI.
 // Returns the final assistant message ready for display.
-async function runToolCallLoop(apiCfg, conv, onIntermediate) {
+async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   // Read max loops from user setting, minimum 5
   const userMax = parseInt(localStorage.getItem('study_max_tool_loops')) || 0;
   const MAX_LOOPS = Math.max(3, userMax); // safety limit to prevent infinite loops
@@ -261,6 +425,8 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
   let finalReasoning = '';
   let allToolResults = [];
   let finalFinishReason = ''; // 最后一次 API 调用的 finish_reason（'length' 表示被 max_tokens 截断）
+  let stopped = false;
+  let streamError = '';
 
   // Track previous tool calls to detect repeated identical queries
   // Stores per-action signatures so we can detect when AI keeps calling
@@ -279,22 +445,47 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
     // Check if user requested stop (per-conversation)
     const convId = getActiveConvId();
     if (isAiStopRequested(convId)) {
-      setAiStopRequested(convId, false);
       finalCleanText = '⏹️ 已手动停止。';
       finalReasoning = '';
       finalFinishReason = '';
+      stopped = true;
       break;
     }
 
-    const { cleanText, toolCalls, reasoning, rawReply, finishReason } = await callAiApi(apiMessages, apiCfg, conv);
+    if (typeof onStreamDelta === 'function') onStreamDelta({ reset: true, loop });
+    let apiResult;
+    try {
+      apiResult = await callAiApi(apiMessages, apiCfg, conv, {
+        onDelta: typeof onStreamDelta === 'function'
+          ? snapshot => onStreamDelta({ ...snapshot, loop })
+          : undefined
+      });
+    } catch (error) {
+      if (error.partialResult) {
+        finalCleanText = error.partialResult.cleanText || '';
+        finalRawReply = error.partialResult.rawReply || finalCleanText;
+        finalReasoning = error.partialResult.reasoning || '';
+        stopped = !!error.isAiAbort || isAiStopRequested(convId);
+        streamError = stopped ? '' : error.message;
+        break;
+      }
+      if (error.isAiAbort || isAiStopRequested(convId)) {
+        finalCleanText = '⏹️ 已手动停止。';
+        stopped = true;
+        break;
+      }
+      throw error;
+    }
+    const { cleanText, toolCalls, reasoning, rawReply, finishReason } = apiResult;
     finalFinishReason = finishReason || '';
 
     // Check stop again after API call (in case it took a long time)
     if (isAiStopRequested(convId)) {
-      setAiStopRequested(convId, false);
-      finalCleanText = '⏹️ 已手动停止。';
+      finalCleanText = cleanText || '⏹️ 已手动停止。';
+      finalRawReply = rawReply || finalCleanText;
       finalReasoning = reasoning || '';
       finalFinishReason = '';
+      stopped = true;
       break;
     }
 
@@ -305,6 +496,10 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
       finalReasoning = reasoning || '';
       break;
     }
+
+    // Tool tags are an internal protocol. Remove the transient draft before
+    // showing the persisted tool-call/result messages for this round.
+    if (typeof onStreamDelta === 'function') onStreamDelta({ reset: true, loop });
 
     // Track repeated identical tool calls (per-action, per-params)
     // Only count when the exact same action + params appears across consecutive loops
@@ -390,7 +585,15 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate) {
     try { renderToday(); } catch (e) { console.warn('[AI] renderToday 失败:', e); }
   }
 
-  return { finalCleanText, finalRawReply, finalReasoning, allToolResults, finishReason: finalFinishReason };
+  return {
+    finalCleanText,
+    finalRawReply,
+    finalReasoning,
+    allToolResults,
+    finishReason: finalFinishReason,
+    stopped,
+    streamError
+  };
 }
 
 // ═══════════ 截断回复续写 ═══════════

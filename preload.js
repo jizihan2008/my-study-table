@@ -100,6 +100,20 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('qqchat:auto-changed', listener);
     return () => ipcRenderer.removeListener('qqchat:auto-changed', listener);
   },
+  qqchatQCEPickRoot: () => ipcRenderer.invoke('qqchat:qce-pick-root'),
+  qqchatQCEStatus: () => ipcRenderer.invoke('qqchat:qce-status'),
+  qqchatQCETest: (endpoint) => ipcRenderer.invoke('qqchat:qce-test', endpoint),
+  qqchatQCEListSchedules: (endpoint) => ipcRenderer.invoke('qqchat:qce-list-schedules', endpoint),
+  qqchatQCEConfigure: (config) => ipcRenderer.invoke('qqchat:qce-configure', config),
+  qqchatQCEDisable: () => ipcRenderer.invoke('qqchat:qce-disable'),
+  qqchatQCERunNow: () => ipcRenderer.invoke('qqchat:qce-run-now'),
+  qqchatQCEReadExport: (filePath) => ipcRenderer.invoke('qqchat:qce-read-export', filePath),
+  qqchatQCEAckExport: (payload) => ipcRenderer.invoke('qqchat:qce-ack-export', payload),
+  onQQChatQCEExports: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('qqchat:qce-exports', listener);
+    return () => ipcRenderer.removeListener('qqchat:qce-exports', listener);
+  },
   // ── Web Page Reader IPC (AI 阅读网页) ──
   webRead: (payload) => ipcRenderer.invoke('web:read', payload)
 });

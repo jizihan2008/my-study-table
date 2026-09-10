@@ -332,6 +332,11 @@ window.QQChats = (function () {
       let json;
       try { json = JSON.parse(await _readFileText(file)); }
       catch (error) { throw new Error('JSON 解析失败：' + ((error && error.message) || error)); }
+      return api.importJsonData(json, opts);
+    },
+
+    async importJsonData(json, opts) {
+      opts = opts || {};
       if (!json || !Array.isArray(json.messages)) throw new Error('不是有效的 qq-chat-exporter JSON：缺少 messages 数组');
       const info = _parseChatInfo(json);
       const chatId = _buildChatId(info);

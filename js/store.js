@@ -4,7 +4,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 window.Store = (function () {
-  // 与好友系统共用 Supabase 配置
+  // 与好友系统共用 CloudBase / Supabase 配置和登录会话
   const CONFIG_KEY = 'study_supabase_config';
   const OLD_CONFIG_KEY = 'study_plugin_store_config';
   const SESSION_KEY = 'study_store_session';
@@ -21,6 +21,7 @@ window.Store = (function () {
       let raw = localStorage.getItem(CONFIG_KEY);
       if (raw) {
         const cfg = JSON.parse(raw);
+        if (cfg && cfg.provider === 'cloudbase' && cfg.envId && cfg.accessKey) return cfg;
         if (cfg && cfg.url && cfg.anonKey) return cfg;
       }
       // 从旧键迁移
@@ -40,13 +41,9 @@ window.Store = (function () {
         if (cfg.url && cfg.anonKey) return cfg;
       }
       // 无本地配置 → 回退到内置默认（与好友系统共用）
-      const builtin = (typeof BUILTIN_SUPABASE_CONFIG !== 'undefined' && BUILTIN_SUPABASE_CONFIG)
-        ? BUILTIN_SUPABASE_CONFIG : { url: '', anonKey: '' };
-      return { url: builtin.url || '', anonKey: builtin.anonKey || '' };
+      return typeof getFriendsConfig === 'function' ? getFriendsConfig() : {};
     } catch (e) {
-      const builtin = (typeof BUILTIN_SUPABASE_CONFIG !== 'undefined' && BUILTIN_SUPABASE_CONFIG)
-        ? BUILTIN_SUPABASE_CONFIG : { url: '', anonKey: '' };
-      return { url: builtin.url || '', anonKey: builtin.anonKey || '' };
+      return typeof getFriendsConfig === 'function' ? getFriendsConfig() : {};
     }
   }
 
@@ -59,16 +56,14 @@ window.Store = (function () {
 
   function isConfigured() {
     const cfg = getStoreConfig();
-    return !!(cfg.url && cfg.anonKey);
+    return !!((cfg.provider === 'cloudbase' && cfg.envId && cfg.accessKey) || (cfg.url && cfg.anonKey));
   }
 
   // ── Supabase 客户端（单例）──
   function getSupabaseClient() {
     if (_supabase) return _supabase;
-    const cfg = getStoreConfig();
-    if (!cfg.url || !cfg.anonKey) return null;
-    if (typeof window.supabase === 'undefined' || !window.supabase.createClient) return null;
-    _supabase = window.supabase.createClient(cfg.url, cfg.anonKey);
+    if (typeof window.getSupabaseClient !== 'function') return null;
+    _supabase = window.getSupabaseClient();
     return _supabase;
   }
 
@@ -91,6 +86,7 @@ window.Store = (function () {
   async function storeSignUp(email, password, username, nickname) {
     const sb = getSupabaseClient();
     if (!sb) throw new Error('插件市场未配置');
+    if (sb.provider === 'cloudbase') throw new Error('请在“好友”页面完成邮箱验证注册，然后使用同一账号登录插件市场。');
     const options = {};
     if (username) options.data = Object.assign({}, options.data, { username: username.trim() });
     if (nickname) options.data = Object.assign({}, options.data, { nickname: nickname.trim() || username.trim() });
@@ -102,10 +98,13 @@ window.Store = (function () {
     return data;
   }
 
-  async function storeSignIn(email, password) {
+  async function storeSignIn(identifier, password) {
     const sb = getSupabaseClient();
     if (!sb) throw new Error('插件市场未配置');
-    const { data, error } = await sb.auth.signInWithPassword({ email, password });
+    const credentials = sb.provider === 'cloudbase'
+      ? { username: identifier.trim(), password }
+      : { email: identifier.trim(), password };
+    const { data, error } = await sb.auth.signInWithPassword(credentials);
     if (error) throw error;
     if (data.user) _currentUser = data.user;
     return data;
@@ -484,7 +483,7 @@ window.Store = (function () {
       <div class="store-conn-status" style="margin-bottom:12px;">
         ${configured
           ? '<span style="color:var(--green)"><i data-lucide="check-circle" class="lucide-icon" style="width:15px;height:15px;vertical-align:middle;"></i> 已连接到 Supabase</span>'
-          : '<span style="color:var(--orange)"><i data-lucide="alert-circle" class="lucide-icon" style="width:15px;height:15px;vertical-align:middle;"></i> 未配置 Supabase 连接 - 请前往 <a href="#" onclick="switchSettingsTab(\'supabase\')">Supabase 连接</a> 设置 URL 和 Key</span>'
+          : '<span style="color:var(--orange)"><i data-lucide="alert-circle" class="lucide-icon" style="width:15px;height:15px;vertical-align:middle;"></i> 未配置 CloudBase 连接 - 请前往 <a href="#" onclick="switchSettingsTab(\'supabase\')">CloudBase 连接</a> 检查 Env ID 和 Key</span>'
         }
       </div>
       <button class="settings-btn" onclick="window.Store.testStoreConnection()" style="margin-bottom:12px;">
@@ -495,9 +494,9 @@ window.Store = (function () {
       <div class="settings-note">
         <p><strong>使用说明</strong></p>
         <ol>
-          <li>先到 <a href="#" onclick="switchSettingsTab(\'supabase\')">Supabase 连接</a> 填入 URL 和 Anon Key 并保存</li>
-          <li>在 Supabase SQL Editor 中执行 <code>supabase/schema.sql</code> 中插件市场相关建表语句</li>
-          <li>在 Storage 页面创建 <code>plugin-store</code> bucket（勾选 Public）</li>
+          <li>先到 <a href="#" onclick="switchSettingsTab(\'supabase\')">CloudBase 连接</a> 检查 Env ID 和 Publishable Key</li>
+          <li>在 CloudBase SQL Editor 中执行 <code>cloudbase/schema.sql</code></li>
+          <li>执行 <code>cloudbase/schema.sql</code> 后会自动创建 <code>plugin-store</code> bucket 和访问策略</li>
           <li>设置 RLS Policy：SELECT 允许所有人，INSERT 仅认证用户</li>
           <li>回到本页测试连接，成功即可使用</li>
         </ol>
@@ -738,14 +737,15 @@ window.Store = (function () {
       <div class="fr-auth-form">
         <i data-lucide="store" class="lucide-icon fr-auth-icon"></i>
         <h3>登录账号</h3>
-        <label class="fr-auth-label">邮箱</label>
-        <input type="email" class="fr-auth-input" id="storeAuthEmail" placeholder="you@example.com" onkeydown="if(event.key==='Enter')window.Store.doLogin()">
+        <label class="fr-auth-label">用户名</label>
+        <input type="text" class="fr-auth-input" id="storeAuthEmail" placeholder="注册时设置的用户名" onkeydown="if(event.key==='Enter')window.Store.doLogin()">
         <label class="fr-auth-label">密码</label>
         <input type="password" class="fr-auth-input" id="storeAuthPassword" placeholder="密码" onkeydown="if(event.key==='Enter')window.Store.doLogin()">
         <div class="fr-auth-status" id="storeAuthStatus"></div>
         <button class="btn-add" onclick="window.Store.doLogin()" style="width:100%;justify-content:center;margin-top:6px;">
           <i data-lucide="log-in" class="lucide-icon" style="width:15px;height:15px;"></i> 登录
         </button>
+        <div class="hint" style="margin-top:10px;text-align:center;">还没有账号？请先到“好友”页面注册并验证邮箱。</div>
       </div>`;
   }
 
@@ -754,10 +754,6 @@ window.Store = (function () {
     _authMode = 'login';
     showCustomConfirm(`
       <div class="store-auth-modal">
-        <div class="store-auth-tabs">
-          <button class="store-auth-tab active" id="storeAuthTabLogin" onclick="window.Store.switchAuthTab('login')">登录账号</button>
-          <button class="store-auth-tab" id="storeAuthTabRegister" onclick="window.Store.switchAuthTab('register')">注册新账号</button>
-        </div>
         <div id="storeAuthBody">${_storeAuthForm('login')}</div>
       </div>
     `, { title: '插件市场', dontAskKey: '', hideActions: true });
@@ -812,7 +808,7 @@ window.Store = (function () {
     const password = (document.getElementById('storeAuthPassword') || {}).value || '';
     const status = document.getElementById('storeAuthStatus');
     const set = (msg, err) => { if (status) { status.textContent = msg; status.style.color = err ? 'var(--red)' : 'var(--green)'; } };
-    if (!email || !password) { set('请填写邮箱和密码', true); return; }
+    if (!email || !password) { set('请填写用户名和密码', true); return; }
     try {
       await storeSignIn(email, password);
       set('登录成功！');

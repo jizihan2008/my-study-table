@@ -45,11 +45,37 @@
         if (externalSignal.aborted) abortFromExternal();
         else externalSignal.addEventListener('abort', abortFromExternal, { once: true });
       }
-      const timer = setTimeout(() => controller.abort(new DOMException('请求超时', 'TimeoutError')), timeoutMs);
+      let timer = null;
+      const refreshTimeout = () => {
+        clearTimeout(timer);
+        timer = setTimeout(() => controller.abort(new DOMException('请求超时', 'TimeoutError')), timeoutMs);
+      };
+      refreshTimeout();
+      let handedOff = false;
+      let cleanedUp = false;
+      const cleanup = () => {
+        if (cleanedUp) return;
+        cleanedUp = true;
+        clearTimeout(timer);
+        release();
+        if (externalSignal) externalSignal.removeEventListener('abort', abortFromExternal);
+      };
       try {
         const response = await fetch(url, { ...options, signal: controller.signal });
         const retryable = [408, 409, 425, 429].includes(response.status) || response.status >= 500;
-        if (!retryable || attempt === retries) return response;
+        if (!retryable || attempt === retries) {
+          // fetch() resolves as soon as response headers arrive. Streaming callers
+          // must keep the controller registered until the response body is consumed,
+          // otherwise the Stop button can no longer abort an active SSE stream.
+          if (policy.keepAlive) {
+            handedOff = true;
+            Object.defineProperty(response, '_aiRequestControl', {
+              configurable: true,
+              value: Object.freeze({ controller, release: cleanup, touch: refreshTimeout })
+            });
+          }
+          return response;
+        }
         if (response.body && typeof response.body.cancel === 'function') await response.body.cancel().catch(() => {});
         const retryAfter = Number(response.headers.get('retry-after'));
         await delay(Number.isFinite(retryAfter) ? retryAfter * 1000 : Math.min(8000, 500 * Math.pow(2, attempt)));
@@ -63,9 +89,7 @@
         }
         await delay(Math.min(8000, 500 * Math.pow(2, attempt)));
       } finally {
-        clearTimeout(timer);
-        release();
-        if (externalSignal) externalSignal.removeEventListener('abort', abortFromExternal);
+        if (!handedOff) cleanup();
       }
     }
     throw lastError || new Error('AI 请求失败');

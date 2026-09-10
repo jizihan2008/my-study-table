@@ -15,6 +15,7 @@ window.Inbox = (function () {
   const WATCH_KEY = 'study_inbox_watch_dirs';
   const LAST_SCAN_KEY = 'study_inbox_watch_last';
   const QQ_META_BACKUP_TIME_KEY = 'study_qq_meta_backup_time';
+  const QCE_TOKEN_KEY = 'study_qce_access_token';
   const MAX_MESSAGES = 200;
 
   const CHANNEL_META = {
@@ -56,6 +57,10 @@ window.Inbox = (function () {
   let _qqAutoPendingDir = '';
   let _qqAutoTimer = null;
   let _qqAutoRetryCount = 0;
+  let _qceStatus = { enabled: false, mode: 'native', endpoint: 'http://127.0.0.1:40653', outputRoot: '', scheduleIds: [], intervalHours: 24 };
+  let _qceSchedules = [];
+  let _qceImporting = false;
+  let _qceImportQueue = [];
 
   // ── 存储 ──
   function loadJSON(key, fallback) {
@@ -145,6 +150,7 @@ window.Inbox = (function () {
           <button class="inbox-btn" onclick="document.getElementById('inboxFileInput').click()"><i data-lucide="folder-plus" style="width:14px;height:14px;vertical-align:middle;"></i> 导入文件</button>
           <button class="inbox-btn" onclick="Inbox.openWatchModal()"><i data-lucide="folder-search" style="width:14px;height:14px;vertical-align:middle;"></i> 目录监控</button>
           <button class="inbox-btn" onclick="Inbox.openQQAutoSyncModal()" title="低风险模式：仅监听导出目录，不操作 QQ"><i data-lucide="refresh-cw" style="width:14px;height:14px;vertical-align:middle;"></i> QQ 自动同步</button>
+          <button class="inbox-btn" onclick="Inbox.openQCEIntegrationModal()" title="整合 QQChatExporter 原生计划任务或低频触发"><i data-lucide="plug-zap" style="width:14px;height:14px;vertical-align:middle;"></i> 整合 QCE</button>
           <button class="inbox-btn" onclick="Inbox.importQQChatJsonl()" title="导入 qq-chat-exporter 流式导出的 JSONL 文件夹（manifest.json + chunks/）"><i data-lucide="folder-down" style="width:14px;height:14px;vertical-align:middle;"></i> 导入 JSONL 文件夹</button>
           <button class="inbox-btn inbox-btn-primary" style="background:linear-gradient(135deg,#f59e0b,#ef8a2c);border-color:transparent;" onclick="document.getElementById('inboxQQChatInput').click()" title="导入 qq-chat-exporter 导出的 JSON 文件"><i data-lucide="message-square" style="width:14px;height:14px;vertical-align:middle;"></i> 导入 QQ 聊天</button>
           <button class="inbox-btn" onclick="Inbox.exportQQBackup()" title="导出全部 QQ 会话、消息和日报"><i data-lucide="archive" style="width:14px;height:14px;vertical-align:middle;"></i> 备份 QQ</button>
@@ -1217,6 +1223,223 @@ window.Inbox = (function () {
     }
   }
 
+  function qceField(id) { return document.getElementById(id); }
+  function qceStatusTime(value) {
+    if (!value) return '—';
+    const date = new Date(value);
+    return isNaN(date.getTime()) ? '—' : date.toLocaleString('zh-CN');
+  }
+
+  async function refreshQCEStatus() {
+    if (!window.electronAPI || typeof window.electronAPI.qqchatQCEStatus !== 'function') return _qceStatus;
+    try {
+      const result = await window.electronAPI.qqchatQCEStatus();
+      if (result && result.ok && result.status) _qceStatus = result.status;
+    } catch (e) {}
+    return _qceStatus;
+  }
+
+  async function openQCEIntegrationModal() {
+    if (!window.electronAPI || typeof window.electronAPI.qqchatQCEConfigure !== 'function') {
+      alert('QQChatExporter 整合仅在桌面版中可用');
+      return;
+    }
+    const status = await refreshQCEStatus();
+    const selectedIds = Array.isArray(status.scheduleIds) ? status.scheduleIds : [];
+    showInboxModal({
+      title: '整合 QQChatExporter',
+      width: '620px',
+      body: `<div style="font-size:13px;line-height:1.65;color:var(--text);">
+        <div style="padding:10px 12px;border-radius:8px;background:rgba(16,185,129,.09);margin-bottom:12px;">
+          推荐“QCE 原生计划”：QCE 自己按计划导出，本应用只监听本地 JSON 文件，平时不访问 QCE API。可选“低频触发”最短 6 小时调用一次官方计划任务接口，不轮询任务状态。
+        </div>
+        <label style="display:block;margin-bottom:8px;">本机 QCE 地址
+          <input id="qceEndpoint" class="form-input" style="width:100%;margin-top:4px;" value="${escAttr(status.endpoint || 'http://127.0.0.1:40653')}">
+        </label>
+        <label style="display:block;margin-bottom:8px;">Access Token（仅测试、读取任务或低频触发需要）
+          <input id="qceToken" class="form-input" type="password" autocomplete="off" style="width:100%;margin-top:4px;" placeholder="${typeof SecretVault !== 'undefined' && SecretVault.get(QCE_TOKEN_KEY, '') ? '已安全保存；留空表示不更改' : '填写 ~/.qq-chat-exporter/security.json 中的 accessToken'}">
+        </label>
+        <label style="display:block;margin-bottom:8px;">JSON 导出目录
+          <div style="display:flex;gap:7px;margin-top:4px;"><input id="qceOutputRoot" class="form-input" style="flex:1;min-width:0;" value="${escAttr(status.outputRoot || '')}" readonly><button class="inbox-btn" onclick="Inbox.pickQCEOutputRoot()">选择</button></div>
+        </label>
+        <label style="display:block;margin-bottom:8px;">运行方式
+          <select id="qceMode" class="form-input" style="width:100%;margin-top:4px;" onchange="Inbox.renderQCETriggerOptions()">
+            <option value="native" ${status.mode !== 'trigger' ? 'selected' : ''}>QCE 原生计划（推荐，零轮询）</option>
+            <option value="trigger" ${status.mode === 'trigger' ? 'selected' : ''}>由本应用低频触发</option>
+          </select>
+        </label>
+        <div id="qceTriggerOptions" style="display:${status.mode === 'trigger' ? 'block' : 'none'};padding:10px;border:1px solid var(--border);border-radius:8px;margin-bottom:10px;">
+          <label style="display:block;margin-bottom:8px;">触发间隔
+            <select id="qceInterval" class="form-input" style="width:100%;margin-top:4px;">
+              ${[6,12,24,48,168].map(function (hours) { return '<option value="' + hours + '" ' + (Number(status.intervalHours) === hours ? 'selected' : '') + '>' + (hours === 168 ? '每周' : '每 ' + hours + ' 小时') + '</option>'; }).join('')}
+            </select>
+          </label>
+          <div style="display:flex;gap:7px;margin-bottom:8px;"><button class="inbox-btn" onclick="Inbox.loadQCESchedules()">读取 QCE 计划任务</button><span id="qceApiHint" style="font-size:12px;color:var(--text-muted);align-self:center;"></span></div>
+          <div id="qceScheduleList" style="max-height:170px;overflow:auto;font-size:12px;">${selectedIds.length ? '已保存 ' + selectedIds.length + ' 个任务；点击上方按钮刷新详情。' : '尚未选择任务。仅 JSON 格式任务可自动导入。'}</div>
+        </div>
+        <div style="font-size:12px;color:var(--text-muted);margin-bottom:10px;">状态：${status.enabled ? '已启用' : '未启用'} · 最近触发 ${esc(qceStatusTime(status.lastRunAt))} · 下次触发 ${esc(qceStatusTime(status.nextRunAt))}${status.lastError ? '<br><span style="color:#ef4444;">' + esc(status.lastError) + '</span>' : ''}</div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button class="inbox-btn" onclick="Inbox.testQCEConnection()">测试连接</button>
+          <button class="inbox-btn inbox-btn-primary" onclick="Inbox.saveQCEIntegration()">保存并启用</button>
+          ${status.enabled && status.mode === 'trigger' ? '<button class="inbox-btn" onclick="Inbox.runQCENow()">立即触发一次</button>' : ''}
+          ${status.enabled ? '<button class="inbox-btn" onclick="Inbox.disableQCEIntegration()">停用</button>' : ''}
+        </div>
+      </div>`
+    });
+  }
+
+  function renderQCETriggerOptions() {
+    const node = qceField('qceTriggerOptions');
+    if (node) node.style.display = (qceField('qceMode') || {}).value === 'trigger' ? 'block' : 'none';
+  }
+
+  async function saveQCETokenFromForm(required) {
+    const node = qceField('qceToken');
+    const value = String((node && node.value) || '').trim();
+    const existing = typeof SecretVault !== 'undefined' ? SecretVault.get(QCE_TOKEN_KEY, '') : '';
+    if (!value) {
+      if (required && !existing) throw new Error('请填写 QCE Access Token');
+      return;
+    }
+    if (typeof SecretVault === 'undefined' || !SecretVault.isSecure || !SecretVault.isSecure()) {
+      throw new Error('当前系统安全凭据存储不可用，已拒绝保存 QCE Token');
+    }
+    await SecretVault.set(QCE_TOKEN_KEY, value);
+  }
+
+  async function pickQCEOutputRoot() {
+    const result = await window.electronAPI.qqchatQCEPickRoot();
+    if (!result || !result.ok) {
+      if (result && !result.canceled) alert('目录选择失败：' + (result.reason || '未知错误'));
+      return;
+    }
+    const node = qceField('qceOutputRoot');
+    if (node) node.value = result.dir;
+  }
+
+  async function testQCEConnection() {
+    const hint = qceField('qceApiHint');
+    try {
+      await saveQCETokenFromForm(true);
+      if (hint) hint.textContent = '正在连接…';
+      const result = await window.electronAPI.qqchatQCETest((qceField('qceEndpoint') || {}).value || '');
+      if (!result || !result.ok) throw new Error((result && result.reason) || '连接失败');
+      if (hint) hint.textContent = '连接成功';
+    } catch (error) {
+      if (hint) hint.textContent = '';
+      alert('QCE 连接失败：' + ((error && error.message) || error));
+    }
+  }
+
+  async function loadQCESchedules() {
+    const hint = qceField('qceApiHint');
+    try {
+      await saveQCETokenFromForm(true);
+      if (hint) hint.textContent = '正在读取一次…';
+      const result = await window.electronAPI.qqchatQCEListSchedules((qceField('qceEndpoint') || {}).value || '');
+      if (!result || !result.ok) throw new Error((result && result.reason) || '读取失败');
+      _qceSchedules = Array.isArray(result.schedules) ? result.schedules : [];
+      const selected = new Set((_qceStatus.scheduleIds || []).map(String));
+      const list = qceField('qceScheduleList');
+      if (list) list.innerHTML = _qceSchedules.length ? _qceSchedules.map(function (schedule) {
+        const id = String(schedule.id || schedule.taskId || '');
+        const format = String(schedule.format || '').toUpperCase();
+        const compatible = format === 'JSON';
+        return `<label style="display:flex;gap:7px;align-items:flex-start;padding:6px 4px;border-bottom:1px solid var(--border);opacity:${compatible ? '1' : '.55'};">
+          <input type="checkbox" data-qce-schedule-id="${escAttr(id)}" ${selected.has(id) ? 'checked' : ''} ${compatible ? '' : 'disabled'}>
+          <span><b>${esc(schedule.name || id || '未命名任务')}</b> · ${esc(format || '未知格式')}${schedule.enabled === false ? ' · 已停用' : ''}${compatible ? '' : '<br>自动导入仅支持 JSON'}</span>
+        </label>`;
+      }).join('') : 'QCE 中尚无定时导出任务。请先在 QCE 页面创建 JSON 格式任务。';
+      if (hint) hint.textContent = '本次读取完成';
+    } catch (error) {
+      if (hint) hint.textContent = '';
+      alert('读取 QCE 任务失败：' + ((error && error.message) || error));
+    }
+  }
+
+  async function saveQCEIntegration() {
+    try {
+      const mode = (qceField('qceMode') || {}).value || 'native';
+      await saveQCETokenFromForm(mode === 'trigger');
+      const checked = Array.prototype.slice.call(document.querySelectorAll('[data-qce-schedule-id]:checked')).map(function (node) { return node.dataset.qceScheduleId; });
+      const scheduleIds = checked.length ? checked : (_qceStatus.scheduleIds || []);
+      const config = {
+        endpoint: (qceField('qceEndpoint') || {}).value || '',
+        outputRoot: (qceField('qceOutputRoot') || {}).value || '',
+        mode,
+        intervalHours: Number((qceField('qceInterval') || {}).value) || 24,
+        scheduleIds
+      };
+      const result = await window.electronAPI.qqchatQCEConfigure(config);
+      if (!result || !result.ok) throw new Error((result && result.reason) || '保存失败');
+      _qceStatus = result.status || _qceStatus;
+      closeInboxModal();
+      alert('QCE 整合已启用。' + (mode === 'native' ? '应用只监听本地导出目录，不会定期访问 QCE API。' : '最短访问间隔为 6 小时，且不会轮询任务状态。'));
+    } catch (error) {
+      alert('QCE 整合保存失败：' + ((error && error.message) || error));
+    }
+  }
+
+  async function disableQCEIntegration() {
+    const result = await window.electronAPI.qqchatQCEDisable();
+    if (!result || !result.ok) { alert('停用失败：' + ((result && result.reason) || '未知错误')); return; }
+    _qceStatus = result.status || _qceStatus;
+    openQCEIntegrationModal();
+  }
+
+  async function runQCENow() {
+    const result = await window.electronAPI.qqchatQCERunNow();
+    if (!result || !result.ok) { alert('QCE 触发失败：' + ((result && result.reason) || '未知错误')); return; }
+    if (result.status) _qceStatus = result.status;
+    closeInboxModal();
+    alert('已触发所选 QCE JSON 计划任务；不会轮询任务，导出文件完成后将由目录监听自动导入。');
+  }
+
+  function enqueueQCEExports(files) {
+    for (const file of (Array.isArray(files) ? files : [])) {
+      if (!file || !file.path || _qceImportQueue.some(function (item) { return item.path === file.path; })) continue;
+      _qceImportQueue.push(file);
+    }
+    processQCEImportQueue();
+  }
+
+  async function processQCEImportQueue() {
+    if (_qceImporting || !_qceImportQueue.length || !window.QQChats || typeof window.QQChats.importJsonData !== 'function') return;
+    _qceImporting = true;
+    let totalAdded = 0;
+    const hint = document.getElementById('inboxQQHint');
+    try {
+      while (_qceImportQueue.length) {
+        const file = _qceImportQueue.shift();
+        try {
+          if (hint) hint.textContent = 'QCE 自动导入：' + (file.name || 'JSON') + '…';
+          const loaded = await window.electronAPI.qqchatQCEReadExport(file.path);
+          if (!loaded || !loaded.ok || !loaded.result) throw new Error((loaded && loaded.reason) || '读取 QCE 导出失败');
+          const result = await window.QQChats.importJsonData(loaded.result.json, { merge: true });
+          totalAdded += Number(result && result.added) || 0;
+          await window.electronAPI.qqchatQCEAckExport({ filePath: file.path, ok: true });
+        } catch (error) {
+          const reason = String((error && error.message) || error || 'QCE 自动导入失败');
+          const permanentlyInvalid = /不是有效的 QCE JSON|缺少 messages|缺少 chatInfo/.test(reason);
+          await window.electronAPI.qqchatQCEAckExport({ filePath: file.path, ok: permanentlyInvalid }).catch(function () {});
+          if (hint) hint.textContent = 'QCE 自动导入暂未完成：' + reason;
+        }
+      }
+      if (totalAdded > 0) {
+        await autoBackupQQMetadata('qce-integration');
+        _chatListOpen = true;
+        if (!_chatView) renderInboxArea();
+      }
+      if (hint && totalAdded > 0) {
+        hint.textContent = 'QCE 自动导入完成：新增 ' + totalAdded + ' 条';
+        setTimeout(function () { if (hint && /^QCE 自动导入完成/.test(hint.textContent)) hint.textContent = ''; }, 4000);
+      }
+    } finally {
+      _qceImporting = false;
+      if (_qceImportQueue.length) setTimeout(processQCEImportQueue, 1000);
+    }
+  }
+
   // PWA/浏览器：多选文件（manifest.json + 所有 chunk .jsonl）
   async function importQQChatJsonlFiles(input) {
     const files = input && input.files ? Array.prototype.slice.call(input.files) : [];
@@ -2156,6 +2379,12 @@ window.Inbox = (function () {
         });
       }, 1800);
     }
+    if (window.electronAPI && typeof window.electronAPI.onQQChatQCEExports === 'function') {
+      window.electronAPI.onQQChatQCEExports(function (payload) {
+        enqueueQCEExports(payload && payload.files);
+      });
+      refreshQCEStatus();
+    }
     // 进入收件箱时自动扫描一次（防抖，避免频繁触发）
     if (watchDirs.length > 0) {
       const last = Number(localStorage.getItem(LAST_SCAN_KEY)) || 0;
@@ -2199,6 +2428,14 @@ window.Inbox = (function () {
     configureQQAutoSync,
     disableQQAutoSync,
     syncQQAutoNow,
+    openQCEIntegrationModal,
+    renderQCETriggerOptions,
+    pickQCEOutputRoot,
+    testQCEConnection,
+    loadQCESchedules,
+    saveQCEIntegration,
+    disableQCEIntegration,
+    runQCENow,
     exportQQBackup,
     restoreQQBackup,
     pickImportModeResolve,

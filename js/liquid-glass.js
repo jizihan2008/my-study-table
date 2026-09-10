@@ -1,154 +1,110 @@
-// ═══════════ Apple Liquid Glass — SVG Displacement Refraction ═══════════
-// Uses feDisplacementMap as backdrop-filter to genuinely bend background
-// pixels at glass panel edges, simulating lens refraction.
-// 折射仅 Chromium 支持（backdrop-filter: url(#filter)）；WebKit（iOS Safari 等）与
-// Firefox 不支持该写法且会导致整条声明失效 → 自动回退为纯 blur 磨砂。
-
-(function() {
+/* Liquid surface renderer. Blur is the universal base; refraction is optional.
+   Only top-level panels receive expensive filters. No permanent animation loop. */
+(function () {
+  'use strict';
+  const root = document.documentElement;
   const FILTER_ID = 'liquid-glass-filter';
-  const SVG_ID = 'liquid-glass-svg';
-  const MAP_SIZE = 256;
-  let cachedMapUrl = null;
-  let cachedEdgeRatio = -1;
-
-  // ── Chromium 内核检测 ──
-  // backdrop-filter: url(#filter) 仅 Chromium 支持（SVG 引用滤镜作 backdrop-filter 参数）。
-  // iOS Safari / iOS 上的 Chrome/Edge 均基于 WebKit，Firefox 用 Gecko：遇到 url() 时整条
-  // 声明无效 → 连 blur 磨砂也一起失效（style.css 中带 url() 的规则覆盖了纯 blur 回退规则）。
-  // 非 Chromium 时：跳过 SVG 折射注入，改用 !important 纯 blur 覆盖规则恢复磨砂。
-  const isChromium = (function () {
-    const ua = navigator.userAgent || '';
-    // 桌面 Chrome/Edge/Electron 含 "Chrome/<版本>"；iOS 的 Chrome/Edge UA 为 CriOS/EdgiOS
-    //（无 "Chrome/<版本>" 特征，实为 WebKit），不会误判。
-    return /Chrome\/[\d.]+/.test(ua) && !/CriOS|EdgiOS|FxiOS/i.test(ua);
-  })();
-
-  // 注入非 Chromium 纯 blur 回退（!important 覆盖 style.css 中带 url(#liquid-glass-filter) 的规则）
-  function injectBlurFallback() {
-    if (document.getElementById('lg-blur-fallback')) return;
-    const style = document.createElement('style');
-    style.id = 'lg-blur-fallback';
-    style.textContent =
-      '[data-glass="true"] .sidebar,' +
-      '[data-glass="true"] .card,' +
-      '[data-glass="true"] .modal > div {' +
-      '  -webkit-backdrop-filter: blur(var(--glass-blur, 16px)) saturate(1.4) !important;' +
-      '  backdrop-filter: blur(var(--glass-blur, 16px)) saturate(1.4) !important;' +
-      '}';
-    document.head.appendChild(style);
-  }
-
-  // ── Displacement Map Generation ──
-  // R = X displacement, G = Y displacement. 128 = neutral.
-  // At edges: sampling shifts outward → content appears pulled toward center
-  // (convex lens bulge). Center: no displacement.
-  function generateDisplacementMap(edgeRatio) {
-    if (cachedMapUrl && Math.abs(edgeRatio - cachedEdgeRatio) < 0.001) {
-      return cachedMapUrl;
+  const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
+  const compact = window.matchMedia('(max-width: 800px)');
+  const coarse = window.matchMedia('(pointer: coarse)');
+  const chromium = /Chrome\/[\d.]+/.test(navigator.userAgent) && !/CriOS|EdgiOS|FxiOS/.test(navigator.userAgent);
+  const blurSupported = typeof CSS !== 'undefined' && (CSS.supports('backdrop-filter','blur(1px)') || CSS.supports('-webkit-backdrop-filter','blur(1px)'));
+  const urlSupported = chromium && typeof CSS !== 'undefined' && CSS.supports('backdrop-filter','url("#' + FILTER_ID + '")');
+  let config = { material:'solid', glassQuality:'auto', glassBlur:18, glassCurve:35, glassDeflect:25, glassMotion:true };
+  let frame = 0, pointerFrame = 0, mapKey = '', mapUrl = '', lastSurface = null, lastPointer = null;
+  const surfaces = '.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .appearance-preview-card';
+  function generateMap(edge) {
+    const key = edge.toFixed(3);
+    if (mapKey === key && mapUrl) return mapUrl;
+    const size = 128, canvas = document.createElement('canvas');
+    canvas.width = canvas.height = size;
+    const context = canvas.getContext('2d');
+    if (!context) return '';
+    const data = context.createImageData(size,size);
+    function bend(t) {
+      if (edge <= 0) return 0;
+      if (t < edge) return -Math.pow(1-t/edge,3);
+      if (t > 1-edge) return Math.pow((t-1+edge)/edge,3);
+      return 0;
     }
-    const size = MAP_SIZE;
-    const canvas = document.createElement('canvas');
-    canvas.width = size;
-    canvas.height = size;
-    const ctx = canvas.getContext('2d');
-    const imageData = ctx.createImageData(size, size);
-    const d = imageData.data;
-    const ew = edgeRatio;
-
-    for (let y = 0; y < size; y++) {
-      for (let x = 0; x < size; x++) {
-        const fx = x / (size - 1);
-        const fy = y / (size - 1);
-
-        let dx = 0;
-        if (fx < ew) {
-          dx = -edgeCurve(1 - fx / ew);
-        } else if (fx > 1 - ew) {
-          dx = edgeCurve((fx - (1 - ew)) / ew);
-        }
-
-        let dy = 0;
-        if (fy < ew) {
-          dy = -edgeCurve(1 - fy / ew);
-        } else if (fy > 1 - ew) {
-          dy = edgeCurve((fy - (1 - ew)) / ew);
-        }
-
-        const i = (y * size + x) * 4;
-        d[i]     = clamp128(dx);
-        d[i + 1] = clamp128(dy);
-        d[i + 2] = 128;
-        d[i + 3] = 255;
-      }
+    for (let y=0;y<size;y++) for (let x=0;x<size;x++) {
+      const i=(y*size+x)*4;
+      data.data[i]=Math.round(128+bend(x/(size-1))*120);
+      data.data[i+1]=Math.round(128+bend(y/(size-1))*120);
+      data.data[i+2]=128; data.data[i+3]=255;
     }
-
-    ctx.putImageData(imageData, 0, 0);
-    cachedMapUrl = canvas.toDataURL('image/png');
-    cachedEdgeRatio = edgeRatio;
-    return cachedMapUrl;
+    context.putImageData(data,0,0);
+    mapKey=key; mapUrl=canvas.toDataURL();
+    return mapUrl;
   }
-
-  // Cubic curve: displacement concentrated near the very edge
-  // t=0 (zone boundary) → 0, t=1 (panel edge) → 1
-  // Most of the zone has minimal displacement; strong bend only at edge
-  function edgeCurve(t) {
-    t = Math.max(0, Math.min(1, t));
-    return t * t * t;
-  }
-
-  function clamp128(v) {
-    return Math.max(0, Math.min(255, Math.round(128 + v * 127)));
-  }
-
-  // ── SVG Filter: create once, update in place ──
   function ensureFilter() {
-    let svg = document.getElementById(SVG_ID);
+    let svg=document.getElementById('liquid-glass-svg');
     if (svg) return svg;
-
-    svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-    svg.id = SVG_ID;
-    svg.setAttribute('style', 'position:absolute;width:0;height:0;overflow:hidden;pointer-events:none');
-    svg.setAttribute('aria-hidden', 'true');
-
-    const mapUrl = generateDisplacementMap(0.18);
-    svg.innerHTML =
-      '<defs>' +
-        '<filter id="' + FILTER_ID + '" x="-5%" y="-5%" width="110%" height="110%" color-interpolation-filters="sRGB">' +
-          '<feImage id="lg-feimage" href="' + mapUrl + '" x="0" y="0" width="100%" height="100%" preserveAspectRatio="none" result="dmap"/>' +
-          '<feDisplacementMap id="lg-fedm" in="SourceGraphic" in2="dmap" scale="40" xChannelSelector="R" yChannelSelector="G"/>' +
-        '</filter>' +
-      '</defs>';
-
-    document.body.appendChild(svg);
-    return svg;
+    svg=document.createElementNS('http://www.w3.org/2000/svg','svg');
+    svg.id='liquid-glass-svg';svg.setAttribute('aria-hidden','true');
+    svg.style.cssText='position:fixed;width:0;height:0;pointer-events:none;overflow:hidden';
+    svg.innerHTML='<defs><filter id="'+FILTER_ID+'" x="0%" y="0%" width="100%" height="100%" color-interpolation-filters="sRGB"><feImage id="lg-feimage" width="100%" height="100%" preserveAspectRatio="none" result="map"/><feDisplacementMap id="lg-fedm" in="SourceGraphic" in2="map" xChannelSelector="R" yChannelSelector="G" scale="0"/></filter></defs>';
+    svg.querySelector('#lg-feimage').setAttribute('href',generateMap(config.glassDeflect/100*.22));
+    document.body.appendChild(svg);return svg;
   }
-
-  // ── Public API ──
-  // scale: max pixel displacement at edges (0 = none, ~30 = strong)
-  // edgeRatio: edge zone width as fraction (0.1~0.5, default 0.18)
-  window.updateLiquidGlass = function(scale, edgeRatio) {
-    if (!isChromium) return;   // 非 Chromium 不支持 backdrop-filter: url()，忽略折射控制（磨砂由 blur 回退承担）
-    ensureFilter();
-    if (scale !== undefined) {
-      const fedm = document.getElementById('lg-fedm');
-      if (fedm) fedm.setAttribute('scale', String(scale));
+  function clearPointer() {
+    if (lastSurface) { lastSurface.style.removeProperty('--glass-pointer-active');lastSurface.style.removeProperty('--glass-pointer-x');lastSurface.style.removeProperty('--glass-pointer-y'); }
+    lastSurface=null;lastPointer=null;
+    if(pointerFrame)cancelAnimationFrame(pointerFrame);
+    pointerFrame=0;
+  }
+  function status() {
+    const enabled=config.material!=='solid';
+    const lite=config.glassQuality==='low' || (config.glassQuality==='auto' && (compact.matches || coarse.matches));
+    const refract=enabled && config.material==='liquid' && !lite && !reduced.matches && blurSupported && urlSupported && config.glassCurve>0 && config.glassDeflect>0;
+    return { enabled, lite, refract, blurSupported, motion: refract && config.glassMotion && !document.hidden,
+      renderer: !enabled?'solid':!blurSupported?'fallback':refract?'liquid':'frosted' };
+  }
+  function render() {
+    frame=0;
+    const state=status();
+    root.dataset.glassRenderer=state.renderer;
+    root.dataset.glassMotion=state.motion?'true':'false';
+    if(!state.motion)clearPointer();
+    root.style.setProperty('--glass-render-blur',Math.min(config.glassBlur,state.lite?14:40)+'px');
+    if (state.refract) {
+      ensureFilter();
+      document.getElementById('lg-feimage').setAttribute('href',generateMap(config.glassDeflect/100*.22));
+      document.getElementById('lg-fedm').setAttribute('scale',String(Math.round(config.glassCurve*.22)));
+    } else {
+      document.getElementById('liquid-glass-svg')?.remove();
+      clearPointer();
     }
-    // Only regenerate map if edgeRatio changed
-    if (edgeRatio !== undefined && Math.abs(edgeRatio - cachedEdgeRatio) > 0.001) {
-      const mapUrl = generateDisplacementMap(edgeRatio);
-      const feimg = document.getElementById('lg-feimage');
-      if (feimg) feimg.setAttribute('href', mapUrl);
-    }
+    window.dispatchEvent(new CustomEvent('liquidglasschange',{detail:state}));
+  }
+  function schedule() { if (!frame) frame=requestAnimationFrame(render); }
+  function configure(next) { config={...config,...next};schedule(); }
+  window.LiquidGlass={ configure, status, destroy() {
+    config.material='solid';if(frame)cancelAnimationFrame(frame);frame=0;render();mapUrl='';mapKey='';
+  }};
+  // Legacy extension hooks remain available.
+  window.updateLiquidGlass=function(scale,edgeRatio) {
+    if(scale!==undefined)config.glassCurve=Math.max(0,Math.min(100,Number(scale)/.22));
+    if(edgeRatio!==undefined)config.glassDeflect=Math.max(0,Math.min(100,Number(edgeRatio)/.22*100));
+    schedule();
   };
-
-  // Initialize
-  function init() {
-    if (!isChromium) { injectBlurFallback(); return; }
-    ensureFilter();
-  }
-  if (document.readyState === 'loading') {
-    document.addEventListener('DOMContentLoaded', init);
-  } else {
-    init();
-  }
+  document.addEventListener('pointermove',event=>{
+    if(!status().motion || event.pointerType==='touch')return;
+    const surface=event.target.closest(surfaces);
+    if(!surface || surface.matches('#section-today > .card')){clearPointer();return;}
+    if(lastSurface!==surface){clearPointer();lastSurface=surface;}
+    lastPointer={x:event.clientX,y:event.clientY};
+    if(pointerFrame)return;
+    pointerFrame=requestAnimationFrame(()=>{
+      pointerFrame=0;
+      if(!lastSurface?.isConnected || !lastPointer)return;
+      const box=lastSurface.getBoundingClientRect();
+      lastSurface.style.setProperty('--glass-pointer-active','1');
+      lastSurface.style.setProperty('--glass-pointer-x',((lastPointer.x-box.left)/Math.max(1,box.width)*100).toFixed(1)+'%');
+      lastSurface.style.setProperty('--glass-pointer-y',((lastPointer.y-box.top)/Math.max(1,box.height)*100).toFixed(1)+'%');
+    });
+  },{passive:true});
+  document.addEventListener('pointerleave',clearPointer);
+  document.addEventListener('visibilitychange',()=>{if(document.hidden)clearPointer();schedule();});
+  for(const query of [reduced,compact,coarse])query.addEventListener('change',schedule);
 })();

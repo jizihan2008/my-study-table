@@ -817,6 +817,8 @@ function renderGoals() {
 }
 
 function renderToday() {
+  const welcomeDate = document.getElementById('todayWelcomeDate');
+  if (welcomeDate) welcomeDate.textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
   closeTodoPicker();
   renderCheckinCalendar();
   renderFocusList();

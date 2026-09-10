@@ -5,6 +5,7 @@
   const KEYS = Object.freeze([
     'study_ai_api_key', 'study_api_keys', 'study_web_search_key',
     'study_mail_accounts', 'study_mail_config', 'study_inbox_config',
+    'study_qce_access_token',
     'study_codegen_api_key', 'study_codebuddy_api_key'
   ]);
   const allowed = new Set(KEYS);

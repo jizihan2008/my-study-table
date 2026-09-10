@@ -283,19 +283,29 @@ function initSidebarDismiss() {
 }
 
 // ═══════════ Dark Mode ═══════════
-function getTheme() { return localStorage.getItem('study_theme') || 'light'; }
+function getTheme() {
+  const saved=localStorage.getItem('study_theme');
+  return ['light','dark','system'].includes(saved)?saved:'light';
+}
+function getResolvedTheme(theme) {
+  return theme==='system'?(window.matchMedia('(prefers-color-scheme: dark)').matches?'dark':'light'):theme==='dark'?'dark':'light';
+}
 function applyTheme(theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  const icon = document.getElementById('themeIcon');
-  icon.setAttribute('data-lucide', theme === 'dark' ? 'sun' : 'moon');
-  if (typeof lucide !== 'undefined') lucide.createIcons();
-  localStorage.setItem('study_theme', theme);
-  // Apply custom theme CSS overrides (if any)
-  if (typeof applyCustomTheme === 'function') applyCustomTheme();
+  theme=['light','dark','system'].includes(theme)?theme:'light';
+  const resolved=getResolvedTheme(theme);
+  document.documentElement.setAttribute('data-theme',resolved);
+  const icon=document.getElementById('themeIcon');
+  if(icon)icon.setAttribute('data-lucide',resolved==='dark'?'sun':'moon');
+  const toggle=document.getElementById('themeToggle');
+  if(toggle){toggle.title=resolved==='dark'?'切换为浅色':'切换为深色';toggle.setAttribute('aria-label',toggle.title);}
+  if(typeof lucide!=='undefined')lucide.createIcons();
+  localStorage.setItem('study_theme',theme);
+  if(typeof applyCustomTheme==='function')applyCustomTheme();
 }
-function toggleTheme() {
-  applyTheme(getTheme() === 'dark' ? 'light' : 'dark');
-}
+function toggleTheme(){applyTheme(getResolvedTheme(getTheme())==='dark'?'light':'dark');}
+window.matchMedia('(prefers-color-scheme: dark)').addEventListener('change',()=>{
+  if(getTheme()==='system')applyTheme('system');
+});
 
 // ── Apply theme on init ──
 document.addEventListener('DOMContentLoaded', () => {
@@ -323,6 +333,11 @@ function switchTab(tab) {
   const sectionEl = document.getElementById('section-' + tab);
   if (!sectionEl) return;
   sectionEl.classList.add('active');
+  updateWorkspaceHeading(tab);
+  document.querySelectorAll('.sidebar-nav-item').forEach(button => {
+    if (button === navBtn) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
+  });
   // 动态扩展面板：触发其自定义 render
   if (typeof window.ExtManager !== 'undefined' && window.ExtManager.switchToExtSection) {
     window.ExtManager.switchToExtSection(tab);
@@ -345,6 +360,7 @@ function switchTab(tab) {
   } else {
     // 降 IO：离开好友页停止心跳（避免后台每分钟 auth.getUser()+profiles.update 空耗磁盘 IO）
     if (typeof stopFriendsHeartbeat === 'function') stopFriendsHeartbeat();
+    if (typeof friendsStopFallbackPolling === 'function') friendsStopFallbackPolling();
   }
   if (tab === 'trash') { if (typeof renderTrash === 'function') renderTrash(); }
   if (tab === 'archive') { if (typeof renderArchive === 'function') renderArchive(); }
@@ -447,7 +463,6 @@ function renderMobileTabbar(activeTab) {
 }
 
 function updateMobileTabbar(tab) {
-  if (typeof Env === 'undefined' || !Env.isMobile) return;
   const bar = document.getElementById('mobileTabbar');
   if (!bar) return;
   const ids = getMobileBottomTabs();
@@ -456,6 +471,8 @@ function updateMobileTabbar(tab) {
     const key = t.dataset.tab;
     const isActive = (key === tab) || (key === 'more' && ids.indexOf(tab) === -1);
     t.classList.toggle('active', !!isActive);
+    if (isActive) t.setAttribute('aria-current', 'page');
+    else t.removeAttribute('aria-current');
   });
 }
 
@@ -506,6 +523,31 @@ function closeMobileMore() {
 }
 
 // ═══════════ Navigation Management ═══════════
+function updateWorkspaceHeading(tab) {
+  const descriptions = {
+    today: ['今天', '把计划变成行动，让成长清晰可见。'],
+    todo: ['待办事项', '理清每一个步骤，专注眼前最重要的事。'],
+    taskline: ['任务线', '连接目标与行动，走好自己的学习路线。'],
+    notes: ['我的笔记', '记录、思考，让知识慢慢成为自己的。'],
+    books: ['我的书架', '翻开一本书，打开新的可能。'],
+    keywords: ['关键词', '串联知识，让每个概念都有迹可循。'],
+    calendar: ['学习日历', '为重要的事，留出刚刚好的时间。'],
+    timer: ['专注时光', '一次只做一件事，沉浸在此刻。'],
+    habits: ['习惯追踪', '用微小的坚持，积累看得见的改变。'],
+    ai: ['AI 助手', '一起提问、探索，让学习多一点启发。'],
+    inbox: ['收件箱', '把消息归于一处，让注意力回到学习。'],
+    friends: ['学习伙伴', '分享进步，也分享沿途的风景。']
+  };
+  const info = ALL_NAV_ITEMS.find(item => item.id === tab);
+  const dynamic = typeof window.ExtManager?.getDynamicNavItems === 'function'
+    ? window.ExtManager.getDynamicNavItems().find(item => item.id === tab) : null;
+  const [title, description] = descriptions[tab] || [info?.label || dynamic?.label || '我的学习桌', '在这里，安排你的学习与生活。'];
+  const titleEl = document.getElementById('workspaceTitle');
+  const descriptionEl = document.getElementById('workspaceDescription');
+  if (titleEl) titleEl.textContent = title;
+  if (descriptionEl) descriptionEl.textContent = description;
+}
+
 const ALL_NAV_ITEMS = [
   { id: 'todo',      icon: 'check-square',  label: '待办' },
   { id: 'taskline',  icon: 'swords',        label: '任务线' },
@@ -586,7 +628,7 @@ function renderSidebarNav() {
   if (activeSection) {
     const activeId = activeSection.id.replace('section-', '');
     const activeBtn = document.getElementById('nav-' + activeId);
-    if (activeBtn) activeBtn.classList.add('active');
+    if (activeBtn) { activeBtn.classList.add('active'); activeBtn.setAttribute('aria-current', 'page'); }
   }
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
   // 同步刷新移动端底部导航（配置变更后底部 Tab 也即时更新）

@@ -23,14 +23,17 @@ test('secret vault encrypts allowed values at rest and rejects arbitrary keys', 
   });
   await Promise.all([
     handlers.get('secret:set')(null, { key: 'study_api_keys', value: '[{"key":"sk-test"}]' }),
-    handlers.get('secret:set')(null, { key: 'study_codebuddy_api_key', value: 'codebuddy-secret' })
+    handlers.get('secret:set')(null, { key: 'study_codebuddy_api_key', value: 'codebuddy-secret' }),
+    handlers.get('secret:set')(null, { key: 'study_qce_access_token', value: 'qce-secret' })
   ]);
   const disk = await fs.readFile(service.vaultPath, 'utf8');
   assert.equal(disk.includes('sk-test'), false);
   assert.deepEqual((await handlers.get('secret:load-all')()).values, {
     study_api_keys: '[{"key":"sk-test"}]',
-    study_codebuddy_api_key: 'codebuddy-secret'
+    study_codebuddy_api_key: 'codebuddy-secret',
+    study_qce_access_token: 'qce-secret'
   });
+  assert.equal(await service.getSecret('study_qce_access_token'), 'qce-secret');
   await assert.rejects(
     handlers.get('secret:set')(null, { key: 'arbitrary', value: 'x' }),
     /不允许访问/

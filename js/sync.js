@@ -124,6 +124,12 @@
     PULL_INTERVAL
   );
 
+  function _canRunScheduledPull() {
+    const online = typeof global.navigator === 'undefined' || global.navigator.onLine !== false;
+    const visible = !global.document || global.document.visibilityState !== 'hidden';
+    return online && visible;
+  }
+
   // 判断某 key 是否参与同步
   function isSyncKey(key) {
     if (!key) return false;
@@ -865,7 +871,7 @@
   let _subscribing = false;   // 并发锁：防止 _subscribe 被重复触发导致 channel 冲突
   async function _subscribe() {
     const c = _client();
-    if (!c || !enabled || !autoSync || !loggedIn) return;
+    if (!c || typeof c.channel !== 'function' || !enabled || !autoSync || !loggedIn) return;
     if (_subscribing) return;             // 已在订阅中，忽略重复调用
     _subscribing = true;
     try {
@@ -1106,7 +1112,7 @@
     if (loggedIn) {
       _subscribe();
       await _pullAll(true);
-      pullScheduler.start();
+      if (_canRunScheduledPull()) pullScheduler.start();
     }
     _emitStatus();
   }
@@ -1115,7 +1121,7 @@
     if (!enabled || !autoSync || !loggedIn || !_client()) return;
     _subscribe();
     await _pullAll(true);
-    pullScheduler.start();
+    if (_canRunScheduledPull()) pullScheduler.start();
   }
 
   let lifecycleBound = false;
@@ -1125,15 +1131,20 @@
     global.addEventListener('online', function () {
       if (!enabled || !autoSync || !loggedIn) return;
       _hydrateDirtyKeys();
-      void pullScheduler.trigger();
+      void pullScheduler.start({ immediate: true });
       if (global.SyncLogs && typeof global.SyncLogs.retryPending === 'function') {
         void global.SyncLogs.retryPending();
       }
     });
+    global.addEventListener('offline', function () {
+      pullScheduler.stop();
+    });
     if (global.document && typeof global.document.addEventListener === 'function') {
       global.document.addEventListener('visibilitychange', function () {
-        if (global.document.visibilityState === 'visible' && enabled && autoSync && loggedIn) {
-          void pullScheduler.trigger();
+        if (global.document.visibilityState === 'hidden') {
+          pullScheduler.stop();
+        } else if (enabled && autoSync && loggedIn && _canRunScheduledPull()) {
+          void pullScheduler.start({ immediate: true });
         }
       });
     }

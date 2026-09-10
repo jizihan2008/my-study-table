@@ -11,6 +11,149 @@ let friendsUnread = {};          // 未读数: { friendId: count }
 let friendsReadConvs = new Set(); // 已标记已读的会话 id（避免重复触发）
 let friendsRealtimeChannels = [];
 let _friendsSubscribedConvs = new Set(); // 已订阅的会话 id（避免重复订阅）
+let _friendsRealtimeReadyConvs = new Set();
+let _friendsChatPollTimer = null;
+let _friendsChatPollTarget = null;
+let _friendsChatPollInFlight = false;
+let _friendsChatPollLastNewAt = 0;
+let _friendsUnreadPollInFlight = false;
+
+function _friendsPollingPolicy() {
+  return window.FriendsPollingPolicy || {
+    nextChatDelay: () => 30000,
+    mergeMessages: (existing, incoming) => ({ messages: (existing || []).concat(incoming || []), added: incoming || [] }),
+    canPoll: ({ online, visible, sectionActive }) => online && visible && sectionActive
+  };
+}
+
+function _friendsSectionCanPoll() {
+  return _friendsPollingPolicy().canPoll({
+    online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    visible: typeof document === 'undefined' || document.visibilityState !== 'hidden',
+    sectionActive: !!document.getElementById('section-friends')?.classList.contains('active')
+  });
+}
+
+function friendsStopChatPolling() {
+  if (_friendsChatPollTimer) clearTimeout(_friendsChatPollTimer);
+  _friendsChatPollTimer = null;
+  _friendsChatPollTarget = null;
+  _friendsChatPollInFlight = false;
+}
+
+function friendsResetChatRealtimeState() {
+  friendsStopChatPolling();
+  _friendsRealtimeReadyConvs.clear();
+  _friendsSubscribedConvs.clear();
+}
+
+function _friendsScheduleChatPoll() {
+  if (!_friendsChatPollTarget || _friendsChatPollTimer) return;
+  const target = _friendsChatPollTarget;
+  if (_friendsRealtimeReadyConvs.has(target.convId)) return;
+  const delay = _friendsPollingPolicy().nextChatDelay(Date.now() - _friendsChatPollLastNewAt);
+  _friendsChatPollTimer = setTimeout(async function () {
+    _friendsChatPollTimer = null;
+    if (!_friendsChatPollTarget || _friendsChatPollTarget.convId !== target.convId) return;
+    await friendsPollConversationOnce(target.convId, target.friendId);
+    _friendsScheduleChatPoll();
+  }, delay);
+}
+
+function friendsStartChatPolling(convId, friendId, immediate) {
+  if (!convId || !friendId || _friendsRealtimeReadyConvs.has(convId)) return;
+  if (friendsMainView !== 'chat' || friendsChatFriendId !== friendId) return;
+  const targetChanged = !_friendsChatPollTarget || _friendsChatPollTarget.convId !== convId;
+  if (_friendsChatPollTimer) clearTimeout(_friendsChatPollTimer);
+  _friendsChatPollTimer = null;
+  _friendsChatPollTarget = { convId, friendId };
+  if (!_friendsChatPollLastNewAt || targetChanged) _friendsChatPollLastNewAt = Date.now();
+  if (immediate) {
+    void friendsPollConversationOnce(convId, friendId).then(_friendsScheduleChatPoll);
+  } else {
+    _friendsScheduleChatPoll();
+  }
+}
+
+async function friendsPollConversationOnce(convId, friendId) {
+  if (_friendsChatPollInFlight || !_friendsSectionCanPoll()) return false;
+  if (friendsMainView !== 'chat' || friendsChatFriendId !== friendId) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
+  _friendsChatPollInFlight = true;
+  try {
+    const cached = Array.isArray(friendsMessages[convId]) ? friendsMessages[convId] : [];
+    if (!cached.length) {
+      await friendsLoadMessages(friendId, convId);
+      return true;
+    }
+    const cursor = cached[cached.length - 1]?.created_at;
+    let query = client.from('messages').select('*')
+      .eq('conversation_id', convId)
+      .order('created_at', { ascending: true })
+      .limit(100);
+    if (cursor && typeof query.gte === 'function') query = query.gte('created_at', cursor);
+    const { data, error } = await query;
+    if (error) return false;
+    const merged = _friendsPollingPolicy().mergeMessages(cached, data || []);
+    friendsMessages[convId] = merged.messages;
+    if (merged.added.length) {
+      _friendsChatPollLastNewAt = Date.now();
+      const hasIncoming = merged.added.some(message => !friendsAuthUser || message.sender_id !== friendsAuthUser.id);
+      if (hasIncoming) {
+        friendsReadConvs.delete(convId);
+        void friendsMarkConversationRead(convId, friendId, true);
+      }
+      renderFriendsChatMessages(convId, friendId);
+      if (typeof friendsRefreshChatHeader === 'function') friendsRefreshChatHeader(friendId);
+      return true;
+    }
+    return false;
+  } catch (e) {
+    console.warn('[Friends] chat polling failed:', e);
+    return false;
+  } finally {
+    _friendsChatPollInFlight = false;
+  }
+}
+
+// Realtime 不可用时，在好友页每分钟合并一次未读消息。
+async function friendsPollUnreadMessages() {
+  if (_friendsUnreadPollInFlight || !_friendsSectionCanPoll() || !friendsAuthUser) return false;
+  const client = getSupabaseClient();
+  if (!client) return false;
+  _friendsUnreadPollInFlight = true;
+  try {
+    const { data, error } = await client.from('messages')
+      .select('*')
+      .neq('sender_id', friendsAuthUser.id)
+      .is('read_at', null)
+      .order('created_at', { ascending: true })
+      .limit(200);
+    if (error) return false;
+    const friendByConv = {};
+    Object.keys(friendsConversations).forEach(friendId => {
+      friendByConv[friendsConversations[friendId]] = friendId;
+      friendsUnread[friendId] = 0;
+    });
+    for (const message of (data || [])) {
+      const convId = message.conversation_id;
+      const friendId = friendByConv[convId];
+      if (!friendId) continue;
+      const merged = _friendsPollingPolicy().mergeMessages(friendsMessages[convId] || [], [message]);
+      friendsMessages[convId] = merged.messages;
+      friendsUnread[friendId] = (friendsUnread[friendId] || 0) + 1;
+    }
+    if (typeof renderFriendList === 'function') renderFriendList();
+    friendsUpdateSidebarBadge();
+    return true;
+  } catch (e) {
+    console.warn('[Friends] unread polling failed:', e);
+    return false;
+  } finally {
+    _friendsUnreadPollInFlight = false;
+  }
+}
 
 // 规范化两个用户 id 的排序（保证 user_a < user_b）
 function friendsConvPair(a, b) {
@@ -85,8 +228,8 @@ async function friendsSendMessage(friendId, content) {
 }
 
 // 标记会话已读
-async function friendsMarkConversationRead(convId, friendId) {
-  if (friendsReadConvs.has(convId)) return;
+async function friendsMarkConversationRead(convId, friendId, force) {
+  if (friendsReadConvs.has(convId) && !force) return;
   const client = getSupabaseClient();
   const me = friendsAuthUser;
   if (!client || !me) return;
@@ -110,10 +253,18 @@ async function friendsMarkConversationRead(convId, friendId) {
 
 // 订阅某会话的实时新消息
 function friendsSubscribeConversation(convId, friendId) {
-  if (_friendsSubscribedConvs.has(convId)) return;
+  if (_friendsSubscribedConvs.has(convId)) {
+    if (!_friendsRealtimeReadyConvs.has(convId) && friendsMainView === 'chat' && friendsChatFriendId === friendId) {
+      friendsStartChatPolling(convId, friendId, false);
+    }
+    return;
+  }
   _friendsSubscribedConvs.add(convId);
   const client = getSupabaseClient();
-  if (!client) return;
+  if (!client || typeof client.channel !== 'function') {
+    friendsStartChatPolling(convId, friendId, false);
+    return;
+  }
   try {
     const channel = client
       .channel('friends-msg-' + convId)
@@ -121,14 +272,16 @@ function friendsSubscribeConversation(convId, friendId) {
         { event: 'INSERT', schema: 'public', table: 'messages', filter: 'conversation_id=eq.' + convId },
         (payload) => {
           const msg = payload.new;
-          if (!Array.isArray(friendsMessages[convId])) friendsMessages[convId] = [];
-          friendsMessages[convId].push(msg);
+          const merged = _friendsPollingPolicy().mergeMessages(friendsMessages[convId] || [], [msg]);
+          friendsMessages[convId] = merged.messages;
+          if (!merged.added.length) return;
           // 若是别人发来的且聊天窗口正打开该好友 → 标记已读
           const isMe = friendsAuthUser && msg.sender_id === friendsAuthUser.id;
           if (!isMe) {
             const chatOpen = friendsMainView === 'chat' && friendsChatFriendId === friendId;
             if (chatOpen) {
-              friendsMarkConversationRead(convId, friendId);
+              friendsReadConvs.delete(convId);
+              friendsMarkConversationRead(convId, friendId, true);
             } else {
               friendsUnread[friendId] = (friendsUnread[friendId] || 0) + 1;
               renderFriendList();
@@ -142,10 +295,22 @@ function friendsSubscribeConversation(convId, friendId) {
             renderFriendsChatMessages(convId);
           }
         })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          _friendsRealtimeReadyConvs.add(convId);
+          if (_friendsChatPollTarget?.convId === convId) friendsStopChatPolling();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          _friendsRealtimeReadyConvs.delete(convId);
+          if (friendsMainView === 'chat' && friendsChatFriendId === friendId) {
+            friendsStartChatPolling(convId, friendId, false);
+          }
+        }
+      });
     friendsRealtimeChannels.push(channel);
   } catch (e) {
     console.warn('[Friends] subscribe conversation failed:', e);
+    _friendsRealtimeReadyConvs.delete(convId);
+    friendsStartChatPolling(convId, friendId, false);
   }
 }
 
@@ -163,6 +328,7 @@ async function friendsOpenChat(friendId) {
   if (convId) {
     await friendsLoadMessages(friendId, convId);
     friendsSubscribeConversation(convId, friendId);
+    friendsStartChatPolling(convId, friendId, false);
     renderFriendsHome();
     // 滚动到底部
     setTimeout(() => {
@@ -177,6 +343,7 @@ async function friendsOpenChat(friendId) {
 }
 
 function friendsCloseChat() {
+  friendsStopChatPolling();
   friendsMainView = 'feed';
   friendsChatFriendId = null;
 }
@@ -309,6 +476,11 @@ async function frSendChat() {
   if (!res.ok) {
     input.value = content;
     showCustomConfirm(res.error);
+  } else {
+    const convId = friendsConversations[friendsChatFriendId];
+    if (convId && !_friendsRealtimeReadyConvs.has(convId)) {
+      await friendsPollConversationOnce(convId, friendsChatFriendId);
+    }
   }
 }
 
@@ -359,7 +531,7 @@ async function frShowFriendProfile(friendId) {
       } catch (e) {
         if (e.message && /(404|Not Found|does not exist|relation.*does not exist)/i.test(String(e.message))) {
           window._weeklyFocusTodosMissing = true;
-          console.warn('[Friends] weekly_focus_todos 表不存在，已跳过后续查询。请在 Supabase SQL Editor 执行 supabase/schema.sql 建表。');
+          console.warn('[Friends] weekly_focus_todos 表不存在，已跳过后续查询。请在 CloudBase SQL Editor 执行 cloudbase/schema.sql 建表。');
         }
       }
     }
@@ -416,4 +588,25 @@ async function friendsSubscribeAllConversations() {
       friendsSubscribeConversation(convId, f.profile.id);
     }
   }
+}
+
+if (typeof document !== 'undefined') {
+  document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') {
+      friendsStopChatPolling();
+      return;
+    }
+    if (friendsMainView === 'chat' && friendsChatFriendId) {
+      const convId = friendsConversations[friendsChatFriendId];
+      if (convId && !_friendsRealtimeReadyConvs.has(convId)) friendsStartChatPolling(convId, friendsChatFriendId, true);
+    }
+  });
+}
+if (typeof window !== 'undefined') {
+  window.addEventListener('online', function () {
+    if (friendsMainView === 'chat' && friendsChatFriendId) {
+      const convId = friendsConversations[friendsChatFriendId];
+      if (convId && !_friendsRealtimeReadyConvs.has(convId)) friendsStartChatPolling(convId, friendsChatFriendId, true);
+    }
+  });
 }

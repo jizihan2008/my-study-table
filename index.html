@@ -12,8 +12,11 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260827-r11">
+<link rel="stylesheet" href="css/style.css?v=20260906-r2">
+<link rel="stylesheet" href="css/workspace.css?v=20260905-r1">
+<link rel="stylesheet" href="css/appearance.css?v=20260906-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
+<link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
 <script src="lib/lucide/lucide.min.js"></script>
 </head>
 <body>
@@ -28,11 +31,13 @@
 <!-- Sidebar -->
 <div class="sidebar" id="sidebar">
   <div class="sidebar-logo">
-    <h2><i data-lucide="book-open" class="lucide-icon" style="width:22px;height:22px;"></i> Study Table</h2>
+    <div class="brand-mark"><i data-lucide="book-open" aria-hidden="true"></i></div>
+    <div><h2>Study Table</h2><p>留一点时间，给成长。</p></div>
   </div>
-  <nav class="sidebar-nav" id="sidebarNav"></nav>
+  <div class="sidebar-caption">我的学习空间</div>
+  <nav class="sidebar-nav" id="sidebarNav" aria-label="主导航"></nav>
   <button class="sidebar-edit-btn" onclick="openNavSettings()" title="编辑界面栏">
-    <i data-lucide="sliders-horizontal" class="lucide-icon" style="width:16px;height:16px;"></i>
+    <i data-lucide="sliders-horizontal" class="lucide-icon" style="width:16px;height:16px;"></i><span>自定义导航</span>
   </button>
 </div>
 
@@ -48,11 +53,14 @@
 
 <div class="app">
   <div class="header">
-    <button class="mobile-hamburger" id="mobileHamburger" onclick="openMobileDrawer()" title="菜单">
+    <button class="mobile-hamburger" id="mobileHamburger" onclick="event.stopPropagation();if(window.innerWidth>800)openSidebar();else openMobileDrawer()" title="菜单">
       <i data-lucide="menu" style="width:20px;height:20px;"></i>
     </button>
-    <h1><i data-lucide="book-open" class="lucide-icon" style="width:24px;height:24px;vertical-align:middle;"></i> My Study Table</h1>
-    <p>管理你的待办事项、笔记与快捷访问</p>
+    <div class="header-heading">
+      <div class="workspace-eyebrow">MY STUDY SPACE</div>
+      <h1 id="workspaceTitle">我的学习桌</h1>
+      <p id="workspaceDescription">把计划变成行动，让成长清晰可见。</p>
+    </div>
     <div class="header-actions">
       <button class="header-btn" id="changelogBtn" onclick="openChangelogModal()" title="更新日志">
         <i data-lucide="list" style="width:18px;height:18px;"></i>
@@ -177,6 +185,7 @@
               <button class="notes-view-btn" id="notesPreviewBtn" onclick="switchNoteView('preview')">预览</button>
               <button class="notes-view-btn" id="notesEditBtn" onclick="switchNoteView('edit')">编辑</button>
               <button class="notes-view-btn" id="notesSummaryBtn" onclick="switchNoteView('summary')">摘要</button>
+              <button class="notes-view-btn notes-toc-toggle" id="notesTocToggleBtn" onclick="toggleNoteToc()" title="显示或隐藏智能目录">目录</button>
               <button class="notes-view-btn notes-ann-btn" id="notesAnnBtn" onclick="toggleNoteAnnPanel()" title="批注列表">批注<span id="notesAnnCount"></span></button>
             </div>
           </div>
@@ -189,24 +198,37 @@
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('heading')" title="标题"><b>H</b></button>
             <button class="fmt-btn" onclick="formatText('code')" title="行内代码">&lt;/&gt;</button>
+            <button class="fmt-btn" onclick="formatText('codeblock')" title="代码块">{ }</button>
             <button class="fmt-btn" onclick="formatText('latex')" title="LaTeX 公式 (∑)">∑</button>
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('link')" title="链接"><i data-lucide="link" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button class="fmt-btn" onclick="formatText('image')" title="网络图片"><i data-lucide="image" class="lucide-icon" style="width:14px;height:14px;"></i></button>
             <button class="fmt-btn" onclick="formatText('ul')" title="无序列表">•</button>
             <button class="fmt-btn" onclick="formatText('ol')" title="有序列表">1.</button>
             <button class="fmt-btn" onclick="formatText('quote')" title="引用">❝</button>
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('task')" title="任务列表">☐</button>
+            <button class="fmt-btn" onclick="formatText('table')" title="表格">▦</button>
+            <button class="fmt-btn" onclick="formatText('footnote')" title="脚注">¹</button>
             <button class="fmt-btn" onclick="formatText('hr')" title="分割线">—</button>
           </div>
-          <textarea class="notes-editor-textarea" id="notesTextarea"
-                    placeholder="在这里记录你的想法、笔记、备忘……&#10;内容会自动保存 ✨"
-                    oninput="onNotesChange()"></textarea>
-          <div class="notes-editor-preview" id="notesPreview"></div>
-          <div class="notes-summary-panel" id="notesSummaryPanel" style="display:none;">
-            <div class="notes-summary-actions">
-              <button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 更新摘要</button>
+          <div class="notes-document-workspace">
+            <textarea class="notes-editor-textarea" id="notesTextarea"
+                      placeholder="在这里记录你的想法、笔记、备忘……&#10;内容会自动保存 ✨"
+                      oninput="onNotesChange()"></textarea>
+            <div class="notes-editor-preview" id="notesPreview" onscroll="onNotePreviewScroll()"></div>
+            <div class="notes-summary-panel" id="notesSummaryPanel" style="display:none;">
+              <div class="notes-summary-actions">
+                <button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 更新摘要</button>
+              </div>
             </div>
+            <aside class="notes-toc-panel" id="notesTocPanel" aria-label="当前笔记目录">
+              <div class="notes-toc-header">
+                <span><i data-lucide="list-tree" class="lucide-icon"></i> 智能目录</span>
+                <button type="button" class="notes-toc-close" onclick="toggleNoteToc(false)" title="收起目录" aria-label="收起目录">×</button>
+              </div>
+              <nav class="notes-toc-list" id="notesTocList"></nav>
+            </aside>
           </div>
           <div class="notes-editor-footer">
             <span id="notesWordCount">0 字</span>
@@ -224,8 +246,9 @@
           <div class="notes-mv-menu" id="notesMvMenu" style="display:none;">
             <button onclick="switchNoteView('preview');hideNotesMobileViewMenu()"><i data-lucide="eye" class="lucide-icon"></i>预览</button>
             <button onclick="switchNoteView('edit');hideNotesMobileViewMenu()"><i data-lucide="square-pen" class="lucide-icon"></i>编辑</button>
-            <button onclick="switchNoteView('summary');hideNotesMobileViewMenu()"><i data-lucide="sparkles" class="lucide-icon"></i>摘要</button>
-            <button onclick="toggleNoteAnnPanel();hideNotesMobileViewMenu()"><i data-lucide="message-square" class="lucide-icon"></i>批注<span id="notesAnnCountMobile"></span></button>
+          <button onclick="switchNoteView('summary');hideNotesMobileViewMenu()"><i data-lucide="sparkles" class="lucide-icon"></i>摘要</button>
+          <button onclick="toggleNoteToc(true);hideNotesMobileViewMenu()"><i data-lucide="list-tree" class="lucide-icon"></i>目录</button>
+          <button onclick="toggleNoteAnnPanel();hideNotesMobileViewMenu()"><i data-lucide="message-square" class="lucide-icon"></i>批注<span id="notesAnnCountMobile"></span></button>
           </div>
         </div>
       </div>
@@ -237,7 +260,22 @@
   <!-- ── Today Section ── -->
   <div class="section" id="section-today">
     <div class="card">
-      <div class="card-scroll">
+      <div class="card-scroll today-dashboard">
+        <div class="today-welcome">
+          <div class="today-welcome-copy">
+            <span class="today-date" id="todayWelcomeDate"></span>
+            <h2>让今天，向前一小步。</h2>
+            <p>选一件重要的小事，开始属于你的专注时光。</p>
+            <button class="welcome-focus-btn" onclick="switchTab('timer')"><i data-lucide="play" aria-hidden="true"></i>开始专注<i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
+          </div>
+          <div class="study-illustration" aria-hidden="true"><div class="study-orbit"></div><div class="study-sun"></div><div class="study-book study-book-back"></div><div class="study-book study-book-front"><i data-lucide="sprout"></i><span>ONE STEP<br>AT A TIME</span></div><div class="study-pencil"></div><div class="study-spark">✦</div></div>
+        </div>
+        <div class="today-shortcuts" aria-label="学习快捷入口">
+          <button onclick="switchTab('todo')"><span class="shortcut-icon"><i data-lucide="check-square" aria-hidden="true"></i></span><span><strong>整理待办</strong><small>把想法变成下一步</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
+          <button onclick="switchTab('notes')"><span class="shortcut-icon"><i data-lucide="notebook-pen" aria-hidden="true"></i></span><span><strong>打开笔记</strong><small>留住每一次灵感</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
+          <button onclick="switchTab('calendar')"><span class="shortcut-icon"><i data-lucide="calendar-days" aria-hidden="true"></i></span><span><strong>查看日程</strong><small>为重要的事留出时间</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
+        </div>
+
         <!-- Goals Card (top) -->
         <div class="today-goals-card" id="todayGoalsCard">
           <div class="today-goals-header">
@@ -585,7 +623,7 @@
     </div>
     <div class="settings-tabs">
       <button class="settings-tab active" onclick="switchSettingsTab('api')" id="settingsTabApi"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> AI 设置</button>
-      <button class="settings-tab" onclick="switchSettingsTab('supabase')" id="settingsTabSupabase"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> Supabase 连接</button>
+      <button class="settings-tab" onclick="switchSettingsTab('supabase')" id="settingsTabSupabase"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> CloudBase 连接</button>
 
       <button class="settings-tab" onclick="switchSettingsTab('memory')" id="settingsTabMemory"><i data-lucide="brain" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 记忆</button>
       <button class="settings-tab" onclick="switchSettingsTab('data')" id="settingsTabData"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 数据</button>
@@ -741,17 +779,17 @@
 
         <div class="settings-status" id="settingsStatus"></div>
       </div>
-      <!-- Supabase Panel（好友系统 & 插件市场共享） -->
+      <!-- CloudBase Panel（好友系统 & 插件市场共享） -->
       <div class="settings-tab-panel" id="settingsPanelSupabase">
-        <div class="settings-section-title"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> Supabase 连接</div>
-        <span class="hint" style="display:block;margin-bottom:12px;">好友系统和插件市场共用此 Supabase 项目连接。应用已<b>内置默认项目</b>（下方已自动填入），通常无需修改即可直接使用；如需接入自己的项目，替换 URL 与 anon key 后点「保存并重新连接」。建表脚本见 <b>supabase/schema.sql</b>。</span>
+        <div class="settings-section-title"><i data-lucide="database" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> CloudBase for Supabase 连接</div>
+        <span class="hint" style="display:block;margin-bottom:12px;">好友、聊天、学习同步和插件市场共用此 CloudBase 环境。项目配置已内置，通常无需修改。首次部署需在 CloudBase SQL Editor 执行 <b>cloudbase/schema.sql</b>。</span>
         <div class="settings-field">
-          <label>Supabase 项目地址（Project URL）</label>
-          <input type="text" id="supabaseUrl" placeholder="https://xxxx.supabase.co" onchange="saveSupabaseSettings()" style="width:100%;">
+          <label>CloudBase 环境 ID（Env ID）</label>
+          <input type="text" id="supabaseUrl" placeholder="your-env-id" onchange="saveSupabaseSettings()" style="width:100%;">
         </div>
         <div class="settings-field">
-          <label>Anon Public Key（匿名公开密钥）</label>
-          <input type="password" id="supabaseAnonKey" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." onchange="saveSupabaseSettings()" style="width:100%;">
+          <label>Publishable Key（前端公开密钥）</label>
+          <input type="password" id="supabaseAnonKey" placeholder="eyJhbGciOiJSUzI1Ni..." onchange="saveSupabaseSettings()" style="width:100%;">
         </div>
         <div class="settings-field" style="margin-top:10px;">
           <button class="btn-save-settings" id="supabaseSaveBtn" onclick="saveSupabaseSettings(true)" style="background:var(--primary);color:#fff;padding:7px 16px;font-size:12px;border-radius:6px;border:none;cursor:pointer;">
@@ -1039,7 +1077,7 @@
       <!-- Sync Panel（手机端 PWA 数据云同步） -->
       <div class="settings-tab-panel" id="settingsPanelSync">
         <div class="settings-section-title"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 跨设备同步</div>
-        <span class="hint" style="display:block;margin-bottom:12px;">将待办、笔记、计时、习惯、任务线、电子书元数据等学习数据同步到 Supabase 云端，手机端与桌面端保持一致。AI Key、邮箱授权码等敏感信息<b>绝不上传</b>。</span>
+        <span class="hint" style="display:block;margin-bottom:12px;">将待办、笔记、计时、习惯、任务线、电子书元数据等学习数据同步到 CloudBase 云端，手机端与桌面端保持一致。AI Key、邮箱授权码等敏感信息<b>绝不上传</b>。</span>
         <div class="settings-field">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
             <input type="checkbox" id="syncEnabled" style="width:18px;height:18px;accent-color:var(--primary);" onchange="toggleSyncEnabled()">
@@ -1081,7 +1119,7 @@
         </section>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="log-in" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 登录</div>
-        <span class="hint" style="display:block;margin-bottom:8px;">同步使用与「好友」系统相同的 Supabase 账号。请先在「Supabase 连接」中配置项目，并在「好友」页面登录。</span>
+        <span class="hint" style="display:block;margin-bottom:8px;">同步使用与「好友」系统相同的 CloudBase 账号。请先在「好友」页面登录。</span>
         <div id="syncAccountInfo" style="font-size:13px;color:var(--text);margin-bottom:8px;">未检测到登录状态。</div>
         <div class="settings-status" id="syncPanelStatus"></div>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
@@ -1319,40 +1357,47 @@
   </div>
 </div>
 
+<script src="lib/markdown/markdown-it.min.js"></script>
+<script src="lib/markdown/markdown-it-footnote.min.js"></script>
+<script src="lib/markdown/purify.min.js"></script>
+<script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
+<script src="js/markdown.js?v=20260827-r1"></script>
 <script src="js/platform.js?v=20260826-r2"></script>
-<script src="js/secrets.js?v=20260825-r1"></script>
+<script src="js/secrets.js?v=20260827-r2"></script>
 <script src="js/data-store.js?v=20260825-r1"></script>
 <script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260811-r1"></script>
-<script src="js/liquid-glass.js?v=20260823-r1"></script>
-<script src="js/core.js?v=20260826-r2"></script>
+<script src="js/theme-model.js?v=20260906-r2"></script>
+<script src="js/liquid-glass.js?v=20260906-r2"></script>
+<script src="js/core.js?v=20260910-r3"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260823-r3"></script>
-<script src="js/notes.js?v=20260823-r5"></script>
+<script src="js/notes.js?v=20260827-r7"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260824-r2"></script>
+<script src="js/today.js?v=20260905-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260804-r3"></script>
 <script src="js/ai-conv.js?v=20260825-r2"></script>
 <script src="js/ai-attach.js?v=20260824-r3"></script>
-<script src="js/ai-render.js?v=20260822-r3"></script>
+<script src="js/ai-render.js?v=20260827-r6"></script>
 <script src="js/ai-tools.js?v=20260822-r1"></script>
 <script src="js/ai-search.js"></script>
-<script src="js/ai-client.js?v=20260825-r1"></script>
-<script src="js/ai-api.js?v=20260824-r1"></script>
-<script src="js/ai-send.js?v=20260824-r3"></script>
+<script src="js/ai-client.js?v=20260827-r2"></script>
+<script src="js/ai-stream.js?v=20260827-r1"></script>
+<script src="js/ai-api.js?v=20260827-r2"></script>
+<script src="js/ai-send.js?v=20260827-r4"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260812-r3"></script>
-<script src="js/bg-media-idb.js?v=20260823-r1"></script>
-<script src="js/appearance.js?v=20260823-r1"></script>
+<script src="js/bg-media-idb.js?v=20260906-r2"></script>
+<script src="js/appearance.js?v=20260906-r2"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/settings.js?v=20260825-r5"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
-<script src="js/qq-chats.js?v=20260827-r1"></script>
-<script src="js/inbox.js?v=20260827-r2"></script>
+<script src="js/qq-chats.js?v=20260827-r2"></script>
+<script src="js/inbox.js?v=20260827-r3"></script>
 <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
 <script type="module">
   import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
@@ -1371,12 +1416,15 @@
 <script src="js/taskline.js?v=20260825-r10"></script>
 <script src="js/timer.js?v=20260814-r1"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
-<script src="js/stats.js?v=20260724-r1"></script>
+<script src="js/stats.js?v=20260827-r2"></script>
 <script src="js/updater.js?v=20260802-r1"></script>
 <!-- 好友系统 -->
 <script src="lib/supabase/supabase.js"></script>
-<script src="js/friends.js?v=20260824-r1"></script>
-<script src="js/friends-chat.js?v=20260805-r2"></script>
+<script src="lib/cloudbase/cloudbase.js"></script>
+<script src="js/cloud-client.js?v=20260910-r1"></script>
+<script src="js/friends-polling-policy.js?v=20260910-r1"></script>
+<script src="js/friends.js?v=20260910-r1"></script>
+<script src="js/friends-chat.js?v=20260910-r1"></script>
 <!-- 扩展系统 -->
 <script src="js/ext-api.js?v=20260804-r1"></script>
 <script src="js/ext-sandbox.js?v=20260825-r1"></script>
@@ -1387,9 +1435,9 @@
 <script src="js/store.js?v=20260813-r1"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260826-r12"></script>
+<script src="js/sync.js?v=20260910-r13"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260826-r5"></script>
+<script src="js/sync-logs.js?v=20260910-r6"></script>
 <script src="js/bootstrap.js?v=20260825-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->

@@ -77,7 +77,26 @@ window.BgMediaIDB = (function () {
     if (key === VIDEO_KEY && _videoUrl) { try { URL.revokeObjectURL(_videoUrl); } catch (e) {} _videoUrl = null; }
   }
 
+  const assetUrls = new Map();
   return {
+    // New backgrounds use stable asset IDs. Different saved presets keep their
+    // own files; replacing a background no longer invalidates older presets.
+    async saveAsset(file, kind) {
+      if (!file || !['image','video'].includes(kind)) throw new Error('不支持的背景类型');
+      if (file.type && !file.type.startsWith(kind + '/')) throw new Error('文件类型不匹配');
+      const key = 'asset_' + (typeof crypto.randomUUID === 'function' ? crypto.randomUUID() : Date.now().toString(36) + Math.random().toString(36).slice(2));
+      if (!await _save(key,file)) throw new Error('本地存储写入失败');
+      return { key, url: 'idb:' + key };
+    },
+    async resolveAsset(reference) {
+      if (!/^idb:asset_[a-z0-9_-]+$/i.test(reference)) return null;
+      if (assetUrls.has(reference)) return assetUrls.get(reference);
+      const blob = await _load(reference.slice(4));
+      if (!blob) return null;
+      const url = _makeUrl(blob);
+      assetUrls.set(reference,url);
+      return url;
+    },
     // 保存背景图片文件，返回 { key, url }
     async saveImage(file) {
       if (!file) return null;

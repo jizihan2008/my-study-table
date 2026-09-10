@@ -3,6 +3,83 @@
 // ═══════════════════════════════════════════════
 
 let _aiForceScrollBottom = false; // 强制滚动到底部标志（发送/切换对话时置位）
+const _aiStreamingDrafts = new Map(); // convId -> transient assistant output (never persisted)
+const _aiStreamingPaintTimers = new Map();
+const AI_STREAM_PAINT_INTERVAL_MS = 32;
+
+function sanitizeAiStreamingText(value) {
+  return String(value || '')
+    .replace(/<(tool_call|call_ai|memory)>[\s\S]*?<\/\1>/g, '')
+    .replace(/<(?:tool_call|call_ai|memory)>[\s\S]*$/g, '')
+    .replace(/<[a-z_]*$/i, '')
+    .replace(/\n{3,}/g, '\n\n');
+}
+
+function setAiStreamingDraft(convId, snapshot) {
+  const key = String(convId);
+  const draft = {
+    // Keep the raw accumulated text here. Sanitizing once per paint is much
+    // cheaper than repeatedly scanning the complete reply for every token.
+    content: String(snapshot?.content || ''),
+    reasoning: String(snapshot?.reasoning || ''),
+    keyName: snapshot?.keyName || ''
+  };
+  _aiStreamingDrafts.set(key, draft);
+  if (String(getActiveConvId()) !== key) return;
+
+  const row = document.getElementById('aiStreamingDraft');
+  if (!row) {
+    // First token creates the transient bubble immediately. Later tokens are
+    // batched so the full conversation is not re-rendered for every SSE event.
+    renderAiMessages();
+    return;
+  }
+  scheduleAiStreamingPaint(key);
+}
+
+function updateStreamingTextNode(element, nextValue) {
+  if (!element) return;
+  const next = String(nextValue || '');
+  const current = element.textContent || '';
+  if (next === current) return;
+  if (next.startsWith(current)) {
+    element.appendChild(document.createTextNode(next.slice(current.length)));
+  } else {
+    element.textContent = next;
+  }
+}
+
+function paintAiStreamingDraft(key) {
+  _aiStreamingPaintTimers.delete(key);
+  if (String(getActiveConvId()) !== key) return;
+  const draft = _aiStreamingDrafts.get(key);
+  const row = document.getElementById('aiStreamingDraft');
+  if (!draft || !row) return;
+  const container = document.getElementById('aiMessages');
+  const wasNearBottom = !!container && container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+  const content = row.querySelector('.ai-streaming-content');
+  const reasoningWrap = row.querySelector('.ai-streaming-reasoning');
+  const reasoningText = row.querySelector('.ai-streaming-reasoning-text');
+  updateStreamingTextNode(content, sanitizeAiStreamingText(draft.content));
+  updateStreamingTextNode(reasoningText, draft.reasoning);
+  if (reasoningWrap) reasoningWrap.style.display = draft.reasoning ? '' : 'none';
+  if (wasNearBottom && container) container.scrollTop = container.scrollHeight;
+}
+
+function scheduleAiStreamingPaint(key) {
+  if (_aiStreamingPaintTimers.has(key)) return;
+  const timer = setTimeout(() => paintAiStreamingDraft(key), AI_STREAM_PAINT_INTERVAL_MS);
+  _aiStreamingPaintTimers.set(key, timer);
+}
+
+function clearAiStreamingDraft(convId, shouldRender = true) {
+  const key = String(convId);
+  const timer = _aiStreamingPaintTimers.get(key);
+  if (timer) clearTimeout(timer);
+  _aiStreamingPaintTimers.delete(key);
+  const existed = _aiStreamingDrafts.delete(key);
+  if (existed && shouldRender && String(getActiveConvId()) === key) renderAiMessages();
+}
 
 // ═══════════ AI Chat: Rendering ═══════════
 function renderAiChat() {
@@ -233,12 +310,28 @@ function renderAiMessages() {
       renderItems.push({ type: 'system', msg: m, idx, nodeId });
     }
   }
+  const streamingDraft = _aiStreamingDrafts.get(String(conv.id));
+  if (streamingDraft) {
+    renderItems.push({
+      type: 'assistant',
+      msg: { ...streamingDraft, role: 'assistant', _streaming: true },
+      idx: 'streaming',
+      nodeId: null,
+      branchCount: 1,
+      branchCurIndex: 1
+    });
+  }
 
   container.innerHTML = renderItems.map(item => {
     const m = item.msg;
     if (!m) return ''; // safety: skip items without a message object
     const idx = item.idx;
-    const reasoningHtml = m.reasoning ? `
+    const reasoningHtml = m._streaming ? `
+      <div class="ai-streaming-reasoning"${m.reasoning ? '' : ' style="display:none"'}>
+        <span class="ai-streaming-reasoning-label">🧠 深度思考</span>
+        <span class="ai-streaming-reasoning-text">${escapeHtml(m.reasoning || '')}</span>
+      </div>
+    ` : m.reasoning ? `
       <div class="ai-reasoning-toggle" onclick="toggleReasoning(this)" data-idx="${idx}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         🧠 深度思考
@@ -330,7 +423,9 @@ function renderAiMessages() {
 
     // Hide tool_call, call_ai, and memory tags from user-facing messages
     const hasToolCall = typeof cleanContent === 'string' && /<tool_call>/.test(cleanContent);
-    if (typeof cleanContent === 'string') {
+    if (m._streaming) {
+      cleanContent = sanitizeAiStreamingText(cleanContent);
+    } else if (typeof cleanContent === 'string') {
       cleanContent = cleanContent
         .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
         .replace(/<tool_call>[\s\S]*?<tool_call>/g, '')
@@ -355,6 +450,8 @@ function renderAiMessages() {
           <button class="ai-tree-edit-btn" onclick="event.stopPropagation(); cancelEditAiMsg()">取消</button>
         </div>
       `;
+    } else if (m._streaming) {
+      contentHtml = `<div class="ai-streaming-content">${escapeHtml(cleanContent || '')}</div>`;
     } else {
       contentHtml = formatAiContent(cleanContent);
       if (!contentHtml && isAssistant && hasToolCall) {
@@ -420,7 +517,7 @@ function renderAiMessages() {
     const kimiSearchBadge = (m._kimiSearchResult) ? '<div class="ai-kimi-search-badge">🔍 Kimi 联网搜索</div>' : '';
 
     return `
-      <div class="ai-chat-msg ${roleClass}">
+      <div class="ai-chat-msg ${roleClass}"${m._streaming ? ' id="aiStreamingDraft" aria-live="polite"' : ''}>
         <div class="ai-chat-avatar">${avatar}</div>
         <div class="ai-chat-msg-body">
           ${keyNameHtml}
@@ -432,7 +529,7 @@ function renderAiMessages() {
   }).join('');
   // Show typing indicator only when loading and there are no pending intermediate messages
   // (i.e., during the first API call before any tool results come back)
-  if (isAiLoading(conv.id) && conv.messages.length > 0) {
+  if (!streamingDraft && isAiLoading(conv.id) && conv.messages.length > 0) {
     const lastMsg = conv.messages[conv.messages.length - 1];
     // Show typing indicator if the last message is from user (waiting for first AI response)
     // or if the last message is a tool result (waiting for AI to process it)
@@ -832,67 +929,6 @@ function toggleToolCallData(toggleEl) {
   contentEl.classList.toggle('open');
 }
 
-// Apply inline markdown formatting (bold, italic, inline code) to a string
-function formatInline(text) {
-  let s = text;
-  s = s.replace(/`([^`]+)`/g, '<code>$1</code>');
-  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  return s;
-}
-
-// ── Simple LaTeX math to HTML converter ──
-// Wraps bare LaTeX commands (without \( ... \) delimiters) in inline math
-function wrapBareLatex(text) {
-  if (typeof text !== 'string') return text;
-  // Split by existing math delimiters \(...\), \[...\], and $$...$$, only wrap outside parts.
-  let result = '';
-  let i = 0;
-  while (i < text.length) {
-    const inlineStart = text.indexOf('\\(', i);
-    const displayStart = text.indexOf('\\[', i);
-    const dollarDisplayStart = text.indexOf('$$', i);
-    // Pick the earliest delimiter
-    const candidates = [];
-    if (inlineStart !== -1) candidates.push({ pos: inlineStart, end: '\\)', len: 2 });
-    if (displayStart !== -1) candidates.push({ pos: displayStart, end: '\\]', len: 2 });
-    if (dollarDisplayStart !== -1) candidates.push({ pos: dollarDisplayStart, end: '$$', len: 2 });
-    candidates.sort((a, b) => a.pos - b.pos);
-    if (candidates.length === 0) {
-      result += wrapBareLatexSegment(text.slice(i));
-      break;
-    }
-    const delim = candidates[0];
-    result += wrapBareLatexSegment(text.slice(i, delim.pos));
-    const endIndex = text.indexOf(delim.end, delim.pos + delim.len);
-    if (endIndex === -1) {
-      result += wrapBareLatexSegment(text.slice(delim.pos));
-      break;
-    }
-    result += text.slice(delim.pos, endIndex + delim.len);
-    i = endIndex + delim.len;
-  }
-  return result;
-}
-
-function wrapBareLatexSegment(segment) {
-  // Wrap known LaTeX command expressions in \( ... \).
-  // Captures the command plus a small trailing expression (no unbalanced parens).
-  return segment.replace(
-    /\\(sin|cos|tan|log|ln|exp|lim|sup|inf|min|max|frac|sqrt|theta|Theta|Delta|alpha|beta|gamma|delta|lambda|pi|to|cdot|infty|partial|bar|hat|vec|dot|ddot|tilde|overline|underbrace|mathbb)(?![a-zA-Z])(?:\[([^\]]*)\])?(?:\{([^{}]*)\})?(?:\{([^{}]*)\})?(?:([_^])\{([^{}]*)\})?(?:\s*[a-zA-Z0-9+\-*/^_{}\s]*[a-zA-Z0-9}])?/g,
-    '\\($&\\)'
-  );
-}
-
-// Normalize double backslashes (\\) inside LaTeX to single backslashes.
-// AI outputs sometimes escape commands as \\frac, \\sin, etc.; this lets
-// KaTeX render them correctly.
-// Only normalize \\ before letters (command names), preserve \\ used as
-// matrix/array line breaks (followed by space, &, digit, or end of line).
-function normalizeLatex(formula) {
-  return formula.replace(/\\\\(?=[a-zA-Z])/g, '\\');
-}
-
 // ── 内嵌思维导图（```mindmap），复用教材知识库导图样式 ──
 // 支持两种格式（自动识别）：
 //   A. 缩进树：每行一个节点，2 空格 / Tab 表示层级
@@ -977,127 +1013,14 @@ function renderNoteMindmap(code) {
 }
 
 // ── Shared Markdown-to-HTML base renderer ──
-// Escapes HTML, then applies: code blocks, tables, inline code, hr, headings, bold, italic, unordered lists.
-// Returns HTML string with placeholders for protected blocks already restored.
+// 统一交给 StudyMarkdown：CommonMark/GFM、KaTeX、脚注、任务列表、代码高亮和 DOMPurify。
+// extraProcessor 在最终消毒前执行，供 AI 的 [ID:数字] 等受控扩展注入 HTML。
 function formatMarkdownBase(text, extraProcessor) {
   if (typeof text !== 'string') return '';
-
-  // ── LaTeX math: protect from HTML escaping and markdown processing ──
-  // Step 0: Convert $...$ inline math to \(...\) BEFORE any other processing.
-  //         This must happen before wrapBareLatex to prevent it from breaking
-  //         $...$ blocks (which it doesn't recognise as delimiters).
-  //         Negative lookbehind/lookahead ensures we match single $, not $$.
-  let prepared = text.replace(/(?<!\$)\$(?!\$)(.+?)(?<!\$)\$(?!\$)/g, '\\($1\\)');
-  // Step 1: Wrap bare LaTeX commands not already in recognised delimiters
-  prepared = wrapBareLatex(prepared);
-  const mathBlocks = [];
-  // Display math: $$ ... $$ (must process before \[...\] to avoid conflict)
-  let html = prepared.replace(/\$\$([\s\S]*?)\$\$/g, (_, formula) => {
-    const idx = mathBlocks.length;
-    mathBlocks.push(katex.renderToString(normalizeLatex(formula.trim()), { displayMode: true, throwOnError: false }));
-    return `%%MATH_DISPLAY_${idx}%%`;
-  });
-  // Display math: \[ ... \]
-  html = html.replace(/\\\[([\s\S]*?)\\\]/g, (_, formula) => {
-    const idx = mathBlocks.length;
-    mathBlocks.push(katex.renderToString(normalizeLatex(formula), { displayMode: true, throwOnError: false }));
-    return `%%MATH_DISPLAY_${idx}%%`;
-  });
-  // Inline math: \( ... \)
-  html = html.replace(/\\\(([\s\S]*?)\\\)/g, (_, formula) => {
-    const idx = mathBlocks.length;
-    mathBlocks.push(katex.renderToString(normalizeLatex(formula), { displayMode: false, throwOnError: false }));
-    return `%%MATH_INLINE_${idx}%%`;
-  });
-
-  // Escape HTML (including any remaining LaTeX that wasn't matched)
-  html = html
-    .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
-
-  // Code blocks (fenced) — protect from further processing
-  // 语言标记为 mindmap 时渲染为思维导图（教材知识库风格）；
-  // 裸 ```（无语言标记）但内容像缩进树/树形字符时也自动渲染思维导图，否则按普通代码块
-  const codeBlocks = [];
-  html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
-    const idx = codeBlocks.length;
-    const l = (lang || '').toLowerCase();
-    if (l === 'mindmap' || (!l && looksLikeMindmap(code))) {
-      codeBlocks.push(renderNoteMindmap(code));
-    } else {
-      codeBlocks.push(`<pre><code>${code}</code></pre>`);
-    }
-    return `%%CODEBLOCK_${idx}%%`;
-  });
-
-  // Table: protect from other processing, ensure trailing newline for headings after table
-  const tablePlaceholders = [];
-  html = html.replace(/(?:^\|[^\n]+\|\s*$\n?)+/gm, (tableBlock) => {
-    const rows = tableBlock.trim().split('\n').filter(r => r.includes('|'));
-    const dataRows = rows.filter(r => !/^\|[\s\-:|]+\|$/.test(r));
-    if (dataRows.length === 0) return tableBlock;
-    const hasHeader = rows.length >= 2 && /^\|[\s\-:|]+\|$/.test(rows[1]);
-    let tableHtml = '<table>';
-    dataRows.forEach((row, i) => {
-      const cells = row.split('|').filter(c => c.trim() !== '').map(c => c.trim());
-      const tag = (hasHeader && i === 0) ? 'th' : 'td';
-      tableHtml += '<tr>' + cells.map(c => `<${tag}>${formatInline(c)}</${tag}>`).join('') + '</tr>';
-    });
-    tableHtml += '</table>';
-    const idx = tablePlaceholders.length;
-    tablePlaceholders.push(tableHtml);
-    return `%%TABLE_${idx}%%\n`;
-  });
-
-  // Inline code — protect from further processing (must be after table since table handles its own inline code)
-  const inlineCodes = [];
-  html = html.replace(/`([^`]+)`/g, (_, code) => {
-    const idx = inlineCodes.length;
-    inlineCodes.push(`<code>${code}</code>`);
-    return `%%INLINECODE_${idx}%%`;
-  });
-
-  // Horizontal rule --- or *** (use [ \t]* instead of \s* to NOT consume trailing newline)
-  html = html.replace(/^(---+|\*\*\*+)[ \t]*$/gm, '<hr>');
-
-  // Headings: #### text, ### text, ## text, # text
-  html = html.replace(/^#### (.+)$/gm, '<h4>$1</h4>');
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-
-  // Bold **text**
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  // Italic *text* (but not **)
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-
-  // Unordered list: lines starting with - or * (preserve indentation as left padding)
-  html = html.replace(/^(\s*)[-*] (.+)$/gm, (_, indent, content) => {
-    const pad = Math.min(indent.length * 8, 120);
-    return pad > 0 ? `<li style="padding-left:${pad}px">${content}</li>` : `<li>${content}</li>`;
-  });
-  html = html.replace(/((?:<li[^>]*>.*<\/li>\s*)+)/g, '<ul>$1</ul>');
-
-  // Run extra processor before restoring protected blocks
-  if (extraProcessor) {
-    html = extraProcessor(html);
+  if (typeof StudyMarkdown !== 'undefined' && StudyMarkdown && typeof StudyMarkdown.render === 'function') {
+    return StudyMarkdown.render(text, { transformHtml: extraProcessor });
   }
-
-  // Line breaks (before restoring to avoid breaking SVG/code/tables with embedded \n)
-  html = html.replace(/\n/g, '<br>');
-  // Cleanup: remove <br> that create unwanted blank lines in/around block-level elements
-  html = html.replace(/<\/(ul|ol|table|pre|blockquote|h[1-4])><br>/g, '</$1>');   // after closing tag
-  html = html.replace(/<hr><br>/g, '<hr>');                                        // after hr
-  html = html.replace(/<br>\s*<\/(ul|ol)>/g, '</$1>');                             // before </ul>/</ol>
-  html = html.replace(/<br>\s*(?=<li)/g, '');                                      // between <li> items
-
-  // Restore protected blocks
-  html = html.replace(/%%TABLE_(\d+)%%/g, (_, i) => tablePlaceholders[Number(i)]);
-  html = html.replace(/%%INLINECODE_(\d+)%%/g, (_, i) => inlineCodes[Number(i)]);
-  html = html.replace(/%%CODEBLOCK_(\d+)%%/g, (_, i) => codeBlocks[Number(i)]);
-  // Restore math blocks (must be after other restorations since math may contain inline HTML)
-  html = html.replace(/%%MATH_DISPLAY_(\d+)%%/g, (_, i) => mathBlocks[Number(i)]);
-  html = html.replace(/%%MATH_INLINE_(\d+)%%/g, (_, i) => mathBlocks[Number(i)]);
-
+  let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
   return html;
 }
 
@@ -1116,7 +1039,7 @@ function formatAiContent(text) {
       if (!t) return match;
       const escapedId = Number(id);
       const isDone = t.done;
-      return `<span class="ai-action-link" onclick="event.stopPropagation(); aiNavigateToTodo(${escapedId})" title="去目录查看"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>${escapeHtml(t.text.length > 15 ? t.text.slice(0,15)+'…' : t.text)}</span>` + (isDone ? ' ✅' : '');
+      return `<span class="ai-action-link" data-todo-id="${escapedId}" role="button" tabindex="0" title="去目录查看"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>${escapeHtml(t.text.length > 15 ? t.text.slice(0,15)+'…' : t.text)}</span>` + (isDone ? ' ✅' : '');
     });
   });
 }
@@ -1271,9 +1194,18 @@ function nodeToMarkdown(node) {
     case 'p': return '\n\n' + children().replace(/\n+$/, '') + '\n\n';
     case 'strong': case 'b': return '**' + children() + '**';
     case 'em': case 'i': return '*' + children() + '*';
-    case 'code': return '`' + children() + '`';
-    case 'pre': return '\n\n```\n' + children() + '\n```\n\n';
-    case 'h1': case 'h2': case 'h3': case 'h4':
+    case 'code': {
+      const value = children();
+      const marker = value.includes('`') ? '``' : '`';
+      return marker + value + marker;
+    }
+    case 'pre': {
+      const code = node.querySelector('code');
+      const languageClass = code ? Array.from(code.classList).find(c => c.startsWith('language-')) : '';
+      const language = languageClass ? languageClass.slice('language-'.length) : '';
+      return '\n\n```' + language + '\n' + (code ? code.textContent : node.textContent).replace(/\n$/, '') + '\n```\n\n';
+    }
+    case 'h1': case 'h2': case 'h3': case 'h4': case 'h5': case 'h6':
       return '\n\n' + '#'.repeat(Number(tag[1])) + ' ' + children() + '\n\n';
     case 'ul': case 'ol': {
       const items = Array.from(node.children)
@@ -1281,7 +1213,10 @@ function nodeToMarkdown(node) {
         .map((li, i) => (tag === 'ul' ? '- ' : (i + 1) + '. ') + nodeToMarkdown(li));
       return '\n\n' + items.join('\n') + '\n\n';
     }
-    case 'li': return children();
+    case 'li': {
+      const checkbox = node.querySelector(':scope > input[type="checkbox"]');
+      return (checkbox ? '[' + (checkbox.checked ? 'x' : ' ') + '] ' : '') + children();
+    }
     case 'table': return tableToMarkdown(node);
     case 'tr': { // 选区仅覆盖部分行（无 <table> 包裹）时尽力还原
       const cells = Array.from(node.children)
@@ -1291,10 +1226,23 @@ function nodeToMarkdown(node) {
     }
     case 'th': case 'td': return nodeToInline(node);
     case 'blockquote': return '\n\n> ' + children().replace(/\n/g, '\n> ') + '\n\n';
+    case 'del': case 's': return '~~' + children() + '~~';
     case 'span':
       if (node.classList.contains('katex')) return katexToLatex(node);
       return children(); // ai-action-link 等保留其文字
-    case 'a': return children();
+    case 'a': {
+      const href = node.getAttribute('href') || '';
+      if (!href) return children();
+      const title = node.getAttribute('title');
+      return '[' + children() + '](' + href + (title ? ' "' + title.replace(/"/g, '\\"') + '"' : '') + ')';
+    }
+    case 'img': {
+      const src = node.getAttribute('src') || '';
+      const alt = node.getAttribute('alt') || '';
+      const title = node.getAttribute('title');
+      return src ? '![' + alt + '](' + src + (title ? ' "' + title.replace(/"/g, '\\"') + '"' : '') + ')' : alt;
+    }
+    case 'input': return '';
     case 'div':
       // 跳过聊天界面装饰性元素，避免混入时间戳/按钮等噪音
       if (node.classList.contains('ai-chat-time') || node.classList.contains('ai-chat-keyname') ||
@@ -1312,7 +1260,7 @@ function tableToMarkdown(table) {
   table.querySelectorAll('tr').forEach(tr => {
     const cells = [];
     tr.querySelectorAll('th, td').forEach(c => {
-      cells.push(nodeToInline(c).trim().replace(/\s*\n\s*/g, ' '));
+      cells.push(nodeToInline(c).trim().replace(/\s*\n\s*/g, ' ').replace(/\|/g, '\\|'));
     });
     if (cells.length) rows.push(cells);
   });
@@ -1337,9 +1285,17 @@ function nodeToInline(node) {
     case 'br': return ' ';
     case 'strong': case 'b': return '**' + children() + '**';
     case 'em': case 'i': return '*' + children() + '*';
-    case 'code': return '`' + children() + '`';
+    case 'code': {
+      const value = children();
+      const marker = value.includes('`') ? '``' : '`';
+      return marker + value + marker;
+    }
+    case 'del': case 's': return '~~' + children() + '~~';
     case 'span': return node.classList.contains('katex') ? katexToLatex(node) : children();
-    case 'a': return children();
+    case 'a': {
+      const href = node.getAttribute('href') || '';
+      return href ? '[' + children() + '](' + href + ')' : children();
+    }
     default: return children();
   }
 }
@@ -1376,8 +1332,19 @@ document.addEventListener('contextmenu', function(e) {
   }
 });
 document.addEventListener('click', function(e) {
+  const todoLink = e.target.closest && e.target.closest('.ai-action-link[data-todo-id]');
+  if (todoLink) {
+    e.stopPropagation();
+    aiNavigateToTodo(Number(todoLink.dataset.todoId));
+  }
   if (!e.target.closest('#aiChatContextMenu')) closeAiChatContextMenu();
 });
 document.addEventListener('keydown', function(e) {
+  const todoLink = e.target.closest && e.target.closest('.ai-action-link[data-todo-id]');
+  if (todoLink && (e.key === 'Enter' || e.key === ' ')) {
+    e.preventDefault();
+    aiNavigateToTodo(Number(todoLink.dataset.todoId));
+    return;
+  }
   if (e.key === 'Escape') closeAiChatContextMenu();
 });

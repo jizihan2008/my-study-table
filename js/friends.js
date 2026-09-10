@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
-// js/friends.js — 好友系统（Supabase 后端）
-// 依赖：lib/supabase/supabase.js（window.supabase）、core.js（loadData/saveData）、
+// js/friends.js — 好友系统（CloudBase for Supabase / Supabase 后端）
+// 依赖：js/cloud-client.js（window.StudyCloud）、core.js（loadData/saveData）、
 //       todos.js（formatDate）、ai-utils.js（showCustomConfirm）、utils.js（escapeHtml）
 // 模块划分：本文件负责 配置 / Supabase 客户端 / 认证 / 好友管理 / 分组 / 聚合统计 /
 //           动态流 / 好友页整体渲染；聊天功能在 friends-chat.js 中。
@@ -9,22 +9,32 @@
 // ═══════════════ 配置管理（与插件市场共用 Supabase 连接） ═══════════════
 const FRIENDS_CFG_KEY = 'study_supabase_config';
 const OLD_FRIENDS_CFG_KEY = 'study_friends_config';
+const LEGACY_BUILTIN_SUPABASE_URL = 'https://taujqtysezmmxhkxxjce.supabase.co';
 
-// ── 内置默认 Supabase 连接（项目 URL + anon public key）──
-// anon key 本就是公开信息，安全靠 RLS（行级安全）保证数据隔离；
-// 内置后所有用户开箱即用，无需手动填写。用户仍可在「设置 → Supabase」覆盖为自建项目。
-// 注意：升级为内置后，设置面板默认展示此值；若希望某用户强制使用自己的项目，覆盖即可。
-const BUILTIN_SUPABASE_CONFIG = {
-  url: 'https://taujqtysezmmxhkxxjce.supabase.co',
-  anonKey: 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRhdWpxdHlzZXptbXhoa3h4amNlIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODU4MzA4OTEsImV4cCI6MjEwMTQwNjg5MX0.2AxQ4F7pYXTWHFxjdlDMt7OhnIPJihEcEw8HhOOP9Y8'
+// Publishable Key 与网页前端的 Supabase anon key 一样，本来就会随应用公开；数据安全依赖 RLS。
+const BUILTIN_CLOUD_CONFIG = {
+  provider: 'cloudbase',
+  envId: 'my-study-table-d1g1r0axn2975754f',
+  region: 'ap-shanghai',
+  accessKey: 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImIyNDkyOGQxLTY3MTgtNDU0Ny04ZWExLWVmMzRhN2YwNTAwZiJ9.eyJpc3MiOiJodHRwczovL215LXN0dWR5LXRhYmxlLWQxZzFyMGF4bjI5NzU3NTRmLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJteS1zdHVkeS10YWJsZS1kMWcxcjBheG4yOTc1NzU0ZiIsImV4cCI6NDA5MjcxNDQwOCwiaWF0IjoxNzg5MDMxMjA4LCJub25jZSI6ImVwZTZpTlU4U3VLYVZTc0Y5VzZhNGciLCJhdF9oYXNoIjoiZXBlNmlOVThTdUthVlNzRjlXNmE0ZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJteS1zdHVkeS10YWJsZS1kMWcxcjBheG4yOTc1NzU0ZiIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.VRFi624BWXB6RaKBeiDnb3IP33cGkORcM6HhYmHbuzP8XLhWj7Vs8UE7YEwJvFYTI4hm36Y63idn9BihycnJy8psFTkvp7ANnecmc4xHAZGx7ZPlkJb6qBrJYzDHAIs6jilt1LsP_wioKl8A_SMiTDSKD0gxIGoxwdiYdjC0EmxRbmknpWo5pGoRyRw3P3roZJ2d45px_XAxCVnWjcs6Xwmc_DDoMdJl396eRTVxuK6dI_qOeMjY2A1aQYa_llRQy6_YvdTQnSVvR8vl9XmU2SGhqWfJKB6_sa3dZzcKF_1HIeuOa5PnI_bD_F4p8HP4xlLSJCxy2wP1w-eIqOArog'
 };
+
+function cloneBuiltinCloudConfig() {
+  return Object.assign({}, BUILTIN_CLOUD_CONFIG);
+}
 
 function getFriendsConfig() {
   try {
     let raw = localStorage.getItem(FRIENDS_CFG_KEY);
     if (raw) {
       const cfg = JSON.parse(raw);
-      if (cfg && cfg.url && cfg.anonKey) return cfg;
+      if (cfg && cfg.provider === 'cloudbase' && cfg.envId && cfg.accessKey) return cfg;
+      if (cfg && cfg.url === LEGACY_BUILTIN_SUPABASE_URL) {
+        const migrated = cloneBuiltinCloudConfig();
+        localStorage.setItem(FRIENDS_CFG_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
+      if (cfg && cfg.url && cfg.anonKey) return cfg; // 保留自建 Supabase 兼容
     }
     // 从旧键迁移
     raw = localStorage.getItem(OLD_FRIENDS_CFG_KEY);
@@ -42,15 +52,15 @@ function getFriendsConfig() {
       if (cfg.url && cfg.anonKey) return cfg;
     }
     // 无本地配置 → 回退到内置默认（开箱即用）
-    return { url: BUILTIN_SUPABASE_CONFIG.url, anonKey: BUILTIN_SUPABASE_CONFIG.anonKey };
-  } catch (e) { return { url: BUILTIN_SUPABASE_CONFIG.url, anonKey: BUILTIN_SUPABASE_CONFIG.anonKey }; }
+    return cloneBuiltinCloudConfig();
+  } catch (e) { return cloneBuiltinCloudConfig(); }
 }
 function saveFriendsConfig(cfg) {
   localStorage.setItem(FRIENDS_CFG_KEY, JSON.stringify(cfg));
 }
 function isFriendsConfigured() {
   const cfg = getFriendsConfig();
-  return !!(cfg.url && cfg.anonKey);
+  return !!((cfg.provider === 'cloudbase' && cfg.envId && cfg.accessKey) || (cfg.url && cfg.anonKey));
 }
 
 // ═══════════════ Supabase 客户端单例 ═══════════════
@@ -58,18 +68,10 @@ let _frdClient = null;
 
 function getSupabaseClient() {
   if (_frdClient) return _frdClient;
-  if (typeof window.supabase === 'undefined') return null;
   const cfg = getFriendsConfig();
-  if (!cfg.url || !cfg.anonKey) return null;
+  if (typeof window.StudyCloud === 'undefined') return null;
   try {
-    _frdClient = window.supabase.createClient(cfg.url, cfg.anonKey, {
-      auth: {
-        persistSession: true,
-        autoRefreshToken: true,
-        detectSessionInUrl: false,
-        storage: window.localStorage
-      }
-    });
+    _frdClient = window.StudyCloud.createClient(cfg);
   } catch (e) {
     console.error('[Friends] createClient failed:', e);
     return null;
@@ -121,22 +123,28 @@ async function friendsGetMyProfile() {
   } catch (e) { return null; }
 }
 
-// 注册：username（唯一）/ nickname（可选）/ email / password
+let _friendsRegisterVerifyOtp = null;
+
+// CloudBase 注册先向邮箱发送一次验证码；验证完成后日常使用用户名 + 密码登录。
 async function friendsRegister(username, nickname, email, password) {
   const client = getSupabaseClient();
-  if (!client) return { error: 'Supabase 未配置，请先到 设置 → 好友 填写项目地址与 anon key。' };
+  if (!client) return { error: '云数据库客户端初始化失败，请检查 CloudBase 配置。' };
   if (!username || !email || !password) return { error: '请填写用户名、邮箱和密码。' };
-  if (password.length < 6) return { error: '密码至少需要 6 位。' };
+  if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
+    return { error: '密码至少 8 位，并包含大写字母、小写字母、数字和特殊字符。' };
+  }
   try {
-    const { data, error } = await client.auth.signUp({
-      email,
-      password,
-      options: {
-        data: { username: username.trim(), nickname: (nickname || username).trim() }
-      }
-    });
+    const cloudbase = client.provider === 'cloudbase';
+    const params = cloudbase
+      ? { email, password, username: username.trim(), name: (nickname || username).trim(), nickname: (nickname || username).trim() }
+      : { email, password, options: { data: { username: username.trim(), nickname: (nickname || username).trim() } } };
+    const { data, error } = await client.auth.signUp(params);
     if (error) return { error: error.message };
-    if (!data.user) return { error: '注册失败，请重试。' };
+    if (cloudbase && data && typeof data.verifyOtp === 'function') {
+      _friendsRegisterVerifyOtp = data.verifyOtp;
+      return { ok: true, needVerificationCode: true };
+    }
+    if (!data || !data.user) return { error: '注册失败，请重试。' };
     // signUp 返回 data.session 为 null = Supabase 已开启邮箱确认
     if (!data.session) {
       return { ok: true, needEmailConfirm: true, data };
@@ -148,12 +156,29 @@ async function friendsRegister(username, nickname, email, password) {
   }
 }
 
-async function friendsLogin(email, password) {
-  const client = getSupabaseClient();
-  if (!client) return { error: 'Supabase 未配置，请先到 设置 → 好友 填写项目地址与 anon key。' };
-  if (!email || !password) return { error: '请输入邮箱和密码。' };
+async function friendsVerifyRegistration(code) {
+  if (!_friendsRegisterVerifyOtp) return { error: '验证码已失效，请重新发送。' };
+  if (!code) return { error: '请输入邮箱验证码。' };
   try {
-    const { data, error } = await client.auth.signInWithPassword({ email, password });
+    const { data, error } = await _friendsRegisterVerifyOtp({ token: code.trim() });
+    if (error) return { error: error.message };
+    _friendsRegisterVerifyOtp = null;
+    if (!data || !data.user) return { error: '验证成功但未能登录，请使用用户名和密码登录。' };
+    return { ok: true, data };
+  } catch (e) {
+    return { error: '验证码校验异常：' + e.message };
+  }
+}
+
+async function friendsLogin(identifier, password) {
+  const client = getSupabaseClient();
+  if (!client) return { error: '云数据库客户端初始化失败，请检查 CloudBase 配置。' };
+  if (!identifier || !password) return { error: '请输入用户名和密码。' };
+  try {
+    const credentials = client.provider === 'cloudbase'
+      ? { username: identifier, password }
+      : { email: identifier, password };
+    const { data, error } = await client.auth.signInWithPassword(credentials);
     if (error) return { error: error.message };
     if (!data.user) return { error: '登录失败，请重试。' };
     return { ok: true, data };
@@ -792,7 +817,7 @@ async function syncStudyStats() {
     } catch (e) {
       if (e.message && /(404|Not Found|does not exist|relation.*does not exist)/i.test(String(e.message))) {
         window._weeklyFocusTodosMissing = true;
-        console.warn('[Friends] weekly_focus_todos 表不存在，已跳过后续上传。请在 Supabase SQL Editor 执行 supabase/schema.sql 建表。');
+        console.warn('[Friends] weekly_focus_todos 表不存在，已跳过后续上传。请在 CloudBase SQL Editor 执行 cloudbase/schema.sql 建表。');
       } else {
         console.warn('[Friends] sync weekly top todos failed:', e);
       }
@@ -802,6 +827,73 @@ async function syncStudyStats() {
 }
 
 // ═══════════════ 动态流 ═══════════════
+const FRIENDS_FALLBACK_POLL_MS = 60 * 1000;
+let friendsActivityPollTimer = null;
+let friendsActivityPollInFlight = false;
+let friendsActivitiesRealtimeReady = false;
+let friendsActivitiesRealtimePending = false;
+let friendsActivitiesRealtimeProbeTimer = null;
+
+function friendsCanFallbackPoll() {
+  const policy = window.FriendsPollingPolicy;
+  const state = {
+    online: typeof navigator === 'undefined' || navigator.onLine !== false,
+    visible: typeof document === 'undefined' || document.visibilityState !== 'hidden',
+    sectionActive: !!document.getElementById('section-friends')?.classList.contains('active')
+  };
+  return policy && typeof policy.canPoll === 'function'
+    ? policy.canPoll(state)
+    : state.online && state.visible && state.sectionActive;
+}
+
+function friendsStopActivityPolling() {
+  if (friendsActivityPollTimer) clearTimeout(friendsActivityPollTimer);
+  friendsActivityPollTimer = null;
+}
+
+function friendsStopFallbackPolling() {
+  friendsStopActivityPolling();
+  if (typeof friendsStopChatPolling === 'function') friendsStopChatPolling();
+}
+
+function friendsScheduleActivityPoll() {
+  if (friendsActivitiesRealtimeReady || friendsActivityPollTimer) return;
+  friendsActivityPollTimer = setTimeout(async function () {
+    friendsActivityPollTimer = null;
+    await friendsPollActivityFallbackOnce();
+    friendsScheduleActivityPoll();
+  }, FRIENDS_FALLBACK_POLL_MS);
+}
+
+function friendsStartActivityPolling(immediate) {
+  if (friendsActivitiesRealtimeReady) return;
+  friendsStopActivityPolling();
+  if (immediate) void friendsPollActivityFallbackOnce().then(friendsScheduleActivityPoll);
+  else friendsScheduleActivityPoll();
+}
+
+async function friendsPollActivityFallbackOnce() {
+  if (friendsActivityPollInFlight || !friendsCanFallbackPoll()) return false;
+  friendsActivityPollInFlight = true;
+  try {
+    if (friendsMainView === 'feed') {
+      await friendsLoadActivities();
+      const main = document.getElementById('friendsMainView');
+      if (main && friendsMainView === 'feed') {
+        main.innerHTML = renderFriendsFeedView();
+        initFriendsLucide();
+      }
+    }
+    if (typeof friendsPollUnreadMessages === 'function') await friendsPollUnreadMessages();
+    return true;
+  } catch (e) {
+    console.warn('[Friends] activity polling failed:', e);
+    return false;
+  } finally {
+    friendsActivityPollInFlight = false;
+  }
+}
+
 async function friendsLoadActivities() {
   const client = getSupabaseClient();
   const me = await friendsGetMyProfile();
@@ -832,8 +924,14 @@ async function friendsLoadActivities() {
 
 // 订阅动态实时推送（RLS 自动过滤为本人+好友）
 function friendsSubscribeActivities() {
+  if (friendsActivitiesRealtimeReady || friendsActivitiesRealtimePending) return;
   const client = getSupabaseClient();
   if (!client) return;
+  if (typeof client.channel !== 'function') {
+    friendsStartActivityPolling(false);
+    return;
+  }
+  friendsActivitiesRealtimePending = true;
   try {
     const channel = client
       .channel('friends-activities')
@@ -846,6 +944,7 @@ function friendsSubscribeActivities() {
           const isMine = meId && act.user_id === meId;
           const isFriend = friendsListCache.some(f => f.profile.id === act.user_id);
           if (!isMine && !isFriend) return;
+          if (!document.getElementById('section-friends')?.classList.contains('active')) return;
           friendsLoadActivities().then(() => {
             if (friendsMainView === 'feed' && document.getElementById('friendsMainView')) {
               document.getElementById('friendsMainView').innerHTML = renderFriendsFeedView();
@@ -853,10 +952,31 @@ function friendsSubscribeActivities() {
             }
           });
         })
-      .subscribe();
+      .subscribe((status) => {
+        if (status === 'SUBSCRIBED') {
+          friendsActivitiesRealtimeReady = true;
+          friendsActivitiesRealtimePending = false;
+          if (friendsActivitiesRealtimeProbeTimer) clearTimeout(friendsActivitiesRealtimeProbeTimer);
+          friendsActivitiesRealtimeProbeTimer = null;
+          friendsStopActivityPolling();
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          friendsActivitiesRealtimeReady = false;
+          friendsActivitiesRealtimePending = false;
+          friendsStartActivityPolling(false);
+        }
+      });
     friendsRealtimeChannels.push(channel);
+    // Supabase 兼容 SDK 可能不回报订阅状态，超时后自动降级。
+    friendsActivitiesRealtimeProbeTimer = setTimeout(function () {
+      if (friendsActivitiesRealtimeReady) return;
+      friendsActivitiesRealtimePending = false;
+      friendsStartActivityPolling(false);
+    }, 10000);
   } catch (e) {
     console.warn('[Friends] subscribe activities failed:', e);
+    friendsActivitiesRealtimePending = false;
+    friendsActivitiesRealtimeReady = false;
+    friendsStartActivityPolling(false);
   }
 }
 
@@ -865,8 +985,13 @@ function friendsUnsubscribeAll() {
   if (client) {
     try { client.removeAllChannels(); } catch (e) {}
   }
+  if (friendsActivitiesRealtimeProbeTimer) clearTimeout(friendsActivitiesRealtimeProbeTimer);
+  friendsActivitiesRealtimeProbeTimer = null;
+  friendsActivitiesRealtimePending = false;
+  friendsActivitiesRealtimeReady = false;
+  friendsStopActivityPolling();
   friendsRealtimeChannels = [];
-  if (typeof _friendsSubscribedConvs !== 'undefined') _friendsSubscribedConvs = new Set();
+  if (typeof friendsResetChatRealtimeState === 'function') friendsResetChatRealtimeState();
 }
 
 // ═══════════════ 在线心跳 ═══════════════
@@ -973,6 +1098,19 @@ async function renderFriends() {
   }
 }
 
+document.addEventListener('visibilitychange', function () {
+  if (document.visibilityState === 'hidden') {
+    friendsStopFallbackPolling();
+  } else if (!friendsActivitiesRealtimeReady && document.getElementById('section-friends')?.classList.contains('active')) {
+    friendsStartActivityPolling(true);
+  }
+});
+window.addEventListener('online', function () {
+  if (!friendsActivitiesRealtimeReady && document.getElementById('section-friends')?.classList.contains('active')) {
+    friendsStartActivityPolling(true);
+  }
+});
+
 // 好友页错误兜底界面（Supabase 网络故障时展示，含重试按钮）
 function renderFriendsError(msg) {
   return `
@@ -995,8 +1133,8 @@ function renderFriendsSetup() {
       <h3>好友系统需要先连接云端</h3>
       <p>应用已内置默认云服务连接，通常无需配置即可使用。若仍显示此页，请检查云端配置：</p>
       <ol class="fr-setup-steps">
-        <li><b>创建数据库表</b>：打开 Supabase 控制台 → SQL Editor，执行应用目录下 <code>supabase/schema.sql</code> 中的脚本（已随应用提供）。</li>
-        <li><b>填写项目配置</b>：在 <b>设置 → 好友</b> 中填入项目的 URL 与 anon public key（默认已内置，可覆盖为自己的项目）。</li>
+        <li><b>创建数据库表</b>：打开 CloudBase 控制台 → Supabase → SQL Editor，执行应用目录下 <code>cloudbase/schema.sql</code>。</li>
+        <li><b>检查登录方式</b>：在身份认证中开启用户名密码登录和邮箱验证码注册。</li>
       </ol>
       <button class="btn-add" onclick="openSettingsModal()" style="align-self:center;">
         <i data-lucide="settings" class="lucide-icon" style="width:15px;height:15px;"></i> 前往设置
@@ -1029,12 +1167,13 @@ function frSwitchAuthTab(mode) {
 }
 
 function frLoginForm() {
+  const cloudbase = getFriendsConfig().provider === 'cloudbase';
   return `
   <div class="fr-auth-form">
     <i data-lucide="log-in" class="lucide-icon fr-auth-icon"></i>
     <h3>登录账号</h3>
-    <label class="fr-auth-label">邮箱</label>
-    <input type="email" class="fr-auth-input" id="frLoginEmail" placeholder="you@example.com" onkeydown="if(event.key==='Enter')frDoLogin()">
+    <label class="fr-auth-label">${cloudbase ? '用户名' : '邮箱'}</label>
+    <input type="${cloudbase ? 'text' : 'email'}" class="fr-auth-input" id="frLoginEmail" placeholder="${cloudbase ? '注册时设置的用户名' : 'you@example.com'}" onkeydown="if(event.key==='Enter')frDoLogin()">
     <label class="fr-auth-label">密码</label>
     <input type="password" class="fr-auth-input" id="frLoginPassword" placeholder="密码" onkeydown="if(event.key==='Enter')frDoLogin()">
     <div class="fr-auth-status" id="frAuthStatus"></div>
@@ -1045,23 +1184,31 @@ function frLoginForm() {
 }
 
 function frRegisterForm() {
+  _friendsRegisterVerifyOtp = null;
   return `
   <div class="fr-auth-form">
     <i data-lucide="user-plus" class="lucide-icon fr-auth-icon"></i>
     <h3>注册新账号</h3>
     <label class="fr-auth-label">用户名（唯一，好友通过它找到你）</label>
-    <input type="text" class="fr-auth-input" id="frRegUsername" placeholder="如：小纪" maxlength="30">
+    <input type="text" class="fr-auth-input" id="frRegUsername" placeholder="5–24 位字母、数字、_ 或 -" maxlength="24">
     <label class="fr-auth-label">昵称（可选）</label>
     <input type="text" class="fr-auth-input" id="frRegNickname" placeholder="展示昵称" maxlength="30">
     <label class="fr-auth-label">邮箱</label>
     <input type="email" class="fr-auth-input" id="frRegEmail" placeholder="you@example.com">
-    <label class="fr-auth-label">密码（至少 6 位）</label>
+    <label class="fr-auth-label">密码（至少 8 位，含大小写字母、数字和特殊字符）</label>
     <input type="password" class="fr-auth-input" id="frRegPassword" placeholder="密码" onkeydown="if(event.key==='Enter')frDoRegister()">
     <label class="fr-auth-label">确认密码</label>
     <input type="password" class="fr-auth-input" id="frRegPassword2" placeholder="再次输入密码" onkeydown="if(event.key==='Enter')frDoRegister()">
+    <div id="frRegVerifyWrap" style="display:none;">
+      <label class="fr-auth-label">邮箱验证码</label>
+      <input type="text" inputmode="numeric" autocomplete="one-time-code" class="fr-auth-input" id="frRegCode" placeholder="请输入邮件中的验证码" onkeydown="if(event.key==='Enter')frDoVerifyRegistration()">
+      <button class="btn-add" onclick="frDoVerifyRegistration()" style="width:100%;justify-content:center;margin-top:6px;">
+        <i data-lucide="badge-check" class="lucide-icon" style="width:15px;height:15px;"></i> 验证并完成注册
+      </button>
+    </div>
     <div class="fr-auth-status" id="frAuthStatus"></div>
-    <button class="btn-add" onclick="frDoRegister()" style="width:100%;justify-content:center;margin-top:6px;">
-      <i data-lucide="user-plus" class="lucide-icon" style="width:15px;height:15px;"></i> 注册
+    <button class="btn-add" id="frRegisterBtn" onclick="frDoRegister()" style="width:100%;justify-content:center;margin-top:6px;">
+      <i data-lucide="mail" class="lucide-icon" style="width:15px;height:15px;"></i> 发送验证码
     </button>
   </div>`;
 }
@@ -1072,10 +1219,10 @@ function frSetAuthStatus(msg, isError) {
 }
 
 async function frDoLogin() {
-  const email = document.getElementById('frLoginEmail').value.trim();
+  const identifier = document.getElementById('frLoginEmail').value.trim();
   const password = document.getElementById('frLoginPassword').value;
   frSetAuthStatus('登录中…');
-  const res = await friendsLogin(email, password);
+  const res = await friendsLogin(identifier, password);
   if (!res.ok) { frSetAuthStatus(res.error, true); return; }
   friendsAuthUser = await friendsGetMyProfile();
   frSetAuthStatus('');
@@ -1090,12 +1237,26 @@ async function frDoRegister() {
   const password = document.getElementById('frRegPassword').value;
   const password2 = document.getElementById('frRegPassword2').value;
   if (!username) { frSetAuthStatus('请填写用户名', true); return; }
-  if (!/^[\u4e00-\u9fa5a-zA-Z0-9_-]{1,30}$/.test(username)) { frSetAuthStatus('用户名仅支持中文、字母、数字、下划线和中划线', true); return; }
+  if (!/^[A-Za-z0-9][A-Za-z0-9_-]{4,23}$/.test(username) || !/[A-Za-z]/.test(username)) { frSetAuthStatus('用户名需为 5–24 位，以字母或数字开头，且不能是纯数字', true); return; }
   if (!email) { frSetAuthStatus('请填写邮箱', true); return; }
   if (password !== password2) { frSetAuthStatus('两次输入的密码不一致', true); return; }
-  frSetAuthStatus('注册中…');
+  frSetAuthStatus('正在向邮箱发送验证码…');
   const res = await friendsRegister(username, nickname, email, password);
   if (!res.ok) { frSetAuthStatus(res.error, true); return; }
+  if (res.needVerificationCode) {
+    const wrap = document.getElementById('frRegVerifyWrap');
+    const btn = document.getElementById('frRegisterBtn');
+    if (wrap) wrap.style.display = 'block';
+    if (btn) btn.style.display = 'none';
+    ['frRegUsername', 'frRegNickname', 'frRegEmail', 'frRegPassword', 'frRegPassword2'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.disabled = true;
+    });
+    frSetAuthStatus('验证码已发送。此验证码只用于完成注册，以后直接用用户名和密码登录。');
+    document.getElementById('frRegCode')?.focus();
+    initFriendsLucide();
+    return;
+  }
   if (res.needEmailConfirm) {
     frSetAuthStatus('注册成功！已发送确认邮件，请先到邮箱确认，然后回到这里登录。');
     friendsShowToast('📧 注册成功！已发送确认邮件，请到邮箱确认后登录');
@@ -1106,6 +1267,20 @@ async function frDoRegister() {
   frSetAuthStatus('');
   friendsShowToast('🎉 注册成功，欢迎加入！');
   renderFriends();
+}
+
+async function frDoVerifyRegistration() {
+  const code = document.getElementById('frRegCode')?.value.trim() || '';
+  frSetAuthStatus('正在验证…');
+  const res = await friendsVerifyRegistration(code);
+  if (!res.ok) { frSetAuthStatus(res.error, true); return; }
+  friendsAuthUser = await friendsGetMyProfile();
+  friendsShowToast('🎉 注册成功，以后可直接使用用户名和密码登录');
+  if (friendsAuthUser) renderFriends();
+  else {
+    frSwitchAuthTab('login');
+    frSetAuthStatus('注册成功，请使用用户名和密码登录。');
+  }
 }
 
 // ═══════════════ 已登录主界面 ═══════════════
@@ -1585,7 +1760,7 @@ function frShowAbout() {
         <li>好友间实时聊天</li>
         <li>只同步<u>聚合统计</u>（打卡/时长/数量），不上传具体待办与笔记内容</li>
       </ul>
-      <p style="color:var(--text-secondary);">数据存储于你的 Supabase 项目。</p>
+      <p style="color:var(--text-secondary);">数据存储于你的 CloudBase 环境。</p>
     </div>
   `;
   editModalOpen = true;

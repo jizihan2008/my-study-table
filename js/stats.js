@@ -282,29 +282,8 @@ ${ts.range.slice(-7).map(d => d.slice(5)+': 待办'+ts.completed[d]+' 专注'+Ma
 }
 
 function parseAnalysisSections(text) {
-  let html = ''; const lines = text.split('\n'); let inList = null; // null, 'ul', 'ol'
-  function closeList() { if (inList) { html += inList === 'ul' ? '</ul>' : '</ol>'; inList = null; } }
-  // 先 HTML 转义再套 Markdown 格式，防止 AI 输出中夹带 HTML/脚本被直接注入
-  const fmt = t => escapeHtml(t).replace(/\*\*(.+?)\*\*/g,'<strong>$1</strong>').replace(/\*(.+?)\*/g,'<em>$1</em>').replace(/`(.+?)`/g,'<code class="stats-inline-code">$1</code>');
-  for (const line of lines) {
-    const tr = line.trim();
-    if (!tr) { closeList(); continue; }
-    if (tr.startsWith('### ')) { closeList(); html += '<h4 class="stats-analysis-h4">'+fmt(tr.slice(4))+'</h4>'; continue; }
-    if (tr.startsWith('## ')) { closeList(); html += '<h3 class="stats-analysis-h3">'+fmt(tr.slice(3))+'</h3>'; continue; }
-    if (tr.startsWith('# ')) { closeList(); html += '<h2 class="stats-analysis-h2">'+fmt(tr.slice(2))+'</h2>'; continue; }
-    if (tr.startsWith('- ') || tr.startsWith('* ')) {
-      if (inList !== 'ul') { closeList(); html += '<ul class="stats-analysis-list">'; inList = 'ul'; }
-      html += '<li>'+fmt(tr.slice(2))+'</li>'; continue;
-    }
-    if (/^\d+\.\s/.test(tr)) {
-      if (inList !== 'ol') { closeList(); html += '<ol class="stats-analysis-list">'; inList = 'ol'; }
-      html += '<li>'+fmt(tr.replace(/^\d+\.\s/,''))+'</li>'; continue;
-    }
-    closeList();
-    html += '<p class="stats-analysis-p">'+fmt(tr)+'</p>';
-  }
-  closeList();
-  return html;
+  if (typeof formatMarkdownBase === 'function') return formatMarkdownBase(String(text || ''));
+  return '<p class="stats-analysis-p">' + escapeHtml(String(text || '')).replace(/\n/g, '<br>') + '</p>';
 }
 
 // ═══════════ Stats: Main Render ═══════════

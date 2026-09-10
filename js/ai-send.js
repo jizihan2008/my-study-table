@@ -358,13 +358,33 @@ async function sendAiMessage(externalText, externalAttachments) {
 
   let aiReplyText = null; // 最终回复文本（供调用方回填等使用）
   try {
-    const loopRes = await runToolCallLoop(apiCfg, conv, null);
+    const streamingKeyName = getActiveKeyDisplayName();
+    const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
+      if (snapshot.reset) {
+        clearAiStreamingDraft(conv.id);
+        return;
+      }
+      setAiStreamingDraft(conv.id, {
+        content: snapshot.content,
+        reasoning: snapshot.reasoning,
+        keyName: streamingKeyName
+      });
+    });
     let finalCleanText = loopRes.finalCleanText;
     const finalRawReply = loopRes.finalRawReply;
     const finalReasoning = loopRes.finalReasoning;
+    clearAiStreamingDraft(conv.id, false);
+    if (loopRes.stopped) {
+      finalCleanText = finalCleanText && finalCleanText !== '⏹️ 已手动停止。'
+        ? finalCleanText.replace(/\s+$/, '') + '\n\n> ⏹️ 已停止生成，以上为已收到的内容。'
+        : '⏹️ 已手动停止。';
+    } else if (loopRes.streamError) {
+      finalCleanText = (finalCleanText || '（未收到完整回复）').replace(/\s+$/, '')
+        + '\n\n> ⚠️ 流式连接中断：' + loopRes.streamError;
+    }
     aiReplyText = finalCleanText || null;
     // max_tokens 截断（finish_reason='length'）→ 自动续写一次，让回复完整
-    if (loopRes.finishReason === 'length') {
+    if (!loopRes.stopped && !loopRes.streamError && loopRes.finishReason === 'length') {
       const more = (typeof continueTruncatedReply === 'function') ? await continueTruncatedReply(apiCfg, conv, finalCleanText) : '';
       if (more) finalCleanText = (finalCleanText || '').replace(/\s+$/, '') + '\n' + more;
       else finalCleanText += '\n\n⚠️（回复因长度限制被截断，可调大 Max Tokens 或发送「继续」）';
@@ -403,6 +423,7 @@ async function sendAiMessage(externalText, externalAttachments) {
       }
     }
   } catch (err) {
+    clearAiStreamingDraft(conv.id, false);
     const errorMsg = '❌ 出错了：' + err.message;
     const errMsg = { role: 'assistant', content: errorMsg + '\n\n请检查 API Key 和网络连接是否正确。', time: timeStr, keyName: getActiveKeyDisplayName() };
     appendMessage(conv, errMsg);
@@ -413,6 +434,7 @@ async function sendAiMessage(externalText, externalAttachments) {
   // Always reset loading state for this conversation
   setAiLoading(conv.id, false);
   setAiStopRequested(conv.id, false);
+  clearAiStreamingDraft(conv.id, false);
   // 已生成/已停止/已失败：清除待生成标记（避免下次启动误判为"被中断"）
   try { localStorage.removeItem('study_ai_pending'); } catch {}
   renderAiMessages();
@@ -507,12 +529,25 @@ async function regenerateFromUserNode(conv, userNodeId) {
   try { localStorage.setItem('study_ai_pending', JSON.stringify({ convId: conv.id, userNodeId, at: Date.now() })); } catch {}
 
   try {
-    const loopRes = await runToolCallLoop(apiCfg, conv, null);
+    const streamingKeyName = getActiveKeyDisplayName();
+    const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
+      if (snapshot.reset) clearAiStreamingDraft(conv.id);
+      else setAiStreamingDraft(conv.id, { content: snapshot.content, reasoning: snapshot.reasoning, keyName: streamingKeyName });
+    });
     let finalCleanText = loopRes.finalCleanText;
     const finalRawReply = loopRes.finalRawReply;
     const finalReasoning = loopRes.finalReasoning;
+    clearAiStreamingDraft(conv.id, false);
+    if (loopRes.stopped) {
+      finalCleanText = finalCleanText && finalCleanText !== '⏹️ 已手动停止。'
+        ? finalCleanText.replace(/\s+$/, '') + '\n\n> ⏹️ 已停止生成，以上为已收到的内容。'
+        : '⏹️ 已手动停止。';
+    } else if (loopRes.streamError) {
+      finalCleanText = (finalCleanText || '（未收到完整回复）').replace(/\s+$/, '')
+        + '\n\n> ⚠️ 流式连接中断：' + loopRes.streamError;
+    }
     // max_tokens 截断（finish_reason='length'）→ 自动续写一次，让回复完整
-    if (loopRes.finishReason === 'length') {
+    if (!loopRes.stopped && !loopRes.streamError && loopRes.finishReason === 'length') {
       const more = (typeof continueTruncatedReply === 'function') ? await continueTruncatedReply(apiCfg, conv, finalCleanText) : '';
       if (more) finalCleanText = (finalCleanText || '').replace(/\s+$/, '') + '\n' + more;
       else finalCleanText += '\n\n⚠️（回复因长度限制被截断，可调大 Max Tokens 或发送「继续」）';
@@ -536,6 +571,7 @@ async function regenerateFromUserNode(conv, userNodeId) {
       parseMemoryTags(finalRawReply || finalCleanText, conv.id, conv.title);
     }
   } catch (err) {
+    clearAiStreamingDraft(conv.id, false);
     const errorMsg = '❌ 出错了：' + err.message;
     const errMsg = { role: 'assistant', content: errorMsg + '\n\n请检查 API Key 和网络连接是否正确。', time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), keyName: getActiveKeyDisplayName() };
     createBranch(conv, userNodeId, errMsg);
@@ -545,6 +581,7 @@ async function regenerateFromUserNode(conv, userNodeId) {
 
   setAiLoading(conv.id, false);
   setAiStopRequested(conv.id, false);
+  clearAiStreamingDraft(conv.id, false);
   try { localStorage.removeItem('study_ai_pending'); } catch {}
   renderAiMessages();
   updateAiSendButton();

@@ -650,22 +650,20 @@ aiConvs = [{
 - Kimi 视觉模型可分析图片/视频
 - 图片文件限制 6MB（Data URL 会膨胀 ~33%）
 
-### 11.6 Markdown 渲染（ai-render.js）
+### 11.6 Markdown 渲染（markdown.js / ai-render.js）
 
-`formatMarkdownBase(text, extraProcessor)` 是一个通用 Markdown → HTML 渲染器：
+`js/markdown.js` 提供全应用统一的 `StudyMarkdown`；`formatMarkdownBase(text, extraProcessor)` 是兼容旧调用的入口。笔记、AI 对话、教材、Codegen 和统计分析不得再维护各自的正则 Markdown 解析器。
 
-**处理步骤**：
-1. HTML 转义（防 XSS）
-2. 保护代码块（` ``` `）→ 占位符
-3. 保护表格 → 占位符
-4. 保护行内代码（`` ` ``）→ 占位符
-5. 转换分隔线、标题、粗体、斜体
-6. 转换无序列表
-7. 执行额外处理器（如 AI 消息中的 `[ID:数字]` → 可点击链接）
-8. 还原占位符
-9. 换行 → `<br>`
+**处理链**：
+1. Markdown-It 15 解析 CommonMark/GFM（表格、删除线、嵌套列表、引用、链接、图片等）
+2. 项目扩展处理任务列表、唯一标题锚点、脚注、KaTeX 和 `mindmap` 围栏
+3. Highlight.js 按围栏语言标记进行代码高亮
+4. 执行受控 `extraProcessor`（如 AI 消息中的 `[ID:数字]`）
+5. DOMPurify 对最终 HTML 统一消毒后才允许写入 `innerHTML`
 
-**LaTeX 支持**：`latexToHtml` 递归处理 `\frac{}{}` / `\sqrt{}` 内部内容（避免嵌套命令未转换）；支持 `\( \)`、`\[ \]`、`$$...$$` 定界符；裸 LaTeX 命令自动包裹行内定界符。
+**安全约束**：Markdown 原始 HTML 始终关闭；普通链接只允许 `http:` / `https:` / `mailto:` 与页内 `#` 锚点，图片只允许 HTTPS；Electron 外链统一交给主进程 `open-external` 策略；禁止脚本、iframe、object、embed 和 form。任何新增 Markdown 插件都必须先经过最终 DOMPurify 层并补充 XSS 测试。
+
+**LaTeX 支持**：支持 `$...$`、`$$...$$`、`\( ... \)`、`\[ ... \]`，并兼容旧笔记中的常见裸 LaTeX 命令。数学规则在 Markdown token 层运行，不处理行内代码和围栏代码，也不再使用可能与用户文本碰撞的字符串占位符。
 
 ### 11.7 长期记忆系统（memory.js）
 

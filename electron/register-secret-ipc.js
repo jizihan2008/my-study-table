@@ -10,6 +10,7 @@ const ALLOWED_SECRET_KEYS = new Set([
   'study_mail_accounts',
   'study_mail_config',
   'study_inbox_config',
+  'study_qce_access_token',
   'study_codegen_api_key',
   'study_codebuddy_api_key'
 ]);
@@ -58,6 +59,15 @@ function registerSecretIpc({ ipcMain, safeStorage, userDataPath }) {
     return safeStorage.decryptString(Buffer.from(String(value), 'base64'));
   }
 
+  async function getSecret(key) {
+    const safeKey = assertAllowedKey(key);
+    if (!encryptionAvailable()) return '';
+    await writeChain.catch(() => {});
+    const vault = await readVault();
+    if (!vault.entries[safeKey]) return '';
+    try { return decrypt(vault.entries[safeKey]); } catch { return ''; }
+  }
+
   ipcMain.handle('secret:status', async () => ({ available: encryptionAvailable() }));
 
   ipcMain.handle('secret:load-all', async () => {
@@ -97,7 +107,7 @@ function registerSecretIpc({ ipcMain, safeStorage, userDataPath }) {
     return { ok: true, available: true, migrated };
   });
 
-  return { vaultPath, encryptionAvailable };
+  return { vaultPath, encryptionAvailable, getSecret };
 }
 
 module.exports = { ALLOWED_SECRET_KEYS, assertAllowedKey, registerSecretIpc };

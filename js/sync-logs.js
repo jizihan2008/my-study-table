@@ -74,6 +74,33 @@
     () => _enqueue(() => _flushLogs({ pullMode: 'incremental', maintenance: true })),
     PULL_INTERVAL
   );
+  let pullLifecycleBound = false;
+
+  function _canRunScheduledPull() {
+    const online = !global.navigator || global.navigator.onLine !== false;
+    const visible = !global.document || global.document.visibilityState !== 'hidden';
+    return online && visible;
+  }
+
+  function _bindPullLifecycle() {
+    if (pullLifecycleBound || typeof global.addEventListener !== 'function') return;
+    pullLifecycleBound = true;
+    global.addEventListener('online', function () {
+      if (_enabled() && _autoSyncOn() && loggedIn) void pullScheduler.start({ immediate: true });
+    });
+    global.addEventListener('offline', function () {
+      pullScheduler.stop();
+    });
+    if (global.document && typeof global.document.addEventListener === 'function') {
+      global.document.addEventListener('visibilitychange', function () {
+        if (global.document.visibilityState === 'hidden') {
+          pullScheduler.stop();
+        } else if (_enabled() && _autoSyncOn() && loggedIn && _canRunScheduledPull()) {
+          void pullScheduler.start({ immediate: true });
+        }
+      });
+    }
+  }
   // 同步进度状态（面板「同步」区块实时显示；见 _emitProgress / _statusLine）
   let progressState = {
     phase: 'idle',        // idle | quota | uploading | outbox | pulling | done | error
@@ -1725,7 +1752,7 @@
     _subscribe();
     if (_autoSyncOn()) {
       await _enqueue(() => _flushLogs({ pullMode: 'full', maintenance: true }));
-      pullScheduler.start();
+      if (_canRunScheduledPull()) pullScheduler.start();
     }
     _emitStatus();
   }
@@ -1733,7 +1760,7 @@
   // Realtime 订阅 user_sync_items（其他设备写入时实时合并）
   async function _subscribe() {
     const c = _client();
-    if (!c || !_autoSyncOn() || !loggedIn) return;
+    if (!c || typeof c.channel !== 'function' || !_autoSyncOn() || !loggedIn) return;
     try {
       const session = await _session();
       if (!session) return;
@@ -1789,6 +1816,7 @@
   // 登录状态监听（复用 sync.js 的 onAuthStateChange 思路，避免事件时序问题）
   function init() {
     _loadCfg();
+    _bindPullLifecycle();
     try {
       if (typeof getSupabaseClient === 'function') client = getSupabaseClient();
     } catch (e) {}

@@ -150,6 +150,7 @@ document.addEventListener('click', function(e) {
 function selectNote(id) {
   checkAndUpdateSummary();
   activeNoteId = id;
+  notesTocMobileOpen = false;
   localStorage.setItem('study_active_note', activeNoteId);
   if (notesIsMobile()) notesMobileView = 'main';   // 移动端选中笔记 → 进入正文页
   renderNotes();
@@ -1437,13 +1438,44 @@ function formatText(type) {
     case 'italic':      prefix = '*';   suffix = '*';   placeholder = '斜体文字'; break;
     case 'strikethrough': prefix = '~~'; suffix = '~~'; placeholder = '删除的文字'; break;
     case 'code':        prefix = '`';   suffix = '`';   placeholder = '代码'; break;
+    case 'codeblock': {
+      const beforeNl = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+      const afterNl = end < text.length && text[end] !== '\n' ? '\n' : '';
+      prefix = beforeNl + '```\n'; suffix = '\n```' + afterNl; placeholder = '代码'; break;
+    }
     case 'latex':       prefix = '\\(';  suffix = '\\)';  placeholder = '公式'; break;
     case 'heading':     prefix = '## '; suffix = '';    placeholder = '标题'; break;
-    case 'link':        prefix = '[';   suffix = '](url)'; placeholder = '链接文字'; break;
+    case 'link':        prefix = '[';   suffix = '](https://example.com)'; placeholder = '链接文字'; break;
+    case 'image':       prefix = '![';  suffix = '](https://example.com/image.png)'; placeholder = '图片说明'; break;
     case 'ul':          prefix = '- ';  suffix = '';    placeholder = '列表项'; break;
     case 'ol':          prefix = '1. '; suffix = '';    placeholder = '列表项'; break;
     case 'quote':       prefix = '> ';  suffix = '';    placeholder = '引用文字'; break;
     case 'task':        prefix = '- [ ] '; suffix = ''; placeholder = '待办事项'; break;
+    case 'table': {
+      const block = '| 列 1 | 列 2 |\n| --- | --- |\n| 内容 | 内容 |';
+      const beforeNl = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+      const afterNl = end < text.length && text[end] !== '\n' ? '\n' : '';
+      ta.value = text.substring(0, start) + beforeNl + block + afterNl + text.substring(end);
+      const firstCell = start + beforeNl.length + 2;
+      ta.selectionStart = firstCell;
+      ta.selectionEnd = firstCell + 3;
+      ta.focus();
+      onNotesChange();
+      return;
+    }
+    case 'footnote': {
+      const ids = Array.from(text.matchAll(/\[\^(\d+)\]/g), m => Number(m[1])).filter(Number.isFinite);
+      const id = ids.length ? Math.max(...ids) + 1 : 1;
+      const marker = '[^' + id + ']';
+      const definition = '\n\n[^' + id + ']: 脚注内容';
+      ta.value = text.substring(0, start) + marker + text.substring(end) + definition;
+      const defStart = ta.value.length - '脚注内容'.length;
+      ta.selectionStart = defStart;
+      ta.selectionEnd = ta.value.length;
+      ta.focus();
+      onNotesChange();
+      return;
+    }
     case 'hr': {
       // Only prepend \n if neither the preceding char nor the cursor position is \n
       const beforeNl = start > 0 && text[start - 1] !== '\n' && text[start] !== '\n' ? '\n' : '';
@@ -1506,8 +1538,109 @@ document.addEventListener('keydown', function(e) {
 });
 
 let noteViewMode='preview';
+let notesTocVisible=localStorage.getItem('study_notes_toc_visible')!=='false';
+let notesTocMobileOpen=false;
+let _noteTocScrollFrame=0;
+
+function getNotePreviewHeadings(){
+  const preview=document.getElementById('notesPreview');
+  if(!preview)return[];
+  return Array.from(preview.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]'));
+}
+
+function renderNoteToc(){
+  const panel=document.getElementById('notesTocPanel');
+  const list=document.getElementById('notesTocList');
+  const toggle=document.getElementById('notesTocToggleBtn');
+  if(!panel||!list)return;
+  const shouldShow=noteViewMode==='preview'&&(notesIsMobile()?notesTocMobileOpen:notesTocVisible);
+  panel.classList.toggle('visible',shouldShow);
+  panel.setAttribute('aria-hidden',shouldShow?'false':'true');
+  if(toggle){
+    toggle.classList.toggle('active',shouldShow);
+    toggle.setAttribute('aria-pressed',shouldShow?'true':'false');
+    toggle.title=notesTocVisible?'隐藏智能目录':'显示智能目录';
+  }
+  if(noteViewMode!=='preview')return;
+
+  const headings=getNotePreviewHeadings();
+  if(!headings.length){
+    list.innerHTML='<div class="notes-toc-empty">使用 <code># 标题</code> 后，目录会自动生成</div>';
+    return;
+  }
+  const minLevel=Math.min(...headings.map(heading=>Number(heading.tagName.slice(1))||1));
+  list.innerHTML=headings.map((heading,index)=>{
+    const level=Number(heading.tagName.slice(1))||1;
+    const depth=Math.max(0,level-minLevel);
+    const label=(heading.textContent||'').replace(/\s+/g,' ').trim()||('章节 '+(index+1));
+    return `<button type="button" class="notes-toc-item${index===0?' active':''}" data-target="${escapeHtml(heading.id)}" style="--toc-indent:${Math.min(depth,4)*12}px" onclick="jumpToNoteHeading(this.dataset.target)" title="${escapeHtml(label)}"${index===0?' aria-current="location"':''}>${escapeHtml(label)}</button>`;
+  }).join('');
+}
+
+function toggleNoteToc(force){
+  if(notesIsMobile()){
+    notesTocMobileOpen=typeof force==='boolean'?force:!notesTocMobileOpen;
+    if(notesTocMobileOpen&&noteViewMode!=='preview'){
+      switchNoteView('preview');
+      return;
+    }
+    renderNoteToc();
+    return;
+  }
+  notesTocVisible=typeof force==='boolean'?force:!notesTocVisible;
+  localStorage.setItem('study_notes_toc_visible',String(notesTocVisible));
+  if(notesTocVisible&&noteViewMode!=='preview'){
+    switchNoteView('preview');
+    return;
+  }
+  renderNoteToc();
+}
+
+function setActiveNoteTocItem(targetId){
+  document.querySelectorAll('#notesTocList .notes-toc-item').forEach(button=>{
+    const active=button.dataset.target===targetId;
+    button.classList.toggle('active',active);
+    if(active)button.setAttribute('aria-current','location');
+    else button.removeAttribute('aria-current');
+  });
+}
+
+function jumpToNoteHeading(targetId){
+  const preview=document.getElementById('notesPreview');
+  if(!preview)return;
+  const heading=getNotePreviewHeadings().find(item=>item.id===targetId);
+  if(!heading)return;
+  const previewRect=preview.getBoundingClientRect();
+  const headingRect=heading.getBoundingClientRect();
+  const top=preview.scrollTop+headingRect.top-previewRect.top-12;
+  const reduceMotion=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  preview.scrollTo({top:Math.max(0,top),behavior:reduceMotion?'auto':'smooth'});
+  setActiveNoteTocItem(targetId);
+}
+
+function onNotePreviewScroll(){
+  if(_noteTocScrollFrame)return;
+  const schedule=window.requestAnimationFrame||function(callback){return setTimeout(callback,16)};
+  _noteTocScrollFrame=schedule(()=>{
+    _noteTocScrollFrame=0;
+    if(noteViewMode!=='preview'||!notesTocVisible)return;
+    const preview=document.getElementById('notesPreview');
+    const headings=getNotePreviewHeadings();
+    if(!preview||!headings.length)return;
+    const threshold=preview.getBoundingClientRect().top+28;
+    let active=headings[0];
+    for(const heading of headings){
+      if(heading.getBoundingClientRect().top<=threshold)active=heading;
+      else break;
+    }
+    if(preview.scrollTop+preview.clientHeight>=preview.scrollHeight-4)active=headings[headings.length-1];
+    setActiveNoteTocItem(active.id);
+  });
+}
+
 function switchNoteView(mode){
   noteViewMode=mode;
+  if(mode!=='preview')notesTocMobileOpen=false;
   const ta=document.getElementById('notesTextarea'),pv=document.getElementById('notesPreview'),sp=document.getElementById('notesSummaryPanel');
   const eb=document.getElementById('notesEditBtn'),pb=document.getElementById('notesPreviewBtn'),sb=document.getElementById('notesSummaryBtn');
   ta.classList.add('hidden');pv.classList.remove('active');if(sp)sp.style.display='none';
@@ -1517,6 +1650,7 @@ function switchNoteView(mode){
   if(mode==='preview'){const n=getActiveNote();pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';pv.classList.add('active');if(pb)pb.classList.add('active');}
   else if(mode==='summary'){if(sp)sp.style.display='flex';if(sb)sb.classList.add('active');renderNoteSummary();const n=getActiveNote();if(n&&!n._summaryFresh&&(n.content||'').trim().length>0&&isAutoSummaryEnabled()){n._summaryUpdating=true;renderNoteSummary();generateNoteSummary(n).then(()=>{n._summaryUpdating=false;renderNoteSummary()});}}
   else{ta.classList.remove('hidden');if(eb)eb.classList.add('active');} // 不自动聚焦，避免移动端切编辑模式弹键盘
+  renderNoteToc();
 }
 
 // ═══════════ Notes: Summary ═══════════
