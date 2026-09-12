@@ -20,6 +20,19 @@
 - `_uploadKey` 超大 key（>800K 字符）不上传，localTs 用 remoteTs 兜底 + 清 dirty，避免每轮重复入队。
 - 冲突弹窗 `_conflictQueue` 实际为死代码（从不 push），保留未用。
 
+### AI 图片附件（deepseek-flash 视觉 + Files API 图片复用，2026-09-14）
+- **能力判定唯一入口** `js/ai-attach.js` 的 `modelSupportsVision()`：`deepseek-flash`（DeepSeek-V4.1-Flash，官方支持图像理解）/ 旧名 `deepseek-v4-flash`、`deepseek-v4-flash-vision-exp` / 名称含 `vision` 者。**`deepseek-v4-pro` 官方标注不支持图像理解，勿加入白名单**。books-kb.js、inbox.js 复用该判定，勿再各自写关键词。
+- **图片发送两条路径**：① 内联 `{"type":"image_url","image_url":{"url":"data:image/…;base64,…"}}`；② Files API——`POST {baseUrl}/files`（multipart：`file` + `purpose=user_data` 必填，**不传 `expires_after` 才永久有效**，单文件 ≤64 MiB）换取 `file_id`，对话里发 `{"type":"file","file_id":"file-api-…"}`，并紧跟一个长边 320px 的 `file_data` 缩略图（`file_id` 与 `file_data` 互斥，故拆两块），使模型在后续追问时仍能看到该图。
+- **策略** `getAiImageUploadMode()`：auto（>1 MiB 上传）/ always / never；聊天工具栏「图片上传」pill 与管理设置面板均可改。上传失败自动回退内联。
+- **归属与复用**：`file_id` 属于上传时使用的 API Key（单账号 25 GiB / 10000 文件，永久有效）。`findReusableUploadedImage()` 仅在同一 keyId 下复用；换 Key 必须重传。对话历史只存小缩略图 + `file_id`，原图仅存服务端。
+- **端点判定**用 `getApiHostname()` 解析主机名（曾用正则有 bug：`https://deepseek.com/...` 被误判为非官方端点）。自动测试可用 `window.__MST_FILE_API_TEST_HOSTS__` 放行测试主机。
+- **易错点**：图片只能出现在 user 消息（system/assistant 带图会 400）；本地预处理 `downscaleImageForApi()` 负责缩放/转码/补 MIME，`preprocessAiImageAttachment()` 把 Promise 挂在 `attach._processPromise` 上，发送时 await 它（避免重复解码与竞态）；原始请求日志必须对 `image_url`/`file_data` 的 base64 脱敏（`redactInlineImages`）。
+
+### 协作纪律（血的教训，2026-09-14）
+- **禁止用 `git show HEAD:<file>` 覆盖工作区文件**去做「基线对比」测试。本仓库长期有大量未提交改动，覆盖即丢工作。需要基线时用 `git worktree add` 或把仓库复制到 `%TEMP%` 再跑。
+- **禁止用过期临时备份恢复文件**。备份必须与本次操作成对创建（同一秒内），恢复前先比对文件大小/标记。
+- 动 `js/` 或 `css/` 前，先 `git add -A && git commit`（或至少 `git stash create` 留个快照），事后可精确回滚。
+
 ### 模块架构
 - **任务线系统**（v0.2.7）：localStorage `study_taskline_v1`（version:3，**无经验系统**），`js/taskline.js`。双轴 main/quality；每章独立 DAG（`tlLayoutGraph` 按依赖深度分列 + `tlComputeDepth` DFS），SVG 贝塞尔箭头；状态 draft/locked/active/done/skipped。v0.2.6 跨章节依赖（`.tl-node-ext`/`.tl-edge-ext`）。v0.2.7 手动画布（quest `pos:{x,y}`，手动/自动布局切换 `tlDragMode`，坐标加/减 TL_PAD 偏移）。cond 自动检测（todo/note/timer/manual）。奖励：徽章 `tlCheckAutoBadges` + 奖励池 `tlRewardBalance()=tlDoneCount()-spent`。AI：ai-tools.js 12 个 `quest_*` 工具 + `buildAiSummary()`；待办联动 `tlOnTodosChanged()`。**坑**：(1) quest_update 设 active 走 `tlRefreshQuestStatus`；(2) 无 xp/等级函数；(3) 占位节点不参与条件/解锁；(4) pos 传 null 回退自动布局。
 - **好友系统**（v0.3.0）：Supabase（表 `supabase/schema.sql`），`js/friends.js`（key `study_friends_config`、`getSupabaseClient` 单例、`computeDailyStats`+`syncStudyStats`）+ `js/friends-chat.js`（Realtime）。**隐私红线**：只同步聚合统计，绝不上传待办/笔记内容，RLS `is_friend()`。**坑**：订阅回调用 `renderFriendsFeedView` 手动 innerHTML。
