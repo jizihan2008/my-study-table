@@ -646,9 +646,23 @@ aiConvs = [{
 ### 11.5 附件处理（ai-attach.js）
 
 - 支持 `.txt`、PDF、Word、Excel、图片等附件（20MB 限制）
-- 支持从文件管理器**拖拽文件**到对话区域添加附件
+- 支持从文件管理器**拖拽文件**到对话区域添加附件，也支持 **Ctrl+V 粘贴剪贴板图片**
 - Kimi 视觉模型可分析图片/视频
-- 图片文件限制 6MB（Data URL 会膨胀 ~33%）
+- 图片附件走 OpenAI 兼容的 `image_url` base64 内联，能力判定统一在 `modelSupportsVision()`：
+  `deepseek-flash`（DeepSeek-V4.1-Flash，官方支持图像理解）/ 旧名 `deepseek-v4-flash`、
+  `deepseek-v4-flash-vision-exp` / 模型名含 `vision` 的模型；
+  `deepseek-v4-pro` 官方标注**不支持**图像理解，不要加入白名单
+- 图片在本地预处理（`downscaleImageForApi()`）：超过 2048px 单边等比缩放、BMP 等不支持格式转 PNG/JPEG、
+  按扩展名补齐 data URL 的 MIME；预处理结果缓存在附件上，发送时直接复用
+- 图片内联体积约等于原始字节 ×1.37（base64 膨胀），单图上限 20MB；超限附件发送前剔除并在消息中说明
+- **图片复用（DeepSeek Files API）**：官方端点上大图会先 `POST /files`（`purpose=user_data`，不传
+  `expires_after` → 永久有效）拿到 `file_id`，之后每轮只发 `{"type":"file","file_id":…}` 内容块，
+  不再重复传图；为让模型在后续轮次仍“看得到”图，紧跟一个极小（长边 320px）的 `file_data` 缩略图
+  （`file_id` 与 `file_data` 互斥，故拆两块）
+  - 能力判定：`supportsDeepSeekFilesApi()` = DeepSeek 官方主机（`getApiHostname()`）+ `modelSupportsVision()`
+  - 策略：`getAiImageUploadMode()` = auto（>1MiB 才上传）/ always / never，可在设置或聊天工具栏切换
+  - 上传失败自动回退内联；`file_id` 按 API Key 归属，换 Key 必须重传（`findReusableUploadedImage()` 会校验）
+  - 对话历史里只存小缩略图与 `file_id`，原图只在服务端；`quote` 清理入口在设置面板（仅允许删除未被引用的文件）
 
 ### 11.6 Markdown 渲染（markdown.js / ai-render.js）
 

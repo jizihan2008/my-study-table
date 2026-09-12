@@ -13,6 +13,72 @@ function isTreeConv(conv) {
   return !!(conv && conv.tree && conv.activePath);
 }
 
+// 相同内容的“编辑后发送”在旧版本中会创建两个一模一样的 user 兄弟节点。
+// 这会把后续回复藏到另一个消息版本里，看起来像聊天记录丢失。
+// 将这类无意义的重复 user 节点合并为一个节点，其各自的回复链仍作为候选分支保留。
+function mergeDuplicateUserBranches(conv) {
+  if (!conv || !conv.tree) return false;
+  const tree = conv.tree;
+  let changed = false;
+  let activeEndpoint = Array.isArray(conv.activePath) ? conv.activePath[conv.activePath.length - 1] : null;
+
+  const signature = node => {
+    try {
+      return JSON.stringify([
+        node.content || '',
+        node.attachments || null,
+        node.visionFiles || null
+      ]);
+    } catch (_) {
+      return String(node.content || '');
+    }
+  };
+
+  for (const parent of Object.values(tree)) {
+    if (!parent || !Array.isArray(parent.children) || parent.children.length < 2) continue;
+    const seen = new Map();
+    for (const childId of [...parent.children]) {
+      const child = tree[childId];
+      if (!child || child.role !== 'user') continue;
+      const key = signature(child);
+      const existingId = seen.get(key);
+      if (existingId == null) {
+        seen.set(key, childId);
+        continue;
+      }
+
+      // 当前正在显示重复节点时，以它为主节点，避免修复后意外切换用户看到的分支。
+      const activeIds = new Set(conv.activePath || []);
+      let keepId = existingId;
+      let removeId = childId;
+      if (activeIds.has(childId) && !activeIds.has(existingId)) {
+        keepId = childId;
+        removeId = existingId;
+        seen.set(key, keepId);
+      }
+      const keep = tree[keepId];
+      const duplicate = tree[removeId];
+      if (!keep || !duplicate) continue;
+      if (!Array.isArray(keep.children)) keep.children = [];
+      for (const grandchildId of duplicate.children || []) {
+        if (!keep.children.includes(grandchildId)) keep.children.push(grandchildId);
+        if (tree[grandchildId]) tree[grandchildId].parentId = keepId;
+      }
+      parent.children = parent.children.filter(id => id !== removeId);
+      if (!parent.children.includes(keepId)) parent.children.push(keepId);
+      if (activeEndpoint === removeId) activeEndpoint = keepId;
+      delete tree[removeId];
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    const endpoint = tree[activeEndpoint] ? activeEndpoint : 'root';
+    conv.activePath = buildPathTo(tree, endpoint);
+  }
+  return changed;
+}
+
 // ── 核心：由 activePath 重建扁平 messages 视图 ──
 function recomputeMessages(conv) {
   if (!conv || !conv.tree || !conv.activePath) return conv.messages || [];
@@ -175,6 +241,10 @@ function ensureTree(conv) {
       initTreeOnConv(conv);
     }
   }
+  // activePath 是唯一展示路径，messages 只是其缓存。旧同步数据可能让两者不一致，
+  // 因而每次确保树结构时都重新计算缓存；同时修复旧版产生的相同 user 分支。
+  mergeDuplicateUserBranches(conv);
+  recomputeMessages(conv);
   return conv;
 }
 

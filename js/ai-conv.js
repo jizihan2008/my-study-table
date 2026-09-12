@@ -174,6 +174,8 @@ function exportConvLog() {
   try {
     const conv = getActiveConv();
     if (!conv) return;
+    // 导出必须与界面当前分支一致，不能使用同步/分支切换前留下的 messages 缓存。
+    if (typeof ensureTree === 'function') ensureTree(conv);
 
     const now = new Date();
     const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}:${String(now.getSeconds()).padStart(2,'0')}`;

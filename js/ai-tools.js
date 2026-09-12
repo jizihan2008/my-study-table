@@ -114,7 +114,7 @@ const AI_TOOLS = {
   },
   schedule_automation: {
     description: '创建一个定时自动化任务：在指定时间自动调用AI（在同一对话窗口），AI收到一条系统消息提示执行任务。支持每天重复或仅执行一次',
-    params: { at: '触发时间，格式HH:MM，24小时制（string，必填）', prompt: '触发时发送给AI的系统提示，描述需要AI做什么（string，必填）', repeat: '重复模式：daily=每天重复（默认），once=仅执行一次（string，可选）' }
+    params: { at: '触发时间，格式HH:MM，24小时制（string，必填）', prompt: '触发时发送给AI的系统提示，描述需要AI做什么（string，必填）', repeat: '重复模式：once=仅执行一次（默认），daily=每天重复（仅在用户明确要求时）', date: '一次性提醒的本地日期 YYYY-MM-DD；明天等必须转换为具体日期', reason: '创建依据：用户要求提醒的事项及时间' }
   },
   list_automations: {
     description: '列出所有已创建的自动化任务',
@@ -198,9 +198,9 @@ const AI_TOOLS = {
   }
 };
 
-function buildToolsSystemPrompt() {
+function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApiConfig()) {
   // Check if web search is enabled for the active conversation
-  const _activeConv = getActiveConv();
+  const _activeConv = conv;
   const _wsMode = _activeConv?._webSearchMode || null; // 'native' | 'external' | null (Kimi)
   const _wsEnabled = _activeConv?._webSearchEnabled === true || !!_wsMode;
   const _isKimiNative = _wsMode === 'native';
@@ -261,13 +261,9 @@ function buildToolsSystemPrompt() {
   prompt += '   另外，add_note 和 update_note 的 content 参数中，请使用真实的换行（回车换行）来分段，不要使用字面上的 \n 字符（即不要在字符串中写反斜杠n），否则笔记内容中会显示成字面 \n 文本而不会换行。\n';
   prompt += '9. 你可以通过 <call_ai> 标签唤起另一个 AI 助手参与对话。格式：<call_ai>{"keyId":"目标 Key 名称","prompt":"要发送的消息"}</call_ai>\n';
   prompt += '   系统会在你回复后自动调用目标 AI，它的回复会以独立消息直接显示在对话中（标注 🔑 Key 名称）。你不需要重复或转发该回复。\n';
-  prompt += '10. ⚡ 善用自动化工具构造全时段提醒：\n';
-  prompt += '    (a) 你的回复首先要切合用户当前提问和对话主题，不要在无关主题时额外提醒。如果与当前话题相关，可以在主题内做自然延伸进行提醒。\n';
-  prompt += '    (b) 更重要的是：利用 <tool_call>{"action":"schedule_automation","params":{"at":"HH:MM","prompt":"提醒内容","repeat":"daily"}}</tool_call> 工具来创建定时自动化任务，让系统在指定时间自动触发提醒，而不是只在聊天中口头提醒。例如：\n';
-  prompt += '      - 用户提到明天要交作业 → 设置一个每天 20:00 的「检查作业进度」自动提醒\n';
-  prompt += '      - 用户说最近要备考 → 设置一个每天 08:00 的「今日学习计划」自动推送\n';
-  prompt += '      - 发现待办中有即将到期却没安排聚焦的任务 → 设置提前一天的「到期提醒」\n';
-  prompt += '    总之，优先用 schedule_automation 构造自动化提醒链，让提醒不依赖实时对话。\n';
+  prompt += '10. 提醒应与用户明确要求一致：只有用户要求设置提醒/定时任务时才创建，普通聊天或提到截止日期时可以建议，但不要自动创建。\n';
+  prompt += '    单次事项（如明天交作业）必须使用 repeat=once，并填写具体 date（YYYY-MM-DD）和 at；仅当用户明确要求每天提醒时使用 daily。不要把单次事项转成每日任务。\n';
+  prompt += '    时间不明确时先询问用户。reason 应说明用户的提醒需求；创建后告知日期、时间和频率，用户可以在设置的自动化任务中查看和修改依据。\n';
   prompt += '11. ⭐ 信任工具执行结果：当工具返回以 ✅ 开头的成功结果时，说明操作已成功完成。\n';
   prompt += '    **不要对成功的操作进行「删除后重建」或「验证性查询」**。\n';
   prompt += '    例如：\n';
@@ -277,7 +273,7 @@ function buildToolsSystemPrompt() {
   prompt += '12. 🌐 阅读网页：当用户消息中包含 http(s):// 链接、或明确要求「阅读/总结/分析某个网页」时，请主动调用 read_webpage 工具获取网页正文后再回答。此工具不依赖「网络搜索」开关，只要用户给出 URL 或表达阅读网页的意图即可使用。若 read_webpage 返回 ❌ 错误（如需登录、渲染超时），如实告知用户原因。\n';
 
   // ── 注入当前 AI 身份 ──
-  const currentCfg = getEffectiveApiConfig();
+  const currentCfg = apiCfg;
   prompt += `═══ 当前 AI 身份 ═══\n`;
   prompt += `  你的 Key 名称：${currentCfg.name || '未命名'}\n`;
   prompt += `  你的模型：${currentCfg.model || '未知'}\n`;
@@ -469,7 +465,7 @@ function buildToolsSystemPrompt() {
   if (automations.length > 0) {
     prompt += `⏰ 自动化任务：${automations.length} 个（${automations.filter(a => a.enabled !== false).length} 个启用）\n`;
     automations.forEach(a => {
-      prompt += `   [ID:${a.id}] ${a.enabled === false ? '⏸️' : '▶️'} 每天 ${a.at} → ${a.prompt.slice(0, 30)}${a.prompt.length > 30 ? '…' : ''}` + (a.lastRun ? `（上次：${a.lastRun}）` : '') + '\n';
+      prompt += `   [ID:${a.id}] ${a.enabled === false ? '⏸️' : '▶️'} ${a.repeat === 'once' ? (a.date || '一次性') : '每天'} ${a.at} → ${a.prompt.slice(0, 30)}${a.prompt.length > 30 ? '…' : ''}` + (a.lastRun ? `（上次：${a.lastRun}）` : '') + '\n';
     });
   }
 
@@ -576,7 +572,38 @@ async function executeCallAiAndPush(params, conv) {
   }
 }
 
-async function executeToolCall(action, params) {
+function normalizeAutomationSchedule(params, now = new Date()) {
+  const at = String(params.at || '');
+  if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(at)) return { error: '请输入有效时间 HH:MM（00:00–23:59）' };
+  const repeat = params.repeat === 'daily' ? 'daily' : 'once';
+  if (repeat === 'daily') return { at, repeat, date: null };
+  const localDate = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  let date = params.date || '';
+  if (!date) {
+    const next = new Date(now);
+    const [hours, minutes] = at.split(':').map(Number);
+    next.setHours(hours, minutes, 0, 0);
+    if (next.getTime() < Math.floor(now.getTime() / 60000) * 60000) next.setDate(next.getDate() + 1);
+    date = localDate(next);
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return { error: '日期格式应为 YYYY-MM-DD' };
+  const due = new Date(date + 'T' + at + ':00');
+  if (!Number.isFinite(due.getTime()) || localDate(due) !== date) return { error: '日期无效' };
+  if (due.getTime() < Math.floor(now.getTime() / 60000) * 60000) return { error: '一次性提醒的时间已经过去，请选择未来的日期和时间' };
+  return { at, repeat, date };
+}
+
+function isAutomationDue(auto, now = new Date()) {
+  if (auto.enabled === false) return false;
+  const today = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0') + '-' + String(now.getDate()).padStart(2, '0');
+  const time = String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  if (auto.repeat === 'once' && auto.date) return auto.date + ' ' + auto.at <= today + ' ' + time;
+  // Legacy one-time tasks have no date; preserve their next matching minute.
+  if (auto.repeat === 'once') return auto.at === time;
+  return auto.at <= time && (!auto.lastRun || auto.lastRun.split(' ')[0] !== today);
+}
+
+async function executeToolCall(action, params, context = {}) {
   switch (action) {
     case 'add_todo': {
       const text = params.text || params.content || '';
@@ -1429,19 +1456,26 @@ async function executeToolCall(action, params) {
       return result;
     }
     case 'schedule_automation': {
-      const at = params.at;
-      if (!at || !/^\d{2}:\d{2}$/.test(at)) return '错误：缺少有效的时间参数 at，格式为 HH:MM（如 09:30）';
+      const schedule = normalizeAutomationSchedule(params);
+      if (schedule.error) return '错误：' + schedule.error;
+      const { at, repeat, date } = schedule;
       const promptText = params.prompt;
       if (!promptText) return '错误：缺少 prompt 参数，请描述触发时AI应该做什么';
-      const repeat = params.repeat === 'once' ? 'once' : 'daily';
-      const convId = activeConvId;
-      if (!convId) return '错误：没有活跃的对话';
+
+      const convId = context.conv?.id;
+      if (!convId) return '错误：缺少发起对话';
+      const existing = automations.find(a => a.enabled !== false && a.convId === convId && a.at === at && a.repeat === repeat && (a.date || '') === (date || '') && a.prompt === promptText);
+      if (existing) return '✅ 相同提醒已存在（ID:' + existing.id + '），未重复创建。';
+      const source = [...(context.conv.messages || [])].reverse().find(m => m.role === 'user');
       const newAuto = {
         id: genId(),
         convId,
         at,
         prompt: promptText,
         repeat,
+        date,
+        reason: String(params.reason || source?.content || '用户创建提醒').slice(0, 500),
+        sourceText: String(source?.content || '').slice(0, 500),
         createdAt: new Date().toISOString(),
         lastRun: null,
         enabled: true
@@ -1450,14 +1484,14 @@ async function executeToolCall(action, params) {
       saveData('study_automations', automations);
       startAutomationTimer();
       const repeatLabel = repeat === 'once' ? '一次性' : '每天';
-      return `✅ 已创建${repeatLabel}自动化任务（ID:${newAuto.id}）：${repeat === 'daily' ? '每天 ' : ''}${at} 自动执行「${promptText.slice(0, 30)}${promptText.length > 30 ? '…' : ''}」`;
+      return `✅ 已创建${repeatLabel}自动化任务（ID:${newAuto.id}）：${repeat === 'daily' ? '每天 ' : date + ' '}${at} 自动执行「${promptText.slice(0, 30)}${promptText.length > 30 ? '…' : ''}」`;
     }
     case 'list_automations': {
       if (automations.length === 0) return '⏰ 当前没有自动化任务';
       let result = '⏰ 自动化任务列表：\n';
       automations.forEach(a => {
         const repeatLabel = a.repeat === 'once' ? '一次性' : '每天';
-        const timeLabel = a.repeat === 'once' ? ` ${a.at} 触发` : `每天 ${a.at}`;
+        const timeLabel = a.repeat === 'once' ? ` ${a.date || ''} ${a.at} 触发` : `每天 ${a.at}`;
         result += `- [ID:${a.id}] ${repeatLabel}${timeLabel} → ${a.prompt.slice(0, 40)}${a.prompt.length > 40 ? '…' : ''}` + (a.enabled === false ? ' [已停用]' : '') + (a.lastRun ? `（上次运行：${a.lastRun}）` : '（尚未运行）') + '\n';
       });
       return result;
@@ -1470,7 +1504,7 @@ async function executeToolCall(action, params) {
       const removed = automations.splice(idx, 1)[0];
       saveData('study_automations', automations);
       if (automations.length === 0) stopAutomationTimer();
-      return `✅ 已删除自动化任务：每天 ${removed.at}「${removed.prompt.slice(0, 30)}」`;
+      return `✅ 已删除自动化任务：${removed.repeat === 'once' ? (removed.date || '一次性') : '每天'} ${removed.at}「${removed.prompt.slice(0, 30)}」`;
     }
     case 'list_memories': {
       return typeof toolListMemories === 'function' ? toolListMemories(params) : '错误：记忆系统未加载';

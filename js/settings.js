@@ -347,7 +347,7 @@ if (!aiConvs.find(c => c.id === activeConvId)) {
 if (Array.isArray(aiConvs)) {
   let migrated = false;
   for (const c of aiConvs) {
-    if (typeof ensureTree === 'function' && !isTreeConv(c)) {
+    if (typeof ensureTree === 'function') {
       ensureTree(c);
       migrated = true;
     }
@@ -419,13 +419,15 @@ function setActiveReportKeyId(id) {
 })();
 
 // Get the effective API config for current context (uses active multi-key)
-function getEffectiveApiConfig() {
+// keyId 可选：显式指定 Key（如日报专用 Key、设置面板按 Key 预览），不传则用当前启用的 Key
+function getEffectiveApiConfig(keyId) {
   const keys = loadApiKeys();
-  const activeId = getActiveApiKeyId();
+  const activeId = keyId || getActiveApiKeyId();
   const activeKey = activeId ? keys.find(k => k.id === activeId) : null;
 
   if (activeKey) {
     return {
+      keyId: activeKey.id,
       name: activeKey.name,
       apiKey: activeKey.key,
       baseUrl: activeKey.baseUrl || 'https://api.openai.com/v1',
@@ -434,6 +436,7 @@ function getEffectiveApiConfig() {
       deepThink: activeKey.deepThink === true,
       maxTokens: activeKey.maxTokens || 0,
       contextLimit: activeKey.contextLimit || 20,
+      contextBudget: activeKey.contextBudget || 32768,
       titleContextCount: activeKey.titleContextCount || 4
     };
   }
@@ -448,6 +451,7 @@ function getEffectiveApiConfig() {
     deepThink: false,
     maxTokens: 0,
     contextLimit: 20,
+    contextBudget: 32768,
     titleContextCount: 4
   };
 }
@@ -460,6 +464,7 @@ function getEffectiveReportApiConfig() {
     const reportKey = keys.find(k => k.id === reportKeyId);
     if (reportKey) {
       return {
+        keyId: reportKey.id,
         name: reportKey.name,
         apiKey: reportKey.key,
         baseUrl: reportKey.baseUrl || 'https://api.openai.com/v1',
@@ -468,6 +473,7 @@ function getEffectiveReportApiConfig() {
         deepThink: reportKey.deepThink === true,
         maxTokens: reportKey.maxTokens || 0,
         contextLimit: reportKey.contextLimit || 20,
+        contextBudget: reportKey.contextBudget || 32768,
         titleContextCount: reportKey.titleContextCount || 4
       };
     }
@@ -521,6 +527,10 @@ function switchSettingsTab(tab) {
   // Render CodeBuddy CLI config panel
   if (tab === 'api' && typeof renderCodebuddyCliConfig === 'function') {
     renderCodebuddyCliConfig();
+  }
+  // 图片上传方式（图片附件区块）
+  if (tab === 'api' && typeof renderImageUploadSetting === 'function') {
+    renderImageUploadSetting();
   }
   // Load Supabase connection settings
   if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
@@ -1848,6 +1858,7 @@ function showApiKeyForm(editId) {
     document.getElementById('apiKeyFormTemp').value = k.temperature != null ? k.temperature : 0.7;
     document.getElementById('apiKeyFormMaxTokens').value = k.maxTokens || '';
     document.getElementById('apiKeyFormContextLimit').value = k.contextLimit || 20;
+    document.getElementById('apiKeyFormContextBudget').value = k.contextBudget || 32768;
     document.getElementById('apiKeyFormTitleContext').value = k.titleContextCount || 4;
     document.getElementById('apiKeyFormEditId').value = editId;
   } else {
@@ -1858,6 +1869,7 @@ function showApiKeyForm(editId) {
     document.getElementById('apiKeyFormTemp').value = '0.7';
     document.getElementById('apiKeyFormMaxTokens').value = '';
     document.getElementById('apiKeyFormContextLimit').value = 20;
+    document.getElementById('apiKeyFormContextBudget').value = 32768;
     document.getElementById('apiKeyFormTitleContext').value = 4;
     document.getElementById('apiKeyFormEditId').value = '';
   }
@@ -1892,6 +1904,7 @@ function submitApiKeyForm() {
   const maxTokensInput = document.getElementById('apiKeyFormMaxTokens').value.trim();
   const maxTokens = maxTokensInput ? parseInt(maxTokensInput) : 0;
   const contextLimit = parseInt(document.getElementById('apiKeyFormContextLimit').value) || 20;
+  const contextBudget = Math.max(2048, Math.min(2000000, parseInt(document.getElementById('apiKeyFormContextBudget').value) || 32768));
   const titleContextCount = parseInt(document.getElementById('apiKeyFormTitleContext').value) || 4;
 
   if (!name) { showSettingsStatus('请输入 Key 名称', true); return; }
@@ -1910,6 +1923,7 @@ function submitApiKeyForm() {
     k.deepThink = deepThink;
     k.maxTokens = maxTokens || undefined;
     k.contextLimit = Math.max(5, contextLimit);
+    k.contextBudget = contextBudget;
     k.titleContextCount = Math.max(2, titleContextCount);
     showSettingsStatus('✅ Key 已更新');
   } else {
@@ -1920,6 +1934,7 @@ function submitApiKeyForm() {
       model: model || 'gpt-3.5-turbo',
       temperature, deepThink, maxTokens: maxTokens || undefined,
       contextLimit: Math.max(5, contextLimit),
+      contextBudget,
       titleContextCount: Math.max(2, titleContextCount),
       createdAt: new Date().toISOString()
     });
@@ -2007,6 +2022,8 @@ function switchActiveKey(id) {
   refreshKeyBar();
   // Update file input accept based on the new model
   if (typeof updateAiFileInput === 'function') updateAiFileInput();
+  // 换 Key 后 Files API 可用性与上传方式提示都要跟着变
+  if (typeof updateAiImageUploadBtn === 'function') updateAiImageUploadBtn();
 }
 
 // Refresh just the key bar without full re-render
@@ -2022,6 +2039,76 @@ function buildKeySelectorOptions() {
   return '';
 }
 function onAiKeySwitch() {}
+
+// ═══════════ 图片上传方式 & DeepSeek 文件服务清理（js/ai-attach.js）═══════════
+function renderImageUploadSetting() {
+  const sel = document.getElementById('settingsImageUploadMode');
+  if (!sel) return;
+  sel.value = (typeof getAiImageUploadMode === 'function') ? getAiImageUploadMode() : 'auto';
+  const hint = document.getElementById('settingsImageUploadHint');
+  if (hint) {
+    const cfg = getEffectiveApiConfig();
+    const available = (typeof supportsDeepSeekFilesApi === 'function') && supportsDeepSeekFilesApi(cfg);
+    hint.textContent = available
+      ? '当前 Key 支持 DeepSeek 文件服务：上传后的图片在后续轮次只发送 file_id，不再重复传图。'
+      : `当前 Key（${cfg.model || '未配置'}）不是 DeepSeek 官方端点或模型不支持看图，图片将以内联(base64)方式发送。`;
+  }
+}
+
+function saveImageUploadSetting() {
+  const sel = document.getElementById('settingsImageUploadMode');
+  if (!sel || typeof setAiImageUploadMode !== 'function') return;
+  setAiImageUploadMode(sel.value);
+  if (typeof updateAiImageUploadBtn === 'function') updateAiImageUploadBtn();
+  showSettingsStatus('✅ 图片上传方式已保存');
+}
+
+// 列出服务端已上传的图片并支持清理（仅删除未被对话引用的文件）
+async function cleanupUploadedFiles() {
+  const cfg = getEffectiveApiConfig();
+  const listEl = document.getElementById('uploadedFilesList');
+  if (!cfg.apiKey || !cfg.baseUrl) { showSettingsStatus('请先配置 API Key', true); return; }
+  if (listEl) listEl.innerHTML = '<div class="hint">正在读取服务端文件列表…</div>';
+  try {
+    const files = await listDeepSeekFiles(cfg);
+    if (files.length === 0) {
+      if (listEl) listEl.innerHTML = '<div class="hint">服务端暂无已上传的图片。</div>';
+      showSettingsStatus('✅ 无已上传文件');
+      return;
+    }
+    const referenced = collectReferencedFileIds();
+    const rows = files.map(f => {
+      const used = referenced.has(f.id);
+      const when = f.created_at ? new Date(f.created_at * 1000).toLocaleString('zh-CN') : '';
+      return `<div style="display:flex;align-items:center;gap:8px;padding:6px 8px;margin:4px 0;background:var(--todo-bg);border-radius:6px;font-size:11px;">
+        <div style="flex:1;min-width:0;">
+          <div style="color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${escapeHtml(f.filename || f.id)}</div>
+          <div style="color:var(--text-secondary);font-size:10px;">${escapeHtml(f.id)} · ${formatFileSize(f.bytes || 0)} · ${escapeHtml(when)}</div>
+        </div>
+        <span style="color:${used ? 'var(--text-secondary)' : 'var(--danger)'};font-size:10px;white-space:nowrap;">${used ? '对话在用' : '未引用'}</span>
+        ${used ? '' : `<button onclick="deleteUploadedFile('${escapeHtml(f.id)}')" style="background:var(--danger);color:#fff;border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:10px;">删除</button>`}
+      </div>`;
+    }).join('');
+    if (listEl) {
+      listEl.innerHTML = `<div class="hint" style="margin-bottom:6px;">共 ${files.length} 个文件（在用 ${referenced.size} 个；被对话引用的文件已禁用删除）</div>${rows}`;
+    }
+    showSettingsStatus('✅ 已读取 ' + files.length + ' 个文件');
+  } catch (e) {
+    if (listEl) listEl.innerHTML = '<div class="hint" style="color:var(--danger);">读取失败：' + escapeHtml(String((e && e.message) || e)) + '</div>';
+    showSettingsStatus('读取文件列表失败', true);
+  }
+}
+
+async function deleteUploadedFile(fileId) {
+  const cfg = getEffectiveApiConfig();
+  try {
+    const ok = await deleteDeepSeekFile(fileId, cfg);
+    showSettingsStatus(ok ? '✅ 已删除 ' + fileId : '删除失败：服务端未确认', !ok);
+  } catch (e) {
+    showSettingsStatus('删除失败：' + String((e && e.message) || e), true);
+  }
+  cleanupUploadedFiles();
+}
 
 // ═══════════ App Quit ═══════════
 function quitApp() {
@@ -2101,7 +2188,12 @@ function renderAutomationList() {
     const convTitle = conv ? escapeHtml(conv.title || '对话#' + a.convId) : '（对话已删除）';
     const isOnce = a.repeat === 'once';
     const repeatLabel = isOnce ? '1️⃣ 一次性' : '🔄 每天';
-    const timeLabel = isOnce ? `触发时间 ${escapeHtml(a.at)}` : `每天 ${escapeHtml(a.at)}`;
+    const timeLabel = isOnce
+      ? `触发时间 ${escapeHtml((a.date ? a.date + ' ' : '') + a.at)}`
+      : `每天 ${escapeHtml(a.at)}`;
+    const reasonHtml = a.reason
+      ? `<div style="color:var(--text-secondary);font-size:11px;margin-top:2px;">📌 依据：${escapeHtml(a.reason)}</div>`
+      : '';
     return `
     <div style="display:flex;align-items:flex-start;padding:10px 12px;margin:4px 0;background:var(--todo-bg);border-radius:8px;font-size:13px;gap:8px;${a.enabled === false ? 'opacity:0.5;' : ''}">
       <input type="checkbox" ${a.enabled !== false ? 'checked' : ''} onchange="toggleAutomationEnabled(${a.id}, this.checked)" style="flex-shrink:0;margin-top:3px;cursor:pointer;width:16px;height:16px;accent-color:var(--primary);" title="${a.enabled !== false ? '已启用，点击停用' : '已停用，点击启用'}">
@@ -2112,6 +2204,7 @@ function renderAutomationList() {
           <span style="color:var(--text-secondary);font-size:11px;margin-left:4px;">→ ${convTitle}</span>
         </div>
         <div style="color:var(--text-secondary);font-size:12px;margin-top:2px;">${escapeHtml(a.prompt)}</div>
+        ${reasonHtml}
         ${a.lastRun ? `<div style="color:var(--done);font-size:10px;margin-top:2px;">✅ 上次运行：${escapeHtml(a.lastRun)}</div>` : '<div style="color:var(--text-secondary);font-size:10px;margin-top:2px;">⏳ 尚未运行</div>'}
       </div>
       <div style="display:flex;gap:4px;flex-shrink:0;">
@@ -2146,12 +2239,21 @@ function showAutomationForm(editId) {
     document.getElementById('autoFormAt').value = a.at;
     document.getElementById('autoFormPrompt').value = a.prompt;
     document.getElementById('autoFormRepeat').value = a.repeat || 'daily';
+    // 一次性提醒的日期与创建依据（可查看、可修改）
+    const dateEl = document.getElementById('autoFormDate');
+    if (dateEl) dateEl.value = a.date || '';
+    const reasonEl = document.getElementById('autoFormReason');
+    if (reasonEl) reasonEl.value = a.reason || '';
     editIdInput.value = editId;
   } else {
     // Add mode: clear form
     document.getElementById('autoFormAt').value = '';
     document.getElementById('autoFormPrompt').value = '';
     document.getElementById('autoFormRepeat').value = 'daily';
+    const dateEl = document.getElementById('autoFormDate');
+    if (dateEl) dateEl.value = '';
+    const reasonEl = document.getElementById('autoFormReason');
+    if (reasonEl) reasonEl.value = '';
     editIdInput.value = '';
   }
   form.style.display = 'block';
@@ -2185,6 +2287,12 @@ function submitAutomationForm() {
     a.at = at;
     a.prompt = promptText;
     a.repeat = repeat;
+    // 日期与创建依据可编辑（date 留空时清掉，保证窗口内触发语义一致）
+    const dateVal = (document.getElementById('autoFormDate') || {}).value || '';
+    const reasonVal = (document.getElementById('autoFormReason') || {}).value || '';
+    if (repeat === 'once' || dateVal) a.date = dateVal;
+    else delete a.date;
+    a.reason = reasonVal.slice(0, 500);
     saveData('study_automations', automations);
     stopAutomationTimer();
     if (shouldTimerRun()) startAutomationTimer();
@@ -2194,12 +2302,17 @@ function submitAutomationForm() {
     // Add new
     const convId = activeConvId;
     if (!convId) { showAutomationStatus('❌ 请先选择一个对话'); return; }
+    const dateVal = (document.getElementById('autoFormDate') || {}).value || '';
+    const reasonVal = (document.getElementById('autoFormReason') || {}).value || '';
     const newAuto = {
       id: genId(),
       convId,
       at,
       prompt: promptText,
       repeat,
+      date: repeat === 'once' ? dateVal : (dateVal || undefined),
+      reason: reasonVal.slice(0, 500),
+      sourceText: promptText.slice(0, 500),
       createdAt: new Date().toISOString(),
       lastRun: null,
       enabled: true

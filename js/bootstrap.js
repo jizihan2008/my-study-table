@@ -22,11 +22,9 @@
   }, 10);
 
   platform.registerInitializer('sidebar', () => {
-    if (platform.storage.getRaw('study_sidebar_open') === 'true') {
-      sidebarOpen = true;
-      const sidebar = document.getElementById('sidebar');
-      if (sidebar) sidebar.classList.add('open');
-    }
+    // 展开只是本次交互的临时状态，不应跨启动恢复。
+    platform.storage.remove('study_sidebar_open');
+    if (typeof syncSidebarAccessibility === 'function') syncSidebarAccessibility(sidebarOpen);
     if (typeof initSidebarHover === 'function') initSidebarHover();
   }, 20);
 
@@ -37,6 +35,7 @@
       ['refreshRepeatTodos', typeof refreshRepeatTodos === 'function' ? refreshRepeatTodos : null],
       ['renderNotes', typeof renderNotes === 'function' ? renderNotes : null],
       ['renderAiChat', typeof renderAiChat === 'function' ? renderAiChat : null],
+      ['renderPromptStudio', typeof renderPromptStudio === 'function' ? renderPromptStudio : null],
       ['renderToday', typeof renderToday === 'function' ? renderToday : null]
     ];
     for (const [name, render] of views) {

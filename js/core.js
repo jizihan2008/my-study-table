@@ -137,29 +137,59 @@ let changelogModalOpen = false;
 
 // ═══════════ Sidebar (hover-triggered) ═══════════
 let sidebarCloseTimer = null;
-const SIDEBAR_HOVER_DELAY = 250; // ms before closing after mouse leaves
+const SIDEBAR_HOVER_DELAY = 420; // 留出少量移动缓冲，避免误收起
+
+function isDesktopSidebarMode() {
+  return (typeof Env !== 'undefined' && Env.isElectron) || window.innerWidth > 800;
+}
+
+function syncSidebarAccessibility(isOpen) {
+  const sidebar = document.getElementById('sidebar');
+  const toggle = document.getElementById('mobileHamburger');
+  const edgeTrigger = document.getElementById('sidebarHoverTrigger');
+  if (!sidebar) return;
+  sidebar.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+  // 清理旧版可能留下的 inert；显隐与点击隔离由 CSS 负责。
+  sidebar.removeAttribute('inert');
+  if (toggle) toggle.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+  if (edgeTrigger) {
+    edgeTrigger.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+    edgeTrigger.setAttribute('aria-label', '打开导航侧边栏');
+    edgeTrigger.title = '打开导航侧边栏';
+  }
+}
 
 function openSidebar() {
   if (sidebarCloseTimer) { clearTimeout(sidebarCloseTimer); sidebarCloseTimer = null; }
-  if (!sidebarOpen) {
-    sidebarOpen = true;
-    document.getElementById('sidebar').classList.add('open');
-    localStorage.setItem('study_sidebar_open', true);
-  }
+  sidebarOpen = true;
+  document.getElementById('sidebar').classList.add('open');
+  syncSidebarAccessibility(true);
 }
 
 // 立即关闭侧边栏（点击外部 / 左滑手势调用，无 hover 延迟）
 function closeSidebar() {
+  const sidebar = document.getElementById('sidebar');
+  // 先移走侧栏内焦点，避免隐藏后焦点滞留；focusout 产生的计时器也在此清除。
+  if (sidebar.contains(document.activeElement)) document.activeElement.blur();
   if (sidebarCloseTimer) { clearTimeout(sidebarCloseTimer); sidebarCloseTimer = null; }
-  if (sidebarOpen) {
-    sidebarOpen = false;
-    document.getElementById('sidebar').classList.remove('open');
-    localStorage.setItem('study_sidebar_open', false);
-  }
+  sidebarOpen = false;
+  sidebar.classList.remove('open');
+  syncSidebarAccessibility(false);
+  const overlay = document.getElementById('mobileDrawerOverlay');
+  if (overlay) overlay.classList.remove('open');
+  document.body.classList.remove('mobile-drawer-open');
 }
 
-function scheduleCloseSidebar() {
-  sidebarCloseTimer = setTimeout(closeSidebar, SIDEBAR_HOVER_DELAY);
+function scheduleCloseSidebar(delay = SIDEBAR_HOVER_DELAY) {
+  if (!isDesktopSidebarMode()) return;
+  if (sidebarCloseTimer) clearTimeout(sidebarCloseTimer);
+  sidebarCloseTimer = setTimeout(() => {
+    sidebarCloseTimer = null;
+    // 侧栏和左缘触发条属于同一交互区域，移入任一处都应保持展开。
+    // 键盘导航时也保留侧栏；鼠标点击留下的普通焦点不阻止自动收起。
+    if (document.querySelector('#sidebar:hover, #sidebarHoverTrigger:hover, #sidebar :focus-visible, #sidebarHoverTrigger:focus-visible')) return;
+    closeSidebar();
+  }, delay);
 }
 
 function initSidebarHover() {
@@ -167,12 +197,23 @@ function initSidebarHover() {
   const sidebar = document.getElementById('sidebar');
   if (!trigger || !sidebar) return;
 
-  trigger.addEventListener('mouseenter', openSidebar);
-  sidebar.addEventListener('mouseenter', openSidebar);
-  sidebar.addEventListener('mouseleave', scheduleCloseSidebar);
-  // Also close if mouse leaves the trigger (when sidebar isn't open yet)
-  trigger.addEventListener('mouseleave', () => {
-    if (!sidebarOpen) { /* nothing to close */ }
+  // 指针事件直接声明在 HTML 元素上，即使异步初始化延迟也可使用。
+  sidebar.addEventListener('focusin', openSidebar);
+  sidebar.addEventListener('focusout', (event) => {
+    if (!sidebar.contains(event.relatedTarget)) scheduleCloseSidebar();
+  });
+  trigger.addEventListener('focusout', () => scheduleCloseSidebar());
+
+  // 侧边栏只是临时抽屉，应用失去焦点时也自动收起。
+  window.addEventListener('blur', () => {
+    if (isDesktopSidebarMode()) closeSidebar();
+  });
+  // 跨越手机断点时清理遮罩与滚动锁，避免窗口变宽后留下透明拦截层。
+  let desktopMode = isDesktopSidebarMode();
+  window.addEventListener('resize', () => {
+    const nextMode = isDesktopSidebarMode();
+    if (desktopMode !== nextMode) closeSidebar();
+    desktopMode = nextMode;
   });
 
   // 触屏：从屏幕左缘向右滑动打开侧边栏（iPad/触屏平板呼出难问题的解决方案）
@@ -215,8 +256,8 @@ function initSidebarEdgeSwipe() {
     // 左滑（dx<0）忽略；水平位移达标且明显大于垂直位移 → 判定为呼出手势
     if (dx >= minDist && dx > dy * slope) {
       _edgeSwipe.fired = true;
-      if (window.innerWidth <= 800) openMobileDrawer();
-      else openSidebar();
+      if (isDesktopSidebarMode()) openSidebar();
+      else openMobileDrawer();
     }
   }, { passive: true });
 
@@ -236,8 +277,8 @@ function initSidebarDismiss() {
   document.addEventListener('click', (e) => {
     if (!sidebar || !sidebar.classList.contains('open')) return;
     if (sidebar.contains(e.target)) return;   // 点击侧边栏内部（导航项等）不关闭
-    if (window.innerWidth <= 800) closeMobileDrawer();
-    else closeSidebar();
+    if (isDesktopSidebarMode()) closeSidebar();
+    else closeMobileDrawer();
   });
 
   // ② 左滑关闭（触屏）
@@ -273,8 +314,8 @@ function initSidebarDismiss() {
     // 左滑（dx<0）且水平位移达标、明显大于垂直位移 → 关闭
     if (dx <= -minDist && -dx > dy * slope) {
       _sidebarSwipe.fired = true;
-      if (window.innerWidth <= 800) closeMobileDrawer();
-      else closeSidebar();
+      if (isDesktopSidebarMode()) closeSidebar();
+      else closeMobileDrawer();
     }
   }, { passive: true });
 
@@ -348,6 +389,7 @@ function switchTab(tab) {
   if (tab === 'books') { if (typeof renderBooks === 'function') renderBooks(); }
   if (tab === 'keywords') { if (typeof renderKeywords === 'function') renderKeywords(); }
   if (tab === 'ai') renderAiChat();
+  if (tab === 'prompts' && typeof renderPromptStudio === 'function') renderPromptStudio();
   if (tab === 'today') renderToday();
   if (tab === 'calendar') renderCalendar();
   if (tab === 'timer') renderTimer();
@@ -372,8 +414,8 @@ function switchTab(tab) {
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
   // 同步移动端底部导航激活态
   updateMobileTabbar(tab);
-  // 移动端切换后关闭抽屉
-  closeMobileDrawer();
+  // 桌面导航后保持侧栏展开，由移出或点击外部收起；移动端仍关闭抽屉。
+  if (!isDesktopSidebarMode()) closeMobileDrawer();
 }
 
 // ═══════════ 触屏长按 → 右键菜单（长按 500ms 触发 contextmenu）═══════════
@@ -477,17 +519,14 @@ function updateMobileTabbar(tab) {
 }
 
 function openMobileDrawer() {
-  document.getElementById('sidebar').classList.add('open');
+  openSidebar();
+  if (isDesktopSidebarMode()) return;
   const ov = document.getElementById('mobileDrawerOverlay');
   if (ov) ov.classList.add('open');
   document.body.classList.add('mobile-drawer-open');
 }
 function closeMobileDrawer() {
-  if (!window.innerWidth || window.innerWidth > 800) return;
-  document.getElementById('sidebar').classList.remove('open');
-  const ov = document.getElementById('mobileDrawerOverlay');
-  if (ov) ov.classList.remove('open');
-  document.body.classList.remove('mobile-drawer-open');
+  closeSidebar();
 }
 
 function openMobileMore() {
@@ -535,6 +574,7 @@ function updateWorkspaceHeading(tab) {
     timer: ['专注时光', '一次只做一件事，沉浸在此刻。'],
     habits: ['习惯追踪', '用微小的坚持，积累看得见的改变。'],
     ai: ['AI 助手', '一起提问、探索，让学习多一点启发。'],
+    prompts: ['提示词工作台', '把想法拆成结构，清楚地告诉 AI 如何协助你。'],
     inbox: ['收件箱', '把消息归于一处，让注意力回到学习。'],
     friends: ['学习伙伴', '分享进步，也分享沿途的风景。']
   };
@@ -561,6 +601,7 @@ const ALL_NAV_ITEMS = [
   { id: 'friends',   icon: 'users',         label: '好友' },
   { id: 'habits',    icon: 'target',        label: '习惯' },
   { id: 'ai',        icon: 'bot',           label: 'AI 助手' },
+  { id: 'prompts',   icon: 'wand-sparkles', label: '提示词' },
   { id: 'codegen',   icon: 'code-2',        label: 'AI 编程' },
   { id: 'extensions',icon: 'puzzle',        label: '扩展' },
   { id: 'store',     icon: 'store',         label: '插件市场' },

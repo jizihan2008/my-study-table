@@ -196,7 +196,9 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
-    minWidth: 800,
+    // BrowserWindow 尺寸包含 Windows 窗口边框；840 可保证渲染器内容区
+    // 仍大于 800px 的移动端断点，避免桌面侧边栏被手机样式隐藏。
+    minWidth: 840,
     minHeight: 600,
     title: 'My Study Table',
     webPreferences: {
@@ -1467,12 +1469,12 @@ function runPowerShellScript(script, args, csSource) {
   }
   try { fs.writeFileSync(scriptPath, '\uFEFF' + text, 'utf-8'); }
   catch (e) { return Promise.resolve({ ok: false, error: '写入脚本失败: ' + e.message }); }
-  return new Promise((resolve) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath].concat(finalArgs), { windowsHide: true });
   const cleanup = () => {
     try { fs.unlinkSync(scriptPath); } catch (e2) {}
     if (csPath) { try { fs.unlinkSync(csPath); } catch (e2) {} }
   };
+  return new Promise((resolve) => {
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath].concat(finalArgs), { windowsHide: true });
     let stdout = '', stderr = '';
     const outDec = createStreamDecoder();
     const errDec = createStreamDecoder();

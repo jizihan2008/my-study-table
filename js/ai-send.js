@@ -11,9 +11,9 @@ function handleAiSendOrStop() {
     if (typeof AIClient !== 'undefined') AIClient.cancel(convId);
     // 停止当前回复时清空发送队列（停止 = 停止一切），避免回复结束后自动补发排队消息
     if (_aiSendQueue.length > 0) {
-      _aiSendQueue = [];
+      _aiSendQueue = _aiSendQueue.filter(item => item.convId !== convId);
       updateAiQueueIndicator();
-      if (typeof showAiToast === 'function') showAiToast('已停止并清空发送队列');
+      if (typeof showAiToast === 'function') showAiToast('已停止并清空当前对话的发送队列');
     }
     updateAiSendButton();
   } else {
@@ -51,6 +51,15 @@ function _queueTextPreview(text, maxLen) {
   const t = String(text || '').replace(/\s+/g, ' ').trim();
   if (!t) return '（纯附件）';
   return t.length > (maxLen || 40) ? t.slice(0, maxLen) + '…' : t;
+}
+
+function formatAiRequestError(error) {
+  const message = String(error?.message || error || '未知错误');
+  if (/上下文预算|系统提示词|Max Tokens/.test(message)) {
+    return '❌ 出错了：' + message + '\n\n可在“设置 → AI 设置 → 编辑当前 Key → 更多设置”中调整。';
+  }
+  if (/已取消|手动停止/.test(message)) return '⏹️ ' + message;
+  return '❌ 出错了：' + message + '\n\n请检查 API Key、接口地址和网络连接。';
 }
 
 // 更新指示条 + 预览面板
@@ -183,7 +192,7 @@ async function sendAiMessage(externalText, externalAttachments) {
   if (!text && !hasAttach) return null;
   // Clear draft for this conv before sending
   if (!fromQueue) clearAiDraft();
-  const apiCfg = getEffectiveApiConfig();
+  const apiCfg = { ...getEffectiveApiConfig() };
   if (!apiCfg.apiKey) { openSettingsModal(); return null; }
 
   const conv = getActiveConv();
@@ -197,26 +206,52 @@ async function sendAiMessage(externalText, externalAttachments) {
     return null;
   }
 
+  apiCfg.conversationSettings = { id: conv.id, _webSearchMode: conv._webSearchMode, _webSearchEnabled: conv._webSearchEnabled };
+
   // Snapshot current attachments
   const currentAttachments = fromQueue ? [...(externalAttachments || [])] : [...aiAttachments];
 
-  const displayAttachments = currentAttachments.map(a => ({ name: a.name, size: a.size }));
+  // Clear only the originating composer, before file reads yield control.
+  // After an await the user may already be editing another conversation.
+  if (!fromQueue) {
+    input.value = '';
+    input.style.height = 'auto';
+    aiAttachments = [];
+    renderAttachPreview();
+  }
+  setAiLoading(conv.id, true);
+  setAiStopRequested(conv.id, false);
+  updateAiSendButton();
+
+  // 附件在消息里的展示信息（displayUrl 在下面处理附件时补上：可能是 Files API 的小缩略图）
+  const displayAttachments = currentAttachments.map(a => ({ name: a.name, size: a.size, displayUrl: a.dataUrl || '' }));
 
   // Process attachments: for Kimi use file upload API, for others read as txt
   let docTexts = '';
-  const isKimi = isKimiModel();
-  const isVision = isVisionModel();
+  const isKimi = isKimiModel(apiCfg);
+  const isVision = isVisionModel(apiCfg);
+  // 图片附件：内联 base64 会让请求体膨胀约 1.37 倍（服务端另有 48 MiB 请求体上限），
+  // 预处理失败的超大图在发送前剔除并说明，避免整条消息因 413/400 失败
+  const oversized = pruneOversizedImageAttachments(currentAttachments, apiCfg);
+  if (oversized.length > 0) {
+    docTexts += `\n\n[以下图片未发送：${oversized.join('、')} —— 内联(base64)体积超出限制，请压缩后重试]`;
+    // 从本次发送的快照中剔除（currentAttachments 是浅拷贝，需按名字过滤）
+    for (let i = currentAttachments.length - 1; i >= 0; i--) {
+      if (currentAttachments[i] && oversized.indexOf(currentAttachments[i].name) >= 0) currentAttachments.splice(i, 1);
+    }
+  }
   if (isDebugMode()) console.log('[DEBUG sendAiMessage] isKimi:', isKimi, 'isVision:', isVision, 'attachments:', currentAttachments.length);
   // Collect vision file references (base64 data URLs) for multimodal content
   let visionFiles = [];
   for (const a of currentAttachments) {
+    if (isAiStopRequested(conv.id)) break;
     try {
       if (isKimi) {
         if (isVisionFile(a.file)) {
           // Video: must upload to Kimi first, reference via ms://<fileId>
           if (isVideoFile(a.file)) {
             if (isDebugMode()) console.log('[DEBUG] Video upload', a.name);
-            const fileId = await uploadVideoToKimi(a.file);
+            const fileId = await uploadVideoToKimi(a.file, apiCfg);
             visionFiles.push({
               fileId: fileId,
               name: a.name,
@@ -225,7 +260,7 @@ async function sendAiMessage(externalText, externalAttachments) {
           } else if (a.ocrMode) {
             // OCR mode: upload to Kimi file-extract for text extraction
             if (isDebugMode()) console.log('[DEBUG] Vision path: OCR upload', a.name);
-            const content = await uploadToKimi(a.file);
+            const content = await uploadToKimi(a.file, apiCfg);
             const maxLen = 80000;
             const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
             docTexts += `\n\n[附件(OCR)：${a.name}]\n` + truncated;
@@ -244,7 +279,7 @@ async function sendAiMessage(externalText, externalAttachments) {
         } else {
           if (isDebugMode()) console.log('[DEBUG] Doc path: uploading', a.name);
           // Document: use file-extract for text/OCR extraction
-          const content = await uploadToKimi(a.file);
+          const content = await uploadToKimi(a.file, apiCfg);
           const maxLen = 80000;
           const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
           docTexts += `\n\n[附件：${a.name}]\n` + truncated;
@@ -252,19 +287,56 @@ async function sendAiMessage(externalText, externalAttachments) {
           if (idx >= 0) displayAttachments[idx].content = truncated;
         }
       } else if (isVision) {
-        // 视觉模型（DeepSeek V4 Vision 等）：图片 → base64 image_url 内联；其他文件 → 文本读取
-        const imgExt = '.' + (a.file.name.split('.').pop() || '').toLowerCase();
-        if (isImageFile(a.file) && imgExt === '.bmp') {
-          // DeepSeek Vision 官方仅支持 webp/png/jpeg/gif（不含 bmp）→ 明确提示
-          docTexts += `\n\n[附件：${a.name} — 当前模型不支持 bmp 图片，请转换为 png/jpeg 后重试]`;
-        } else if (isImageFile(a.file)) {
-          if (isDebugMode()) console.log('[DEBUG] Vision path: reading image as base64', a.name);
-          const dataUrl = await readFileAsDataURL(a.file);
-          visionFiles.push({
-            dataUrl: dataUrl,
-            name: a.name,
-            type: 'image_url'
-          });
+        // 视觉模型（deepseek-flash / DeepSeek V4.1 Flash 等）：图片 → 文件引用或 base64 内联；其他文件 → 文本读取
+        // 优先复用历史里已上传的 file_id（同一张图在后续轮次不再重复传输），否则用本次附件预处理的结果
+        if (isImageFile(a.file)) {
+          if (isDebugMode()) console.log('[DEBUG] Vision path: inline image', a.name, a.imageInfo || '(未预处理)');
+          // 添加附件时就已开始处理（上传或本地转码）：这里直接等它，避免重复解码，也避免"点发送时还没处理完"
+          if (a._processPromise) {
+            try { await a._processPromise; } catch (e) { /* 失败已在预处理里记录，走下面兜底 */ }
+          }
+          const reused = findReusableUploadedImage(a.name, apiCfg);
+          if (reused) {
+            if (isDebugMode()) console.log('[DEBUG] Vision path: reuse uploaded file', a.name, reused.fileId);
+            visionFiles.push({
+              type: 'file',
+              fileId: reused.fileId,
+              uploadKeyId: reused.uploadKeyId,
+              name: a.name,
+              dataUrl: reused.thumb || '' // 缩略图沿用原消息里的，仅用于界面回显
+            });
+          } else if (a.uploadFileId) {
+            if (isDebugMode()) console.log('[DEBUG] Vision path: uploaded now', a.name, a.uploadFileId);
+            visionFiles.push({
+              type: 'file',
+              fileId: a.uploadFileId,
+              uploadKeyId: a.uploadKeyId || apiCfg.keyId || '',
+              name: a.name,
+              dataUrl: a.dataUrl || ''
+            });
+          } else {
+            let dataUrl = a.dataUrl;
+            if (!dataUrl) {
+              // 附件是在切到视觉模型前添加的（那时没预处理）→ 现场补一次，仍失败则退回原文件
+              try {
+                const processed = await downscaleImageForApi(a.file);
+                dataUrl = processed.dataUrl;
+                a.file = processed.file;
+                a.imageInfo = processed.info;
+              } catch (e) {
+                dataUrl = await readFileAsDataURL(a.file);
+              }
+            }
+            if (a._preprocessError) {
+              docTexts += `\n\n[附件：${a.name} — 图片本地转换失败（${a._preprocessError}），已按原文件内联发送]`;
+            }
+            a.dataUrl = dataUrl; // 缓存，避免同一附件在多轮工具调用中重复编码
+            visionFiles.push({
+              dataUrl: dataUrl,
+              name: a.name,
+              type: 'image_url'
+            });
+          }
         } else if (isVideoFile(a.file)) {
           // 视觉模型不支持视频内联，提示跳过
           docTexts += `\n\n[附件：${a.name} — 当前模型不支持视频分析]`;
@@ -301,6 +373,13 @@ async function sendAiMessage(externalText, externalAttachments) {
     }
   }
 
+  // 图片附件的展示图：Files API 路径下 attach.dataUrl 是本地生成的小缩略图（原图只在服务端）
+  for (const d of displayAttachments) {
+    if (d.displayUrl) continue;
+    const attached = currentAttachments.find(a => a.name === d.name && a.dataUrl);
+    if (attached) d.displayUrl = attached.dataUrl;
+  }
+
   // Build user message content
   const userContent = text + docTexts;
 
@@ -320,35 +399,18 @@ async function sendAiMessage(externalText, externalAttachments) {
   const _pendingUserNodeId = appendMessage(conv, userMsg);
   safeSaveAiConvs();
   if (_pendingUserNodeId) {
-    try { localStorage.setItem('study_ai_pending', JSON.stringify({ convId: conv.id, userNodeId: _pendingUserNodeId, at: Date.now() })); } catch {}
-  }
-
-  // Clear attachments（队列自动发送不清理全局附件，避免打断用户正在准备的新附件）
-  if (!fromQueue) {
-    aiAttachments = [];
-    renderAttachPreview();
+    setAiPendingRequest(conv.id, _pendingUserNodeId, apiCfg.keyId);
   }
 
   // AI Auto-title — regenerate after every exchange
   const shouldAutoTitle = conv.messages.filter(m => m.role === 'user').length >= 1;
 
-  let didReRender = false;
   if (conv.title.startsWith('新对话 ') && conv.messages.filter(m => m.role === 'user').length === 1) {
     conv.title = text ? (text.length > 20 ? text.slice(0, 20) + '…' : text) : '附件对话';
     safeSaveAiConvs();
-    didReRender = true;
-    // 关键：必须先清空输入框再全量重渲染。renderAiChat() 内部会 saveAiDraft()+restoreAiDraft()，
-    // 若输入框仍残留刚发送的文本，会被当作草稿恢复回输入框（Enter 后对话框保留草稿的 bug）。
-    if (input) { input.value = ''; input.style.height = 'auto'; }
-    renderAiChat();
-  }
-
-  if (!didReRender && !fromQueue) {
-    input.value = '';
-    input.style.height = 'auto';
+    if (getActiveConvId() === conv.id) renderAiChat();
   }
   // 发送后滚动交由 renderAiMessages 智能处理：用户接近底部才滚到底，否则保持浏览位置
-  setAiLoading(conv.id, true);
   renderAiMessages();
   updateAiSendButton();
 
@@ -358,7 +420,7 @@ async function sendAiMessage(externalText, externalAttachments) {
 
   let aiReplyText = null; // 最终回复文本（供调用方回填等使用）
   try {
-    const streamingKeyName = getActiveKeyDisplayName();
+    const streamingKeyName = (apiCfg.name || apiCfg.model || 'AI');
     const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
       if (snapshot.reset) {
         clearAiStreamingDraft(conv.id);
@@ -392,7 +454,7 @@ async function sendAiMessage(externalText, externalAttachments) {
     }
 
     // Build the final assistant message
-    const keyName = getActiveKeyDisplayName();
+    const keyName = (apiCfg.name || apiCfg.model || 'AI');
     const finalAssistantMsg = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
     if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
     appendMessage(conv, finalAssistantMsg);
@@ -408,14 +470,14 @@ async function sendAiMessage(externalText, externalAttachments) {
     // ═══ call_ai queue: check if the AI requested another AI to respond ═══
     // (For simplicity, the call_ai chain is still pushed as a separate message after the candidate.)
     const callAiMatch = finalCleanText.match(/<call_ai>\s*({[\s\S]*?})\s*<\/call_ai>/);
-    if (callAiMatch) {
+    if (callAiMatch && !loopRes.stopped && !loopRes.streamError && !isAiStopRequested(conv.id)) {
       try {
         const callAiParams = JSON.parse(callAiMatch[1]);
         const errMsg = await executeCallAiAndPush(callAiParams, conv);
         if (errMsg) {
-          appendMessage(conv, { role: 'assistant', content: errMsg, time: timeStr, keyName: getActiveKeyDisplayName() });
+          appendMessage(conv, { role: 'assistant', content: errMsg, time: timeStr, keyName: (apiCfg.name || apiCfg.model || 'AI') });
           safeSaveAiConvs();
-          sendAiNotification(conv, errMsg, getActiveKeyDisplayName());
+          sendAiNotification(conv, errMsg, (apiCfg.name || apiCfg.model || 'AI'));
         }
         renderAiMessages();
       } catch (e) {
@@ -424,11 +486,11 @@ async function sendAiMessage(externalText, externalAttachments) {
     }
   } catch (err) {
     clearAiStreamingDraft(conv.id, false);
-    const errorMsg = '❌ 出错了：' + err.message;
-    const errMsg = { role: 'assistant', content: errorMsg + '\n\n请检查 API Key 和网络连接是否正确。', time: timeStr, keyName: getActiveKeyDisplayName() };
+    const errorMsg = formatAiRequestError(err);
+    const errMsg = { role: 'assistant', content: errorMsg, time: timeStr, keyName: (apiCfg.name || apiCfg.model || 'AI') };
     appendMessage(conv, errMsg);
     safeSaveAiConvs();
-    sendAiNotification(conv, errorMsg, getActiveKeyDisplayName());
+    sendAiNotification(conv, errorMsg, (apiCfg.name || apiCfg.model || 'AI'));
   }
 
   // Always reset loading state for this conversation
@@ -436,7 +498,7 @@ async function sendAiMessage(externalText, externalAttachments) {
   setAiStopRequested(conv.id, false);
   clearAiStreamingDraft(conv.id, false);
   // 已生成/已停止/已失败：清除待生成标记（避免下次启动误判为"被中断"）
-  try { localStorage.removeItem('study_ai_pending'); } catch {}
+  clearAiPendingRequest(conv.id);
   renderAiMessages();
   updateAiSendButton();
 
@@ -461,7 +523,7 @@ async function sendAiMessage(externalText, externalAttachments) {
 // （原版通用逻辑，未改底层语义）
 function navigateCandidateBranch(userNodeId, delta) {
   const conv = getActiveConv();
-  if (!conv || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
+  if (!conv || isAiLoading(conv.id) || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
   const siblings = siblingNodeIds(conv, userNodeId);
   if (siblings.length === 0) return;
   const n = siblings.length + 1; // 含自己
@@ -516,9 +578,10 @@ async function regenerateAiMessage(nodeId) {
 
 // 核心：从指定 user 节点重新生成回复（在其下新建分支）。
 // 被 regenerateAiMessage（换一条）与 sendEditedMessage（编辑后发送）复用。
-async function regenerateFromUserNode(conv, userNodeId) {
+async function regenerateFromUserNode(conv, userNodeId, config) {
   if (!conv || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
-  const apiCfg = getEffectiveApiConfig();
+  if (isAiLoading(conv.id)) return;
+  const apiCfg = { ...(config || getEffectiveApiConfig()) };
   if (!apiCfg.apiKey) return;
 
   // 切换到该 user 节点，使 runToolCallLoop 的 appendMessage 落在其下，自动形成新分支
@@ -526,10 +589,10 @@ async function regenerateFromUserNode(conv, userNodeId) {
   setAiLoading(conv.id, true);
   updateAiSendButton();
   // 重新生成同样记录待生成标记（刷新中断后自动续传）
-  try { localStorage.setItem('study_ai_pending', JSON.stringify({ convId: conv.id, userNodeId, at: Date.now() })); } catch {}
+  setAiPendingRequest(conv.id, userNodeId, apiCfg.keyId);
 
   try {
-    const streamingKeyName = getActiveKeyDisplayName();
+    const streamingKeyName = (apiCfg.name || apiCfg.model || 'AI');
     const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
       if (snapshot.reset) clearAiStreamingDraft(conv.id);
       else setAiStreamingDraft(conv.id, { content: snapshot.content, reasoning: snapshot.reasoning, keyName: streamingKeyName });
@@ -553,18 +616,14 @@ async function regenerateFromUserNode(conv, userNodeId) {
       else finalCleanText += '\n\n⚠️（回复因长度限制被截断，可调大 Max Tokens 或发送「继续」）';
     }
 
-    // runToolCallLoop 已通过 appendMessage 追加中间工具消息与最终回复，
-    // 自动形成 user 节点下的新分支。若无任何追加（异常兜底），则手动创建。
-    const lastNode = conv.tree[conv.activePath[conv.activePath.length - 1]];
-    if (!lastNode || lastNode.role === 'user') {
-      const keyName = getActiveKeyDisplayName();
-      const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
-      const finalAssistantMsg = { role: 'assistant', content: finalCleanText || '（未收到回复）', time: timeStr, keyName };
-      if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
-      createBranch(conv, userNodeId, finalAssistantMsg);
-    }
+    // The loop stores intermediate tool messages; the caller owns the final reply.
+    const keyName = apiCfg.name || apiCfg.model || 'AI';
+    const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    const finalAssistantMsg = { role: 'assistant', content: finalCleanText || '（未收到回复）', time: timeStr, keyName };
+    if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
+    appendMessage(conv, finalAssistantMsg);
     safeSaveAiConvs();
-    sendAiNotification(conv, finalCleanText, getActiveKeyDisplayName());
+    sendAiNotification(conv, finalCleanText, (apiCfg.name || apiCfg.model || 'AI'));
 
     // Parse <memory> tags (only from the most recent reply)
     if (typeof parseMemoryTags === 'function') {
@@ -572,19 +631,20 @@ async function regenerateFromUserNode(conv, userNodeId) {
     }
   } catch (err) {
     clearAiStreamingDraft(conv.id, false);
-    const errorMsg = '❌ 出错了：' + err.message;
-    const errMsg = { role: 'assistant', content: errorMsg + '\n\n请检查 API Key 和网络连接是否正确。', time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), keyName: getActiveKeyDisplayName() };
-    createBranch(conv, userNodeId, errMsg);
+    const errorMsg = formatAiRequestError(err);
+    const errMsg = { role: 'assistant', content: errorMsg, time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }), keyName: (apiCfg.name || apiCfg.model || 'AI') };
+    appendMessage(conv, errMsg);
     safeSaveAiConvs();
-    sendAiNotification(conv, errorMsg, getActiveKeyDisplayName());
+    sendAiNotification(conv, errorMsg, (apiCfg.name || apiCfg.model || 'AI'));
   }
 
   setAiLoading(conv.id, false);
   setAiStopRequested(conv.id, false);
   clearAiStreamingDraft(conv.id, false);
-  try { localStorage.removeItem('study_ai_pending'); } catch {}
+  clearAiPendingRequest(conv.id);
   renderAiMessages();
   updateAiSendButton();
+  if (typeof drainAiSendQueue === 'function') drainAiSendQueue(conv.id);
 }
 
 // 编辑消息后发送：在原 user 节点父节点下创建「编辑后新 user 分支」，
@@ -610,6 +670,13 @@ async function sendEditedMessage(nodeId, newText) {
     }
   }
   if (!isTreeConv(conv) || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
+
+  // 内容没有变化时不创建“看不出区别”的 user 分支。旧行为会显示 1/2，
+  // 并把其中一条回复藏在另一版本下，用户会误以为聊天记录丢失。
+  if (text === String(conv.tree[userNodeId].content || '').trim()) {
+    if (typeof showAiToast === 'function') showAiToast('内容没有变化，未创建新分支');
+    return null;
+  }
 
   // 创建编辑后的新 user 分支（与原文并列），并切换过去
   const newUserId = createBranchFromEdit(conv, userNodeId, text, { time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) });
@@ -657,11 +724,40 @@ function initAiToolbar() {
     }
   }
 
+  // 图片上传方式（auto / always / never）
+  updateAiImageUploadBtn();
+
   // Reset quick action dropdown
   const quickSelect = document.getElementById('aiToolbarQuick');
   if (quickSelect) quickSelect.value = '';
   // Re-render Lucide icons (the toolbar was just created/updated in DOM)
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+
+// ═══════════ 图片上传方式：内联 base64 ↔ DeepSeek Files API ═══════════
+// auto  ：小图内联，大图（>1 MiB）上传后按 file_id 引用（默认）
+// always：图片一律先上传，后续轮次不再重复传图（最省请求体）
+// never ：一律内联 base64（图片不出现在服务端文件列表里）
+function updateAiImageUploadBtn() {
+  const btn = document.getElementById('aiToolbarImageUploadBtn');
+  if (!btn) return;
+  const mode = (typeof getAiImageUploadMode === 'function') ? getAiImageUploadMode() : 'auto';
+  const apiCfg = getEffectiveApiConfig();
+  const available = (typeof supportsDeepSeekFilesApi === 'function') && supportsDeepSeekFilesApi(apiCfg);
+  const span = btn.querySelector('span');
+  const label = mode === 'never' ? '仅内联' : (mode === 'always' ? '全部上传' : '自动上传');
+  if (span) span.textContent = label;
+  btn.classList.toggle('active', mode !== 'never' && available);
+  btn.title = available
+    ? `图片上传方式：${label}\n点击切换（自动上传 → 全部上传 → 仅内联）\n上传后同一张图在后续轮次只发送 file_id，不再重复传图`
+    : `图片上传方式：${label}\n当前 Key（${apiCfg.model || '未配置'}）不是 DeepSeek 官方端点，无法使用 Files API，图片将内联(base64)发送`;
+}
+
+function cycleAiImageUploadMode() {
+  const current = (typeof getAiImageUploadMode === 'function') ? getAiImageUploadMode() : 'auto';
+  const next = current === 'auto' ? 'always' : (current === 'always' ? 'never' : 'auto');
+  if (typeof setAiImageUploadMode === 'function') setAiImageUploadMode(next);
+  updateAiImageUploadBtn();
 }
 
 function onAiToolbarKeyChange() {
@@ -799,11 +895,36 @@ function aiToggleTodo(todoId) {
 // 发送/重新生成时写入 study_ai_pending { convId, userNodeId }，完成/停止/失败后清除。
 // 若刷新打断（fetch 中断、loading 状态丢失），启动时检测到该标记且对应 user 节点下
 // 还没有 assistant 回复，则自动切回该节点重新生成，实现"AI 对话不被打断"。
+function getAiPendingRequests() {
+  try {
+    const stored = JSON.parse(localStorage.getItem('study_ai_pending') || '{}');
+    if (stored?.convId) return { [stored.convId]: stored }; // Legacy single request.
+    return stored && typeof stored === 'object' && !Array.isArray(stored) ? stored : {};
+  } catch { return {}; }
+}
+
+function setAiPendingRequest(convId, userNodeId, keyId) {
+  const requests = getAiPendingRequests();
+  requests[convId] = { convId, userNodeId, keyId, at: Date.now() };
+  try { localStorage.setItem('study_ai_pending', JSON.stringify(requests)); } catch {}
+}
+
+function clearAiPendingRequest(convId) {
+  const requests = getAiPendingRequests();
+  delete requests[convId];
+  try {
+    if (Object.keys(requests).length) localStorage.setItem('study_ai_pending', JSON.stringify(requests));
+    else localStorage.removeItem('study_ai_pending');
+  } catch {}
+}
+
 function resumeInterruptedAiReply() {
-  let pending = null;
-  try { pending = JSON.parse(localStorage.getItem('study_ai_pending') || 'null'); } catch {}
-  try { localStorage.removeItem('study_ai_pending'); } catch {}
+  for (const pending of Object.values(getAiPendingRequests())) resumePendingAiReply(pending);
+}
+
+function resumePendingAiReply(pending) {
   if (!pending || !pending.convId) return;
+  clearAiPendingRequest(pending.convId);
   if (typeof aiConvs === 'undefined' || typeof ensureTree !== 'function' || typeof regenerateFromUserNode !== 'function') return;
   const conv = aiConvs.find(c => String(c.id) === String(pending.convId));
   if (!conv) return;
@@ -814,13 +935,9 @@ function resumeInterruptedAiReply() {
   const kids = userNode.children || [];
   const hasAssistantReply = kids.some(kid => conv.tree[kid] && conv.tree[kid].role === 'assistant');
   if (hasAssistantReply) return;
-  if (activeConvId !== conv.id) {
-    activeConvId = conv.id;
-    try { localStorage.setItem('study_active_conv', conv.id); } catch {}
-  }
   setTimeout(() => {
     if (typeof bkShowMiniToast === 'function') bkShowMiniToast('检测到上次 AI 回复被中断，已自动重新生成');
-    regenerateFromUserNode(conv, pending.userNodeId);
+    regenerateFromUserNode(conv, pending.userNodeId, getEffectiveApiConfig(pending.keyId));
   }, 300);
 }
 if (typeof window._aiResumeInited === 'undefined') {

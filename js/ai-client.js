@@ -13,11 +13,20 @@
   });
 
   function numberSetting(key, fallback, min, max) {
-    const value = Number(localStorage.getItem(key));
+    const raw = localStorage.getItem(key);
+    if (raw == null || raw.trim() === '') return fallback;
+    const value = Number(raw);
     return Number.isFinite(value) ? Math.max(min, Math.min(max, value)) : fallback;
   }
 
-  function delay(ms) { return new Promise(resolve => setTimeout(resolve, ms)); }
+  function delay(ms, signal) {
+    return new Promise((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); reject(signal.reason); };
+      const timer = setTimeout(() => { signal.removeEventListener('abort', abort); resolve(); }, ms);
+      if (signal.aborted) abort();
+      else signal.addEventListener('abort', abort, { once: true });
+    });
+  }
 
   function addController(scope, controller) {
     const key = String(scope || 'global');
@@ -77,8 +86,10 @@
           return response;
         }
         if (response.body && typeof response.body.cancel === 'function') await response.body.cancel().catch(() => {});
-        const retryAfter = Number(response.headers.get('retry-after'));
-        await delay(Number.isFinite(retryAfter) ? retryAfter * 1000 : Math.min(8000, 500 * Math.pow(2, attempt)));
+        const rawRetryAfter = response.headers.get('retry-after');
+        const retryAfter = rawRetryAfter == null || rawRetryAfter.trim() === '' ? NaN
+          : (/^\d+(\.\d+)?$/.test(rawRetryAfter) ? Number(rawRetryAfter) * 1000 : Date.parse(rawRetryAfter) - Date.now());
+        await delay(Number.isFinite(retryAfter) ? Math.max(0, Math.min(30000, retryAfter)) : Math.min(8000, 500 * Math.pow(2, attempt)), controller.signal);
       } catch (error) {
         lastError = error;
         if (controller.signal.aborted || attempt === retries) {
@@ -87,7 +98,11 @@
           if (controller.signal.aborted) throw new Error('AI 请求已取消');
           throw error;
         }
-        await delay(Math.min(8000, 500 * Math.pow(2, attempt)));
+        try {
+          await delay(Math.min(8000, 500 * Math.pow(2, attempt)), controller.signal);
+        } catch {
+          throw new Error(controller.signal.reason?.name === 'TimeoutError' ? 'AI 请求超时，请检查网络或调高超时时间' : 'AI 请求已取消');
+        }
       } finally {
         if (!handedOff) cleanup();
       }

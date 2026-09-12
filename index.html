@@ -12,8 +12,8 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260906-r2">
-<link rel="stylesheet" href="css/workspace.css?v=20260905-r1">
+<link rel="stylesheet" href="css/style.css?v=20260914-r2">
+<link rel="stylesheet" href="css/workspace.css?v=20260911-r2">
 <link rel="stylesheet" href="css/appearance.css?v=20260906-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -26,10 +26,10 @@
 <div class="app-bg-video-overlay"></div>
 
 <!-- Sidebar Hover Trigger -->
-<div class="sidebar-hover-trigger" id="sidebarHoverTrigger"></div>
+<button class="sidebar-hover-trigger" id="sidebarHoverTrigger" type="button" aria-label="打开导航侧边栏" aria-controls="sidebar" aria-expanded="false" title="打开导航侧边栏" onmouseenter="openSidebar()" onmouseleave="scheduleCloseSidebar()" onclick="event.stopPropagation();openSidebar()"></button>
 
 <!-- Sidebar -->
-<div class="sidebar" id="sidebar">
+<div class="sidebar" id="sidebar" aria-hidden="true" onmouseenter="openSidebar()" onmouseleave="scheduleCloseSidebar()">
   <div class="sidebar-logo">
     <div class="brand-mark"><i data-lucide="book-open" aria-hidden="true"></i></div>
     <div><h2>Study Table</h2><p>留一点时间，给成长。</p></div>
@@ -53,7 +53,7 @@
 
 <div class="app">
   <div class="header">
-    <button class="mobile-hamburger" id="mobileHamburger" onclick="event.stopPropagation();if(window.innerWidth>800)openSidebar();else openMobileDrawer()" title="菜单">
+    <button class="mobile-hamburger" id="mobileHamburger" onclick="event.stopPropagation();openMobileDrawer()" title="菜单" aria-label="打开导航侧边栏" aria-controls="sidebar" aria-expanded="false">
       <i data-lucide="menu" style="width:20px;height:20px;"></i>
     </button>
     <div class="header-heading">
@@ -401,6 +401,11 @@
     </div>
   </div>
 
+  <!-- ── Prompt Studio Section ── -->
+  <div class="section" id="section-prompts">
+    <div class="prompt-studio" id="promptStudio" aria-live="polite"></div>
+  </div>
+
   <!-- ── Friends Section ── -->
   <div class="section" id="section-friends">
     <div class="card" style="padding: 0; overflow: hidden; border-radius: var(--radius);">
@@ -684,7 +689,12 @@
           <div class="settings-field" style="margin-bottom:8px;">
             <label>上下文消息条数</label>
             <input type="number" id="apiKeyFormContextLimit" value="20" min="5" max="100" step="1">
-            <span class="hint">每次发送给 AI 的最近消息数，数值越大上下文越完整但消耗 Token 也越多（建议 5~50）</span>
+            <span class="hint">优先保留最近的完整问答和工具链；较早内容压缩为摘录，实际条数可能因轮次边界调整。</span>
+          </div>
+          <div class="settings-field" style="margin-bottom:8px;">
+            <label>上下文预算（估算 Token）</label>
+            <input type="number" id="apiKeyFormContextBudget" value="32768" min="2048" max="2000000" step="1024">
+            <span class="hint">包含系统提示、历史和回复预留；请按模型容量设置。按字符保守估算，图片单独预留。</span>
           </div>
           <div class="settings-field" style="margin-bottom:8px;">
             <label>标题生成上下文条数</label>
@@ -700,6 +710,26 @@
         </div>
 
         <button class="btn-save-settings" onclick="showApiKeyForm()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;margin-bottom:12px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加 Key</button>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="image-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 图片附件上传</div>
+        <div class="settings-field" style="margin-bottom:8px;">
+          <label>上传方式</label>
+          <select id="settingsImageUploadMode" onchange="saveImageUploadSetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+            <option value="auto">自动（小图内联，大图上传后复用）</option>
+            <option value="always">总是上传（同一张图后续只发 file_id）</option>
+            <option value="never">仅内联 base64（不写入服务端文件）</option>
+          </select>
+          <span class="hint" id="settingsImageUploadHint"></span>
+        </div>
+        <div class="settings-field" style="margin-bottom:8px;">
+          <label>服务端文件</label>
+          <div style="display:flex;gap:8px;align-items:center;">
+            <button onclick="cleanupUploadedFiles()" style="background:var(--todo-hover);color:var(--text);border:1px solid var(--border);border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">查看 / 清理已上传图片</button>
+          </div>
+          <span class="hint">上传的图片保存在你的 DeepSeek 账号下（单账号上限 25 GiB / 10000 个文件）。只有未被任何对话引用的文件才能删除。</span>
+          <div id="uploadedFilesList" style="margin-top:6px;"></div>
+        </div>
 
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> CodeBuddy CLI（AI 编程助手引擎）</div>
@@ -968,9 +998,16 @@
         <div class="settings-debug-row">
           <div>
             <label style="cursor:pointer;" for="settingsDebug"><i data-lucide="wrench" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 调试模式</label>
-            <div class="hint">开启后可在「今天」页面手动编辑打卡状态，方便调试日报功能</div>
+            <div class="hint">开启后可使用各项调试功能</div>
           </div>
           <input type="checkbox" id="settingsDebug" style="width:20px;height:20px;accent-color:#f59e0b;" onchange="onDebugToggle()">
+        </div>
+        <div class="settings-debug-row" style="margin-top:10px;padding-left:18px;">
+          <div>
+            <label style="cursor:pointer;" for="settingsCheckinDebug"><i data-lucide="flame" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;color:#f59e0b;"></i> 打卡调试</label>
+            <div class="hint">在「今天」页显示打卡状态编辑、日期修改和日报测试工具</div>
+          </div>
+          <input type="checkbox" id="settingsCheckinDebug" style="width:20px;height:20px;accent-color:#f59e0b;" onchange="onCheckinDebugToggle()">
         </div>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-field">
@@ -1142,6 +1179,10 @@
             <input id="autoFormAt" type="text" placeholder="如 09:30" maxlength="5" style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;box-sizing:border-box;">
           </div>
           <div style="margin-bottom:8px;">
+            <label for="autoFormDate">一次性提醒日期（留空为下次到达该时间）</label>
+            <input id="autoFormDate" type="date" style="display:block;width:100%;margin:6px 0;">
+            <label for="autoFormReason">创建依据</label>
+            <textarea id="autoFormReason" rows="2" placeholder="为什么需要这条提醒" style="width:100%;box-sizing:border-box;"></textarea>
             <label style="font-size:12px;color:var(--text-secondary);display:block;margin-bottom:4px;">任务描述（触发时 AI 会执行）</label>
             <textarea id="autoFormPrompt" rows="3" placeholder="描述触发后 AI 需要做什么..." style="width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
           </div>
@@ -1273,6 +1314,7 @@
         <label>系统提示词 (System Prompt)</label>
         <textarea id="convSystemPrompt" placeholder="设定 AI 的角色和行为，例如：你是一个专业的数学老师，用通俗易懂的方式解答问题。&#10;&#10;留空则使用默认提示词。" onchange="saveConvSettings()"></textarea>
         <span class="hint">提示词会在这段对话每次请求时作为 system message 发送</span>
+        <button type="button" class="prompt-open-studio-btn" onclick="closeConvSettingsModal();switchTab('prompts')"><i data-lucide="wand-sparkles"></i> 在提示词工作台中可视化编辑</button>
       </div>
       <div style="margin:12px 0;border-top:1px solid var(--border);"></div>
       <div class="settings-section-title"><i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导出对话日志</div>
@@ -1367,10 +1409,10 @@
 <script src="js/secrets.js?v=20260827-r2"></script>
 <script src="js/data-store.js?v=20260825-r1"></script>
 <script src="js/diagnostics.js?v=20260825-r1"></script>
-<script src="js/env.js?v=20260811-r1"></script>
+<script src="js/env.js?v=20260911-r2"></script>
 <script src="js/theme-model.js?v=20260906-r2"></script>
 <script src="js/liquid-glass.js?v=20260906-r2"></script>
-<script src="js/core.js?v=20260910-r3"></script>
+<script src="js/core.js?v=20260911-r9"></script>
 <script src="js/trash.js?v=20260804-r3"></script>
 <script src="js/todos.js?v=20260823-r3"></script>
 <script src="js/notes.js?v=20260827-r7"></script>
@@ -1378,26 +1420,27 @@
 <script src="js/today.js?v=20260905-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
-<script src="js/ai-tree.js?v=20260804-r3"></script>
-<script src="js/ai-conv.js?v=20260825-r2"></script>
-<script src="js/ai-attach.js?v=20260824-r3"></script>
-<script src="js/ai-render.js?v=20260827-r6"></script>
+<script src="js/ai-tree.js?v=20260912-r1"></script>
+<script src="js/ai-conv.js?v=20260912-r1"></script>
+<script src="js/ai-attach.js?v=20260914-r2"></script>
+<script src="js/ai-render.js?v=20260914-r2"></script>
 <script src="js/ai-tools.js?v=20260822-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260827-r2"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
-<script src="js/ai-api.js?v=20260827-r2"></script>
-<script src="js/ai-send.js?v=20260827-r4"></script>
+<script src="js/ai-api.js?v=20260914-r2"></script>
+<script src="js/ai-send.js?v=20260914-r3"></script>
+<script src="js/prompts.js?v=20260912-r2"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260812-r3"></script>
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
 <script src="js/appearance.js?v=20260906-r2"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260825-r5"></script>
+<script src="js/settings.js?v=20260914-r3"></script>
 <script src="js/utils.js?v=20260813-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
-<script src="js/inbox.js?v=20260827-r3"></script>
+<script src="js/inbox.js?v=20260901-r1"></script>
 <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
 <script type="module">
   import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
@@ -1407,13 +1450,13 @@
 <script src="js/books-pdfstore.js?v=20260812-r2"></script>
 <script src="js/books.js?v=20260814-r1"></script>
 <script src="js/books-pdf.js?v=20260813-r6"></script>
-<script src="js/books-kb.js?v=20260814-r1"></script>
+<script src="js/books-kb.js?v=20260901-r1"></script>
 <script src="js/books-ai.js?v=20260814-r7"></script>
 <script src="js/books-annot.js?v=20260813-r4"></script>
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
 <script src="js/calendar.js?v=20260825-r8"></script>
-<script src="js/taskline.js?v=20260825-r10"></script>
+<script src="js/taskline.js?v=20260912-r12"></script>
 <script src="js/timer.js?v=20260814-r1"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
 <script src="js/stats.js?v=20260827-r2"></script>
@@ -1438,7 +1481,7 @@
 <script src="js/sync.js?v=20260910-r13"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260910-r6"></script>
-<script src="js/bootstrap.js?v=20260825-r1"></script>
+<script src="js/bootstrap.js?v=20260911-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
 <div class="context-menu" id="notesContextMenu">

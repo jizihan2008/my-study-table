@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v93';
+const VERSION = 'mst-v106';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,8 +14,8 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260906-r2',
-  './css/workspace.css?v=20260905-r1',
+  './css/style.css?v=20260913-r2',
+  './css/workspace.css?v=20260911-r2',
   './css/appearance.css?v=20260906-r2',
   './js/theme-model.js?v=20260906-r2',
   './js/liquid-glass.js?v=20260906-r2',
@@ -44,8 +44,9 @@ const PRECACHE_URLS = [
   './js/ai-stream.js?v=20260827-r1',
   './js/ai-api.js?v=20260827-r2',
   './js/ai-send.js?v=20260827-r4',
-  './js/env.js?v=20260811-r1',
-  './js/core.js?v=20260910-r3',
+  './js/prompts.js?v=20260912-r2',
+  './js/env.js?v=20260911-r2',
+  './js/core.js?v=20260911-r9',
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260910-r1',
   './js/friends-chat.js?v=20260910-r1',
@@ -55,9 +56,9 @@ const PRECACHE_URLS = [
   './js/ai-utils.js?v=20260826-r2',
   './js/bg-media-idb.js?v=20260906-r2',
   './js/qq-chats.js?v=20260827-r2',
-  './js/taskline.js?v=20260825-r10',
+  './js/taskline.js?v=20260912-r12',
   './js/calendar.js?v=20260825-r8',
-  './js/bootstrap.js?v=20260825-r1',
+  './js/bootstrap.js?v=20260911-r1',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

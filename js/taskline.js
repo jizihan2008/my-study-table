@@ -8,6 +8,20 @@
 
 const TASkLINE_KEY = 'study_taskline_v1';
 
+const TL_STATUS_STYLE = Object.freeze({
+  draft: { label: '待确认', icon: 'file-pen-line' },
+  locked: { label: '待解锁', icon: 'lock-keyhole' },
+  active: { label: '进行中', icon: 'circle-play' },
+  done: { label: '已完成', icon: 'circle-check' },
+  skipped: { label: '已跳过', icon: 'circle-minus' }
+});
+
+function tlStatusBadge(status, detail = false) {
+  const state = TL_STATUS_STYLE[status] || TL_STATUS_STYLE.draft;
+  const key = TL_STATUS_STYLE[status] ? status : 'draft';
+  return `<span class="tl-status-badge tl-status-${key}${detail ? ' tl-detail-status' : ''}"><i data-lucide="${state.icon}" aria-hidden="true"></i><span>${state.label}</span></span>`;
+}
+
 // ─────────────────────── 存储层 ───────────────────────
 function loadTaskLineStore() {
   try {
@@ -103,7 +117,7 @@ function tlDeleteLine(id) {
 }
 
 // ─────────────────────── 任务 CRUD ───────────────────────
-// kind: 'main' 主线关键任务（金色框）| 'side' 支线任务（普通框）
+// kind: 'main' 主线关键任务（金色框）| 'side' 支线任务
 // desc: 任务的一段完整文字描述（含目标/意义/产出）；兼容旧版 goal/meaning/output 分离参数
 function tlAddQuest({ lineId, title, goal = '', meaning = '', output = '', desc, deps = [], conditions = [], kind = 'side', status = 'draft', milestone = false, pos = null }) {
   if (!lineId || !title || !title.trim()) return null;
@@ -123,7 +137,7 @@ function tlAddQuest({ lineId, title, goal = '', meaning = '', output = '', desc,
     id: genId(),
     lineId,
     title: title.trim(),
-    status: 'draft', // AI 生成默认草稿，用户确认后转 active
+    status: status === 'active' ? 'active' : 'draft', // 手动创建直接生效，AI 默认保留草稿
     kind: kind === 'main' ? 'main' : 'side',
     desc: descText || '',
     deps: Array.isArray(deps) ? deps.filter(d => d !== null) : [],
@@ -137,6 +151,7 @@ function tlAddQuest({ lineId, title, goal = '', meaning = '', output = '', desc,
     quest.pos = { x: Math.round(pos.x), y: Math.round(pos.y) };
   }
   store.quests.push(quest);
+  if (quest.status === 'active' && (!tlMainLineUnlocked(store, line) || !quest.deps.every(id => store.quests.some(q => q.id === id && ['done', 'skipped'].includes(q.status))))) quest.status = 'locked';
   saveTaskLineStore(store);
   return quest;
 }
@@ -291,7 +306,8 @@ function tlRefreshAll() {
   // 逐个任务：依赖解锁
   for (const q of store.quests) {
     if (q.status === 'done' || q.status === 'skipped') continue;
-    const depsMet = (q.deps || []).every(did => {
+    const chapter = store.lines.find(line => line.id === q.lineId);
+    const depsMet = (!chapter || tlMainLineUnlocked(store, chapter)) && (q.deps || []).every(did => {
       const d = store.quests.find(x => x.id === did);
       return d && (d.status === 'done' || d.status === 'skipped');
     });
@@ -595,9 +611,9 @@ let tlActiveLineId = null;
 let tlDragMode = true; // 拖拽模式：默认开启，可直接拖动节点（点击=打开详情，按住拖动=移动）
 let tlSuppressClick = false; // 拖动后抑制节点 click（避免误开详情）
 let tlDraggingQuestId = null; // 拖拽锁：拖拽中跳过 renderTaskLine 重绘（防同步重绘导致节点回弹）
-const TL_NODE_H = 52;
-const TL_GAP_X = 56;
-const TL_GAP_Y = 20;
+const TL_NODE_H = 66;
+const TL_GAP_X = 44;
+const TL_GAP_Y = 14;
 const TL_PAD = 60;
 
 function tlComputeDepth(quests) {
@@ -668,7 +684,7 @@ function tlLayoutGraph(quests, extQuests) {
   const nodeW = {};
   for (const q of all) {
     const len = (q.title || '').length;
-    nodeW[q.id] = Math.min(230, Math.max(110, len * 14 + 56));
+    nodeW[q.id] = Math.min(196, Math.max(132, len * 12 + 44));
   }
   for (let d = 0; d <= maxDepth; d++) {
     if (byDepth[d].length > 0) colW[d] = Math.max(...byDepth[d].map(q => nodeW[q.id]));
@@ -714,7 +730,7 @@ function tlLayoutGraphManual(quests, extList, all) {
   const nodeW = {};
   for (const q of all) {
     const len = (q.title || '').length;
-    nodeW[q.id] = Math.min(230, Math.max(110, len * 14 + 56));
+    nodeW[q.id] = Math.min(196, Math.max(132, len * 12 + 44));
   }
   const nodes = {};
   let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
@@ -854,11 +870,11 @@ function tlRenderGraph(store, line) {
   for (const q of quests) {
     const pos = layout.nodes[q.id];
     if (!pos) continue;
-    const iconMap = { draft: '✏️', locked: '🔒', active: '▶️', done: '✅', skipped: '⏭️' };
+
     const met = tlQuestCondMetCount(q);
     const condStr = q.conditions.length > 0 ? `条件 ${met}/${q.conditions.length}` : '';
-    const kindTag = q.kind === 'main' ? '<span class="tl-node-kind">主线</span>' : '';
-    nodesHtml += `<div class="tl-node tl-node-${q.kind} tl-node-${q.status}${q.milestone ? ' tl-node-milestone' : ''}${tlDragMode ? ' tl-node-draggable' : ''}"
+    const kindTag = `<span class="tl-node-kind tl-node-kind-${q.kind}">${q.kind === 'main' ? '主线' : '支线'}</span>`;
+    nodesHtml += `<div class="tl-node tl-node-${q.kind} tl-node-${q.status}${q.milestone ? ' tl-node-milestone' : ''}${condStr ? ' tl-node-has-cond' : ''}${tlDragMode ? ' tl-node-draggable' : ''}"
       style="left:${pos.x}px;top:${pos.y}px;width:${pos.w}px;"
       data-qid="${q.id}"
       onmousedown="return tlNodeDragStart(event, ${q.id})"
@@ -867,7 +883,7 @@ function tlRenderGraph(store, line) {
       oncontextmenu="tlShowQuestContextMenu(event, ${q.id})"
       title="${escapeHtml(q.title)}">
       <div class="tl-node-head">
-        <span class="tl-node-icon">${iconMap[q.status] || '❓'}</span>
+        ${tlStatusBadge(q.status)}
         ${kindTag}
       </div>
       <div class="tl-node-title">${escapeHtml(q.title)}</div>
@@ -913,10 +929,9 @@ function tlRenderGraph(store, line) {
     return acc;
   }, []).length;
   const legendHtml = `<div class="tl-graph-legend tl-graph-legend-float">
-    <span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-main"></span>主线关键</span>
-    <span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-side"></span>支线任务</span>
-    <span class="tl-legend-item"><i data-lucide="lock" class="lucide-icon" style="width:11px;height:11px;"></i>未解锁</span>
-    <span class="tl-legend-item"><i data-lucide="check" class="lucide-icon" style="width:11px;height:11px;"></i>已完成</span>
+    ${['draft', 'locked', 'active', 'done', 'skipped'].map(status => tlStatusBadge(status)).join('')}
+    <span class="tl-node-kind tl-node-kind-main">主线</span>
+    <span class="tl-node-kind tl-node-kind-side">支线</span>
     ${extCount > 0 ? `<span class="tl-legend-item"><span class="tl-legend-swatch tl-legend-ext"></span>跨章节依赖</span>` : ''}
   </div>`;
   const lockedBanner = isLocked ? `<div class="tl-locked-banner tl-locked-banner-float"><i data-lucide="lock" class="lucide-icon" style="width:14px;height:14px;"></i> 前置章节未完成，本章节任务已锁定</div>` : '';
@@ -1620,7 +1635,7 @@ function tlOpenQuestForm(lineId, canvasPos) {
       <div style="font-size:13px;color:var(--text-secondary);">${escapeHtml(line.name)}</div>
       <label class="settings-label" style="margin:0;">任务类型</label>
       <select id="tlQuestKind" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);">
-        <option value="main">主线关键任务（金色框，章节里程碑）</option>
+        <option value="main">主线关键任务（主线标签，章节里程碑）</option>
         <option value="side" selected>支线任务（普通框）</option>
       </select>
       <label class="settings-label" style="margin:0;">任务标题 *</label>
@@ -1629,7 +1644,7 @@ function tlOpenQuestForm(lineId, canvasPos) {
       <textarea id="tlQuestDesc" rows="5" placeholder="为什么做这件事？完成后会变成什么样？——写成一段完整的话，不要只写一句话" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);resize:vertical;line-height:1.6;"></textarea>
       <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
         <button class="notes-undo-btn" onclick="closeEditModal()">取消</button>
-        <button class="btn-add" onclick="tlSubmitQuestForm(${lineId})"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;"></i>保存（草稿）</button>
+        <button class="btn-add" onclick="tlSubmitQuestForm(${lineId})"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;"></i>创建任务</button>
       </div>
     </div>`;
   document.getElementById('editModal').classList.add('open');
@@ -1645,6 +1660,7 @@ function tlSubmitQuestForm(lineId) {
     title,
     kind,
     desc: document.getElementById('tlQuestDesc').value.trim(),
+    status: 'active',
     pos: tlQuestFormPos
   });
   tlQuestFormPos = null;
@@ -1717,7 +1733,7 @@ function tlOpenQuestDetail(id) {
     <div class="tl-detail" style="min-width:360px;max-width:440px;">
       <div class="tl-detail-head">
         <div class="tl-detail-title">${escapeHtml(q.title)}</div>
-        <div class="tl-detail-status tl-status-${q.status}">${statusMap[q.status] || q.status}</div>
+        ${tlStatusBadge(q.status, true)}
       </div>
       <div class="tl-detail-line">${line ? (line.type === 'main' ? '📖 主线' : '🌱 素质线') + ' · ' + escapeHtml(line.name) : '（章节已删除）'}</div>
       ${descBlock}

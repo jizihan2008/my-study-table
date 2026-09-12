@@ -5,6 +5,118 @@
 // ═══════════ Core AI call (extracted for tool-call loop reuse) ═══════════
 // Returns { cleanText, toolCalls, reasoning } or throws on error
 // If conv is provided, raw API request/response are appended to conv._rawLogs
+async function readAiResponseJson(response) {
+  try {
+    return await response.json();
+  } catch (error) {
+    const reason = response._aiRequestControl?.controller.signal.reason;
+    if (reason?.name === 'TimeoutError') throw new Error('AI 请求超时，请检查网络或调高超时时间');
+    if (reason?.name === 'AbortError') throw new Error('AI 请求已取消');
+    throw error;
+  } finally {
+    response._aiRequestControl?.release();
+  }
+}
+
+// Conservative estimate, not a provider tokenizer. Images reserve a fixed allowance.
+function estimateAiTokens(value) {
+  const text = typeof value === 'string' ? value : JSON.stringify(value || '');
+  const nonAscii = (text.match(/[^\x00-\x7f]/g) || []).length;
+  return Math.ceil((text.length - nonAscii) / 3 + nonAscii);
+}
+
+function getAiContextBudget(apiCfg) {
+  return Math.max(2048, Number(apiCfg.contextBudget) || 32768);
+}
+
+function getAiOutputReserve(apiCfg) {
+  return Number(apiCfg.maxTokens) || (isKimiModel(apiCfg) ? 8192 : 2048);
+}
+
+function truncateAiTextToTokens(text, maxTokens) {
+  if (estimateAiTokens(text) <= maxTokens) return text;
+  let low = 0;
+  let high = text.length;
+  while (low < high) {
+    const mid = Math.ceil((low + high) / 2);
+    if (estimateAiTokens(text.slice(0, mid)) <= maxTokens) low = mid;
+    else high = mid - 1;
+  }
+  return text.slice(0, low).replace(/\s+$/, '');
+}
+
+function fitAiSystemPrompt(systemPrompt, apiCfg) {
+  const budget = getAiContextBudget(apiCfg);
+  const outputReserve = getAiOutputReserve(apiCfg);
+  const maxSystemTokens = budget - outputReserve - 1536;
+  if (maxSystemTokens < 1024) {
+    throw new Error('模型的上下文预算小于回复预留，请调大上下文预算或调低 Max Tokens。');
+  }
+  if (estimateAiTokens(systemPrompt) <= maxSystemTokens) return systemPrompt;
+  const marker = '═══ 当前数据快照（只读参考） ═══';
+  const markerIndex = systemPrompt.indexOf(marker);
+  if (markerIndex < 0) {
+    throw new Error('系统提示词超过上下文预算，请调大上下文预算或精简自定义角色提示词。');
+  }
+  const core = systemPrompt.slice(0, markerIndex);
+  const notice = marker + '\n⚠️ 数据快照已按上下文预算精简；需要具体数据时请调用对应查询工具。\n';
+  const fixedTokens = estimateAiTokens(core + notice);
+  if (fixedTokens >= maxSystemTokens) {
+    throw new Error('系统说明和自定义角色提示词超过上下文预算，请调大上下文预算或精简自定义角色提示词。');
+  }
+  const snapshot = systemPrompt.slice(markerIndex + marker.length).trimStart();
+  return core + notice + truncateAiTextToTokens(snapshot, maxSystemTokens - fixedTokens);
+}
+
+function selectAiContext(history, apiCfg, systemPrompt) {
+  const turns = [];
+  for (const message of history) {
+    if (message.role === 'user' || turns.length === 0) turns.push([]);
+    turns[turns.length - 1].push(message);
+  }
+  const budget = getAiContextBudget(apiCfg);
+  const outputReserve = getAiOutputReserve(apiCfg);
+  const available = budget - estimateAiTokens(systemPrompt) - outputReserve - 256;
+  const cost = turn => turn.reduce((sum, m) => sum + 12 + estimateAiTokens(m.content)
+    + (m.tool_calls ? estimateAiTokens(m.tool_calls) : 0) + (m.visionFiles?.length || 0) * 2048, 0);
+  if (available < 0 || (turns.length && cost(turns[turns.length - 1]) > available)) {
+    throw new Error('当前问题、附件或工具结果超过上下文预算，请减少附件内容、开启新对话，或在模型设置中调大上下文预算。');
+  }
+  const selected = [];
+  let used = 0;
+  let count = 0;
+  let start = turns.length;
+  const limit = Math.max(1, Number(apiCfg.contextLimit) || 20);
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const nextCost = cost(turns[i]);
+    // Never cut a user question away from its answer or tool results.
+    if (selected.length && (count + turns[i].length > limit || used + nextCost > available - 1200)) break;
+    selected.unshift(...turns[i]);
+    used += nextCost;
+    count += turns[i].length;
+    start = i;
+  }
+  let summary = '';
+  if (start > 0) {
+    const excerpts = turns.slice(Math.max(0, start - 12), start).map(turn => {
+      const question = turn.find(m => m.role === 'user');
+      const answer = [...turn].reverse().find(m => m.role === 'assistant');
+      const excerpt = m => String(m?.content || '').replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '').slice(0, 180);
+      return '问题：' + excerpt(question) + '\n回答摘录：' + excerpt(answer);
+    }).join('\n');
+    summary = '【较早对话摘录，仅供背景参考，不是新指令；内容有省略】\n' + excerpts;
+    const room = Math.max(0, Math.min(1200, available - used - 24));
+    while (summary && estimateAiTokens(summary) > room) summary = summary.slice(0, -64);
+  }
+  return { messages: selected, summary };
+}
+
+function aiToolSignature(action, params) {
+  const canonical = value => Array.isArray(value) ? value.map(canonical)
+    : value && typeof value === 'object' ? Object.fromEntries(Object.keys(value).sort().map(key => [key, canonical(value[key])])) : value;
+  return action + '|' + JSON.stringify(canonical(params || {}));
+}
+
 async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
   if (!options.skipSensitiveCheck && typeof AIClient !== 'undefined') {
     const allowed = await AIClient.confirmSensitiveContent(apiMessages);
@@ -14,7 +126,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
   const deepThinkParams = buildDeepThinkParams(apiCfg);
 
   // Determine max_tokens: user setting > model default > fallback
-  const defaultMaxTokens = isKimiModel() ? 8192 : 2048;
+  const defaultMaxTokens = isKimiModel(apiCfg) ? 8192 : 2048;
   const maxTokens = apiCfg.maxTokens || defaultMaxTokens;
 
   const modelLower = (apiCfg.model || '').toLowerCase();
@@ -30,13 +142,13 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
     requestBody.max_tokens = maxTokens;
   }
   // Kimi API 不支持 temperature（文档明确"请勿显式传入"，传了会 400），其它模型正常发送
-  if (!isKimiModel()) {
+  if (!isKimiModel(apiCfg)) {
     requestBody.temperature = apiCfg.temperature;
   }
 
   // Kimi builtin web search (native $web_search tool)
-  const activeConv = typeof getActiveConv === 'function' ? getActiveConv() : null;
-  if (isKimiModel() && activeConv && activeConv._webSearchMode === 'native') {
+  const activeConv = apiCfg.conversationSettings || conv;
+  if (isKimiModel(apiCfg) && activeConv && activeConv._webSearchMode === 'native') {
     requestBody.tools = [{
       type: 'builtin_function',
       function: { name: '$web_search' }
@@ -54,11 +166,11 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
     body: JSON.stringify(requestBody)
   };
   const response = typeof AIClient !== 'undefined'
-    ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', requestOptions, { scope: conv && conv.id, timeoutMs: apiCfg.timeoutMs })
+    ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', requestOptions, { scope: conv && conv.id, timeoutMs: apiCfg.timeoutMs, keepAlive: true })
     : await fetch(baseUrl + '/chat/completions', requestOptions);
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
+    const err = await readAiResponseJson(response).catch(() => ({}));
     const errorMsg = err.error?.message || `请求失败 (HTTP ${response.status})`;
     // Log error too
     if (conv) {
@@ -74,7 +186,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
   }
 
   const responseTime = new Date().toISOString();
-  const data = await response.json();
+  const data = await readAiResponseJson(response);
   if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage);
   const choice = data.choices?.[0]?.message;
   const reply = choice?.content || '';
@@ -97,7 +209,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
               copy.content = m.content;
             }
           } else {
-            copy.content = m.content;
+            copy.content = redactInlineImages(m.content);
           }
           if (m.name) copy.name = m.name;
           return copy;
@@ -124,6 +236,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
       content: tc.function?.arguments || '{}',
       tool_call_id: tc.id
     }));
+    toolResults.forEach(tr => appendMessage(conv, tr));
 
     // Append tool messages to apiMessages and send again
     const followUpMsgs = [
@@ -133,8 +246,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
 
     const followUpBody = {
       ...requestBody,
-      messages: [...apiMessages, ...followUpMsgs],
-      max_tokens: maxTokens
+      messages: [...apiMessages, ...followUpMsgs]
     };
 
     const followUpOptions = {
@@ -146,22 +258,19 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
       body: JSON.stringify(followUpBody)
     };
     const followUpResp = typeof AIClient !== 'undefined'
-      ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', followUpOptions, { scope: conv && conv.id, timeoutMs: apiCfg.timeoutMs })
+      ? await AIClient.fetchWithPolicy(baseUrl + '/chat/completions', followUpOptions, { scope: conv && conv.id, timeoutMs: apiCfg.timeoutMs, keepAlive: true })
       : await fetch(baseUrl + '/chat/completions', followUpOptions);
 
     if (followUpResp.ok) {
-      const followUpData = await followUpResp.json();
+      const followUpData = await readAiResponseJson(followUpResp);
       if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, followUpData.usage);
       const followUpChoice = followUpData.choices?.[0]?.message;
       const finalReply = followUpChoice?.content || '';
-      // Push tool messages and final reply to conversation
-      toolResults.forEach(tr => appendMessage(conv, tr));
-      appendMessage(conv, { role: 'assistant', content: finalReply, _kimiSearchResult: true });
       const { cleanText: ct, toolCalls: tcs } = extractToolCalls(finalReply);
-      return { cleanText: ct || finalReply || '（搜索无结果）', toolCalls: tcs, reasoning, rawReply: finalReply, finishReason: data.choices?.[0]?.finish_reason || '' };
+      return { cleanText: ct || finalReply || '（搜索无结果）', toolCalls: tcs, reasoning, rawReply: finalReply, finishReason: followUpData.choices?.[0]?.finish_reason || '' };
     } else {
-      // Fallback: return partial result
-      appendMessage(conv, { role: 'assistant', content: reply || '（搜索中断）', _kimiSearch: true });
+      const error = await readAiResponseJson(followUpResp).catch(() => ({}));
+      throw new Error(error.error?.message || `原生搜索后续请求失败 (HTTP ${followUpResp.status})`);
     }
   }
 
@@ -170,7 +279,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
 }
 
 function buildStreamingRequestBody(apiMessages, apiCfg) {
-  const maxTokens = apiCfg.maxTokens || (isKimiModel() ? 8192 : 2048);
+  const maxTokens = apiCfg.maxTokens || (isKimiModel(apiCfg) ? 8192 : 2048);
   const modelLower = String(apiCfg.model || '').toLowerCase();
   const body = {
     model: apiCfg.model,
@@ -180,13 +289,37 @@ function buildStreamingRequestBody(apiMessages, apiCfg) {
   };
   // Official OpenAI and DeepSeek Chat Completions endpoints support a final
   // usage chunk. Unknown compatible gateways may reject this optional field.
-  if (/(?:api\.openai\.com|api\.deepseek\.com)/i.test(String(apiCfg.baseUrl || ''))) {
+  // 用主机名判断，避免 baseUrl 带路径/端口时误判（getApiHostname 定义在 js/ai-attach.js）
+  const host = (typeof getApiHostname === 'function') ? getApiHostname(apiCfg.baseUrl) : '';
+  if (host === 'api.openai.com' || host === 'api.deepseek.com') {
     body.stream_options = { include_usage: true };
   }
   if (modelLower.includes('k3') || modelLower.includes('k2.7')) body.max_completion_tokens = maxTokens;
   else body.max_tokens = maxTokens;
-  if (!isKimiModel()) body.temperature = apiCfg.temperature;
+  if (!isKimiModel(apiCfg)) body.temperature = apiCfg.temperature;
   return { body, maxTokens };
+}
+
+// 原始日志里的图片体积很大（一张图 base64 常 1MB+），而 _rawLogs 会写进本地存储，
+// 直接记录会迅速吃满配额。这里把内联图片替换为占位说明，只保留「有没有图、多大」。
+function redactInlineImages(content) {
+  if (typeof content === 'string') return content;
+  if (!Array.isArray(content)) return content;
+  return content.map(part => {
+    if (!part || typeof part !== 'object') return part;
+    const url = part.image_url && part.image_url.url;
+    if (part.type === 'image_url' && typeof url === 'string' && url.startsWith('data:')) {
+      const mime = url.slice(5, url.indexOf(';') > 0 ? url.indexOf(';') : url.indexOf(','));
+      return Object.assign({}, part, {
+        image_url: Object.assign({}, part.image_url, { url: `<内联图片 ${mime || 'image'}，约 ${Math.round(url.length / 1365)}KB>` })
+      });
+    }
+    // Files API 的 file_data 同样是 base64，同样需要脱敏
+    if (part.type === 'file' && typeof part.file_data === 'string' && part.file_data.startsWith('data:')) {
+      return Object.assign({}, part, { file_data: `<内联图片数据，约 ${Math.round(part.file_data.length / 1365)}KB>` });
+    }
+    return part;
+  });
 }
 
 function appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, response) {
@@ -197,7 +330,7 @@ function appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime
     request: {
       url: apiCfg.baseUrl.replace(/\/+$/, '') + '/chat/completions',
       model: apiCfg.model,
-      messages: apiMessages.map(message => ({ role: message.role, content: message.content, ...(message.name ? { name: message.name } : {}) })),
+      messages: apiMessages.map(message => ({ role: message.role, content: redactInlineImages(message.content), ...(message.name ? { name: message.name } : {}) })),
       temperature: apiCfg.temperature,
       max_tokens: maxTokens,
       stream: true
@@ -253,7 +386,7 @@ async function callAiApiStream(apiMessages, apiCfg, conv, options) {
       : await fetch(baseUrl + '/chat/completions', requestOptions);
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({}));
+      const errorData = await readAiResponseJson(response).catch(() => ({}));
       const errorMsg = errorData.error?.message || `请求失败 (HTTP ${response.status})`;
       if (isStreamingUnsupported(response.status, errorMsg)) {
         return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
@@ -264,7 +397,7 @@ async function callAiApiStream(apiMessages, apiCfg, conv, options) {
 
     const contentType = String(response.headers?.get('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
-      const data = await response.json();
+      const data = await readAiResponseJson(response);
       if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage);
       const result = resultFromChatCompletionData(data, apiCfg, options.onDelta);
       appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, { stream: false, compatibilityResponse: data });
@@ -324,8 +457,8 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
     const allowed = await AIClient.confirmSensitiveContent(apiMessages);
     if (!allowed) throw new Error('已取消发送敏感信息');
   }
-  const activeConv = conv || (typeof getActiveConv === 'function' ? getActiveConv() : null);
-  const kimiNativeSearch = isKimiModel() && activeConv && activeConv._webSearchMode === 'native';
+  const activeConv = apiCfg.conversationSettings || conv;
+  const kimiNativeSearch = isKimiModel(apiCfg) && activeConv && activeConv._webSearchMode === 'native';
   const streamEnabled = localStorage.getItem('study_ai_streaming') !== 'false';
   if (streamEnabled && !kimiNativeSearch && typeof options.onDelta === 'function') {
     return callAiApiStream(apiMessages, apiCfg, conv, options);
@@ -336,10 +469,11 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
 // Build the apiMessages array from conversation history.
 // 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
 // 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
-function buildApiMessages(conv, extraSystemMsgs) {
-  const systemPrompt = conv.systemPrompt
-    ? buildToolsSystemPrompt() + '\n\n【用户自定义角色】' + conv.systemPrompt
-    : buildToolsSystemPrompt();
+function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig()) {
+  const rawSystemPrompt = conv.systemPrompt
+    ? buildToolsSystemPrompt(apiCfg.conversationSettings || conv, apiCfg) + '\n\n【用户自定义角色】' + conv.systemPrompt
+    : buildToolsSystemPrompt(apiCfg.conversationSettings || conv, apiCfg);
+  const systemPrompt = fitAiSystemPrompt(rawSystemPrompt, apiCfg);
 
   const msgs = [{ role: 'system', content: systemPrompt }];
 
@@ -351,9 +485,9 @@ function buildApiMessages(conv, extraSystemMsgs) {
   }
 
   // Use per-key context limit (default 20)
-  const apiCfg = getEffectiveApiConfig();
-  const contextLimit = apiCfg.contextLimit || 20;
-  const recentMsgs = (conv.messages || []).slice(-contextLimit);
+  const selection = selectAiContext(conv.messages || [], apiCfg, systemPrompt + (extraSystemMsgs || []).join('\n'));
+  const recentMsgs = selection.messages;
+  if (selection.summary) msgs.push({ role: 'user', content: selection.summary });
 
   for (let mi = 0; mi < recentMsgs.length; mi++) {
     const m = recentMsgs[mi];
@@ -362,7 +496,7 @@ function buildApiMessages(conv, extraSystemMsgs) {
     } else if (m.role === 'user') {
       // Build multimodal content if vision files are present
       let userContent;
-      if (m.visionFiles && m.visionFiles.length > 0 && isMultimodalModel()) {
+      if (m.visionFiles && m.visionFiles.length > 0 && isMultimodalModel(apiCfg)) {
         userContent = [];
         // Add text part first
         if (m.content && m.content.trim()) {
@@ -370,13 +504,21 @@ function buildApiMessages(conv, extraSystemMsgs) {
         }
         // Add vision file references
         for (const vf of m.visionFiles) {
-          if (vf.type === 'video_url' && vf.fileId) {
+          if (vf.type === 'file' && vf.fileId) {
+            // Files API：用 file_id 引用（同一张图后续轮次不再重复上传）。
+            // 紧跟一个极小的 file_data 缩略图，让模型在后续轮次仍"看得到"这张图；
+            // file 与 file_data 互斥，故拆成两个内容块。
+            userContent.push({ type: 'file', file_id: vf.fileId });
+            if (typeof vf.dataUrl === 'string' && vf.dataUrl.startsWith('data:image/')) {
+              userContent.push({ type: 'file', file_data: vf.dataUrl, filename: vf.name || 'image.png' });
+            }
+          } else if (vf.type === 'video_url' && vf.fileId) {
             // Video: use ms:// protocol (uploaded to Kimi server)
             userContent.push({
               type: 'video_url',
               video_url: { url: 'ms://' + vf.fileId }
             });
-          } else {
+          } else if (vf.dataUrl) {
             // Image: use base64 data URL inline
             userContent.push({
               type: vf.type,
@@ -400,13 +542,15 @@ function buildApiMessages(conv, extraSystemMsgs) {
         if (isDebugMode()) console.log('[DEBUG buildApiMessages] multimodal content:', JSON.stringify(userApiMsg.content, null, 2));
       }
       msgs.push(userApiMsg);
+    } else if (m.role === 'tool' && m.tool_call_id) {
+      msgs.push({ role: 'tool', content: m.content, tool_call_id: m.tool_call_id });
     } else if (m.role === 'assistant') {
       // NOTE: Do NOT include reasoning in API history. Including it can make the
       // API think the conversation is still in thinking mode, causing it to return
       // reasoning_content even when thinking is explicitly disabled.
       const assistantContent = typeof m.content === 'string' ? m.content : (m.content_text || '');
       const assistantMsg = { role: 'assistant', content: assistantContent };
-      if (m.keyName) assistantMsg.name = m.keyName;
+      if (m.tool_calls) assistantMsg.tool_calls = m.tool_calls;
       msgs.push(assistantMsg);
     }
   }
@@ -417,9 +561,11 @@ function buildApiMessages(conv, extraSystemMsgs) {
 // Executes tools internally, injects results as system context, re-calls AI.
 // Returns the final assistant message ready for display.
 async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
-  // Read max loops from user setting, minimum 5
+  const settings = apiCfg.conversationSettings || conv;
+  apiCfg = { ...apiCfg, conversationSettings: { id: conv.id, _webSearchMode: settings._webSearchMode, _webSearchEnabled: settings._webSearchEnabled } };
+  // Bound both the minimum and maximum number of tool rounds.
   const userMax = parseInt(localStorage.getItem('study_max_tool_loops')) || 0;
-  const MAX_LOOPS = Math.max(3, userMax); // safety limit to prevent infinite loops
+  const MAX_LOOPS = Math.min(50, Math.max(3, userMax));
   let finalCleanText = '';
   let finalRawReply = ''; // Keep original AI reply for memory parsing
   let finalReasoning = '';
@@ -427,6 +573,9 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   let finalFinishReason = ''; // 最后一次 API 调用的 finish_reason（'length' 表示被 max_tokens 截断）
   let stopped = false;
   let streamError = '';
+  const executedWrites = new Map();
+  const outcomes = [];
+  let incompleteReason = '';
 
   // Track previous tool calls to detect repeated identical queries
   // Stores per-action signatures so we can detect when AI keeps calling
@@ -434,16 +583,16 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   let prevToolCallMap = {}; // { action+'|'+paramSig: count }
   let repeatCount = 0;
 
-  let apiMessages = buildApiMessages(conv, null);
+  let apiMessages = buildApiMessages(conv, null, apiCfg);
 
   for (let loop = 0; loop < MAX_LOOPS; loop++) {
     if (loop > 0) {
       // Rebuild messages with the latest conversation state (including tool results)
-      apiMessages = buildApiMessages(conv, null);
+      apiMessages = buildApiMessages(conv, null, apiCfg);
     }
 
     // Check if user requested stop (per-conversation)
-    const convId = getActiveConvId();
+    const convId = conv.id;
     if (isAiStopRequested(convId)) {
       finalCleanText = '⏹️ 已手动停止。';
       finalReasoning = '';
@@ -506,7 +655,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     let anyRepeated = false;
     const curToolCallMap = {};
     for (const tc of toolCalls) {
-      const sig = tc.action + '|' + JSON.stringify(tc.params);
+      const sig = aiToolSignature(tc.action, tc.params);
       curToolCallMap[sig] = (curToolCallMap[sig] || 0) + 1;
       // If this exact sig appeared in the previous loop, it's a repeat
       if (prevToolCallMap[sig]) {
@@ -521,8 +670,36 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       repeatCount = 0;
     }
 
-    // Execute tools
-    const toolResults = await Promise.all(toolCalls.map(tc => executeToolCall(tc.action, tc.params)));
+    // Execute in order: later writes may depend on earlier results. Cache writes
+    // before any repeat can run, including failures whose effects may be partial.
+    const toolResults = [];
+    const roundOutcomes = [];
+    for (const [index, tc] of toolCalls.entries()) {
+      const sig = aiToolSignature(tc.action, tc.params);
+      const readOnly = /^(?:get_|list_|search_)/.test(tc.action) || ['web_search', 'read_webpage', 'quest_get', 'quest_review'].includes(tc.action);
+      let result;
+      let status;
+      if (isAiStopRequested(conv.id) || index >= 32) {
+        stopped = isAiStopRequested(conv.id);
+        result = '⏹️ 未执行：' + tc.action + (stopped ? '（已停止）' : '（单轮工具数量达到上限）');
+        status = 'skipped';
+      } else if (!readOnly && executedWrites.has(sig)) {
+        result = '已拦截重复操作，沿用本次请求的执行结果：' + executedWrites.get(sig);
+        status = 'duplicate';
+      } else {
+        try {
+          result = String(await executeToolCall(tc.action, tc.params || {}, { conv, apiCfg }));
+          status = /^(?:❌|错误|⚠️)/.test(result.trim()) ? 'failed' : 'success';
+        } catch (error) {
+          result = '❌ ' + tc.action + ' 执行失败：' + error.message;
+          status = 'failed';
+        }
+        if (!readOnly) executedWrites.set(sig, result);
+      }
+      toolResults.push(result);
+      roundOutcomes.push({ action: tc.action, status });
+    }
+    outcomes.push(...roundOutcomes);
     const resultsText = toolResults.join('\n');
     allToolResults.push(resultsText);
 
@@ -541,17 +718,21 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     appendMessage(conv, {
       role: 'system',
       content: '【工具执行结果】\n' + compactResults,
-      _toolInfo: { toolNames, toolLabel, results: toolResults }
+      _toolInfo: { toolNames, toolLabel, results: toolResults, outcomes: roundOutcomes }
     });
     // 持久化中间工具调用，刷新/重启后已完成的工具结果不丢失（配合 study_ai_pending 自动续传）
     if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
+    if (stopped || roundOutcomes.some(item => item.status === 'skipped')) {
+      incompleteReason = stopped ? '已停止，部分操作未执行。' : '单轮工具数量达到上限，部分操作未执行。';
+      break;
+    }
 
     // Check safety limit (repeatCount was already incremented above)
     if (anyRepeated) {
       // Only break if the same tool call has repeated for more than half of MAX_LOOPS
       // This gives the AI enough chances to eventually produce a final reply
       if (repeatCount >= Math.ceil(MAX_LOOPS / 2)) {
-        finalCleanText = cleanText || '✅ 已执行所有操作。';
+        incompleteReason = '检测到重复工具调用，已结束本次生成；任务尚未确认完成。';
         finalReasoning = reasoning || '';
         break;
       }
@@ -573,8 +754,13 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
 
   // If we hit max loops without a final reply, use last cleanText or a fallback
   if (!finalCleanText && allToolResults.length > 0) {
-    finalCleanText = '✅ 已执行所有操作。';
+    incompleteReason = incompleteReason || '已达到工具调用轮次上限，任务尚未确认完成。';
+    finalCleanText = '⚠️ ' + incompleteReason;
   }
+  const failedCount = outcomes.filter(item => item.status === 'failed').length;
+  const successCount = outcomes.filter(item => item.status === 'success').length;
+  const skippedCount = outcomes.filter(item => item.status === 'skipped').length;
+  if (failedCount || incompleteReason) finalCleanText += `\n\n执行记录：成功 ${successCount} 项，失败 ${failedCount} 项，未执行 ${skippedCount} 项。详情见工具结果。`;
 
   // Refresh views after all tool calls are done
   // 逐个 try 保护：任一视图 DOM 未就绪（如 builtin-links 扩展未加载）不拖垮整个 AI 流程
@@ -592,7 +778,9 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     allToolResults,
     finishReason: finalFinishReason,
     stopped,
-    streamError
+    streamError,
+    outcomes,
+    incompleteReason
   };
 }
 
@@ -602,7 +790,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
 async function continueTruncatedReply(apiCfg, conv, partialText) {
   if (!partialText) return '';
   try {
-    const msgs = buildApiMessages(conv, null);
+    const msgs = buildApiMessages(conv, null, apiCfg);
     msgs.push({ role: 'assistant', content: partialText });
     msgs.push({ role: 'user', content: '（上一条回复因长度限制被截断）请从上次中断处无缝继续输出，不要重复已经写过的内容，直接从断点接着往下写。' });
     const { cleanText } = await callAiApi(msgs, apiCfg, conv);

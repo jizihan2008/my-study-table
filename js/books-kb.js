@@ -532,11 +532,14 @@ function bkShouldCollectFigures(book) {
 }
 
 // 判断当前模型是否支持视觉（可接收 image_url 内容块）
-// Kimi 支持；GPT-4o/GLM-4V/Qwen-VL 等视觉模型名称关键词命中即视为支持；DeepSeek 等纯文本模型返回 false
+// 统一走 js/ai-attach.js 的 modelSupportsVision（Kimi、deepseek-flash 等）；
+// 该模块未加载时退回本地关键词判定，保证知识库构建仍可用。
 function bkIsVisionModel(cfg) {
+  if (typeof modelSupportsVision === 'function') return modelSupportsVision(cfg);
   const model = String((cfg && cfg.model) || '').toLowerCase();
   if (!model) return false;
   if (/kimi/.test(model)) return true;
+  if (/deepseek-(v4-)?flash/.test(model)) return true; // DeepSeek-V4.1-Flash：官方标注支持图像理解
   if (/gpt-4o|gpt-4\.1|glm-4v|glm-4\.5v|qwen.*vl|qwen2.*vl|claude-3|claude-4|gemini|doubao-.*vision|step-1v|hunyuan.*vision|gpt-4-vision/i.test(model)) return true;
   return false;
 }

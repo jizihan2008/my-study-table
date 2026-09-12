@@ -416,7 +416,10 @@ window.Inbox = (function () {
     delete msg.summary; delete msg.summaryError;
     updateMessage(msg); renderMessages();
 
-    const isVision = (typeof isKimiModel === 'function') && isKimiModel();
+    // 支持看图的模型（Kimi / deepseek-flash 等）可直接概括截图；否则提示切换模型
+    const isVision = (typeof isMultimodalModel === 'function')
+      ? isMultimodalModel(apiCfg)
+      : (typeof isKimiModel === 'function') && isKimiModel(apiCfg);
     const systemPrompt = '你是一个高效的信息概括助手。请用简洁的中文概括以下邮件/聊天/文件内容的要点：\n' +
       '1. 先一句话总结核心内容；\n2. 再分点列出关键信息（事项、截止时间、需要回复/处理的内容）；\n' +
       '3. 如有需要行动的事项，单独列出「待办」。\n' +
@@ -428,7 +431,7 @@ window.Inbox = (function () {
       if (isImg) {
         // 截图 / 图片：需要视觉模型内联 base64
         if (!isVision) {
-          throw new Error('当前模型不支持图片，请切换到视觉模型（如 Kimi）后再概括截图');
+          throw new Error('当前模型不支持图片，请切换到支持看图的模型（如 deepseek-flash / Kimi）后再概括截图');
         }
         const imgPath = msg.imagePath || msg.filePath;
         if (!imgPath) throw new Error('找不到图片路径，无法概括');

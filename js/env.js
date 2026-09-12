@@ -16,6 +16,9 @@
 
   // 是否为 PWA / 浏览器环境（非 Electron）
   const isPwa = !isElectron;
+  if (global.document && global.document.documentElement) {
+    global.document.documentElement.classList.add(isElectron ? 'env-electron' : 'env-pwa');
+  }
 
   // 是否为移动设备（触屏 + 窄屏优先）
   function detectIsMobile() {

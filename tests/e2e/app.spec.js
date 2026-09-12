@@ -45,6 +45,120 @@ test('application boots with isolated renderer and versioned storage', async () 
   });
 });
 
+test('desktop sidebar opens on the edge and automatically hides', async () => {
+  const windowState = await electronApp.evaluate(({ BrowserWindow }) => {
+    const win = BrowserWindow.getAllWindows()[0];
+    win.setSize(840, 800);
+    return { minimum: win.getMinimumSize(), bounds: win.getBounds() };
+  });
+  expect(windowState.minimum[0]).toBe(840);
+  // 仍在 Electron 渲染器落入窄屏断点时验证桌面侧边栏入口。
+  await page.setViewportSize({ width: 800, height: 700 });
+  await page.waitForFunction(() => window.innerWidth <= 800);
+  await page.evaluate(() => localStorage.setItem('study_sidebar_open', 'true'));
+  await page.reload();
+  await page.waitForLoadState('domcontentloaded');
+  await page.waitForFunction(() => localStorage.getItem('study_sidebar_open') === null);
+
+  const sidebar = page.locator('#sidebar');
+  const trigger = page.locator('#sidebarHoverTrigger');
+  await expect(trigger).toBeVisible();
+  await expect(sidebar).not.toHaveClass(/open/);
+  await expect(sidebar).toHaveAttribute('aria-hidden', 'true');
+  expect(await sidebar.evaluate(element => element.hasAttribute('inert'))).toBe(false);
+
+  // locator.click 覆盖真实的 mouseenter -> click 事件顺序。
+  await trigger.click();
+  await expect(sidebar).toHaveClass(/open/);
+  await expect(sidebar).toHaveAttribute('aria-hidden', 'false');
+
+  await page.mouse.move(100, 200);
+  await page.mouse.move(600, 200);
+  await expect(sidebar).not.toHaveClass(/open/, { timeout: 1500 });
+
+  await trigger.click();
+  await expect(sidebar).toHaveClass(/open/);
+  await sidebar.locator('.sidebar-nav-item').first().click();
+  await page.waitForTimeout(600);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.mouse.move(600, 200);
+  await expect(sidebar).not.toHaveClass(/open/, { timeout: 1000 });
+});
+
+test('desktop sidebar closes after the pointer skips across the edge trigger', async () => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await page.mouse.move(600, 200);
+  await page.evaluate(() => closeSidebar());
+  const sidebar = page.locator('#sidebar');
+
+  // 触发条在侧栏上方：直接跳到内容区不会经过侧栏，也不会触发它的 mouseleave。
+  await page.mouse.move(6, 200);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.mouse.move(600, 200);
+  await expect(sidebar).not.toHaveClass(/open/, { timeout: 1500 });
+});
+
+test('desktop sidebar stays open when moving between the sidebar and its edge', async () => {
+  await page.setViewportSize({ width: 1100, height: 700 });
+  await page.mouse.move(600, 200);
+  await page.evaluate(() => closeSidebar());
+  const sidebar = page.locator('#sidebar');
+  await page.mouse.move(6, 200);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.waitForTimeout(300);
+  await page.mouse.move(100, 200);
+  await page.waitForTimeout(500);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.mouse.move(6, 200);
+  await page.waitForTimeout(600);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.mouse.move(600, 200);
+  await page.waitForTimeout(100);
+  await page.mouse.move(100, 200);
+  await page.waitForTimeout(600);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.mouse.move(600, 200);
+  await expect(sidebar).not.toHaveClass(/open/, { timeout: 1500 });
+});
+
+test('Electron drawer entry does not leave a mobile overlay or scroll lock', async () => {
+  await page.setViewportSize({ width: 800, height: 700 });
+  await page.mouse.move(600, 200);
+  await page.locator('#mobileHamburger').click();
+  await expect(page.locator('#sidebar')).toHaveClass(/open/);
+  await expect(page.locator('body')).not.toHaveClass(/mobile-drawer-open/);
+  await expect(page.locator('#mobileDrawerOverlay')).not.toHaveClass(/open/);
+  await page.locator('#nav-todo').click();
+  await page.waitForTimeout(600);
+  await expect(page.locator('#sidebar')).toHaveClass(/open/);
+  await page.mouse.move(600, 200);
+  await expect(page.locator('#sidebar')).not.toHaveClass(/open/);
+  await page.setViewportSize({ width: 1100, height: 700 });
+});
+
+test('wide Electron windows retain both sidebar entries without an empty gutter', async () => {
+  await page.setViewportSize({ width: 1400, height: 850 });
+  await page.mouse.move(600, 200);
+  await page.evaluate(() => closeSidebar());
+  const sidebar = page.locator('#sidebar');
+  const trigger = page.locator('#sidebarHoverTrigger');
+  await expect(trigger).toBeVisible();
+  await expect(page.locator('body')).toHaveCSS('padding-left', '0px');
+  await expect.poll(() => sidebar.evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+  await page.mouse.move(6, 200);
+  await expect(sidebar).toHaveClass(/open/);
+  await page.waitForTimeout(300);
+  await page.mouse.move(100, 200);
+  await page.mouse.move(600, 200);
+  await expect(sidebar).not.toHaveClass(/open/);
+  await expect.poll(() => sidebar.evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
+  await page.locator('#mobileHamburger').click();
+  await expect(sidebar).toHaveClass(/open/);
+  await page.locator('.header h1').click();
+  await expect(sidebar).not.toHaveClass(/open/);
+  await page.setViewportSize({ width: 1100, height: 700 });
+});
+
 test('todo creation persists across a renderer reload', async () => {
   await page.evaluate(() => window.switchTab('todo'));
   await page.click('#btnTodoToggle');
@@ -183,4 +297,29 @@ test('third-party plugin runs in an opaque sandbox with declared permissions', a
   const sandboxData = await page.evaluate(() => JSON.parse(localStorage.getItem('study_ext_e2e-sandbox_result')));
   expect(result.compromised).toBe('');
   expect(sandboxData).toEqual({ escaped: false, hasNode: false });
+});
+test('prompt studio visually edits the active conversation system prompt', async () => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.evaluate(() => switchTab('prompts'));
+
+  await expect(page.locator('#section-prompts')).toHaveClass(/active/);
+  await expect(page.locator('.prompt-section-card')).toHaveCount(6);
+  await page.getByRole('button', { name: '新建对话' }).click();
+  await page.locator('#promptNameInput').fill('物理概念讲解');
+  await page.locator('#promptSection-role').fill('你是一位物理老师。');
+  await page.locator('#promptSection-goal').fill('请解释');
+  await page.locator('#promptSection-goal').focus();
+  await page.getByRole('button', { name: '+ 主题', exact: true }).click();
+  await page.locator('[data-prompt-variable="主题"]').fill('动量守恒');
+
+  await expect(page.locator('#promptPreviewText')).toContainText('请解释 动量守恒');
+  const applied = await page.evaluate(() => {
+    const conv = getActiveConv();
+    return { systemPrompt: conv.systemPrompt, hasBuilder: !!conv.promptBuilder };
+  });
+  expect(applied.systemPrompt).toContain('【角色设定】\n你是一位物理老师。');
+  expect(applied.systemPrompt).toContain('动量守恒');
+  expect(applied.hasBuilder).toBe(true);
+  await page.getByRole('button', { name: /返回当前对话/ }).click();
+  await expect(page.locator('#section-ai')).toHaveClass(/active/);
 });

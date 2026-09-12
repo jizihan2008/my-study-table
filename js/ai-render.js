@@ -159,6 +159,10 @@ function renderAiChat() {
             <i data-lucide="globe" class="lucide-icon" style="width:16px;height:16px;"></i>
             <span>智能搜索</span>
           </button>
+          <button type="button" class="ai-pill-toggle" id="aiToolbarImageUploadBtn" onclick="cycleAiImageUploadMode()" title="图片上传方式">
+            <i data-lucide="image-plus" class="lucide-icon" style="width:16px;height:16px;"></i>
+            <span>图片上传</span>
+          </button>
           <button type="button" class="ai-pill-toggle" id="aiToolbarTreeBtn" onclick="toggleAiTreePanel()" title="分支树导航（查看所有对话分支）">
             <i data-lucide="git-branch" class="lucide-icon" style="width:16px;height:16px;"></i>
             <span>分支树</span>
@@ -181,7 +185,7 @@ function renderAiChat() {
                 ${noKey ? 'disabled' : ''}
                 onkeydown="handleAiInputKey(event)"
                 oninput="autoResizeAiInput()"></textarea>
-      <input type="file" id="aiFileInput" accept=".txt" multiple style="display:none;" onchange="handleAiFileSelect(event)">
+      <input type="file" id="aiFileInput" accept="" multiple style="display:none;" onchange="handleAiFileSelect(event)">
       <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
       </button>
@@ -193,6 +197,7 @@ function renderAiChat() {
   renderAiMessages();
   renderAttachPreview(); // Restore attachment preview after DOM rebuild
   updateAiFileInput(); // Update file input based on current model
+  initAiPasteZone(); // 输入框已重建 → 重新绑定剪贴板粘贴图片
   // Restore loading state after DOM rebuild: toggle send/stop button
   updateAiSendButton();
   // 恢复发送队列指示器
@@ -250,6 +255,26 @@ function renderAiChat() {
       }
     }, { passive: false });
   }
+}
+
+// 点击用户消息里的图片缩略图 → 全屏查看（再次点击或按 Esc 关闭）
+function openAiAttachmentImage(imgEl) {
+  const src = imgEl && imgEl.getAttribute ? imgEl.getAttribute('src') : '';
+  if (!src || !/^data:image\//i.test(src)) return;
+  const overlay = document.createElement('div');
+  overlay.className = 'ai-image-overlay';
+  const close = () => {
+    overlay.remove();
+    document.removeEventListener('keydown', onKey);
+  };
+  const onKey = e => { if (e.key === 'Escape') close(); };
+  overlay.addEventListener('click', close);
+  const img = document.createElement('img');
+  img.src = src;
+  img.alt = (imgEl && imgEl.getAttribute('alt')) || '附件图片';
+  overlay.appendChild(img);
+  document.body.appendChild(overlay);
+  document.addEventListener('keydown', onKey);
 }
 
 function renderAiMessages() {
@@ -343,7 +368,21 @@ function renderAiMessages() {
     let attachHtml = '';
     let cleanContent = m.content;
     if (item.type === 'user' && m.attachments && m.attachments.length > 0) {
+      // 图片附件：优先用发送时记录在附件上的图片地址（可能是 Files API 的小缩略图），
+      // 旧消息没有该字段时退回按顺序取 visionFiles 里的 dataUrl
+      const imgUrls = (m.visionFiles || [])
+        .filter(v => v && typeof v.dataUrl === 'string' && /^data:image\//i.test(v.dataUrl))
+        .map(v => v.dataUrl);
+      let imgCursor = 0;
       attachHtml = '<div style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:6px;">' + m.attachments.map(a => {
+        const looksImage = /\.(png|jpe?g|gif|webp|bmp)$/i.test(String(a.name || ''));
+        const thumb = (typeof a.displayUrl === 'string' && /^data:image\//i.test(a.displayUrl))
+          ? a.displayUrl
+          : (looksImage ? imgUrls[imgCursor] : '');
+        if (looksImage && thumb) {
+          imgCursor++;
+          return `<span class="msg-attachment-img" title="${escapeHtml(a.name)}"><img src="${thumb}" alt="${escapeHtml(a.name)}" onclick="openAiAttachmentImage(this)"></span>`;
+        }
         return `<span class="msg-attachment">📝 ${escapeHtml(a.name)}</span>`;
       }).join('') + '</div>';
       // Build collapsible file content sections
@@ -825,7 +864,7 @@ function summarizeNode(node) {
 // 点击树节点 → 切换到该分支
 function switchToTreeBranch(nodeId) {
   const conv = getActiveConv();
-  if (!conv) return;
+  if (!conv || isAiLoading(conv.id)) return;
   if (switchBranch(conv, nodeId)) {
     safeSaveAiConvs();
     renderAiMessages();
@@ -838,7 +877,7 @@ function switchToTreeBranch(nodeId) {
 // 避免切换后该 user 下方的 assistant 消息消失（activePath 只到 user 节点）。
 function switchUserVersion(userNodeId, delta) {
   const conv = getActiveConv();
-  if (!conv || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
+  if (!conv || isAiLoading(conv.id) || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
   // 同父下的 user 兄弟（编辑产生的其他版本）
   const siblings = siblingNodeIds(conv, userNodeId)
     .filter(sid => conv.tree[sid] && conv.tree[sid].role === 'user');
