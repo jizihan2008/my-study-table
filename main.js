@@ -216,8 +216,13 @@ function createWindow() {
     const currentUrl = mainWindow && mainWindow.webContents.getURL();
     if (currentUrl && targetUrl !== currentUrl) event.preventDefault();
   });
-  mainWindow.webContents.session.setPermissionRequestHandler((_contents, _permission, callback) => callback(false));
-  mainWindow.webContents.session.setPermissionCheckHandler(() => false);
+  // 安全加固：默认拒绝一切权限请求，但放行 'fullscreen'。
+  // Chromium/Electron 把「元素全屏（requestFullscreen）」也算作一种权限：
+  // 一旦处理器无条件拒绝，渲染进程的 requestFullscreen() 返回的 Promise 既不 resolve
+  // 也不 reject（永久挂起，见 electron#37719），导致教材 PDF 阅读器的全屏按钮点了没反应。
+  // 主窗口只加载本地 index.html，放行全屏不会扩大攻击面。
+  mainWindow.webContents.session.setPermissionRequestHandler((_contents, permission, callback) => callback(permission === 'fullscreen'));
+  mainWindow.webContents.session.setPermissionCheckHandler((_contents, permission) => permission === 'fullscreen');
   mainWindow.webContents.on('render-process-gone', (_event, details) => diagnostics.write('render-process-gone', details));
 
   mainWindow.once('ready-to-show', () => {
@@ -956,21 +961,20 @@ function extractMailText(raw) {
 }
 
 // ═══════════ 内联 PowerShell 长截图脚本 ═══════════
-// 纯 ASCII（中文窗口标题由 ConvertTo-Json 转义为 \uXXXX），避免编码/引号地狱。
-// 通过 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File` 执行。
-const LONG_SHOT_PS1 = `
-param(
-  [string]$Action = 'list',
-  [string]$Hwnd = '',
-  [int]$MaxScreens = 25,
-  [string]$OutPath = ''
-)
-$ErrorActionPreference = 'Stop'
-# 强制 stdout 使用 UTF-8，避免中文窗口标题被 GBK 编码后乱码
-[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
-Add-Type -AssemblyName System.Drawing
-Add-Type -ReferencedAssemblies "System.Drawing" -TypeDefinition @"
+// 拆成两部分，把「C# 能否编译」与「.ps1 怎么被读取」彻底解耦：
+//   LONG_SHOT_CS   —— C# 源码，**严格保持纯 ASCII**（注释只用英文）。
+//                     纯 ASCII 意味着无论被当成 UTF-8 还是 ANSI 解码，字节都一致，
+//                     不会出现中文注释被拆坏、进而吃掉后续代码的情况。
+//   LONG_SHOT_PS1  —— PowerShell 脚本，通过 __CS_PATH__ 占位符引用上面落盘的 .cs。
+//                     （脚本自身仍带中文注释，因此 runPowerShellScript 必须以
+//                      UTF-8 BOM 写入——Windows PowerShell 5.1 读取无 BOM 的文件会按
+//                      ANSI 解码，中文注释一旦错位就会连带破坏脚本结构。）
+// 历史坑：C# 以前用 -TypeDefinition @"..."@ 内联在 .ps1 里，一旦 .ps1 被按 ANSI 解读，
+// 中文注释错位就会让 Add-Type 编译失败（"类、结构或接口成员声明中的标记 if 无效"），
+// 长截图整个不可用。改成独立 .cs + -Path 后，C# 编译不再受 .ps1 编码影响。
+// 两者都通过 `powershell.exe -NoProfile -ExecutionPolicy Bypass -File` 执行。
+// 回归守护见 tests/long-shot-script.test.js（含真实编译验证）。
+const LONG_SHOT_CS = `
 using System;
 using System.Text;
 using System.Threading;
@@ -1003,7 +1007,7 @@ public static class NativeWin {
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT { public int X, Y; }
 
-    // 获取窗口在屏幕上的物理客户区（左上角绝对坐标 + 宽高），供截图/滚动使用
+    // Physical client area of a window on screen (absolute top-left + size), for capture/scroll.
     public static bool GetClientRectOnScreen(IntPtr h, out int cx, out int cy, out int cw, out int ch) {
         cx = 0; cy = 0; cw = 0; ch = 0;
         RECT r; if (!GetClientRect(h, out r)) return false;
@@ -1031,15 +1035,16 @@ public static class NativeWin {
         RECT r; GetWindowRect(h, out r); return r;
     }
     public static bool Activate(IntPtr h) {
-        ShowWindow(h, 9); // SW_RESTORE，最小化的窗口恢复
+        ShowWindow(h, 9); // SW_RESTORE: restore a minimized window
         bool ok = SetForegroundWindow(h);
         SetWindowPos(h, new IntPtr(0), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0020);
         return ok;
     }
     public static void ScrollDown(IntPtr h) {
-        // 直接把 WM_MOUSEWHEEL PostMessage 给顶层窗口通常无效（滚轮消息由系统按光标位置注入目标控件）。
-        // 通用方案：将光标移到客户区中心，再注入真实的鼠标滚轮事件。
-        // 滚动幅度：分 3 次注入（每次 5 档），共约 15 档 → 让单次滚动更接近一屏，减少截图次数。
+        // Posting WM_MOUSEWHEEL to the top-level window usually does nothing: the system routes
+        // wheel messages to the control under the cursor. So park the cursor at the client-area
+        // centre and inject real wheel input instead.
+        // Amount: 3 injections of 5 notches each (~15 notches) so one step covers roughly a screen.
         int cx, cy, cw, ch;
         if (!GetClientRectOnScreen(h, out cx, out cy, out cw, out ch) || cw <= 0 || ch <= 0) {
             RECT r; GetWindowRect(h, out r);
@@ -1071,7 +1076,8 @@ public static class NativeWin {
     public static bool SamePixels(Bitmap a, Bitmap b) {
         if (a == null || b == null) return false;
         if (a.Width != b.Width || a.Height != b.Height) return false;
-        // 采样更密（宽高均分 32 格）+ 阈值更严（差异 <0.5% 才算相同），避免滚动少量内容被误判为到底
+        // Denser sampling (32 divisions per axis) + tighter threshold (<0.5% differing pixels),
+        // so a small scroll is not mistaken for "reached the bottom".
         int sx = Math.Max(1, a.Width / 32);
         int sy = Math.Max(1, a.Height / 32);
         int diff = 0, total = 0;
@@ -1101,7 +1107,7 @@ public static class NativeWin {
         }
         return result;
     }
-    // 单行像素差异百分比（采样列）
+    // Percentage of differing pixels on one row (sampled columns).
     public static double RowDiffPct(Bitmap a, int ra, Bitmap b, int rb, int stepX) {
         int diff = 0, total = 0;
         for (int x = 0; x < a.Width; x += stepX) {
@@ -1113,17 +1119,18 @@ public static class NativeWin {
         }
         return total == 0 ? 100 : diff * 100.0 / total;
     }
-    // 返回 prev 底部与 cur 顶部重叠的行数（即拼接时 cur 应跳过的行数）。
-    // 策略：多行窗口匹配 + 偏移投票。对 cur 中多个采样行，用"连续 WIN 行"在 prev 中
-    // 找最佳匹配位置（多行一致比单行更抗相似纹理误匹配），偏移量 = prev行号 - cur行号，
-    // 取最集中的偏移簇中位数作为滚动量 s。
-    // s=0 → 无滚动/滚动到底（全重叠）；s>=屏高 → 无重叠。
+    // Number of rows where prev's bottom overlaps cur's top = rows cur must skip when stitching.
+    // Strategy: multi-row window matching + offset voting. For several sampled rows of cur, find
+    // the best match of "WIN consecutive rows" inside prev (multi-row agreement is more robust
+    // against repetitive textures than a single row); offset = prev row index - cur row index,
+    // and the median of the densest offset cluster is taken as the scroll amount s.
+    // s = 0 -> no scroll / scrolled to bottom (full overlap); s >= screen height -> no overlap.
     public static int FindOverlapRows(Bitmap prev, Bitmap cur) {
         int ph = prev.Height, ch = cur.Height;
         if (ph <= 0 || ch <= 0 || prev.Width != cur.Width) return 0;
         int stepX = Math.Max(2, prev.Width / 24);
-        const int WIN = 4; // 匹配窗口行数
-        // 采样行：覆盖滚动内容区（避开顶部固定栏 / 底部输入框）
+        const int WIN = 4; // rows per matching window
+        // Sampled rows cover the scrolling content area (skipping the fixed top bar / bottom input box).
         int[] sampleRows = new int[] {
             ch / 8, ch / 4, ch / 2, ch * 3 / 4, ch * 7 / 8
         };
@@ -1134,51 +1141,51 @@ public static class NativeWin {
             double best = double.MaxValue;
             int jMax = ph - WIN;
             for (int j = i; j <= jMax; j++) {
-                // 多行窗口平均差异（比单行更鲁棒）
+                // Average difference over the multi-row window (more robust than a single row).
                 double sum = 0;
                 for (int k = 0; k < WIN; k++) sum += RowDiffPct(prev, j + k, cur, i + k, stepX);
                 double avg = sum / WIN;
                 if (avg < best) { best = avg; bestJ = j; }
             }
-            // 窗口平均差异阈值 25
+            // Window average difference threshold: 25
             if (bestJ >= 0 && best <= 25) offsets.Add(bestJ - i);
         }
         if (offsets.Count == 0) {
-            // 匹配失败：保守返回 30% 重叠，避免大段重复
+            // No match: fall back to a conservative 30% overlap to avoid duplicating a whole block.
             return ch * 3 / 10;
         }
-        // 偏移投票：取最集中的簇的中位数（排序后，找最长连续区间）
+        // Offset voting: median of the densest cluster (sorted, then the middle entry).
         offsets.Sort();
         int s = offsets[offsets.Count / 2];
-        // 校验投票一致性：若中位数与多数偏移偏差过大，说明匹配不稳定，回退 30%
+        // Sanity check: if the median disagrees with most offsets the match is unstable -> 30%.
         int close = 0;
         foreach (int o in offsets) if (Math.Abs(o - s) <= 60) close++;
         if (close * 2 < offsets.Count) return ch * 3 / 10;
-        if (s <= 0) return ch;   // 无滚动 → 全屏重叠（滚动到底判定）
-        if (s >= ch) return 0;   // 滚动超一屏 → 无重叠
+        if (s <= 0) return ch;   // no scroll -> full overlap (treated as "reached the bottom")
+        if (s >= ch) return 0;   // scrolled more than one screen -> no overlap
         return ch - s;
     }
-    // 检测两屏顶部/底部的固定区域高度（标题栏/输入框不随滚动变化）
-    // 返回 fixed: [topFixed, bottomFixed]
+    // Height of the fixed regions at the top/bottom of two screens (title bar / input box do not scroll).
+    // Returns fixed: [topFixed, bottomFixed]
     public static int[] DetectFixedRegions(Bitmap a, Bitmap b, int stepX) {
         int top = 0, bottom = 0;
         int h = Math.Min(a.Height, b.Height);
-        // 顶部：从上往下找连续相同行
+        // Top: count identical rows from the top downwards.
         for (int y = 0; y < h; y++) {
             if (RowDiffPct(a, y, b, y, stepX) <= 5) top++;
             else break;
         }
-        // 底部：从下往上找连续相同行
+        // Bottom: count identical rows from the bottom upwards.
         for (int y = h - 1; y >= 0; y--) {
             if (RowDiffPct(a, y, b, y, stepX) <= 5) bottom++;
             else break;
         }
-        // 保护：固定区不超过 35%，防止误判
+        // Guard: a fixed region may not exceed 35%, to limit misdetection.
         if (top > h * 35 / 100) top = h * 35 / 100;
         if (bottom > h * 35 / 100) bottom = h * 35 / 100;
         return new int[] { top, bottom };
     }
-    // 裁剪 Bitmap 顶部 top 行、底部 bottom 行，返回新图
+    // Crop top/bottom rows off a bitmap and return a new image.
     public static Bitmap CropBitmap(Bitmap src, int top, int bottom) {
         if (src == null) return null;
         int hh = src.Height - top - bottom;
@@ -1190,7 +1197,7 @@ public static class NativeWin {
         }
         return result;
     }
-    // 判断单行是否接近空白（浅色背景，低饱和）
+    // Whether a single row is close to blank (light background, low saturation).
     public static bool IsBlankRow(Bitmap b, int y, int stepX) {
         int total = 0, similar = 0;
         for (int x = 0; x < b.Width; x += stepX) {
@@ -1202,7 +1209,8 @@ public static class NativeWin {
         }
         return total > 0 && similar * 100 / total >= 90;
     }
-    // 统计内容区底部空白行数（从 bottomFixed 往上数，聊天滚动到底后消息不足一屏的空白背景）
+    // Count blank rows at the bottom of the content area (counted upwards from bottomFixed):
+    // the empty background left when the chat is scrolled to the bottom and the last screen is not full.
     public static int CountBottomBlank(Bitmap b, int topFixed, int bottomFixed, int stepX) {
         int h = b.Height;
         int blank = 0;
@@ -1213,8 +1221,9 @@ public static class NativeWin {
         }
         return blank;
     }
-    // 精调 skip：在 approxSkip ±4 行内，找 cur[skip] 与 prev 底部行最接近的位置。
-    // 解决滚动量非整数行导致的整行舍入误差（拼接处 1-3 行错位）。
+    // Fine-tune skip: within approxSkip +/-4 rows, find where cur[skip] best lines up with prev's
+    // bottom rows. Fixes whole-row rounding error caused by a non-integer scroll amount
+    // (1-3 rows of misalignment at the seam).
     public static int RefineSkip(Bitmap prevCrop, Bitmap curCrop, int approxSkip) {
         int ph = prevCrop.Height, ch = curCrop.Height;
         if (ph <= 0 || ch <= 0 || prevCrop.Width != curCrop.Width) return approxSkip;
@@ -1225,7 +1234,7 @@ public static class NativeWin {
         int lo = Math.Max(0, approxSkip - RANGE);
         int hi = Math.Min(ch - 1, approxSkip + RANGE);
         for (int s = lo; s <= hi; s++) {
-            // 用 cur[s..s+2] 与 prev[ph-3..ph-1]（底部 3 行）比对
+            // Compare cur[s..s+2] against prev[ph-3..ph-1] (the bottom 3 rows).
             double sum = 0;
             for (int k = 0; k < 3; k++) {
                 int py = ph - 3 + k;
@@ -1238,25 +1247,27 @@ public static class NativeWin {
         }
         return best;
     }
-    // 智能拼接：第 0 张全取，第 i 张跳过 overlaps[i] 行重叠，只拼新增内容。
-    // topFixed/bottomFixed 为裁剪掉的固定区；每张图内容区底部空白会被检测并裁掉
-    // （聊天滚动到底后消息不足一屏时的空白背景）。skip 经 RefineSkip 局部精调，
-    // 消除滚动量非整数行导致的整行舍入误差（拼接处错位）。
+    // Smart stitching: screen 0 is taken whole; screen i skips overlaps[i] overlapping rows and
+    // only appends new content. topFixed/bottomFixed are the cropped fixed regions; trailing blank
+    // rows at the bottom of each screen are detected and trimmed (the empty background when the
+    // chat is scrolled to the bottom and the last screen is not full). skip is refined locally by
+    // RefineSkip to remove whole-row rounding error at the seam.
     public static Bitmap JoinOverlap(System.Collections.Generic.List<Bitmap> list, int[] overlaps, int topFixed, int bottomFixed) {
         if (list == null || list.Count == 0) return null;
         int w = list[0].Width;
         int stepX = Math.Max(2, w / 24);
         int n = list.Count;
-        // 每张图的有效底部（裁掉固定区 + 内容区空白）
+        // Effective bottom of each screen (fixed regions and trailing blank rows removed).
         int[] effBottom = new int[n];
         for (int i = 0; i < n; i++) {
             int blank = CountBottomBlank(list[i], topFixed, bottomFixed, stepX);
             int contentH = list[i].Height - topFixed - bottomFixed;
             effBottom[i] = list[i].Height - bottomFixed - Math.Min(blank, contentH);
         }
-        // skip = overlaps + 2（保守多算 2 行重叠，避免边界处消息被画两遍）。
-        // FindOverlapRows 基于多行窗口匹配已找到最佳重叠，但因滚动量非整数 + 渲染差异，
-        // 偶尔差 1-2 行，宁可裁多一点避免重复也不漏。
+        // skip = overlaps + 2: conservatively over-count the overlap by 2 rows so a message at the
+        // seam is never drawn twice. FindOverlapRows already found the best overlap via multi-row
+        // window matching, but a non-integer scroll amount plus rendering differences can be off by
+        // 1-2 rows; trimming a little extra is safer than leaving a duplicate.
         int[] skipArr = new int[n];
         skipArr[0] = 0;
         for (int i = 1; i < n; i++) {
@@ -1280,10 +1291,11 @@ public static class NativeWin {
             g.CompositingQuality = CompositingQuality.HighQuality;
             g.Clear(Color.White);
             int y = 0;
-            // 第一屏：内容区（跳过顶部固定区，裁掉底部空白）
+            // First screen: content area only (skip the fixed top region, trim trailing blanks).
             g.DrawImage(list[0], new Rectangle(0, 0, w, firstH), new Rectangle(0, topFixed, w, firstH), GraphicsUnit.Pixel);
             y += firstH;
-            // 后续屏：从顶部固定区后开始，跳过精调后的重叠，裁掉底部空白
+            // Following screens: start after the fixed top region, skip the refined overlap,
+            // trim trailing blank rows.
             for (int i = 1; i < n; i++) {
                 Bitmap b = list[i];
                 int avail = effBottom[i] - topFixed;
@@ -1298,7 +1310,28 @@ public static class NativeWin {
         return result;
     }
 }
-"@
+`;
+
+const LONG_SHOT_PS1 = `
+param(
+  [string]$Action = 'list',
+  [string]$Hwnd = '',
+  [int]$MaxScreens = 25,
+  [string]$OutPath = '',
+  [string]$CsPath = ''
+)
+$ErrorActionPreference = 'Stop'
+# 强制 stdout 使用 UTF-8，避免中文窗口标题被 GBK 编码后乱码
+[Console]::OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+$OutputEncoding = New-Object System.Text.UTF8Encoding($false)
+Add-Type -AssemblyName System.Drawing
+# C# 由调用方落盘为带 UTF-8 BOM 的 .cs 文件后传入路径（见 runPowerShellScript）。
+# 不用 -TypeDefinition 内联，避免 .ps1 的读取编码影响 C# 编译。
+if (-not $CsPath -or -not (Test-Path -LiteralPath $CsPath)) {
+  Write-Output '{"ok":false,"error":"missing-cs-source"}'
+  exit 1
+}
+Add-Type -ReferencedAssemblies "System.Drawing" -Path "__CS_PATH__"
 
 # 声明 DPI-aware：确保 GetWindowRect/PrintWindow 使用物理像素而非虚拟化逻辑像素，
 # 否则在高 DPI 缩放下截图宽度会小于窗口实际宽度（只截到一部分）。
@@ -1411,28 +1444,48 @@ Write-Output '{"ok":false,"error":"unknown-action"}'
 exit 1
 `;
 
-// 运行内联 PowerShell 脚本（写入临时 .ps1，UTF-8 BOM，绕开引号地狱与中文乱码）
-function runPowerShellScript(script, args) {
+// 运行内联 PowerShell 脚本（写入临时 .ps1，UTF-8 BOM，绕开引号地狱与中文乱码）。
+// csSource 非空时：把 C# 源码单独落盘成带 UTF-8 BOM 的 .cs，并把脚本里的
+// __CS_PATH__ 占位符替换成它的绝对路径，同时追加 -CsPath 参数。
+// 这样 C# 由 -Path 从独立文件编译，编译结果不受 .ps1 读取编码影响
+// （Windows PowerShell 5.1 读取无 BOM 文件会按 ANSI 解码，中文注释一旦被拆坏，
+//   内联的 -TypeDefinition 就会编译失败）。
+function runPowerShellScript(script, args, csSource) {
   const tmpDir = path.join(userDataPath, 'tmp');
   if (!fs.existsSync(tmpDir)) fs.mkdirSync(tmpDir, { recursive: true });
-  const scriptPath = path.join(tmpDir, 'inbox-' + Date.now() + '-' + Math.random().toString(36).slice(2, 6) + '.ps1');
-  try { fs.writeFileSync(scriptPath, '\uFEFF' + script, 'utf-8'); }
+  const stamp = Date.now() + '-' + Math.random().toString(36).slice(2, 6);
+  const scriptPath = path.join(tmpDir, 'inbox-' + stamp + '.ps1');
+  const finalArgs = (args || []).slice();
+  let text = script;
+  let csPath = '';
+  if (csSource) {
+    csPath = path.join(tmpDir, 'inbox-' + stamp + '.cs');
+    try { fs.writeFileSync(csPath, '\uFEFF' + csSource, 'utf-8'); }
+    catch (e) { return Promise.resolve({ ok: false, error: '写入 C# 源码失败: ' + e.message }); }
+    text = text.replace('__CS_PATH__', csPath);
+    finalArgs.push('-CsPath', csPath);
+  }
+  try { fs.writeFileSync(scriptPath, '\uFEFF' + text, 'utf-8'); }
   catch (e) { return Promise.resolve({ ok: false, error: '写入脚本失败: ' + e.message }); }
   return new Promise((resolve) => {
-    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath].concat(args || []), { windowsHide: true });
+    const child = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', scriptPath].concat(finalArgs), { windowsHide: true });
+  const cleanup = () => {
+    try { fs.unlinkSync(scriptPath); } catch (e2) {}
+    if (csPath) { try { fs.unlinkSync(csPath); } catch (e2) {} }
+  };
     let stdout = '', stderr = '';
     const outDec = createStreamDecoder();
     const errDec = createStreamDecoder();
     child.stdout.on('data', (d) => { stdout += outDec.decode(d); });
     child.stderr.on('data', (d) => { stderr += errDec.decode(d); });
     child.on('error', (err) => {
-      try { fs.unlinkSync(scriptPath); } catch (e2) {}
+      cleanup();
       resolve({ ok: false, error: String(err.message || err) });
     });
     child.on('close', (code) => {
       stdout += outDec.flush() || '';
       stderr += errDec.flush() || '';
-      try { fs.unlinkSync(scriptPath); } catch (e2) {}
+      cleanup();
       resolve({ ok: code === 0, code, stdout, stderr });
     });
   });
@@ -1638,7 +1691,7 @@ ipcMain.handle('web:read', async (event, { url, maxChars } = {}) => {
 // IPC: 枚举可见窗口
 ipcMain.handle('capture:list-windows', async () => {
   try {
-    const res = await runPowerShellScript(LONG_SHOT_PS1, ['-Action', 'list']);
+    const res = await runPowerShellScript(LONG_SHOT_PS1, ['-Action', 'list'], LONG_SHOT_CS);
     if (!res.ok) return { ok: false, reason: res.stderr || res.stdout || '窗口枚举失败' };
     const parsed = parsePsJsonOutput(res.stdout);
     const windows = Array.isArray(parsed) ? parsed : (parsed ? [parsed] : []);
@@ -1659,7 +1712,7 @@ ipcMain.handle('capture:long-shot', async (event, { hwnd, maxScreens } = {}) => 
       '-Hwnd', String(hwnd),
       '-MaxScreens', String(max),
       '-OutPath', outPath
-    ]);
+    ], LONG_SHOT_CS);
     if (!res.ok) {
       const parsed = parsePsJsonOutput(res.stdout);
       if (parsed && parsed.ok) return { ok: true, imagePath: parsed.path || outPath, screens: parsed.screens || 0 };

@@ -387,9 +387,11 @@ function bkIsIOS() {
   return hasTouch && noRealFs;
 }
 let _stFakeFs = false; // 类全屏状态
+let _stFsFallbackPending = false; // 是否有原生全屏请求正在等待结算
 
 // 切换到类全屏 / 退出类全屏
 function _bkSetFakeFs(on) {
+  _stFsFallbackPending = false;
   _stFakeFs = on;
   document.documentElement.classList.toggle('mst-fake-fullscreen', on);
   const root = document.getElementById('bkStudyRoot');
@@ -397,7 +399,55 @@ function _bkSetFakeFs(on) {
   bkStudyOnFullscreenChange();
 }
 
-// 全屏切换：优先标准 Fullscreen API，iOS/不支持时回退到类全屏（position:fixed 铺满视口）
+// 请求原生元素全屏。返回 Promise<boolean>（true = 已进入原生全屏）。
+//
+// Electron 里权限处理器拒绝 fullscreen 时，requestFullscreen() 的 Promise 会永久挂起
+// （既不 resolve 也不 reject，见 electron#37719），catch 分支永远不会执行；
+// 少数情况下（如刚退出全屏、窗口过渡未结束）请求也会被直接拒绝。
+// 因此这里做两件事：
+//   1) 首次被拒后短暂延迟重试一次，避免偶发的拒绝把阅读器降级成「类全屏」；
+//   2) 超时兜底 —— 超时仍未进入原生全屏就放弃，交给调用方走类全屏。
+// 判定成功以「Promise 已结算 且 document.fullscreenElement 已就位」为准，
+// 不使用 fullscreenchange 事件，避免与上一次全屏切换的事件交错而误判。
+function _bkRequestNativeFullscreen(root, fallbackMs) {
+  const supported = !!(root.requestFullscreen || root.webkitRequestFullscreen);
+  if (!supported) return Promise.resolve(false);
+  return new Promise((resolve) => {
+    let settled = false;
+    let retried = false;
+    let timer = null;
+    const finish = (ok) => {
+      if (settled) return;
+      settled = true;
+      if (timer) { clearTimeout(timer); timer = null; }
+      resolve(!!ok && !!document.fullscreenElement);
+    };
+    const attempt = () => {
+      if (settled) return;
+      if (!timer) timer = setTimeout(() => finish(false), fallbackMs);
+      let req;
+      try {
+        req = root.requestFullscreen ? root.requestFullscreen() : root.webkitRequestFullscreen();
+      } catch (err) {
+        retryOrGiveUp();
+        return;
+      }
+      if (req && typeof req.then === 'function') {
+        req.then(() => finish(true)).catch(retryOrGiveUp);
+      }
+      // webkitRequestFullscreen 无返回值：交由 fullscreenchange 事件或超时决定
+    };
+    const retryOrGiveUp = () => {
+      if (settled) return;
+      if (retried) { finish(false); return; }
+      retried = true;
+      setTimeout(attempt, 250); // 首次被拒：等窗口过渡结束再试一次
+    };
+    attempt();
+  });
+}
+
+// 全屏切换：优先标准 Fullscreen API，iOS/不支持时回退到类全屏（铺满视口）
 function bkStudyToggleFullscreen() {
   const root = document.getElementById('bkStudyRoot');
   if (!root) return;
@@ -405,21 +455,28 @@ function bkStudyToggleFullscreen() {
   if (_stFakeFs) { _bkSetFakeFs(false); return; }
   // 标准全屏中 → 退出
   if (document.fullscreenElement) {
-    document.exitFullscreen().catch(() => _bkSetFakeFs(true));
+    _stFsFallbackPending = false;
+    // exitFullscreen 同样可能不结算；catch 分支只用于纠正按钮状态
+    const done = document.exitFullscreen();
+    if (done && typeof done.catch === 'function') done.catch(() => bkStudyOnFullscreenChange());
     return;
   }
   if (bkIsIOS()) { _bkSetFakeFs(true); return; }
-  if (root.requestFullscreen) {
-    root.requestFullscreen()
-      .catch(() => _bkSetFakeFs(true)); // 标准 API 失败（如 iOS/权限）→ 类全屏
-  } else if (root.webkitRequestFullscreen) {
-    root.webkitRequestFullscreen();
-  } else {
-    _bkSetFakeFs(true);
-  }
+  _stFsFallbackPending = true;
+  _bkRequestNativeFullscreen(root, 900).then((ok) => {
+    _stFsFallbackPending = false;
+    if (!ok) _bkSetFakeFs(true); // 原生全屏不可用 → 类全屏兜底
+    else bkStudyOnFullscreenChange(); // 原生全屏生效 → 同步按钮/重排
+  });
 }
 // 全屏状态变化：更新按钮图标（maximize ⇄ minimize）
 function bkStudyOnFullscreenChange() {
+  // 原生全屏已生效：撤回可能抢跑的类全屏兜底，避免「类全屏 + 原生全屏」双重生效
+  if (document.fullscreenElement && _stFakeFs) {
+    _stFakeFs = false;
+    document.documentElement.classList.remove('mst-fake-fullscreen');
+    document.getElementById('bkStudyRoot')?.classList.remove('fake-fullscreen');
+  }
   const btn = document.getElementById('bkStudyFullscreenBtn');
   if (!btn) return;
   const isFs = _stFakeFs || !!document.fullscreenElement;
