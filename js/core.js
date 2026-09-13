@@ -33,7 +33,8 @@ function saveData(key, data) {
           return { ok: true, changed: true };
         })();
     if (!result.ok) throw result.error;
-    if (result.changed === false) return false;
+    // Unchanged data is already durably present, so this is still a successful save.
+    if (result.changed === false) return true;
     // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步）
     if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
       try { window.Sync.onLocalChange(key); } catch (e) { /* 同步层错误不影响主流程 */ }
@@ -62,26 +63,14 @@ function saveData(key, data) {
         });
         localStorage.setItem(key, JSON.stringify(cleaned));
         console.warn('[saveData] 已清理 _ 前缀字段后重试成功');
-        return;
+        return true;
       } catch (e2) {
         console.error('[saveData] 清理后重试仍然失败:', e2.message);
       }
     }
-    // If all fails, try saving without the problematic conversation
-    if (key.startsWith('study_')) {
-      try {
-        // 数组类 key 降级写空数组 —— 绝不能写成对象 {_saveError:true}：
-        // 否则下次 loadData 解析出对象，调用方 .find/.map 直接崩
-        //（曾导致 "aiConvs.find is not a function" 启动即崩溃）。
-        const ARRAY_KEYS = new Set([
-          'study_ai_convs', 'study_todos_v2', 'study_links_v3', 'study_notes_v2',
-          'study_bk_explain_logs_v1', 'study_bk_qa_logs_v1', 'study_todo_completed_log'
-        ]);
-        const fallback = ARRAY_KEYS.has(key) ? [] : { _saveError: true, _errorTime: new Date().toISOString() };
-        localStorage.setItem(key, JSON.stringify(fallback));
-        console.warn('[saveData] 使用降级数据保存 (' + key + ')');
-      } catch (_) { /* give up */ }
-    }
+    // Never replace the user's last good value with an empty/error placeholder.
+    // Callers receive false and can roll back their in-memory mutation instead.
+    return false;
   }
 }
 
@@ -545,6 +534,7 @@ function openMobileMore() {
   }).join('') +
     `<div class="mobile-more-sep"></div>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openSettingsModal();"><i data-lucide="settings" class="lucide-icon"></i><span>设置</span></button>` +
+    `<button class="mobile-more-item" onclick="closeMobileMore();toggleTheme();"><i data-lucide="sun-moon" class="lucide-icon"></i><span>切换深浅色</span></button>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openHelpModal();"><i data-lucide="help-circle" class="lucide-icon"></i><span>帮助</span></button>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openNavSettings();"><i data-lucide="sliders-horizontal" class="lucide-icon"></i><span>编辑界面栏</span></button>` +
     `<button class="mobile-more-item" onclick="closeMobileMore();openChangelogModal();"><i data-lucide="list" class="lucide-icon"></i><span>更新日志</span></button>`;

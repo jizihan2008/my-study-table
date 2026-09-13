@@ -123,9 +123,11 @@ function loadTodoCompletedLog() {
 function saveTodoCompletedLog(log) {
   // 走 saveData → 触发 Sync.onLocalChange → 待办完成日志跨设备同步
   if (typeof saveData === 'function') {
-    saveData('study_todo_completed_log', log);
+    return saveData('study_todo_completed_log', log) === true;
   } else {
-    localStorage.setItem('study_todo_completed_log', JSON.stringify(log));
+    const raw = JSON.stringify(log);
+    localStorage.setItem('study_todo_completed_log', raw);
+    return localStorage.getItem('study_todo_completed_log') === raw;
   }
 }
 

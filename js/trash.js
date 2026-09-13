@@ -35,7 +35,11 @@ function loadTrash(module) {
 }
 
 function saveTrash(module, data) {
-  try { localStorage.setItem(TRASH_KEYS[module], JSON.stringify(data)); } catch (e) { console.error('saveTrash error:', e); }
+  try {
+    const raw = JSON.stringify(data);
+    localStorage.setItem(TRASH_KEYS[module], raw);
+    return localStorage.getItem(TRASH_KEYS[module]) === raw;
+  } catch (e) { console.error('saveTrash error:', e); return false; }
 }
 
 function loadArchive(module) {
@@ -60,7 +64,7 @@ function moveToTrash(module, item) {
       trash.unshift({ ...t, deletedAt: new Date().toISOString() });
     });
     todos = todos.filter(t => !allIds.has(t.id));
-    saveData('study_todos_v2', todos);
+    if (saveData('study_todos_v2', todos) !== true) return false;
     expandedTodoIds.delete(item.id);
     saveExpandedTodoIds();
   } else if (module === 'notes') {
@@ -89,12 +93,12 @@ function moveToTrash(module, item) {
       activeNoteId = (notes.find(n => n.type === 'note') || notes[0])?.id || null;
     }
     localStorage.setItem('study_active_note', activeNoteId);
-    saveData('study_notes_v2', notes);
+    if (saveData('study_notes_v2', notes) !== true) return false;
     renderNotes();
   } else if (module === 'links') {
     trash.unshift({ ...item, deletedAt: new Date().toISOString() });
     links = links.filter(l => l.id !== item.id);
-    saveData('study_links_v3', links);
+    if (saveData('study_links_v3', links) !== true) return false;
     renderLinks();
   } else if (module === 'habits') {
     trash.unshift({ ...item, deletedAt: new Date().toISOString() });
@@ -103,7 +107,7 @@ function moveToTrash(module, item) {
     if (typeof renderHabits === 'function') renderHabits();
   }
   
-  saveTrash(module, trash);
+  return saveTrash(module, trash);
 }
 
 // ── 移到归档 ──

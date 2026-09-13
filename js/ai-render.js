@@ -7,8 +7,30 @@ const _aiStreamingDrafts = new Map(); // convId -> transient assistant output (n
 const _aiStreamingPaintTimers = new Map();
 const AI_STREAM_PAINT_INTERVAL_MS = 32;
 
+function stripHallucinatedToolTranscriptForDisplay(value) {
+  const text = String(value || '');
+  const protocol = text.match(/\\?<\s*(?:tool(?:\\?_)?(?:call|action)|[|｜]+\s*DSML\s*[|｜]+)/i);
+  if (!protocol) return text;
+  const tail = text.slice(protocol.index);
+  const fakeRole = tail.match(/^[ \t]*(?:user|assistant|system)[ \t]*【工具执行结果】/mi);
+  return fakeRole ? text.slice(0, protocol.index + fakeRole.index).trimEnd() : text;
+}
+
+function sanitizeAiToolRoundText(value) {
+  const text = stripHallucinatedToolTranscriptForDisplay(value);
+  if (typeof parseDsmlToolCalls === 'function') {
+    const dsml = parseDsmlToolCalls(text);
+    if (dsml && dsml.valid) return dsml.cleanText;
+  }
+  return text
+    .replace(/<(tool_call|tool_action)>[\s\S]*?<\/(?:tool_call|tool_action|call)>/g, '')
+    .replace(/\\?<tool\\?_(?:call|action)>[\s\S]*?\\?<\/(?:tool\\?_(?:call|action)|call)>/g, '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+}
+
 function sanitizeAiStreamingText(value) {
-  return String(value || '')
+  return sanitizeAiToolRoundText(value)
     .replace(/<(tool_call|call_ai|memory)>[\s\S]*?<\/\1>/g, '')
     .replace(/<(?:tool_call|call_ai|memory)>[\s\S]*$/g, '')
     .replace(/<[a-z_]*$/i, '')
@@ -428,7 +450,8 @@ function renderAiMessages() {
         'delete_link': '🗑️ 删除链接',
         'schedule_automation': '⏰ 创建自动化',
         'delete_automation': '🗑️ 删除自动化',
-        'web_search': '🌐 网络搜索'
+        'web_search': '🌐 网络搜索',
+        'tool_protocol': '⚠️ 工具协议错误'
       };
       // Handle multiple tool calls: get the unique tool names and look up each one
       const toolNameSet = [...new Set(m._toolInfo.toolNames.split('、').map(s => s.trim()))];
@@ -442,10 +465,16 @@ function renderAiMessages() {
       // Strip the "[工具调用结果——...]" prefix and the summary line (e.g. "📋 待办事项列表（共3个）")
       // Only keep the data content (the numbered list starting with [1])
       let dataContent = m.content.replace(/^\[工具调用[^\]]*\]\n?/, '');
+      dataContent = dataContent.replace(/^【工具执行结果】\n?/, '').replace(/^【结构化状态】[^\n]*\n?/, '');
       dataContent = dataContent.replace(/^.*?（共\d+个）\n*/m, '');
       dataContent = dataContent.replace(/\n{3,}/g, '\n\n'); // 压缩多余空行
       dataContent = dataContent.replace(/\n+$/, ''); // trim trailing newlines
       dataContent = escapeHtml(dataContent);
+      const statusHtml = (m._toolInfo.outcomes || []).map(outcome => {
+        const icon = outcome.status === 'success' ? '✅' : (outcome.status === 'duplicate' ? '🛡️' : outcome.status === 'skipped' ? '⏹️' : '❌');
+        const duration = outcome.durationMs ? ` · ${outcome.durationMs}ms` : '';
+        return `<span class="ai-tool-status ${escapeHtml(outcome.status || '')}" title="${escapeHtml(outcome.error || '')}">${icon} ${escapeHtml(outcome.action || '')}${duration}</span>`;
+      }).join('');
       return `
         <div class="ai-chat-msg system">
           <div class="ai-chat-avatar">⚙️</div>
@@ -454,6 +483,7 @@ function renderAiMessages() {
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
               ${label}
             </div>
+            ${statusHtml ? `<div class="ai-tool-status-row">${statusHtml}</div>` : ''}
             <div class="ai-tool-call-data">${dataContent}</div>
           </div>
         </div>
@@ -461,17 +491,25 @@ function renderAiMessages() {
     }
 
     // Hide tool_call, call_ai, and memory tags from user-facing messages
-    const hasToolCall = typeof cleanContent === 'string' && /<tool_call>/.test(cleanContent);
+    const hasToolCall = m._malformedToolProtocol === true || m._dsmlToolProtocol === true
+      || (typeof cleanContent === 'string' && /<tool_call>/.test(cleanContent));
     if (m._streaming) {
       cleanContent = sanitizeAiStreamingText(cleanContent);
     } else if (typeof cleanContent === 'string') {
-      cleanContent = cleanContent
-        .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-        .replace(/<tool_call>[\s\S]*?<tool_call>/g, '')
-        .replace(/<call_ai>[\s\S]*?<\/call_ai>/g, '')
-        .replace(/<memory>[\s\S]*?<\/memory>/g, '')
-        .replace(/\n{3,}/g, '\n\n') // 压缩移除标签后残留的空行
-        .trim();
+      if (typeof m._toolRoundCleanText === 'string') {
+        cleanContent = m._toolRoundCleanText;
+      } else if (hasToolCall) {
+        const sanitized = sanitizeAiToolRoundText(cleanContent);
+        cleanContent = m._malformedToolProtocol && sanitized === cleanContent ? '' : sanitized;
+      } else {
+        cleanContent = cleanContent
+          .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
+          .replace(/<tool_call>[\s\S]*?<tool_call>/g, '')
+          .replace(/<call_ai>[\s\S]*?<\/call_ai>/g, '')
+          .replace(/<memory>[\s\S]*?<\/memory>/g, '')
+          .replace(/\n{3,}/g, '\n\n') // 压缩移除标签后残留的空行
+          .trim();
+      }
     }
 
     // If the assistant message only contained tool calls (no visible text),
@@ -494,7 +532,9 @@ function renderAiMessages() {
     } else {
       contentHtml = formatAiContent(cleanContent);
       if (!contentHtml && isAssistant && hasToolCall) {
-        contentHtml = '<span class="ai-tool-placeholder">🔧 正在执行操作...</span>';
+        contentHtml = m._malformedToolProtocol
+          ? '<span class="ai-tool-placeholder">⚠️ 工具指令格式错误，已返回给 AI 修正...</span>'
+          : '<span class="ai-tool-placeholder">🔧 正在执行操作...</span>';
       }
     }
 

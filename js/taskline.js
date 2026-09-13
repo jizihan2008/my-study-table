@@ -55,10 +55,10 @@ function saveTaskLineStore(store) {
   try {
     const serialized = JSON.stringify(store);
     // 渲染和状态刷新可能会走到保存入口；内容未变化时不要重复标记同步 dirty。
-    if (localStorage.getItem(TASkLINE_KEY) === serialized) return false;
-    if (typeof saveData === 'function') saveData(TASkLINE_KEY, store);
-    else localStorage.setItem(TASkLINE_KEY, serialized);
-    return true;
+    if (localStorage.getItem(TASkLINE_KEY) === serialized) return true;
+    if (typeof saveData === 'function') return saveData(TASkLINE_KEY, store) === true;
+    localStorage.setItem(TASkLINE_KEY, serialized);
+    return localStorage.getItem(TASkLINE_KEY) === serialized;
   } catch (e) {
     console.error('[任务线] 保存失败:', e);
     return false;
@@ -90,7 +90,7 @@ function tlAddLine({ name, type = 'quality', desc = '' }) {
     createdAt: Date.now()
   };
   store.lines.push(line);
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return null;
   return line;
 }
 function tlUpdateLine(id, patch) {
@@ -100,7 +100,7 @@ function tlUpdateLine(id, patch) {
   if (patch.name !== undefined) line.name = patch.name.trim() || line.name;
   if (patch.desc !== undefined) line.desc = patch.desc;
   if (patch.type !== undefined) line.type = patch.type;
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return null;
   return line;
 }
 function tlDeleteLine(id) {
@@ -112,7 +112,7 @@ function tlDeleteLine(id) {
   store.quests = store.quests.filter(q => q.lineId !== id);
   store.quests.forEach(q => { if (q.deps) q.deps = q.deps.filter(d => !lineQuestIds.has(d)); });
   store.lines = store.lines.filter(l => l.id !== id);
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return false;
   return true;
 }
 
@@ -152,7 +152,7 @@ function tlAddQuest({ lineId, title, goal = '', meaning = '', output = '', desc,
   }
   store.quests.push(quest);
   if (quest.status === 'active' && (!tlMainLineUnlocked(store, line) || !quest.deps.every(id => store.quests.some(q => q.id === id && ['done', 'skipped'].includes(q.status))))) quest.status = 'locked';
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return null;
   return quest;
 }
 function tlUpdateQuest(id, patch) {
@@ -174,7 +174,7 @@ function tlUpdateQuest(id, patch) {
       q.pos = { x: Math.round(patch.pos.x), y: Math.round(patch.pos.y) };
     }
   }
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return null;
   return q;
 }
 function tlDeleteQuest(id) {
@@ -182,7 +182,7 @@ function tlDeleteQuest(id) {
   if (!store.quests.some(q => q.id === id)) return false;
   store.quests = store.quests.filter(q => q.id !== id);
   store.quests.forEach(q => { if (q.deps) q.deps = q.deps.filter(d => d !== id); });
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return false;
   return true;
 }
 function tlGetQuest(id) { return tlGetQuests().find(q => q.id === id) || null; }
@@ -348,7 +348,7 @@ function tlCompleteQuest(id, source = 'manual') {
   q.status = 'done';
   q.completedAt = getTodayStr();
   q.autoCompleted = false;
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   // 解锁下游任务 + 自动徽章 + 即时反馈
   tlRefreshAll();
   const badge = tlCheckAutoBadges();
@@ -367,7 +367,7 @@ function tlSkipQuest(id) {
   if (q.status === 'done') return { ok: false, msg: '已完成任务不可跳过' };
   q.status = 'skipped';
   q.skippedAt = getTodayStr();
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   tlRefreshAll();
   if (typeof renderTaskLine === 'function') renderTaskLine();
   return { ok: true, msg: `已跳过任务「${q.title}」` };
@@ -384,7 +384,7 @@ function tlActivateQuest(id) {
     return d && (d.status === 'done' || d.status === 'skipped');
   });
   q.status = depsMet ? 'active' : 'locked';
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   if (typeof renderTaskLine === 'function') renderTaskLine();
   return { ok: true, msg: `任务「${q.title}」已${q.status === 'active' ? '激活' : '锁定（待前置完成）'}` };
 }
@@ -575,7 +575,7 @@ function tlDrainFeedback() {
   const fb = Array.isArray(store._feedback) ? store._feedback : [];
   if (fb.length === 0) return [];
   delete store._feedback;
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   return fb;
 }
 // 取走反馈队列并弹系统通知（供待办联动等外部调用）
@@ -1982,7 +1982,7 @@ function tlAddDep(questId) {
   q.deps = q.deps || [];
   if (q.deps.includes(depId)) { showCustomConfirm('该任务已在依赖列表中'); return; }
   q.deps.push(depId);
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   // 依赖改变后刷新解锁状态
   if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(questId);
   tlRenderEditDepList(questId);
@@ -1993,7 +1993,7 @@ function tlRemoveDep(questId, index) {
   const q = store.quests.find(x => x.id === questId);
   if (!q) return;
   q.deps.splice(index, 1);
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(questId);
   tlRenderEditDepList(questId);
 }

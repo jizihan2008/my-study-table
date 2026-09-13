@@ -10,13 +10,14 @@
 const FRIENDS_CFG_KEY = 'study_supabase_config';
 const OLD_FRIENDS_CFG_KEY = 'study_friends_config';
 const LEGACY_BUILTIN_SUPABASE_URL = 'https://taujqtysezmmxhkxxjce.supabase.co';
+const LEGACY_BUILTIN_CLOUDBASE_ENV_ID = 'my-study-table-d1g1r0axn2975754f';
 
-// Publishable Key 与网页前端的 Supabase anon key 一样，本来就会随应用公开；数据安全依赖 RLS。
+// Publishable Key / Supabase anon key 本来就会随前端应用公开；数据安全依赖 RLS。
 const BUILTIN_CLOUD_CONFIG = {
-  provider: 'cloudbase',
-  envId: 'my-study-table-d1g1r0axn2975754f',
-  region: 'ap-shanghai',
-  accessKey: 'eyJhbGciOiJSUzI1NiIsImtpZCI6ImIyNDkyOGQxLTY3MTgtNDU0Ny04ZWExLWVmMzRhN2YwNTAwZiJ9.eyJpc3MiOiJodHRwczovL215LXN0dWR5LXRhYmxlLWQxZzFyMGF4bjI5NzU3NTRmLmFwLXNoYW5naGFpLnRjYi1hcGkudGVuY2VudGNsb3VkYXBpLmNvbSIsInN1YiI6ImFub24iLCJhdWQiOiJteS1zdHVkeS10YWJsZS1kMWcxcjBheG4yOTc1NzU0ZiIsImV4cCI6NDA5MjcxNDQwOCwiaWF0IjoxNzg5MDMxMjA4LCJub25jZSI6ImVwZTZpTlU4U3VLYVZTc0Y5VzZhNGciLCJhdF9oYXNoIjoiZXBlNmlOVThTdUthVlNzRjlXNmE0ZyIsIm5hbWUiOiJBbm9ueW1vdXMiLCJzY29wZSI6ImFub255bW91cyIsInByb2plY3RfaWQiOiJteS1zdHVkeS10YWJsZS1kMWcxcjBheG4yOTc1NzU0ZiIsIm1ldGEiOnsicGxhdGZvcm0iOiJQdWJsaXNoYWJsZUtleSJ9LCJyb2xlIjoiYW5vbiIsImlzX2Fub255bW91cyI6dHJ1ZSwiYXBwX21ldGFkYXRhIjp7InByb3ZpZGVyIjoiYW5vbnltb3VzIiwicHJvdmlkZXJzIjpbImFub255bW91cyJdfSwidXNlcl9tZXRhZGF0YSI6eyJuYW1lIjoiQW5vbnltb3VzIn0sInVzZXJfdHlwZSI6IiIsImNsaWVudF90eXBlIjoiY2xpZW50X3VzZXIiLCJpc19zeXN0ZW1fYWRtaW4iOmZhbHNlfQ.VRFi624BWXB6RaKBeiDnb3IP33cGkORcM6HhYmHbuzP8XLhWj7Vs8UE7YEwJvFYTI4hm36Y63idn9BihycnJy8psFTkvp7ANnecmc4xHAZGx7ZPlkJb6qBrJYzDHAIs6jilt1LsP_wioKl8A_SMiTDSKD0gxIGoxwdiYdjC0EmxRbmknpWo5pGoRyRw3P3roZJ2d45px_XAxCVnWjcs6Xwmc_DDoMdJl396eRTVxuK6dI_qOeMjY2A1aQYa_llRQy6_YvdTQnSVvR8vl9XmU2SGhqWfJKB6_sa3dZzcKF_1HIeuOa5PnI_bD_F4p8HP4xlLSJCxy2wP1w-eIqOArog'
+  provider: 'supabase',
+  platform: 'aliyun-free',
+  url: 'https://spb-shxqp0mq19i5l1ln.supabase.opentrust.net',
+  anonKey: 'eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9.eyJyb2xlIjoiYW5vbiIsInJlZiI6InNwYi1zaHhxcDBtcTE5aTVsMWxuIiwiaXNzIjoic3VwYWJhc2UiLCJpYXQiOjE3ODkzMDA3ODIsImV4cCI6MjEwNDg3Njc4Mn0.SjnuSnGOEdNvjtmG3wO8BD2wXBKMqga1O3sbcYrr_v8'
 };
 
 function cloneBuiltinCloudConfig() {
@@ -28,6 +29,11 @@ function getFriendsConfig() {
     let raw = localStorage.getItem(FRIENDS_CFG_KEY);
     if (raw) {
       const cfg = JSON.parse(raw);
+      if (cfg && cfg.provider === 'cloudbase' && cfg.envId === LEGACY_BUILTIN_CLOUDBASE_ENV_ID) {
+        const migrated = cloneBuiltinCloudConfig();
+        localStorage.setItem(FRIENDS_CFG_KEY, JSON.stringify(migrated));
+        return migrated;
+      }
       if (cfg && cfg.provider === 'cloudbase' && cfg.envId && cfg.accessKey) return cfg;
       if (cfg && cfg.url === LEGACY_BUILTIN_SUPABASE_URL) {
         const migrated = cloneBuiltinCloudConfig();
@@ -85,7 +91,11 @@ function resetSupabaseClient() {
   _friendsAuthInit = false;
   const old = _frdClient;
   _frdClient = null;
-  if (old) { try { old.auth.signOut(); } catch (e) {} }
+  if (old) {
+    try {
+      old.auth.signOut(old.provider === 'cloudbase' ? undefined : { scope: 'local' });
+    } catch (e) {}
+  }
 }
 
 // ═══════════════ 认证状态 ═══════════════
@@ -109,7 +119,46 @@ async function friendsGetSession() {
   } catch (e) { return null; }
 }
 
-// 获取当前登录用户的 profile 行
+function _friendsProfileSeed(user, overrides) {
+  const meta = (user && (user.user_metadata || user.raw_user_meta_data)) || {};
+  const requested = String((overrides && overrides.username) || meta.username || '').trim();
+  const emailBase = String((user && user.email) || '').split('@')[0].replace(/[^A-Za-z0-9_-]/g, '');
+  let username = requested || emailBase || ('user_' + String(user && user.id || '').slice(0, 8));
+  username = username.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 24);
+  if (!/^[A-Za-z0-9]/.test(username)) username = 'user_' + username;
+  if (username.length < 5) username = (username + '_' + String(user && user.id || '').slice(0, 8)).slice(0, 24);
+  const nickname = String((overrides && overrides.nickname) || meta.nickname || meta.name || username).trim().slice(0, 30) || username;
+  return { id: String(user.id), username, nickname };
+}
+
+// 阿里云免费版禁止 SECURITY DEFINER 注册触发器；登录后由客户端幂等补建本人资料。
+async function friendsEnsureProfile(user, overrides) {
+  const client = getSupabaseClient();
+  if (!client || !user) return null;
+  try {
+    const current = await client.from('profiles').select('*').eq('id', user.id).maybeSingle();
+    if (!current.error && current.data) return current.data;
+
+    const seed = _friendsProfileSeed(user, overrides);
+    let created = await client.from('profiles').insert(seed).select('*').single();
+    if (!created.error && created.data) return created.data;
+
+    // 用户名可能已被占用。账号本身仍有效，用带用户 ID 的稳定后缀自动完成资料创建。
+    if (created.error && (created.error.code === '23505' || /duplicate|unique/i.test(created.error.message || ''))) {
+      const suffix = '_' + String(user.id).replace(/-/g, '').slice(0, 8);
+      seed.username = (seed.username.slice(0, Math.max(5, 24 - suffix.length)) + suffix).slice(0, 24);
+      created = await client.from('profiles').insert(seed).select('*').single();
+      if (!created.error && created.data) return created.data;
+    }
+    console.warn('[Friends] ensure profile failed:', created.error);
+    return null;
+  } catch (e) {
+    console.warn('[Friends] ensure profile exception:', e);
+    return null;
+  }
+}
+
+// 获取当前登录用户的 profile 行；缺失时自动补建。
 async function friendsGetMyProfile() {
   const client = getSupabaseClient();
   if (!client) return null;
@@ -118,7 +167,8 @@ async function friendsGetMyProfile() {
     if (!user) return null;
     const { data, error } = await client.from('profiles')
       .select('*').eq('id', user.id).maybeSingle();
-    if (error || !data) return null;
+    if (error) return null;
+    if (!data) return friendsEnsureProfile(user);
     return data;
   } catch (e) { return null; }
 }
@@ -128,7 +178,7 @@ let _friendsRegisterVerifyOtp = null;
 // CloudBase 注册先向邮箱发送一次验证码；验证完成后日常使用用户名 + 密码登录。
 async function friendsRegister(username, nickname, email, password) {
   const client = getSupabaseClient();
-  if (!client) return { error: '云数据库客户端初始化失败，请检查 CloudBase 配置。' };
+  if (!client) return { error: '云数据库客户端初始化失败，请检查云服务配置。' };
   if (!username || !email || !password) return { error: '请填写用户名、邮箱和密码。' };
   if (password.length < 8 || !/[A-Z]/.test(password) || !/[a-z]/.test(password) || !/\d/.test(password) || !/[^A-Za-z0-9]/.test(password)) {
     return { error: '密码至少 8 位，并包含大写字母、小写字母、数字和特殊字符。' };
@@ -150,6 +200,7 @@ async function friendsRegister(username, nickname, email, password) {
       return { ok: true, needEmailConfirm: true, data };
     }
     // 邮箱确认未开启，已自动登录
+    await friendsEnsureProfile(data.user, { username, nickname: nickname || username });
     return { ok: true, data };
   } catch (e) {
     return { error: '注册异常：' + e.message };
@@ -172,7 +223,7 @@ async function friendsVerifyRegistration(code) {
 
 async function friendsLogin(identifier, password) {
   const client = getSupabaseClient();
-  if (!client) return { error: '云数据库客户端初始化失败，请检查 CloudBase 配置。' };
+  if (!client) return { error: '云数据库客户端初始化失败，请检查云服务配置。' };
   if (!identifier || !password) return { error: '请输入用户名和密码。' };
   try {
     const credentials = client.provider === 'cloudbase'
@@ -181,6 +232,7 @@ async function friendsLogin(identifier, password) {
     const { data, error } = await client.auth.signInWithPassword(credentials);
     if (error) return { error: error.message };
     if (!data.user) return { error: '登录失败，请重试。' };
+    await friendsEnsureProfile(data.user);
     return { ok: true, data };
   } catch (e) {
     return { error: '登录异常：' + e.message };
@@ -193,7 +245,11 @@ async function friendsLogout() {
   if (!confirmed) return;
   const client = getSupabaseClient();
   try {
-    if (client) { try { await client.auth.signOut(); } catch (e) {} }
+    if (client) {
+      try {
+        await client.auth.signOut(client.provider === 'cloudbase' ? undefined : { scope: 'local' });
+      } catch (e) {}
+    }
     friendsAuthUser = null;
     friendsUnsubscribeAll();
     if (typeof friendsCloseChat === 'function') friendsCloseChat();
@@ -1126,15 +1182,16 @@ function renderFriendsError(msg) {
 
 // 未配置 Supabase 的引导页（内置默认配置失效时兜底）
 function renderFriendsSetup() {
+  const aliyun = getFriendsConfig().platform === 'aliyun-free';
   return `
   <div class="fr-setup-wrap">
     <div class="fr-setup-card">
       <i data-lucide="users" class="lucide-icon fr-setup-icon"></i>
       <h3>好友系统需要先连接云端</h3>
-      <p>应用已内置默认云服务连接，通常无需配置即可使用。若仍显示此页，请检查云端配置：</p>
+      <p>${aliyun ? '阿里云 Supabase 尚未正确初始化，请检查云端配置：' : '应用已内置默认云服务连接，通常无需配置即可使用。若仍显示此页，请检查云端配置：'}</p>
       <ol class="fr-setup-steps">
-        <li><b>创建数据库表</b>：打开 CloudBase 控制台 → Supabase → SQL Editor，执行应用目录下 <code>cloudbase/schema.sql</code>。</li>
-        <li><b>检查登录方式</b>：在身份认证中开启用户名密码登录和邮箱验证码注册。</li>
+        <li><b>创建数据库表</b>：打开 Supabase Dashboard → SQL Editor，执行应用目录下 <code>cloudbase/schema.sql</code>。</li>
+        <li><b>检查登录方式</b>：${aliyun ? '在 Auth 中启用邮箱密码登录；登录后应用会自动创建用户资料。' : '在身份认证中开启用户名密码登录和邮箱验证码注册。'}</li>
       </ol>
       <button class="btn-add" onclick="openSettingsModal()" style="align-self:center;">
         <i data-lucide="settings" class="lucide-icon" style="width:15px;height:15px;"></i> 前往设置
@@ -1750,6 +1807,7 @@ async function frAssignGroup(friendId, groupId) {
 
 // ═══════════════ 关于/设置弹窗 ═══════════════
 function frShowAbout() {
+  const cloudName = getFriendsConfig().platform === 'aliyun-free' ? '阿里云 Supabase' : 'CloudBase';
   document.getElementById('editModalTitle').innerHTML = '<i data-lucide="info" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 关于好友系统';
   document.getElementById('editModalBody').innerHTML = `
     <div style="font-size:13px;line-height:1.9;color:var(--text);">
@@ -1760,7 +1818,7 @@ function frShowAbout() {
         <li>好友间实时聊天</li>
         <li>只同步<u>聚合统计</u>（打卡/时长/数量），不上传具体待办与笔记内容</li>
       </ul>
-      <p style="color:var(--text-secondary);">数据存储于你的 CloudBase 环境。</p>
+      <p style="color:var(--text-secondary);">数据存储于你的 ${cloudName} 环境。</p>
     </div>
   `;
   editModalOpen = true;

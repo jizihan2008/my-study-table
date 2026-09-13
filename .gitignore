@@ -4,5 +4,6 @@ out/
 publish_log*.txt
 .cg-verify-*
 .codebuddy/plans/
+.codebuddy/tmp-commit-msg.txt
 test-results/
 playwright-report/

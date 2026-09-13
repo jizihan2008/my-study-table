@@ -1,7 +1,8 @@
 -- ═══════════════════════════════════════════════════════════════════
--- My Study Table — CloudBase for Supabase 数据库 Schema（PostgreSQL）
--- 使用方法：在腾讯云 CloudBase → Supabase → SQL Editor 中粘贴执行整个脚本。
--- 认证方式：注册时验证一次邮箱；以后使用用户名 + 密码登录。
+-- My Study Table — CloudBase / 阿里云免费版 Supabase 数据库 Schema（PostgreSQL）
+-- 使用方法：在对应 Supabase Dashboard → SQL Editor 中粘贴执行整个脚本。
+-- 本脚本不使用 SECURITY DEFINER，兼容禁用 adbpg_enable_security_definer 的阿里云免费实例。
+-- 用户注册后的 profile 由应用在首次成功登录时幂等创建。
 -- ═══════════════════════════════════════════════════════════════════
 
 -- ─────────────────────────────────────────────
@@ -131,7 +132,7 @@ alter table public.messages enable row level security;
 create or replace function public.is_friend(target varchar)
 returns boolean
 language sql stable
-security definer
+security invoker
 set search_path = public
 as $$
   select exists (
@@ -171,17 +172,20 @@ exception
 end
 $cb_policy$;
 
--- profiles_public：未登录用户也能读的「最小公开视图」，仅暴露昵称/用户名，供插件市场展示作者名。
--- 不暴露头像URL、简介、在线状态、last_seen 等隐私字段；真正的敏感资料仍需登录后经 profiles 表读取。
--- 授权给 anon（未登录）与 authenticated（已登录）角色。
--- 注意：视图默认 security_definer（以 owner=postgres 权限读基表），这样才能让 anon 通过视图读到
--- 昵称/用户名（基表 profiles 的 RLS 对 anon 是拒绝的，若用 security_invoker 则 anon 读视图会空）。
-drop view if exists public.profiles_public;
-create view public.profiles_public as
-  select id, nickname, username
-  from public.profiles;
-revoke all on public.profiles_public from anon, authenticated;
-grant select on public.profiles_public to anon, authenticated;
+-- 免费版不能使用 auth.users 上的 SECURITY DEFINER 注册触发器，允许登录用户补建自己的 profile。
+drop policy if exists "profiles_self_insert" on public.profiles;
+do language plpgsql $cb_policy$
+begin
+  execute $policy_sql$
+    create policy "profiles_self_insert" on public.profiles
+      for insert to authenticated with check (auth.uid()::text = id);
+  $policy_sql$;
+exception
+  when duplicate_object then null;
+end
+$cb_policy$;
+
+-- 插件条目会冗余保存 author_name；免费版不创建绕过 profiles RLS 的公开资料视图。
 
 -- friend_groups：仅本人
 drop policy if exists "groups_self_all" on public.friend_groups;
@@ -440,63 +444,7 @@ grant all on sequence public.messages_id_seq to service_role;
 revoke all on table public.weekly_focus_todos from anon;
 grant all on table public.weekly_focus_todos to authenticated, service_role;
 
--- ═══════════════════════════════════════════════════════════════════
--- 触发器：注册用户后自动创建 profile。
--- CloudBase 的 auth.users 字段与 Supabase 托管版不完全一致：CloudBase 可把
--- username/name/nickname 存为顶层字段，而部分 Supabase 环境使用
--- raw_user_meta_data 或 user_metadata。先把 NEW 转成 jsonb 再按键读取，避免
--- 直接访问不存在的记录字段导致整次注册事务回滚。
--- ═══════════════════════════════════════════════════════════════════
-create or replace function public.handle_new_user()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-declare
-  user_record jsonb;
-  user_meta jsonb;
-  profile_username text;
-  profile_nickname text;
-begin
-  user_record := to_jsonb(new);
-  user_meta := coalesce(
-    user_record->'user_metadata',
-    user_record->'raw_user_meta_data',
-    user_record->'metadata',
-    '{}'::jsonb
-  );
-
-  profile_username := coalesce(
-    nullif(btrim(user_record->>'username'), ''),
-    nullif(btrim(user_meta->>'username'), ''),
-    'user_' || left(new.id::text, 8)
-  );
-
-  profile_nickname := coalesce(
-    nullif(btrim(user_record->>'nickname'), ''),
-    nullif(btrim(user_record->>'name'), ''),
-    nullif(btrim(user_meta->>'nickname'), ''),
-    nullif(btrim(user_meta->>'nickName'), ''),
-    nullif(btrim(user_meta->>'name'), ''),
-    profile_username
-  );
-
-  insert into public.profiles (id, username, nickname)
-  values (
-    new.id::text,
-    profile_username,
-    profile_nickname
-  )
-  on conflict (id) do nothing;
-  return new;
-end;
-$$;
-
-drop trigger if exists on_auth_user_created on auth.users;
-create trigger on_auth_user_created
-  after insert on auth.users
-  for each row execute function public.handle_new_user();
+-- 注册资料不再通过 auth.users 触发器创建；客户端登录后写入 profiles_self_insert。
 
 -- CloudBase for Supabase 暂不提供 Realtime；客户端已使用自适应轮询。
 
@@ -548,29 +496,9 @@ create unique index if not exists plugin_downloads_unique_user
   on public.plugin_downloads (plugin_id, user_id)
   where user_id is not null;
 
--- CloudBase PG 的 RPC 网关不以函数 GRANT 作为唯一权限边界，因此不暴露自增 RPC；
--- 下载数仅由下面的数据库触发器维护。
+-- 下载记录仍会保留，但免费实例无法安全使用提权触发器维护全局下载数。
+-- 阿里云免费模式下客户端隐藏下载总数；付费/已有 CloudBase 项目可继续保留旧触发器。
 drop function if exists public.increment_downloads(uuid);
-
--- 下载记录落库后由数据库维护计数，客户端不能直接调用自增函数。
-create or replace function public.on_plugin_download_created()
-returns trigger
-language plpgsql
-security definer
-set search_path = public
-as $$
-begin
-  update public.plugin_store_items
-     set downloads = downloads + 1
-   where id = new.plugin_id;
-  return new;
-end;
-$$;
-revoke all on function public.on_plugin_download_created() from public, anon, authenticated;
-drop trigger if exists trg_plugin_download_created on public.plugin_downloads;
-create trigger trg_plugin_download_created
-  after insert on public.plugin_downloads
-  for each row execute function public.on_plugin_download_created();
 
 -- 评分
 create table if not exists public.plugin_ratings (
@@ -727,21 +655,7 @@ exception
 end
 $cb_policy$;
 
--- 更新插件平均评分的触发器
-create or replace function public.update_plugin_avg_rating()
-returns trigger language plpgsql security definer as $$
-begin
-  update public.plugin_store_items
-  set rating = (select coalesce(avg(rating), 0) from public.plugin_ratings where plugin_id = coalesce(new.plugin_id, old.plugin_id)),
-      updated_at = now()
-  where id = coalesce(new.plugin_id, old.plugin_id);
-  return null;
-end $$;
-
-drop trigger if exists trg_plugin_rating_update on public.plugin_ratings;
-create trigger trg_plugin_rating_update
-  after insert or update or delete on public.plugin_ratings
-  for each row execute function public.update_plugin_avg_rating();
+-- 平均评分由客户端读取公开的 plugin_ratings 明细后实时计算，避免提权触发器。
 
 -- ═══════════════════════════════════════════════════════════════════
 -- 手机端 PWA：跨设备数据同步（v0.4.0）

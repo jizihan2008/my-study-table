@@ -583,7 +583,7 @@ aiConvs = [{
 
 1. **角色设定**：告知 AI 它是「我的学习桌面」的内置助手
 2. **模块概览**：描述所有系统模块的功能
-3. **工具调用说明**：`<tool_call>` JSON 格式、可用工具列表、调用规则
+3. **工具调用说明**：官方 OpenAI/DeepSeek 端点优先使用原生 Function Calling，其他端点使用 `<tool_call>` / DSML 兼容协议
 4. **实时数据快照**：待办概览、今日聚焦、打卡连续天数、笔记/链接数量、自动化任务、记忆点等
 5. **开发者模式**（可选）
 
@@ -596,7 +596,7 @@ aiConvs = [{
 **定义层**：`AI_TOOLS` 对象定义所有可用工具及其参数：
 
 ```
-📋 待办：add_todo / batch_add_todos / update_todo / delete_todo / toggle_todo / move_todo /
+📋 待办：add_todo / batch_add_todos / update_todo / delete_todo / set_todo_completed / move_todo /
         list_todos / get_todo_detail / batch_update_todos / get_todo_stats
 🎯 聚焦：get_today_status / get_focus_tasks / set_focus_task / get_stats
 📝 笔记：add_note / update_note / move_note / delete_note / list_notes /
@@ -608,17 +608,18 @@ aiConvs = [{
 🔎 搜索：web_search（支持 5 种引擎）
 ```
 
-**解析层** (`extractToolCalls` / `parseSingleToolCall`)：
-1. 使用正则匹配 AI 回复中的 `<tool_call>...</tool_call>` 标签
+**解析层** (`parseNativeLocalToolCalls` / `extractToolCalls` / `parseDsmlToolCalls`)：
+1. 优先解析 API 原生 `tool_calls`；文本标签和 DSML 仅作兼容回退
 2. `parseSingleToolCall` 使用 `JSON.parse()` 解析 `params` 对象（**不要手动正则提取字段**，否则 JSON 转义不解码，导致 `\\Delta` 等 LaTeX 内容失败）
 3. 返回干净的显示文本 + 工具调用列表
 
-**执行层** (`executeToolCall`)：
+**执行层** (`executeToolCallStructured` / `executeToolCall`)：
 - 根据 action 名称分发到对应的处理逻辑
-- 操作 `todos`/`notes`/`links` 等全局数据，调用 `saveData` 持久化
-- 返回中文结果描述
+- JSON Schema 参数预检、删除意图门禁、结构化结果、持久化成功检查
+- 同一轮写操作作为事务处理；失败时回滚已执行写入，不自动重试
+- 持久化调用 ID/结果账本防止刷新后重复写入
 
-**多工具并行**：一条回复可包含多个 `<tool_call>`，按顺序执行并合并结果。重复检测按每个 tool_call 单独比对（action + params），避免误判。
+**多工具调度**：连续只读工具最多 3 个并行，写操作作为顺序屏障。单结果和整轮结果都有字符预算，列表类工具支持分页。
 
 ### 11.4 API 请求流程（ai-api.js / ai-send.js）
 

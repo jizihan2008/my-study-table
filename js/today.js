@@ -98,9 +98,11 @@ function loadFocusData() {
 function saveFocusData(data) {
   // 走 saveData → 触发 Sync.onLocalChange → 今日聚焦跨设备同步
   if (typeof saveData === 'function') {
-    saveData('study_today_focus', data);
+    return saveData('study_today_focus', data) === true;
   } else {
-    localStorage.setItem('study_today_focus', JSON.stringify(data));
+    const raw = JSON.stringify(data);
+    localStorage.setItem('study_today_focus', raw);
+    return localStorage.getItem('study_today_focus') === raw;
   }
 }
 

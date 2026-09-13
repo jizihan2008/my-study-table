@@ -79,6 +79,54 @@ function mergeDuplicateUserBranches(conv) {
   return changed;
 }
 
+// 旧版相同内容编辑产生分支后，用户可能在原工具链下发送“继续”，而真正被停止的
+// 长回复留在兄弟分支中。该结构在界面上会表现为中间回复消失。只有同时满足
+// “短继续指令 + 无后续回复 + 兄弟回复明确带停止标记”时才重接，避免改动正常分支。
+function reattachContinuationAfterStoppedSibling(conv) {
+  if (!conv || !conv.tree || !Array.isArray(conv.activePath)) return false;
+  const tree = conv.tree;
+  const path = conv.activePath;
+  const isContinuation = node => node && node.role === 'user'
+    && /^(?:请)?(?:继续|接着(?:说|写|完成)?|往下(?:说|写)?|continue|go on)[\s.!。！]*$/i.test(String(node.content || '').trim());
+  let changed = false;
+
+  for (let i = path.length - 1; i >= 1; i--) {
+    const continuation = tree[path[i]];
+    if (!isContinuation(continuation) || (continuation.children || []).length > 0) continue;
+
+    // 找到该继续消息所属交换的最上层 user，以及当前路径从它进入的 assistant 分支。
+    let questionIndex = -1;
+    for (let j = i - 1; j >= 1; j--) {
+      if (tree[path[j]] && tree[path[j]].role === 'user') { questionIndex = j; break; }
+    }
+    if (questionIndex < 0) continue;
+    const question = tree[path[questionIndex]];
+    const activeAssistantId = path[questionIndex + 1];
+    const stoppedSiblingId = (question.children || []).find(id => {
+      const node = tree[id];
+      return id !== activeAssistantId
+        && node && node.role === 'assistant'
+        && (node.children || []).length === 0
+        && /(?:⏹️|已停止生成|已手动停止)/.test(String(node.content || ''));
+    });
+    if (stoppedSiblingId == null) continue;
+
+    const oldParent = tree[continuation.parentId];
+    const stoppedSibling = tree[stoppedSiblingId];
+    if (!oldParent || !stoppedSibling) continue;
+    oldParent.children = (oldParent.children || []).filter(id => id !== continuation.id);
+    question.children = (question.children || []).filter(id => id !== stoppedSiblingId);
+    stoppedSibling.parentId = oldParent.id;
+    if (!oldParent.children.includes(stoppedSiblingId)) oldParent.children.push(stoppedSiblingId);
+    stoppedSibling.children = [continuation.id];
+    continuation.parentId = stoppedSiblingId;
+    conv.activePath = buildPathTo(tree, continuation.id);
+    changed = true;
+    break;
+  }
+  return changed;
+}
+
 // ── 核心：由 activePath 重建扁平 messages 视图 ──
 function recomputeMessages(conv) {
   if (!conv || !conv.tree || !conv.activePath) return conv.messages || [];
@@ -244,6 +292,7 @@ function ensureTree(conv) {
   // activePath 是唯一展示路径，messages 只是其缓存。旧同步数据可能让两者不一致，
   // 因而每次确保树结构时都重新计算缓存；同时修复旧版产生的相同 user 分支。
   mergeDuplicateUserBranches(conv);
+  reattachContinuationAfterStoppedSibling(conv);
   recomputeMessages(conv);
   return conv;
 }
@@ -425,7 +474,7 @@ function trimConvMessages(conv, maxLen) {
     if (p && p.children && p.children.length > 1) return false; // 有分叉，不裁剪
   }
 
-  const keep = nodes.slice(-maxLen).map(n => ({ role: n.role, content: n.content, time: n.time, reasoning: n.reasoning, keyName: n.keyName, attachments: n.attachments, visionFiles: n.visionFiles, tool_calls: n.tool_calls, _toolInfo: n._toolInfo, _kimiSearch: n._kimiSearch, _kimiSearchResult: n._kimiSearchResult }));
+  const keep = nodes.slice(-maxLen).map(n => ({ role: n.role, content: n.content, time: n.time, reasoning: n.reasoning, keyName: n.keyName, attachments: n.attachments, visionFiles: n.visionFiles, tool_calls: n.tool_calls, _toolInfo: n._toolInfo, _malformedToolProtocol: n._malformedToolProtocol, _dsmlToolProtocol: n._dsmlToolProtocol, _toolRoundCleanText: n._toolRoundCleanText, _kimiSearch: n._kimiSearch, _kimiSearchResult: n._kimiSearchResult }));
   resetConvTree(conv);
   for (const k of keep) appendMessage(conv, k);
   return true;

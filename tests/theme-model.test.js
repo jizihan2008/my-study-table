@@ -60,3 +60,13 @@ test('accent foreground remains readable for bright and dark custom colors',()=>
   assert.equal(model.contrastInk('#ffff00'),'#101725');
   assert.equal(model.contrastInk('#101010'),'#ffffff');
 });
+test('glass transparency maps linearly to every material surface',()=>{
+  assert.equal(model.surfaceAlpha('solid',100),1);
+  assert.equal(model.surfaceAlpha('liquid',0),1);
+  assert.equal(model.surfaceAlpha('frosted',0),1);
+  assert.equal(model.surfaceAlpha('liquid',25),.75);
+  assert.equal(model.surfaceAlpha('frosted',50),.5);
+  assert.equal(model.surfaceAlpha('liquid',65),.35);
+  assert.equal(model.surfaceAlpha('liquid',100),0);
+  assert.equal(model.surfaceAlpha('frosted',100),0);
+});

@@ -1052,8 +1052,12 @@ function toolListMemories(params) {
 
   if (entries.length === 0) return '暂无记忆条目。';
 
-  let result = `共 ${entries.length} 条记忆条目：\n`;
-  for (const e of entries) {
+  const pageSize = Math.min(50, Math.max(1, Number(params?.pageSize) || 20));
+  const pageCount = Math.max(1, Math.ceil(entries.length / pageSize));
+  const page = Math.min(pageCount, Math.max(1, Number(params?.page) || 1));
+  const pageEntries = entries.slice((page - 1) * pageSize, page * pageSize);
+  let result = `共 ${entries.length} 条记忆条目，第 ${page}/${pageCount} 页：\n`;
+  for (const e of pageEntries) {
     const cat = MEMORY_CATEGORIES[e.type];
     // Show title only (text field)
     result += `[${e.id}] ${cat.icon} ${e.text} | 置信度${Math.round(e.confidence*100)}%`;

@@ -131,5 +131,10 @@
     const l = .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
     return (l+.05)/.05 > 1.05/(l+.05) ? '#101725' : '#ffffff';
   }
-  return { PRESETS, DEFAULTS, defaults, normalize, resolve, patch, snapshot, presetMode, clamp, color, mediaUrl, contrastInk };
+  function surfaceAlpha(material, glassOpacity) {
+    if (material === 'solid') return 1;
+    const transparency = clamp(glassOpacity,0,100,DEFAULTS.glassOpacity) / 100;
+    return 1 - transparency;
+  }
+  return { PRESETS, DEFAULTS, defaults, normalize, resolve, patch, snapshot, presetMode, clamp, color, mediaUrl, contrastInk, surfaceAlpha };
 });

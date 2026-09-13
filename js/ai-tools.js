@@ -21,16 +21,20 @@ const AI_TOOLS = {
     params: { id: '待办ID（number）' }
   },
   toggle_todo: {
-    description: '切换待办完成状态（勾选/取消勾选）',
+    description: '兼容旧对话：切换待办完成状态。新请求应使用 set_todo_completed 明确指定目标状态',
     params: { id: '待办ID（number）' }
+  },
+  set_todo_completed: {
+    description: '把待办设为明确的完成或未完成状态（幂等，重复执行不会反转）',
+    params: { id: '待办ID（number，必填）', completed: '目标完成状态（boolean，必填）' }
   },
   move_todo: {
     description: '将待办移动到另一个父任务下。支持 path 自动创建父层级',
     params: { id: '待办ID（number，必填）', parentId: '新父任务ID（number，可选，与path二选一）', path: '目标父路径层级数组（不含自身），按顺序自动查找/创建（array of strings，可选，如["高数","18.01"]，与parentId二选一）' }
   },
   list_todos: {
-    description: '列出待办事项，支持多种筛选条件。可按关键词搜索、按标签筛选、按截止日期范围筛选、按完成状态筛选。一次性返回全部匹配结果（无分页）',
-    params: { search: '搜索关键词，模糊匹配名称和正文（string，可选）', tags: '标签筛选，逗号分隔，返回包含任意匹配标签的待办（string，可选）', dueFrom: '截止日期起始，格式YYYY-MM-DD（string，可选）', dueTo: '截止日期结束，格式YYYY-MM-DD（string，可选）', completed: '按完成状态筛选 true/false（boolean，可选）' }
+    description: '列出待办事项，支持筛选和分页。默认每页20个顶级任务，并保留其子任务层级',
+    params: { search: '搜索关键词，模糊匹配名称和正文（string，可选）', tags: '标签筛选，逗号分隔，返回包含任意匹配标签的待办（string，可选）', dueFrom: '截止日期起始，格式YYYY-MM-DD（string，可选）', dueTo: '截止日期结束，格式YYYY-MM-DD（string，可选）', completed: '按完成状态筛选 true/false（boolean，可选）', page: '页码，从1开始（number，可选）', pageSize: '每页顶级任务数，1~50，默认20（number，可选）' }
   },
   get_todo_detail: {
     description: '获取单个待办的详细信息，包括正文备注、标签、截止日期、子任务列表',
@@ -78,11 +82,11 @@ const AI_TOOLS = {
   },
   list_notes: {
     description: '列出所有笔记及其文件夹结构。使用 [1]→[1.1] 数字层级编号，文件夹和笔记统排在同一棵树中，每个节点包含名称、ID、摘要（笔记）或子节点概况（文件夹）。如需搜索笔记正文，请使用 search_notes',
-    params: {}
+    params: { page: '页码，从1开始（number，可选）', pageSize: '每页顶级节点数，1~50，默认20（number，可选）' }
   },
   search_notes: {
     description: '搜索笔记，在标题和正文中查找关键词，返回匹配的笔记列表（含内容摘要）',
-    params: { query: '搜索关键词（string）' }
+    params: { query: '搜索关键词（string）', page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
   },
   get_note_detail: {
     description: '获取单条笔记的完整内容（包括标题、正文、创建/更新时间）',
@@ -102,7 +106,7 @@ const AI_TOOLS = {
   },
   list_links: {
     description: '列出所有快捷访问链接',
-    params: {}
+    params: { page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
   },
   get_review_status: {
     description: '查看间隔重复复习状态：待复习笔记列表（含逾期信息）、复习轮次分布、已复习笔记数',
@@ -118,7 +122,7 @@ const AI_TOOLS = {
   },
   list_automations: {
     description: '列出所有已创建的自动化任务',
-    params: {}
+    params: { page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
   },
   delete_automation: {
     description: '删除一个自动化任务',
@@ -126,7 +130,7 @@ const AI_TOOLS = {
   },
   list_memories: {
     description: '查看 AI 长期记忆中储存的条目。可按类型和关键词筛选，按置信度或时间排序',
-    params: { type: '记忆类型：fact/preference/goal/ability/behavior/mental（string，可选）', search: '搜索关键词（string，可选）', sort: '排序方式：confidence（按置信度）/ recent（按更新时间）（string，可选）' }
+    params: { type: '记忆类型：fact/preference/goal/ability/behavior/mental（string，可选）', search: '搜索关键词（string，可选）', sort: '排序方式：confidence（按置信度）/ recent（按更新时间）（string，可选）', page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
   },
   get_memory_detail: {
     description: '查看特定记忆条目的完整信息，包括置信度、来源、时间等',
@@ -142,7 +146,7 @@ const AI_TOOLS = {
   },
   quest_get: {
     description: '查看任务线系统全貌：主线章节（人生阶段）、素质线（并行成长）、任务状态、进度、徽章、奖励池。可指定章节或任务查看详情。注意：当前数据快照中已包含任务线状态摘要，如需全部任务详情才调用本工具',
-    params: { lineId: '章节ID（number，可选，只看该章节的任务）', questId: '任务ID（number，可选，看单个任务详情）' }
+    params: { lineId: '章节ID（number，可选，只看该章节的任务）', questId: '任务ID（number，可选，看单个任务详情）', page: '章节任务页码，从1开始（number，可选）', pageSize: '每页任务数，1~50，默认20（number，可选）' }
   },
   quest_create_line: {
     description: '创建任务线章节。type=main 为人生主线阶段（顺序推进，完成上一章解锁下一章），type=quality 为素质线（并行成长，如英语/体能/阅读/专业技能）。用于把用户的顶层设计/目标拆解为章节',
@@ -190,13 +194,44 @@ const AI_TOOLS = {
   },
   list_chats: {
     description: '列出用户已导入的 QQ 聊天会话（名称/类型/消息数/时间范围）。用户问"聊天记录/QQ 会话/群聊里说过什么"时使用，先列会话再决定是否检索具体消息',
-    params: {}
+    params: { page: '页码，从1开始（number，可选）', pageSize: '每页会话数，1~50，默认20（number，可选）' }
   },
   search_chat_messages: {
     description: '在已导入的 QQ 聊天记录中按关键词检索消息。用户问"聊天记录里关于某话题说了什么/某人在群里说过什么"时使用，检索结果按时间倒序返回消息片段',
     params: { query: '检索关键词（string，必填，支持中文）', chatId: '限定某个会话 ID（string，可选，来自 list_chats 结果）', sender: '限定发送人昵称（string，可选）', dateFrom: '开始日期 YYYY-MM-DD（string，可选）', dateTo: '结束日期 YYYY-MM-DD（string，可选）', maxResults: '最多返回条数（number，可选，默认10上限20）' }
   }
 };
+
+function selectAiToolsForPrompt(conv, webEnabled, kimiNative) {
+  const latest = [...(conv?.messages || [])].reverse().find(m => m.role === 'user');
+  const text = String(latest?.content || '').toLowerCase();
+  const selected = new Set();
+  const add = names => names.forEach(name => selected.add(name));
+  const groups = {
+    todo: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','list_todos','get_todo_detail','get_today_status','get_focus_tasks','set_focus_task','get_stats','get_todo_stats','batch_update_todos','get_review_status','get_habits_status'],
+    note: ['add_note','update_note','move_note','delete_note','list_notes','search_notes','get_note_detail','get_note_changes'],
+    link: ['add_link','delete_link','list_links'],
+    automation: ['schedule_automation','list_automations','delete_automation'],
+    memory: ['list_memories','get_memory_detail'],
+    quest: ['quest_get','quest_create_line','quest_update_line','quest_create','quest_update','quest_link_todo','quest_link_note','quest_link_timer','quest_add_manual_cond','quest_complete','quest_skip','quest_review'],
+    chat: ['list_chats','search_chat_messages']
+  };
+  if (!text || /待办|任务|计划|今日|聚焦|统计|复习|习惯|todo/.test(text)) add(groups.todo);
+  if (/笔记|note|记录|知识/.test(text)) add(groups.note);
+  if (/链接|网址|网站|快捷访问|link|url/.test(text)) add(groups.link);
+  if (/提醒|定时|自动化|每天|每日|闹钟/.test(text)) add(groups.automation);
+  if (/记忆|偏好|了解我|memory/.test(text)) add(groups.memory);
+  if (/任务线|主线|支线|章节|里程碑|徽章|quest/.test(text)) add(groups.quest);
+  if (/qq|聊天记录|群聊|消息|谁说/.test(text)) add(groups.chat);
+  if (/https?:\/\//i.test(text) || /网页|页面|文章/.test(text)) selected.add('read_webpage');
+  if (webEnabled && !kimiNative && /搜索|联网|最新|新闻|查一下|价格|天气/.test(text)) selected.add('web_search');
+  if (selected.size === 0) {
+    const recent = (conv?.messages || []).slice(-8).map(m => String(m.content || '')).join('\n');
+    for (const name of Object.keys(AI_TOOLS)) if (recent.includes(name)) selected.add(name);
+  }
+  if (selected.size === 0) add(groups.todo);
+  return selected;
+}
 
 function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApiConfig()) {
   // Check if web search is enabled for the active conversation
@@ -205,6 +240,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   const _wsEnabled = _activeConv?._webSearchEnabled === true || !!_wsMode;
   const _isKimiNative = _wsMode === 'native';
   const _isKimiExternal = _wsMode === 'external';
+  const _nativeLocalTools = typeof supportsNativeLocalTools === 'function' && supportsNativeLocalTools(apiCfg);
 
   let prompt = '你是「我的学习桌面」的内置 AI 助手，核心使命是<b>积极主动地帮助和提醒用户</b>，帮助用户管理学习任务、整理笔记、解答问题、提供学习建议。\n\n';
 
@@ -228,20 +264,29 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   }
 
   prompt += '═══ 工具调用说明 ═══\n';
-  prompt += '你可以通过返回 <tool_call> 标签来直接操作用户的待办、笔记和链接。格式如下：\n\n';
-  prompt += '<tool_call>{"action":"工具名","params":{参数对象}}</tool_call>\n';
-  prompt += '注意：开始标签和结束标签必须一致，都使用 tool_call。不要写成 tool_action。\n\n';
+  if (_nativeLocalTools) {
+    prompt += '请使用 API 提供的原生 function tools；不要在正文中输出 <tool_call>、DSML 或裸 JSON。\n\n';
+  } else {
+    prompt += '你可以通过返回 <tool_call> 标签来直接操作用户的待办、笔记和链接。格式如下：\n\n';
+    prompt += '<tool_call>{"action":"工具名","params":{参数对象}}</tool_call>\n';
+    prompt += '注意：开始标签和结束标签必须一致，都使用 tool_call。不要写成 tool_action。\n\n';
+  }
   prompt += '可用工具列表：\n';
+  const selectedTools = selectAiToolsForPrompt(conv, _wsEnabled, _isKimiNative);
   for (const [name, tool] of Object.entries(AI_TOOLS)) {
     // Skip web_search if toggle is off, or when using Kimi native search
     if (name === 'web_search') {
       if (!_wsEnabled) continue;
       if (_isKimiNative) continue;
     }
+    if (!selectedTools.has(name) && name !== 'read_webpage') continue;
+    if (getAiToolMetadata(name).risk === 'destructive' && !authorizeAiToolCall(name, {}, conv).ok) continue;
     prompt += `- ${name}: ${tool.description}。参数：${JSON.stringify(tool.params)}\n`;
   }
   prompt += '\n规则：\n';
-  prompt += '1. 一个回复可以包含多个 <tool_call>，按操作顺序排列，文本说明放在各工具调用的前后\n';
+  prompt += _nativeLocalTools
+    ? '1. 一轮可以调用多个原生工具；写操作按依赖顺序排列。\n'
+    : '1. 一个回复可以包含多个 <tool_call>，按操作顺序排列，文本说明放在各工具调用的前后\n';
   prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_links / get_today_status / get_stats / get_todo_stats / list_chats / search_chat_messages）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
   prompt += '   注意：当前数据快照（═══ 当前数据快照 ═══）与工具返回的数据来自同一数据源，查询结果应完全一致。如果快照已包含足够信息，可不必重复调用 list_todos / list_notes / list_links 等查询工具，直接基于快照回答即可。需要详细信息时才调用 get_todo_detail / get_note_detail。\n';
   prompt += '3. 注意：待办支持多层级（父子任务）。一个顶级任务下可能有子任务、孙任务、甚至更多层。list_todos 会以编号方式展示所有层级（如 [1] → [1.1] → [1.1.1]），请根据编号正确理解层级关系。优先使用 list_todos 获取完整层级，需要详细信息时才调用 get_todo_detail。\n';
@@ -257,7 +302,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '6. 请用中文回复\n';
   prompt += '7. 当用户要求「推荐今日聚焦任务」时，请基于现有待办推荐 1 个最重要的聚焦任务即可，不要推荐多个。如果用户明确要求 3 个，再推荐 3 个。\n';
   prompt += '8. 重要：当你返回一个 <tool_call> 后，系统会执行对应的工具，并将结果以「【工具执行结果】」开头的 system 消息注入到对话中。\n';
-  prompt += '   你必须仔细阅读该结果：如果结果以 ❌ 开头或以「错误」开头，说明工具调用失败了，请告知用户失败原因，不要假装成功。如果结果以 ✅ 开头，说明成功了。\n';
+  prompt += '   你必须仔细阅读结果中的【结构化状态】：ok=true 表示成功，status=failed 表示失败，status=duplicate 表示系统已安全拦截重复写入。失败时请告知用户原因，不要假装成功。\n';
   prompt += '   另外，add_note 和 update_note 的 content 参数中，请使用真实的换行（回车换行）来分段，不要使用字面上的 \n 字符（即不要在字符串中写反斜杠n），否则笔记内容中会显示成字面 \n 文本而不会换行。\n';
   prompt += '9. 你可以通过 <call_ai> 标签唤起另一个 AI 助手参与对话。格式：<call_ai>{"keyId":"目标 Key 名称","prompt":"要发送的消息"}</call_ai>\n';
   prompt += '   系统会在你回复后自动调用目标 AI，它的回复会以独立消息直接显示在对话中（标注 🔑 Key 名称）。你不需要重复或转发该回复。\n';
@@ -271,6 +316,8 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '    - update_todo 返回 ✅ 更新成功 → 任务已经更新好了，不要再去 list_todos 验证\n';
   prompt += '    - 工具结果中已经包含了足够的信息（名称、ID、数量等），相信它。\n';
   prompt += '12. 🌐 阅读网页：当用户消息中包含 http(s):// 链接、或明确要求「阅读/总结/分析某个网页」时，请主动调用 read_webpage 工具获取网页正文后再回答。此工具不依赖「网络搜索」开关，只要用户给出 URL 或表达阅读网页的意图即可使用。若 read_webpage 返回 ❌ 错误（如需登录、渲染超时），如实告知用户原因。\n';
+  prompt += '13. 🛡️ 删除和批量删除只能在用户本轮明确要求删除时调用；不要把「整理」「更新」或「完成」解释为删除。\n';
+  prompt += '14. 写操作会先整轮预检；任一写入失败时，本轮已执行的写入会回滚。看到 status=rolled_back 时必须明确告知用户未保留该修改。\n';
 
   // ── 注入当前 AI 身份 ──
   const currentCfg = apiCfg;
@@ -572,6 +619,306 @@ async function executeCallAiAndPush(params, conv) {
   }
 }
 
+// One validation/result boundary for every tool. Individual legacy handlers may
+// keep returning display strings; the orchestration layer always receives a
+// predictable object and no mutation starts until validation has passed.
+const AI_TOOL_REQUIRED_PARAMS = {
+  add_todo:['text'], batch_add_todos:['todos'], update_todo:['id'], delete_todo:['id'], toggle_todo:['id'], set_todo_completed:['id','completed'], move_todo:['id'], get_todo_detail:['id'],
+  batch_update_todos:['ids','action'], add_note:['title'], update_note:['id'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'],
+  add_link:['name','url'], delete_link:['id'], schedule_automation:['at','prompt'], delete_automation:['id'], get_memory_detail:['id'], web_search:['query'], read_webpage:['url'],
+  quest_create_line:['name'], quest_update_line:['id'], quest_create:['lineId','title'], quest_update:['id'], quest_link_todo:['questId','todoId'],
+  quest_link_note:['questId','noteId'], quest_link_timer:['questId','targetId','minutes'], quest_add_manual_cond:['questId','label'], quest_complete:['id'],
+  quest_skip:['id'], search_chat_messages:['query']
+};
+
+const AI_TOOL_READ_ONLY = new Set([
+  'list_todos','get_todo_detail','get_today_status','get_focus_tasks','get_stats','get_todo_stats',
+  'list_notes','search_notes','get_note_detail','get_note_changes','list_links','list_automations',
+  'list_memories','get_memory_detail','web_search','read_webpage','quest_get','quest_review',
+  'get_habits_status','get_review_status','list_chats','search_chat_messages'
+]);
+const AI_TOOL_DESTRUCTIVE = new Set(['delete_todo','delete_note','delete_link','delete_automation']);
+const AI_TOOL_ENUMS = {
+  repeat: ['', 'once', 'daily', 'weekly', 'monthly'],
+  targetType: ['todo', 'goal'], period: ['today', 'yesterday']
+};
+
+function getAiToolMetadata(action, params = {}) {
+  const destructive = AI_TOOL_DESTRUCTIVE.has(action) || (action === 'batch_update_todos' && params.action === 'delete');
+  return { effect: AI_TOOL_READ_ONLY.has(action) ? 'read' : 'write', risk: destructive ? 'destructive' : (AI_TOOL_READ_ONLY.has(action) ? 'read' : 'write') };
+}
+
+function paginateAiToolItems(items, params = {}, defaultSize = 20) {
+  const pageSize = Math.min(50, Math.max(1, Number(params.pageSize) || defaultSize));
+  const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
+  const page = Math.min(pageCount, Math.max(1, Number(params.page) || 1));
+  return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, pageCount, total: items.length };
+}
+
+function inferAiToolPropertySchema(action, name, description) {
+  const d = String(description || '');
+  let schema;
+  if (/array of objects/i.test(d)) schema = { type: 'array', items: { type: 'object' } };
+  else if (/array of strings/i.test(d)) schema = { type: 'array', items: { type: 'string' } };
+  else if (/array of numbers|number\[\]/i.test(d)) schema = { type: 'array', items: { type: 'number' } };
+  else if (/array/i.test(d)) schema = { type: 'array' };
+  else if (/boolean/i.test(d)) schema = { type: 'boolean' };
+  else if (/number/i.test(d)) schema = { type: 'number' };
+  else if (/object/i.test(d)) schema = { type: 'object' };
+  else schema = { type: 'string' };
+  schema.description = d;
+  if (AI_TOOL_ENUMS[name]) schema.enum = AI_TOOL_ENUMS[name];
+  if (name === 'type' && action === 'add_link') schema.enum = ['link', 'app'];
+  if (name === 'type' && action === 'quest_create_line') schema.enum = ['main', 'quality'];
+  if (name === 'type' && action === 'list_memories') schema.enum = ['fact','preference','goal','ability','behavior','mental'];
+  if (name === 'sort' && action === 'list_memories') schema.enum = ['confidence','recent'];
+  if (name === 'kind' && /^quest_/.test(action)) schema.enum = ['main', 'side'];
+  if (name === 'status' && /^quest_/.test(action)) schema.enum = ['draft', 'active', 'locked', 'done', 'skipped'];
+  if (name === 'action') schema.enum = ['toggle_completed','set_tags','set_due_date','delete'];
+  if (name === 'page') schema.minimum = 1;
+  if (name === 'pageSize') { schema.minimum = 1; schema.maximum = 50; }
+  if (/^(?:id|parentId|folderId|todoId|noteId|questId|lineId|targetId)$/.test(name)) schema.minimum = 1;
+  if (name === 'minutes' || name === 'estMinutes') schema.minimum = 0;
+  if (name === 'pos') schema = { type: ['object','null'], properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x','y'], additionalProperties: false, description: d };
+  if (name === 'value') schema = { type: ['string','boolean','null'], description: d };
+  if (name === 'todoId' && /null/.test(d)) schema.type = ['number','null'];
+  return schema;
+}
+
+function getAiToolJsonSchema(action) {
+  const tool = AI_TOOLS[action];
+  if (!tool) return null;
+  const properties = {};
+  for (const [name, description] of Object.entries(tool.params || {})) properties[name] = inferAiToolPropertySchema(action, name, description);
+  const required = (typeof AI_TOOL_REQUIRED_PARAMS !== 'undefined' && AI_TOOL_REQUIRED_PARAMS[action])
+    ? AI_TOOL_REQUIRED_PARAMS[action].slice()
+    : Object.entries(tool.params || {}).filter(([, d]) => /必填/.test(String(d))).map(([name]) => name);
+  if (action === 'batch_add_todos' && properties.todos) {
+    properties.todos.items = {
+      type: 'object', additionalProperties: false, required: ['text'],
+      properties: {
+        text: { type: 'string' }, parentId: { type: ['number','null'], minimum: 1 },
+        path: { type: 'array', items: { type: 'string' } }, dueDate: { type: ['string','null'], pattern: '^\\d{4}-\\d{2}-\\d{2}$' },
+        content: { type: 'string' }, tags: { type: 'string' }, repeat: { type: ['string','null'], enum: ['daily','weekly','monthly',null] },
+        status: { type: ['string','null'] }, estMinutes: { type: ['number','null'], minimum: 0 }
+      }
+    };
+  }
+  return { type: 'object', properties, required, additionalProperties: false };
+}
+
+function buildNativeAiTools(toolNames) {
+  return [...toolNames].filter(name => AI_TOOLS[name]).map(name => ({
+    type: 'function',
+    function: { name, description: AI_TOOLS[name].description, parameters: getAiToolJsonSchema(name) }
+  }));
+}
+
+function validateAiToolCall(action, params) {
+  if (!AI_TOOLS[action]) return { ok: false, error: `未知工具：${action}` };
+  if (!params || typeof params !== 'object' || Array.isArray(params)) return { ok: false, error: 'params 必须是对象' };
+  const allowedAliases = new Set(['parent_id','due_date','due_from','due_to','todo_id','completed_only','key_id']);
+  const schema = getAiToolJsonSchema(action);
+  for (const name of Object.keys(params)) {
+    if (!Object.prototype.hasOwnProperty.call(schema.properties, name) && !allowedAliases.has(name)) return { ok: false, error: `未知参数 ${name}` };
+  }
+  for (const name of AI_TOOL_REQUIRED_PARAMS[action] || []) {
+    const value = name === 'text' ? (params.text ?? params.content) : params[name];
+    if (value === undefined || value === null || value === '') return { ok: false, error: `缺少必填参数 ${name}` };
+  }
+  for (const key of ['id','parentId','folderId','todoId','noteId','questId','lineId','targetId','minutes','estMinutes','page','pageSize','max_results','maxChars','maxResults']) {
+    if (params[key] !== undefined && params[key] !== null && (!Number.isFinite(Number(params[key])) || Number(params[key]) < 0)) return { ok: false, error: `参数 ${key} 必须是有效数字` };
+  }
+  for (const key of ['id','parentId','folderId','todoId','noteId','questId','lineId','targetId']) {
+    if (params[key] !== undefined && params[key] !== null && (!Number.isSafeInteger(Number(params[key])) || Number(params[key]) <= 0)) return { ok: false, error: `参数 ${key} 必须是正整数 ID` };
+  }
+  for (const key of ['path','todos','ids','deps']) if (params[key] !== undefined && !Array.isArray(params[key])) return { ok: false, error: `参数 ${key} 必须是数组` };
+  if (Array.isArray(params.todos)) {
+    if (params.todos.length === 0) return { ok: false, error: 'todos 不能为空' };
+    const allowedTodoFields = new Set(['text','parentId','path','dueDate','content','tags','repeat','status','estMinutes']);
+    for (let i = 0; i < params.todos.length; i++) {
+      const item = params.todos[i];
+      if (!item || typeof item !== 'object' || Array.isArray(item) || typeof item.text !== 'string' || !item.text.trim()) return { ok: false, error: `todos[${i}] 缺少有效 text` };
+      const unknown = Object.keys(item).find(key => !allowedTodoFields.has(key));
+      if (unknown) return { ok: false, error: `todos[${i}] 包含未知参数 ${unknown}` };
+      if (item.path !== undefined && !Array.isArray(item.path)) return { ok: false, error: `todos[${i}].path 必须是数组` };
+      if (item.tags !== undefined && typeof item.tags !== 'string') return { ok: false, error: `todos[${i}].tags 必须是字符串` };
+      if (item.parentId !== undefined && item.parentId !== null && (!Number.isSafeInteger(Number(item.parentId)) || Number(item.parentId) <= 0)) return { ok: false, error: `todos[${i}].parentId 必须是正整数 ID` };
+      if (item.repeat !== undefined && item.repeat !== null && !['daily','weekly','monthly'].includes(item.repeat)) return { ok: false, error: `todos[${i}].repeat 值无效` };
+      if (item.dueDate) {
+        const date = new Date(item.dueDate + 'T00:00:00');
+        const normalized = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(item.dueDate) || normalized !== item.dueDate) return { ok: false, error: `todos[${i}].dueDate 不是有效日期` };
+      }
+    }
+  }
+  if (Array.isArray(params.ids) && params.ids.some(id => !Number.isFinite(Number(id)))) return { ok: false, error: 'ids 必须全部是有效数字' };
+  for (const key of ['ids','deps']) {
+    if (Array.isArray(params[key]) && params[key].some(id => !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) return { ok: false, error: `${key} 必须全部是正整数 ID` };
+  }
+  for (const key of ['text','title','content','tags','query','name','prompt','label']) if (params[key] !== undefined && params[key] !== null && typeof params[key] !== 'string') return { ok: false, error: `参数 ${key} 必须是字符串` };
+  if (params.completed !== undefined && typeof params.completed !== 'boolean') return { ok: false, error: '参数 completed 必须是 boolean' };
+  if (params.url !== undefined && !/^https?:\/\//i.test(String(params.url))) return { ok: false, error: 'url 必须以 http:// 或 https:// 开头' };
+  for (const key of ['dueDate','dueFrom','dueTo','date','due_date','due_from','due_to']) {
+    if (!params[key]) continue;
+    const value = String(params[key]);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return { ok: false, error: `参数 ${key} 必须是 YYYY-MM-DD` };
+    const parsed = new Date(value + 'T00:00:00');
+    const normalized = parsed.getFullYear() + '-' + String(parsed.getMonth() + 1).padStart(2, '0') + '-' + String(parsed.getDate()).padStart(2, '0');
+    if (!Number.isFinite(parsed.getTime()) || normalized !== value) return { ok: false, error: `参数 ${key} 不是有效日期` };
+  }
+  if (params.page !== undefined && Number(params.page) < 1) return { ok: false, error: 'page 必须从 1 开始' };
+  if (params.pageSize !== undefined && (Number(params.pageSize) < 1 || Number(params.pageSize) > 50)) return { ok: false, error: 'pageSize 必须在 1~50 之间' };
+  if (params.repeat !== undefined && !['', 'once', 'daily', 'weekly', 'monthly'].includes(params.repeat)) return { ok: false, error: 'repeat 值无效' };
+  if (params.targetType !== undefined && !['todo','goal'].includes(params.targetType)) return { ok: false, error: 'targetType 值无效' };
+  if (params.kind !== undefined && /^quest_/.test(action) && !['main','side'].includes(params.kind)) return { ok: false, error: 'kind 值无效' };
+  if (params.status !== undefined && /^quest_/.test(action) && !['draft','active','locked','done','skipped'].includes(params.status)) return { ok: false, error: 'status 值无效' };
+  if (params.type !== undefined && action === 'quest_create_line' && !['main','quality'].includes(params.type)) return { ok: false, error: 'type 值无效' };
+  if (params.type !== undefined && action === 'add_link' && !['link','app'].includes(params.type)) return { ok: false, error: 'type 值无效' };
+  if (params.type !== undefined && action === 'list_memories' && !['fact','preference','goal','ability','behavior','mental'].includes(params.type)) return { ok: false, error: 'type 值无效' };
+  if (params.sort !== undefined && action === 'list_memories' && !['confidence','recent'].includes(params.sort)) return { ok: false, error: 'sort 值无效' };
+  if (action === 'batch_update_todos' && !['toggle_completed','set_tags','set_due_date','delete'].includes(params.action)) return { ok: false, error: 'action 值无效' };
+  if (action === 'get_note_changes' && params.period !== undefined && !['today','yesterday'].includes(params.period)) return { ok: false, error: 'period 值无效' };
+  const relationError = validateAiToolRelations(action, params);
+  if (relationError) return { ok: false, error: relationError };
+  const dependencyError = validateAiQuestDependencies(action, params);
+  if (dependencyError) return { ok: false, error: dependencyError };
+  return { ok: true, params };
+}
+
+function validateAiToolRelations(action, params) {
+  if (['add_todo','move_todo'].includes(action) && params.parentId !== undefined && params.parentId !== null && typeof findTodo === 'function') {
+    const parentId = Number(params.parentId);
+    if (!findTodo(parentId)) return `父待办 ID ${parentId} 不存在`;
+    if (action === 'move_todo') {
+      const id = Number(params.id);
+      if (parentId === id) return '待办不能移到自己下面';
+      if (typeof getAllDescendantIds === 'function' && getAllDescendantIds(id).map(Number).includes(parentId)) return '待办不能移到自己的子任务下面';
+    }
+  }
+  if (action === 'batch_update_todos' && Array.isArray(params.ids) && typeof findTodo === 'function') {
+    const missing = params.ids.find(id => !findTodo(Number(id)));
+    if (missing !== undefined) return `待办 ID ${missing} 不存在`;
+  }
+  if (['move_note'].includes(action) && params.folderId !== undefined && params.folderId !== null && typeof notes !== 'undefined') {
+    const folder = notes.find(item => Number(item.id) === Number(params.folderId) && item.type === 'folder');
+    if (!folder) return `笔记文件夹 ID ${params.folderId} 不存在`;
+  }
+  return '';
+}
+
+function validateAiQuestDependencies(action, params) {
+  if (!['quest_create','quest_update'].includes(action) || !Array.isArray(params.deps) || typeof loadTaskLineStore !== 'function') return '';
+  const store = loadTaskLineStore();
+  const ids = new Set(store.quests.map(q => Number(q.id)));
+  const missing = params.deps.find(id => !ids.has(Number(id)));
+  if (missing !== undefined) return `前置任务 ID ${missing} 不存在`;
+  if (action === 'quest_create') {
+    if (!store.lines.some(line => Number(line.id) === Number(params.lineId))) return `章节 ID ${params.lineId} 不存在`;
+    return '';
+  }
+  const targetId = Number(params.id);
+  if (params.deps.some(id => Number(id) === targetId)) return '任务不能依赖自己';
+  const graph = new Map(store.quests.map(q => [Number(q.id), (q.deps || []).map(Number)]));
+  if (!graph.has(targetId)) return `任务 ID ${targetId} 不存在`;
+  graph.set(targetId, params.deps.map(Number));
+  const visiting = new Set();
+  const visited = new Set();
+  const hasCycle = id => {
+    if (visiting.has(id)) return true;
+    if (visited.has(id)) return false;
+    visiting.add(id);
+    for (const dep of graph.get(id) || []) if (graph.has(dep) && hasCycle(dep)) return true;
+    visiting.delete(id);
+    visited.add(id);
+    return false;
+  };
+  for (const id of graph.keys()) if (hasCycle(id)) return '前置任务会形成循环依赖';
+  return '';
+}
+
+function authorizeAiToolCall(action, params, conv) {
+  if (getAiToolMetadata(action, params).risk !== 'destructive') return { ok: true };
+  const latestUser = [...(conv?.messages || [])].reverse().find(message => message.role === 'user');
+  const text = String(latestUser?.content || '');
+  const deleteWord = /(?:删除|删掉|移除|清空|丢弃|delete|remove)/i;
+  const negated = /(?:不要|别|不许|不许|禁止|do\s+not|don't).{0,12}(?:删除|删掉|移除|清空|丢弃|delete|remove)/i.test(text);
+  const questionOnly = /(?:为什么|怎么会|是否|能否|可以吗).{0,12}(?:删除|删掉|移除|清空|丢弃)/i.test(text);
+  if (deleteWord.test(text) && !negated && !questionOnly) return { ok: true };
+  return { ok: false, error: '本轮用户没有明确表达删除意图，已拦截高风险操作' };
+}
+
+function normalizeAiToolResult(action, value, durationMs = 0) {
+  if (value && typeof value === 'object' && typeof value.ok === 'boolean') {
+    return {
+      action, durationMs, retryable: false, status: value.ok ? 'success' : 'failed',
+      code: value.ok ? 'OK' : 'TOOL_ERROR', changed: value.ok && getAiToolMetadata(action).effect === 'write',
+      data: value.data ?? null, error: value.error ?? null, text: value.text ?? '', ...value
+    };
+  }
+  const text = String(value ?? '');
+  const failed = /^(?:❌|错误|⚠️)/.test(text.trim());
+  return {
+    ok: !failed, action, status: failed ? 'failed' : 'success', code: failed ? 'TOOL_ERROR' : 'OK',
+    text, changed: !failed && getAiToolMetadata(action).effect === 'write', data: failed ? null : value,
+    error: failed ? text.replace(/^(?:❌|错误|⚠️)[:：]?\s*/, '') : null,
+    retryable: false, durationMs
+  };
+}
+
+const AI_TOOL_TRANSACTION_KEYS = [
+  'study_todos_v2','study_todo_completed_log','study_notes_v2','study_links_v3',
+  'study_automations','study_taskline_v1','study_todos_trash','study_notes_trash','study_links_trash','study_today_focus'
+];
+
+function beginAiToolTransaction(action) {
+  if (getAiToolMetadata(action).effect === 'read') return null;
+  const clone = value => JSON.parse(JSON.stringify(value));
+  const globals = {};
+  if (typeof todos !== 'undefined') globals.todos = clone(todos);
+  if (typeof notes !== 'undefined') globals.notes = clone(notes);
+  if (typeof links !== 'undefined') globals.links = clone(links);
+  if (typeof automations !== 'undefined') globals.automations = clone(automations);
+  const storage = {};
+  for (const key of AI_TOOL_TRANSACTION_KEYS) {
+    try { storage[key] = localStorage.getItem(key); }
+    catch (_) { storage[key] = null; }
+  }
+  return { globals, storage };
+}
+
+function rollbackAiToolTransaction(snapshot) {
+  if (!snapshot) return;
+  if (snapshot.globals.todos) todos = snapshot.globals.todos;
+  if (snapshot.globals.notes) notes = snapshot.globals.notes;
+  if (snapshot.globals.links) links = snapshot.globals.links;
+  if (snapshot.globals.automations) automations = snapshot.globals.automations;
+  for (const [key, value] of Object.entries(snapshot.storage)) {
+    if (typeof StudyPlatform !== 'undefined' && StudyPlatform.storage) {
+      if (value === null) StudyPlatform.storage.remove(key);
+      else StudyPlatform.storage.setRaw(key, value);
+    } else if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  }
+}
+
+async function executeToolCallStructured(action, params, context = {}) {
+  const startedAt = Date.now();
+  const checked = validateAiToolCall(action, params || {});
+  if (!checked.ok) return normalizeAiToolResult(action, { ok: false, status: 'failed', text: `❌ 参数校验失败：${checked.error}`, error: checked.error }, Date.now() - startedAt);
+  let transaction = null;
+  try {
+    transaction = beginAiToolTransaction(action);
+    const value = await executeToolCall(action, checked.params, context);
+    const result = normalizeAiToolResult(action, value, Date.now() - startedAt);
+    if (!result.ok) rollbackAiToolTransaction(transaction);
+    return result;
+  } catch (error) {
+    rollbackAiToolTransaction(transaction);
+    return normalizeAiToolResult(action, { ok: false, status: 'failed', text: `❌ ${action} 执行失败：${error.message}`, error: error.message }, Date.now() - startedAt);
+  }
+}
+
 function normalizeAutomationSchedule(params, now = new Date()) {
   const at = String(params.at || '');
   if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(at)) return { error: '请输入有效时间 HH:MM（00:00–23:59）' };
@@ -630,7 +977,7 @@ async function executeToolCall(action, params, context = {}) {
       const estMinVal = (params.estMinutes && params.estMinutes > 0) ? params.estMinutes : null;
       const newTodo = { id: genId(), text, done: false, parentId, dueDate, content, tags, createdAt: Date.now(), repeat: repeatVal, status: statusVal, estMinutes: estMinVal };
       todos.push(newTodo);
-      saveData('study_todos_v2', todos);
+      if (saveData('study_todos_v2', todos) !== true) return '❌ 待办保存失败';
       return `✅ 创建成功：${text}（ID:${newTodo.id}）${pathInfo}` + (dueDate ? `，截止：${dueDate}` : '') + (tags.length > 0 ? `，标签：${tags.join('、')}` : '') + (repeatVal ? `，重复：${repeatVal}` : '');
     }
     case 'update_todo': {
@@ -647,7 +994,7 @@ async function executeToolCall(action, params, context = {}) {
       if (params.status !== undefined) { t.status = params.status || null; changes.push('状态'); }
       if (params.estMinutes !== undefined) { t.estMinutes = (params.estMinutes && params.estMinutes > 0) ? params.estMinutes : null; changes.push('预计时长'); }
       if (changes.length === 0) return '未做任何修改';
-      saveData('study_todos_v2', todos);
+      if (saveData('study_todos_v2', todos) !== true) return '❌ 待办保存失败';
       return `✅ 已更新待办"${t.text}"（修改了：${changes.join('、')}）`;
     }
     case 'delete_todo': {
@@ -659,18 +1006,19 @@ async function executeToolCall(action, params, context = {}) {
       // 软删除：与 UI 行为一致（已完成的子任务先记入完成日志，再整体移入回收站），避免数据丢失
       const descendantIds = getAllDescendantIds(id);
       const completedLog = loadTodoCompletedLog();
+      const completedLogSize = completedLog.length;
       for (const did of descendantIds) {
         const dt = findTodo(did);
         if (dt && dt.completedAt) {
           completedLog.push({ id: dt.id, text: dt.text, completedAt: dt.completedAt, deletedAt: formatDate(new Date()) });
         }
       }
-      saveTodoCompletedLog(completedLog);
+      if (completedLog.length !== completedLogSize && saveTodoCompletedLog(completedLog) !== true) return '❌ 待办完成日志保存失败';
       if (typeof moveToTrash === 'function') {
-        moveToTrash('todos', t);
+        if (moveToTrash('todos', t) !== true) return '❌ 待办移入回收站失败';
       } else {
         todos = todos.filter(t2 => !descendantIds.includes(t2.id));
-        saveData('study_todos_v2', todos);
+        if (saveData('study_todos_v2', todos) !== true) return '❌ 待办删除结果保存失败';
       }
       return `✅ 已删除待办：${text}`;
     }
@@ -687,9 +1035,30 @@ async function executeToolCall(action, params, context = {}) {
       } else {
         delete t.completedAt;
       }
-      saveData('study_todos_v2', todos);
+      if (saveData('study_todos_v2', todos) !== true) return '❌ 待办状态保存失败';
       if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
       return `✅ 已将待办"${t.text}"标记为${t.done ? '已完成' : '未完成'}`;
+    }
+    case 'set_todo_completed': {
+      const id = Number(params.id);
+      const t = findTodo(id);
+      if (!t) return `错误：未找到ID为 ${id} 的待办`;
+      const targetDone = params.completed === true;
+      if (t.done === targetDone) return `✅ 待办"${t.text}"已经是${targetDone ? '已完成' : '未完成'}状态`;
+      t.done = targetDone;
+      if (targetDone) {
+        t.completedAt = getTodayStr();
+        const descendantIds = getAllDescendantIds(id).filter(did => did !== id);
+        for (const did of descendantIds) {
+          const child = findTodo(did);
+          if (child) { child.done = true; if (!child.completedAt) child.completedAt = getTodayStr(); }
+        }
+      } else {
+        delete t.completedAt;
+      }
+      if (saveData('study_todos_v2', todos) !== true) return '❌ 待办状态保存失败';
+      if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
+      return `✅ 已将待办"${t.text}"设为${targetDone ? '已完成' : '未完成'}`;
     }
     case 'move_todo': {
       const todoId = Number(params.id);
@@ -703,7 +1072,7 @@ async function executeToolCall(action, params, context = {}) {
         newParent = resolveTodoPath(params.path);
       }
       t.parentId = newParent;
-      saveData('study_todos_v2', todos);
+      if (saveData('study_todos_v2', todos) !== true) return '❌ 待办移动结果保存失败';
       const parentName = t.parentId ? (findTodo(t.parentId)?.text || '根目录') : '根目录';
       return `✅ 已移动待办"${t.text}"到「${parentName}」下`;
     }
@@ -747,12 +1116,37 @@ async function executeToolCall(action, params, context = {}) {
         return reason;
       }
 
-      const topLevel = list.filter(t => t.parentId === null);
+      const matched = list;
+      const rootFor = item => {
+        let cur = item;
+        const seen = new Set();
+        while (cur && cur.parentId !== null && !seen.has(cur.id)) {
+          seen.add(cur.id);
+          cur = todos.find(t => t.id === cur.parentId) || cur;
+          if (seen.has(cur.id)) break;
+        }
+        return cur || item;
+      };
+      const allRoots = [...new Map(matched.map(item => { const root = rootFor(item); return [root.id, root]; })).values()];
+      const pageSize = Math.min(50, Math.max(1, Number(params.pageSize) || 20));
+      const pageCount = Math.max(1, Math.ceil(allRoots.length / pageSize));
+      const page = Math.min(pageCount, Math.max(1, Number(params.page) || 1));
+      const topLevel = allRoots.slice((page - 1) * pageSize, page * pageSize);
+      const visibleIds = new Set(matched.map(t => t.id));
+      for (const item of matched) {
+        let parentId = item.parentId;
+        while (parentId !== null) {
+          visibleIds.add(parentId);
+          parentId = todos.find(t => t.id === parentId)?.parentId ?? null;
+        }
+      }
+      const pageRootIds = new Set(topLevel.map(t => t.id));
+      list = todos.filter(t => visibleIds.has(t.id) && pageRootIds.has(rootFor(t).id));
 
       let result = `📋 待办事项列表（共${list.length}个）\n`;
       if (search) result = `📋 搜索"${params.search}"结果（共${list.length}个）\n`;
       if (tagsFilter) result = `📋 标签"${params.tags}"筛选结果（共${list.length}个）\n`;
-      result += '\n';
+      result += `第 ${page}/${pageCount} 页，每页 ${pageSize} 个顶级任务\n\n`;
       // 结构化层级展示：使用数字编号，避免树形图的理解偏差
       // 格式：顶级编号 → 子编号 → 孙编号，如 "1 → 1.1 → 1.1.1"
       let globalIdx = 1;
@@ -905,7 +1299,7 @@ async function executeToolCall(action, params, context = {}) {
       if (todoId === null || todoId === undefined || todoId === '') {
         // Clear all focus tasks
         data.items = [];
-        saveFocusData(data);
+        if (saveFocusData(data) !== true) return '❌ 今日聚焦保存失败';
         return '✅ 已清空今日聚焦任务';
       }
 
@@ -915,7 +1309,7 @@ async function executeToolCall(action, params, context = {}) {
       if (data.items.some(i => i.todoId === todoId)) return `"${todo.text}"已经是今日聚焦任务了`;
 
       data.items.push({ todoId: todo.id, text: todo.text, done: todo.done });
-      saveFocusData(data);
+      if (saveFocusData(data) !== true) return '❌ 今日聚焦保存失败';
       return `✅ 已将"${todo.text}"设为今日聚焦任务（${data.items.length}/${maxFocus}）`;
     }
     case 'get_focus_tasks': {
@@ -1172,7 +1566,7 @@ async function executeToolCall(action, params, context = {}) {
               affected++;
             }
           });
-          saveData('study_todos_v2', todos);
+          if (saveData('study_todos_v2', todos) !== true) return '❌ 批量待办状态保存失败';
           if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
           return `✅ 已批量${targetDone === true ? '勾选' : targetDone === false ? '取消勾选' : '切换'} ${affected} 个待办`;
         }
@@ -1183,7 +1577,7 @@ async function executeToolCall(action, params, context = {}) {
             const t = findTodo(id);
             if (t) { t.tags = tags; affected++; }
           });
-          saveData('study_todos_v2', todos);
+          if (saveData('study_todos_v2', todos) !== true) return '❌ 批量待办标签保存失败';
           return `✅ 已为 ${affected} 个待办设置标签：${tags.join('、') || '(无)'}`;
         }
         case 'set_due_date': {
@@ -1192,7 +1586,7 @@ async function executeToolCall(action, params, context = {}) {
             const t = findTodo(id);
             if (t) { t.dueDate = dateVal; affected++; }
           });
-          saveData('study_todos_v2', todos);
+          if (saveData('study_todos_v2', todos) !== true) return '❌ 批量待办日期保存失败';
           return `✅ 已为 ${affected} 个待办设置截止日期：${dateVal || '(已清除)'}`;
         }
         case 'delete': {
@@ -1203,7 +1597,7 @@ async function executeToolCall(action, params, context = {}) {
           const before = todos.length;
           todos = todos.filter(t => !allDescendants.has(t.id));
           affected = before - todos.length;
-          saveData('study_todos_v2', todos);
+          if (saveData('study_todos_v2', todos) !== true) return '❌ 批量删除结果保存失败';
           return `✅ 已批量删除 ${affected} 个待办（含子任务）`;
         }
         default:
@@ -1240,7 +1634,7 @@ async function executeToolCall(action, params, context = {}) {
         results.push(item.text);
         createdCount++;
       }
-      saveData('study_todos_v2', todos);
+      if (saveData('study_todos_v2', todos) !== true) return '❌ 批量创建结果保存失败';
       return `✅ 批量创建成功：共创建 ${createdCount} 个待办\n${results.map((r, i) => `  ${i+1}. ${r}`).join('\n')}`;
     }
     case 'add_note': {
@@ -1268,7 +1662,7 @@ async function executeToolCall(action, params, context = {}) {
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
       };
       notes.push(newNote);
-      saveData('study_notes_v2', notes);
+      if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记保存失败';
       return `✅ 已创建笔记：${title} [ID:${newNote.id}]`;
     }
     case 'update_note': {
@@ -1279,7 +1673,7 @@ async function executeToolCall(action, params, context = {}) {
       if (params.title !== undefined) note.title = params.title;
       if (params.content !== undefined) note.content = params.content.replace(/\\n/g, '\n');
       note.updatedAt = new Date().toISOString();
-      saveData('study_notes_v2', notes);
+      if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记保存失败';
       return `✅ 已更新笔记：${note.title}`;
     }
     case 'move_note': {
@@ -1301,7 +1695,7 @@ async function executeToolCall(action, params, context = {}) {
         ? (notes.find(f => f.type === 'folder' && f.id === targetFolder)?.title || '根目录')
         : '根目录';
       note.parentId = targetFolder;
-      saveData('study_notes_v2', notes);
+      if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记保存失败';
       return `✅ 已移动笔记「${note.title}」到「${folderName}」`;
     }
     case 'delete_note': {
@@ -1311,17 +1705,33 @@ async function executeToolCall(action, params, context = {}) {
       if (!note) return `错误：未找到ID为 ${id} 的笔记`;
       notes = notes.filter(n => n.id !== id);
       if (activeNoteId === id) activeNoteId = notes[0] ? notes[0].id : null;
-      saveData('study_notes_v2', notes);
+      if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记删除结果保存失败';
       return `✅ 已删除笔记：${note.title}`;
     }
     case 'list_notes': {
       if (notes.length === 0) return '📝 当前没有笔记。';
       // Trigger summary freshness check for current note (fire-and-forget)
       if (typeof checkAndUpdateSummary === 'function') checkAndUpdateSummary();
-      const noteFolders = notes.filter(n => n.type === 'folder');
-      const noteItems = notes.filter(n => n.type === 'note');
+      const pageSize = Math.min(50, Math.max(1, Number(params.pageSize) || 20));
+      const roots = notes.filter(n => n.parentId === null);
+      const pageCount = Math.max(1, Math.ceil(roots.length / pageSize));
+      const page = Math.min(pageCount, Math.max(1, Number(params.page) || 1));
+      const rootIds = new Set(roots.slice((page - 1) * pageSize, page * pageSize).map(n => n.id));
+      const rootForNote = item => {
+        let cur = item;
+        const seen = new Set();
+        while (cur && cur.parentId !== null && !seen.has(cur.id)) {
+          seen.add(cur.id);
+          cur = notes.find(n => n.id === cur.parentId) || cur;
+          if (seen.has(cur.id)) break;
+        }
+        return cur || item;
+      };
+      const visible = notes.filter(n => rootIds.has(rootForNote(n).id));
+      const noteFolders = visible.filter(n => n.type === 'folder');
+      const noteItems = visible.filter(n => n.type === 'note');
 
-      let result = `📝 笔记概览：${noteFolders.length} 个文件夹，${noteItems.length} 篇笔记\n\n`;
+      let result = `📝 笔记概览：共 ${notes.filter(n => n.type === 'folder').length} 个文件夹，${notes.filter(n => n.type === 'note').length} 篇笔记；第 ${page}/${pageCount} 页\n\n`;
 
       // Numbered hierarchy: [1] → [1.1], interleaving folders and notes
       function buildTree(parentId, prefix) {
@@ -1346,7 +1756,7 @@ async function executeToolCall(action, params, context = {}) {
       }
       buildTree(null, '');
 
-      if (result === `📝 笔记概览：${noteFolders.length} 个文件夹，${noteItems.length} 篇笔记\n\n`) {
+      if (visible.length === 0) {
         result += '(空)';
       }
       return result;
@@ -1362,8 +1772,9 @@ async function executeToolCall(action, params, context = {}) {
       if (matches.length === 0) return `📝 没有找到包含"${params.query}"的笔记。`;
       // Trigger summary freshness check (fire-and-forget)
       if (typeof checkAndUpdateSummary === 'function') checkAndUpdateSummary();
-      let result = `📝 搜索"${params.query}"结果（共${matches.length}篇）：\n\n`;
-      matches.forEach(n => {
+      const pageData = paginateAiToolItems(matches, params);
+      let result = `📝 搜索"${params.query}"结果（共${matches.length}篇，第 ${pageData.page}/${pageData.pageCount} 页）：\n\n`;
+      pageData.items.forEach(n => {
         const title = n.title || '未命名';
         const summary = n.summary || '';
         const content = n.content || '';
@@ -1435,7 +1846,7 @@ async function executeToolCall(action, params, context = {}) {
       const type = params.type === 'app' ? 'app' : 'link';
       const newLink = { id: genId(), name, url, category, type };
       links.unshift(newLink);
-      saveData('study_links_v3', links);
+      if (saveData('study_links_v3', links) !== true) return '❌ 快捷访问保存失败';
       return `✅ 已添加快捷访问：${name}（${category}）`;
     }
     case 'delete_link': {
@@ -1444,13 +1855,16 @@ async function executeToolCall(action, params, context = {}) {
       const link = links.find(l => l.id === id);
       if (!link) return `错误：未找到ID为 ${id} 的链接`;
       links = links.filter(l => l.id !== id);
-      saveData('study_links_v3', links);
+      if (saveData('study_links_v3', links) !== true) return '❌ 快捷访问删除结果保存失败';
       return `✅ 已删除快捷访问：${link.name}`;
     }
     case 'list_links': {
       if (links.length === 0) return '🔗 当前没有快捷访问。';
-      let result = '🔗 快捷访问列表：\n';
-      links.forEach(l => {
+      const pageSize = Math.min(50, Math.max(1, Number(params.pageSize) || 20));
+      const pageCount = Math.max(1, Math.ceil(links.length / pageSize));
+      const page = Math.min(pageCount, Math.max(1, Number(params.page) || 1));
+      let result = `🔗 快捷访问列表（共${links.length}个，第 ${page}/${pageCount} 页）：\n`;
+      links.slice((page - 1) * pageSize, page * pageSize).forEach(l => {
         result += `- [ID:${l.id}] ${l.name} → ${l.url || '(无链接)'} [${l.category || '默认分类'}] ${l.type === 'app' ? '📱' : '🌐'}\n`;
       });
       return result;
@@ -1481,15 +1895,16 @@ async function executeToolCall(action, params, context = {}) {
         enabled: true
       };
       automations.push(newAuto);
-      saveData('study_automations', automations);
+      if (saveData('study_automations', automations) !== true) return '❌ 自动化任务保存失败';
       startAutomationTimer();
       const repeatLabel = repeat === 'once' ? '一次性' : '每天';
       return `✅ 已创建${repeatLabel}自动化任务（ID:${newAuto.id}）：${repeat === 'daily' ? '每天 ' : date + ' '}${at} 自动执行「${promptText.slice(0, 30)}${promptText.length > 30 ? '…' : ''}」`;
     }
     case 'list_automations': {
       if (automations.length === 0) return '⏰ 当前没有自动化任务';
-      let result = '⏰ 自动化任务列表：\n';
-      automations.forEach(a => {
+      const pageData = paginateAiToolItems(automations, params);
+      let result = `⏰ 自动化任务列表（共 ${pageData.total} 个，第 ${pageData.page}/${pageData.pageCount} 页）：\n`;
+      pageData.items.forEach(a => {
         const repeatLabel = a.repeat === 'once' ? '一次性' : '每天';
         const timeLabel = a.repeat === 'once' ? ` ${a.date || ''} ${a.at} 触发` : `每天 ${a.at}`;
         result += `- [ID:${a.id}] ${repeatLabel}${timeLabel} → ${a.prompt.slice(0, 40)}${a.prompt.length > 40 ? '…' : ''}` + (a.enabled === false ? ' [已停用]' : '') + (a.lastRun ? `（上次运行：${a.lastRun}）` : '（尚未运行）') + '\n';
@@ -1502,7 +1917,7 @@ async function executeToolCall(action, params, context = {}) {
       const idx = automations.findIndex(a => a.id === id);
       if (idx === -1) return `错误：未找到ID为 ${id} 的自动化任务`;
       const removed = automations.splice(idx, 1)[0];
-      saveData('study_automations', automations);
+      if (saveData('study_automations', automations) !== true) return '❌ 自动化删除结果保存失败';
       if (automations.length === 0) stopAutomationTimer();
       return `✅ 已删除自动化任务：${removed.repeat === 'once' ? (removed.date || '一次性') : '每天'} ${removed.at}「${removed.prompt.slice(0, 30)}」`;
     }
@@ -1583,9 +1998,10 @@ async function executeToolCall(action, params, context = {}) {
         const line = qStore.lines.find(l => l.id === qLineId);
         if (!line) return `❌ 未找到章节 ID ${qLineId}`;
         const qs = qStore.quests.filter(x => x.lineId === qLineId);
-        let r = `📂 章节「${line.name}」任务列表（${qs.length} 个）\n`;
+        const pageData = paginateAiToolItems(qs, params);
+        let r = `📂 章节「${line.name}」任务列表（${qs.length} 个，第 ${pageData.page}/${pageData.pageCount} 页）\n`;
         if (qs.length === 0) return r + '（暂无任务，可用 quest_create 创建）';
-        for (const q of qs) {
+        for (const q of pageData.items) {
           const met = tlQuestCondMetCount(q);
           r += `   [ID:${q.id}] ${q.status === 'done' ? '✅' : q.status === 'locked' ? '🔒' : q.status === 'draft' ? '✏️' : q.status === 'skipped' ? '⏭️' : '▶️'} ${q.kind === 'main' ? '⭐' : '🔷'} ${q.title}` + (q.conditions.length ? `（条件 ${met}/${q.conditions.length}）` : '') + '\n';
         }
@@ -1669,11 +2085,12 @@ async function executeToolCall(action, params, context = {}) {
       return `✅ 已更新任务「${q.title}」` + (params.status ? `（状态：${statusText}）` : '') + (finalQ && statusText === 'locked' ? '，前置任务未完成，已转为锁定' : '') + invalidHint;
     }
     case 'quest_link_todo': {
-      if (typeof tlGetQuest !== 'function' || typeof tlMakeTodoCond !== 'function') return '❌ 任务线系统未加载。';
+      if (typeof loadTaskLineStore !== 'function' || typeof saveTaskLineStore !== 'function' || typeof tlMakeTodoCond !== 'function') return '❌ 任务线系统未加载。';
       const qId = Number(params.questId);
       const todoId = Number(params.todoId);
       if (!qId || !todoId) return '❌ 缺少 questId 或 todoId';
-      const q = tlGetQuest(qId);
+      const store = loadTaskLineStore();
+      const q = store.quests.find(x => x.id === qId);
       if (!q) return `❌ 未找到任务 ID ${qId}`;
       const t = typeof findTodo === 'function' ? findTodo(todoId) : null;
       if (!t) return `❌ 未找到待办 ID ${todoId}`;
@@ -1681,18 +2098,18 @@ async function executeToolCall(action, params, context = {}) {
       q.conditions = q.conditions || [];
       if (q.conditions.some(c => c.type === 'todo' && c.todoId === todoId)) return `ℹ️ 该待办已绑定为此任务的条件`;
       q.conditions.push(cond);
-      const store = loadTaskLineStore();
-      saveTaskLineStore(store);
+      if (!saveTaskLineStore(store)) return '❌ 完成条件保存失败';
       if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(qId);
       if (typeof renderTaskLine === 'function') renderTaskLine();
       return `✅ 已绑定完成条件：${cond.label}`;
     }
     case 'quest_link_note': {
-      if (typeof tlGetQuest !== 'function' || typeof tlMakeNoteCond !== 'function') return '❌ 任务线系统未加载。';
+      if (typeof loadTaskLineStore !== 'function' || typeof saveTaskLineStore !== 'function' || typeof tlMakeNoteCond !== 'function') return '❌ 任务线系统未加载。';
       const qId = Number(params.questId);
       const noteId = Number(params.noteId);
       if (!qId || !noteId) return '❌ 缺少 questId 或 noteId';
-      const q = tlGetQuest(qId);
+      const store = loadTaskLineStore();
+      const q = store.quests.find(x => x.id === qId);
       if (!q) return `❌ 未找到任务 ID ${qId}`;
       const n = (typeof notes !== 'undefined') ? notes.find(x => x.id === noteId && x.type === 'note') : null;
       if (!n) return `❌ 未找到笔记 ID ${noteId}`;
@@ -1700,40 +2117,39 @@ async function executeToolCall(action, params, context = {}) {
       q.conditions = q.conditions || [];
       if (q.conditions.some(c => c.type === 'note' && c.noteId === noteId)) return `ℹ️ 该笔记已绑定为此任务的条件`;
       q.conditions.push(cond);
-      const store = loadTaskLineStore();
-      saveTaskLineStore(store);
+      if (!saveTaskLineStore(store)) return '❌ 完成条件保存失败';
       if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(qId);
       if (typeof renderTaskLine === 'function') renderTaskLine();
       return `✅ 已绑定完成条件：${cond.label}`;
     }
     case 'quest_link_timer': {
-      if (typeof tlGetQuest !== 'function' || typeof tlMakeTimerCond !== 'function') return '❌ 任务线系统未加载。';
+      if (typeof loadTaskLineStore !== 'function' || typeof saveTaskLineStore !== 'function' || typeof tlMakeTimerCond !== 'function') return '❌ 任务线系统未加载。';
       const qId = Number(params.questId);
       const targetId = Number(params.targetId);
       const minutes = Number(params.minutes) || 0;
       if (!qId || !targetId || !minutes) return '❌ 缺少 questId、targetId 或 minutes';
-      const q = tlGetQuest(qId);
+      const store = loadTaskLineStore();
+      const q = store.quests.find(x => x.id === qId);
       if (!q) return `❌ 未找到任务 ID ${qId}`;
       const cond = tlMakeTimerCond(targetId, minutes, params.targetType || 'todo');
       q.conditions = q.conditions || [];
       q.conditions.push(cond);
-      const store = loadTaskLineStore();
-      saveTaskLineStore(store);
+      if (!saveTaskLineStore(store)) return '❌ 完成条件保存失败';
       if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(qId);
       if (typeof renderTaskLine === 'function') renderTaskLine();
       return `✅ 已绑定完成条件：${cond.label}`;
     }
     case 'quest_add_manual_cond': {
-      if (typeof tlGetQuest !== 'function') return '❌ 任务线系统未加载。';
+      if (typeof loadTaskLineStore !== 'function' || typeof saveTaskLineStore !== 'function') return '❌ 任务线系统未加载。';
       const qId = Number(params.questId);
       const label = params.label;
       if (!qId || !label) return '❌ 缺少 questId 或 label';
-      const q = tlGetQuest(qId);
+      const store = loadTaskLineStore();
+      const q = store.quests.find(x => x.id === qId);
       if (!q) return `❌ 未找到任务 ID ${qId}`;
       q.conditions = q.conditions || [];
       q.conditions.push({ type: 'manual', label, done: false });
-      const store = loadTaskLineStore();
-      saveTaskLineStore(store);
+      if (!saveTaskLineStore(store)) return '❌ 完成条件保存失败';
       if (typeof renderTaskLine === 'function') renderTaskLine();
       return `✅ 已添加手动打卡条件：${label}`;
     }
@@ -1785,8 +2201,9 @@ async function executeToolCall(action, params, context = {}) {
           if (isNaN(d.getTime())) return '';
           return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
         };
-        const lines = chats.map(c => `- [${c.chatId}] ${c.name || '未命名'}（${typeLabel(c.chatType)}，${c.total || 0} 条消息，${timeStr(c.timeStart)} ~ ${timeStr(c.timeEnd)}${c.summary ? '，已总结' : ''}）`);
-        return `📨 已导入 ${chats.length} 个 QQ 聊天会话：\n${lines.join('\n')}\n\n如需检索具体消息内容，使用 search_chat_messages 工具。`;
+        const pageData = paginateAiToolItems(chats, params);
+        const lines = pageData.items.map(c => `- [${c.chatId}] ${c.name || '未命名'}（${typeLabel(c.chatType)}，${c.total || 0} 条消息，${timeStr(c.timeStart)} ~ ${timeStr(c.timeEnd)}${c.summary ? '，已总结' : ''}）`);
+        return `📨 已导入 ${chats.length} 个 QQ 聊天会话（第 ${pageData.page}/${pageData.pageCount} 页）：\n${lines.join('\n')}\n\n如需检索具体消息内容，使用 search_chat_messages 工具。`;
       } catch (e) { return '❌ 列出聊天会话失败：' + ((e && e.message) || e); }
     }
     case 'search_chat_messages': {
@@ -1919,10 +2336,193 @@ function parseSingleToolCall(raw) {
   return { action, params };
 }
 
+function normalizeDsmlTags(text) {
+  return String(text || '').replace(
+    /<\s*(\/?)\s*[|｜]+\s*DSML\s*[|｜]+\s*([a-z_]+)([^>]*)>/gi,
+    (_, closing, tagName, attrs) => `<${closing}dsml_${tagName.toLowerCase()}${attrs}>`
+  );
+}
+
+function decodeDsmlEntities(value) {
+  return String(value || '')
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => String.fromCodePoint(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => String.fromCodePoint(parseInt(dec, 10)))
+    .replace(/&quot;/g, '"')
+    .replace(/&apos;/g, "'")
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&');
+}
+
+function dsmlAttribute(attrs, name) {
+  const match = String(attrs || '').match(new RegExp('(?:^|\\s)' + name + '\\s*=\\s*(["\\\'])([\\s\\S]*?)\\1', 'i'));
+  return match ? decodeDsmlEntities(match[2]) : null;
+}
+
+// DeepSeek V3.2/V4 native DSML -> this app's existing { action, params } shape.
+// Return null when no DSML exists, and valid:false when DSML exists but must not
+// be partially executed (unknown action, broken invoke, or invalid JSON value).
+function parseDsmlToolCalls(text) {
+  const raw = String(text || '');
+  const normalized = normalizeDsmlTags(raw);
+  if (!/<\/?dsml_(?:function_calls|tool_calls|calls|invoke|parameter)\b/i.test(normalized)) return null;
+
+  const toolCalls = [];
+  const invokeRe = /<dsml_invoke\b([^>]*)>([\s\S]*?)<\/dsml_invoke\s*>/gi;
+  let invokeMatch;
+  while ((invokeMatch = invokeRe.exec(normalized)) !== null) {
+    const action = dsmlAttribute(invokeMatch[1], 'name');
+    if (!action || !AI_TOOLS[action]) {
+      return { valid: false, toolCalls: [], cleanText: raw };
+    }
+
+    const params = {};
+    const body = invokeMatch[2];
+    const paramRe = /<dsml_parameter\b([^>]*)>([\s\S]*?)<\/dsml_parameter\s*>/gi;
+    let paramMatch;
+    while ((paramMatch = paramRe.exec(body)) !== null) {
+      const paramName = dsmlAttribute(paramMatch[1], 'name');
+      if (!paramName) return { valid: false, toolCalls: [], cleanText: raw };
+      const stringAttr = dsmlAttribute(paramMatch[1], 'string');
+      const decodedValue = decodeDsmlEntities(paramMatch[2]);
+      if (String(stringAttr).toLowerCase() === 'false') {
+        try {
+          params[paramName] = JSON.parse(decodedValue.trim());
+        } catch (_) {
+          return { valid: false, toolCalls: [], cleanText: raw };
+        }
+      } else {
+        params[paramName] = decodedValue;
+      }
+    }
+
+    // Any leftover parameter marker means at least one parameter was malformed.
+    const bodyWithoutParams = body.replace(/<dsml_parameter\b[^>]*>[\s\S]*?<\/dsml_parameter\s*>/gi, '');
+    if (/<\/?dsml_parameter\b/i.test(bodyWithoutParams)) {
+      return { valid: false, toolCalls: [], cleanText: raw };
+    }
+    toolCalls.push({ action, params });
+  }
+
+  // Never partially execute a DSML envelope containing unmatched invoke tags.
+  const withoutInvokes = normalized.replace(/<dsml_invoke\b[^>]*>[\s\S]*?<\/dsml_invoke\s*>/gi, '');
+  if (toolCalls.length === 0 || /<\/?dsml_invoke\b/i.test(withoutInvokes)) {
+    return { valid: false, toolCalls: [], cleanText: raw };
+  }
+
+  const cleanText = normalized
+    .replace(/<dsml_((?:function_|tool_)?calls)\b[^>]*>[\s\S]*?<\/dsml_\1\s*>/gi, '')
+    .replace(/<dsml_invoke\b[^>]*>[\s\S]*?<\/dsml_invoke\s*>/gi, '')
+    .trim();
+  return { valid: true, toolCalls, cleanText };
+}
+
+// Detect output that looks like an attempted tool call but could not be parsed.
+// This is intentionally conservative: ordinary prose about DSML/tool calls should
+// still be allowed as a final answer, while actual protocol-shaped markup and
+// known action JSON trigger an automatic correction round.
+function detectMalformedToolProtocol(text) {
+  const raw = String(text || '');
+  if (!raw.trim()) return null;
+
+  // DeepSeek V3.2/V4 may leak its native DSML envelope into message.content
+  // when the API compatibility layer does not translate it to tool_calls.
+  if (/<[^>\r\n]{0,40}DSML[^>\r\n]{0,60}(?:function[_\s]*calls|tool[_\s]*calls|calls|invoke|parameter)[^>\r\n]*>/i.test(raw)) {
+    return { kind: 'dsml', message: '检测到模型原生 DSML 工具调用格式' };
+  }
+
+  // Normalize common Markdown escaping before looking for incomplete or escaped
+  // versions of the app's own tags, such as \<tool\_call>.
+  const normalized = raw.replace(/\\_/g, '_').replace(/\\</g, '<').replace(/\\>/g, '>');
+  if (/<\/?(?:tool_call|tool_action)>/i.test(normalized)) {
+    return { kind: 'tool_tag', message: '检测到不完整或被转义的 <tool_call> 标签' };
+  }
+
+  // Some models emit one or more naked action JSON objects without the wrapper.
+  // Only flag actions that actually exist in this app to avoid treating arbitrary
+  // JSON examples as intended operations.
+  const actionRe = /"action"\s*:\s*"([^"]+)"/g;
+  let match;
+  while ((match = actionRe.exec(raw)) !== null) {
+    const action = match[1].replace(/\\_/g, '_');
+    if (AI_TOOLS[action]) {
+      return { kind: 'bare_json', message: `检测到未放入 <tool_call> 的 ${action} 指令` };
+    }
+  }
+
+  return null;
+}
+
+function toolProtocolStartIndex(text) {
+  const raw = String(text || '');
+  const match = raw.match(/\\?<\s*(?:tool(?:\\?_)?(?:call|action)|[|｜]+\s*DSML\s*[|｜]+)/i);
+  return match ? match.index : -1;
+}
+
+// Persist only the grounded preamble and canonical calls for an intermediate
+// tool round. Anything emitted after the first call is untrusted: some models
+// hallucinate their own "user【工具执行结果】" transcript there before the
+// app has actually run the tools.
+function canonicalizeToolRoundReply(rawReply, toolCalls) {
+  const raw = String(rawReply || '');
+  const start = toolProtocolStartIndex(raw);
+  const preamble = (start >= 0 ? raw.slice(0, start) : '').trim();
+  const calls = (toolCalls || []).map(call => '<tool_call>' + JSON.stringify({
+    action: call.action,
+    params: call.params || {}
+  }) + '</tool_call>');
+  return [preamble, ...calls].filter(Boolean).join('\n');
+}
+
+// Recover the leading, actually-issued calls from legacy records whose tail was
+// polluted by a model-generated fake transcript. Stop at the first malformed
+// tag or ordinary text; later calls in that fake transcript were never issued.
+function canonicalizeLegacyToolRoundReply(rawReply) {
+  const raw = String(rawReply || '');
+  const start = toolProtocolStartIndex(raw);
+  if (start < 0) return null;
+  let cursor = start;
+  const toolCalls = [];
+  while (cursor < raw.length) {
+    const tail = raw.slice(cursor);
+    const match = tail.match(/^\s*<(tool_call|tool_action)>([\s\S]*?)<\/\1>/);
+    if (!match) break;
+    const parsed = parseSingleToolCall(match[2]);
+    if (!parsed || !AI_TOOLS[parsed.action]) break;
+    toolCalls.push(parsed);
+    cursor += match[0].length;
+  }
+  return toolCalls.length > 0 ? canonicalizeToolRoundReply(raw, toolCalls) : null;
+}
+
+function stripHallucinatedToolTranscript(text) {
+  const raw = String(text || '');
+  const protocolStart = toolProtocolStartIndex(raw);
+  if (protocolStart < 0) return raw;
+  const tail = raw.slice(protocolStart);
+  // DeepSeek occasionally continues an assistant tool round by inventing the
+  // next role and its result. A role-prefixed result marker cannot be ordinary
+  // assistant prose and is safe to discard; normal text around calls remains.
+  const fakeRole = tail.match(/^[ \t]*(?:user|assistant|system)[ \t]*【工具执行结果】/mi);
+  return fakeRole ? raw.slice(0, protocolStart + fakeRole.index).trimEnd() : raw;
+}
+
 // Extract all <tool_call> blocks from AI reply, returns { cleanText, toolCalls[] }
 function extractToolCalls(text) {
+  text = stripHallucinatedToolTranscript(text);
+  const dsml = parseDsmlToolCalls(text);
+  if (dsml && dsml.valid) {
+    return { cleanText: dsml.cleanText, toolCalls: dsml.toolCalls };
+  }
+
   // Accept both <tool_call> and <tool_action>, and both proper closing </tool_call> and self-closing <tool_call>
   const matches = [...text.matchAll(/<(tool_call|tool_action)>([\s\S]*?)<\/(tool_call|tool_action)>/g)];
+  const openingTags = [...text.matchAll(/<(tool_call|tool_action)>/g)];
+  // Mixed valid and malformed calls must never execute partially. This catches
+  // responses such as one </tool_call> followed by two mistaken </call> tags.
+  if (matches.length > 0 && (matches.length !== openingTags.length || matches.some(match => match[1] !== match[3]))) {
+    return { cleanText: text, toolCalls: [] };
+  }
   // Also try self-closing pattern (some models like Kimi use <tool_call>...</tool_call> without slash)
   // Use brace counting to find the matching closing brace, then check for <tool_call>
   const selfCloseMatches = [];
@@ -1965,9 +2565,8 @@ function extractToolCalls(text) {
   for (const match of matches) {
     const raw = match[2].trim(); // match[2] is the JSON content between tags
     const parsed = parseSingleToolCall(raw);
-    if (parsed && parsed.action && AI_TOOLS[parsed.action]) {
-      toolCalls.push(parsed);
-    }
+    if (!parsed || !parsed.action || !AI_TOOLS[parsed.action]) return { cleanText: text, toolCalls: [] };
+    toolCalls.push(parsed);
   }
   // If no proper-close matches found, try self-close matches
   if (toolCalls.length === 0) {

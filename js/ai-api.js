@@ -117,6 +117,82 @@ function aiToolSignature(action, params) {
   return action + '|' + JSON.stringify(canonical(params || {}));
 }
 
+function supportsNativeLocalTools(apiCfg) {
+  const host = (typeof getApiHostname === 'function') ? getApiHostname(apiCfg?.baseUrl) : '';
+  return host === 'api.openai.com' || host === 'api.deepseek.com';
+}
+
+function selectedNativeLocalTools(conv, apiCfg) {
+  if (!supportsNativeLocalTools(apiCfg) || typeof buildNativeAiTools !== 'function') return [];
+  const settings = apiCfg?.conversationSettings || conv || {};
+  const webMode = settings._webSearchMode || null;
+  const webEnabled = settings._webSearchEnabled === true || !!webMode;
+  const names = typeof selectAiToolsForPrompt === 'function'
+    ? selectAiToolsForPrompt(conv, webEnabled, webMode === 'native')
+    : new Set(Object.keys(typeof AI_TOOLS === 'object' ? AI_TOOLS : {}));
+  const allowed = [...names].filter(name => typeof authorizeAiToolCall !== 'function' || authorizeAiToolCall(name, {}, conv).ok);
+  return buildNativeAiTools(allowed);
+}
+
+function parseNativeLocalToolCalls(nativeCalls) {
+  const parsed = [];
+  for (const call of nativeCalls || []) {
+    const action = call?.function?.name;
+    if (!action || action === '$web_search' || typeof AI_TOOLS !== 'object' || !AI_TOOLS[action]) continue;
+    let params = {};
+    try {
+      const args = call.function?.arguments;
+      params = args && typeof args === 'object' ? args : JSON.parse(args || '{}');
+    }
+    catch (_) { params = { __invalidNativeArguments: String(call.function?.arguments || '') }; }
+    parsed.push({ action, params, callId: call.id || null, native: true });
+  }
+  return parsed;
+}
+
+function canonicalNativeToolReply(reply, calls) {
+  const tags = (calls || []).map(call => '<tool_call>' + JSON.stringify({ action: call.action, params: call.params || {}, callId: call.callId || undefined }) + '</tool_call>');
+  return [String(reply || '').trim(), ...tags].filter(Boolean).join('\n');
+}
+
+const AI_TOOL_LEDGER_KEY = 'study_ai_tool_ledger_v1';
+const AI_TOOL_LEDGER_TTL_MS = 24 * 60 * 60 * 1000;
+
+function isAiReadOnlyTool(action) {
+  return typeof getAiToolMetadata === 'function'
+    ? getAiToolMetadata(action).effect === 'read'
+    : /^(?:get_|list_|search_)/.test(action) || ['web_search', 'read_webpage', 'quest_get', 'quest_review'].includes(action);
+}
+
+function boundAiToolResult(value, maxChars = 12000) {
+  const text = String(value ?? '');
+  return text.length <= maxChars ? text : text.slice(0, maxChars) + `\n\n[工具结果过长，已截断 ${text.length - maxChars} 个字符]`;
+}
+
+function aiToolRequestId(conv) {
+  const latestUser = [...(conv?.messages || [])].reverse().find(m => m.role === 'user');
+  return String(latestUser?.id || latestUser?.nodeId || conv?.activePath?.at?.(-1) || latestUser?.time || 'request');
+}
+
+function loadAiToolLedger() {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(AI_TOOL_LEDGER_KEY) || '{}');
+    const cutoff = Date.now() - AI_TOOL_LEDGER_TTL_MS;
+    return Object.fromEntries(Object.entries(parsed).filter(([, item]) => Number(item?.updatedAt) >= cutoff));
+  } catch (_) { return {}; }
+}
+
+function saveAiToolLedger(ledger) {
+  try {
+    const entries = Object.entries(ledger).sort((a, b) => Number(b[1]?.updatedAt) - Number(a[1]?.updatedAt)).slice(0, 300);
+    localStorage.setItem(AI_TOOL_LEDGER_KEY, JSON.stringify(Object.fromEntries(entries)));
+  } catch (_) {}
+}
+
+function aiPersistentToolKey(conv, signature) {
+  return String(conv?.id || 'conversation') + '|' + aiToolRequestId(conv) + '|' + signature;
+}
+
 async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
   if (!options.skipSensitiveCheck && typeof AIClient !== 'undefined') {
     const allowed = await AIClient.confirmSensitiveContent(apiMessages);
@@ -154,6 +230,8 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
       function: { name: '$web_search' }
     }];
   }
+  const localNativeTools = selectedNativeLocalTools(conv, apiCfg);
+  if (localNativeTools.length > 0) requestBody.tools = [...(requestBody.tools || []), ...localNativeTools];
 
   const requestTime = new Date().toISOString();
 
@@ -274,11 +352,14 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
     }
   }
 
-  const { cleanText, toolCalls } = extractToolCalls(reply || '');
-  return { cleanText: cleanText || reply || '（未收到回复）', toolCalls, reasoning, rawReply: reply, finishReason: data.choices?.[0]?.finish_reason || '' };
+  const nativeToolCalls = parseNativeLocalToolCalls(choice?.tool_calls);
+  const extracted = extractToolCalls(reply || '');
+  const toolCalls = nativeToolCalls.length > 0 ? nativeToolCalls : extracted.toolCalls;
+  const rawReply = nativeToolCalls.length > 0 ? canonicalNativeToolReply(reply, nativeToolCalls) : reply;
+  return { cleanText: extracted.cleanText || reply || (toolCalls.length ? '' : '（未收到回复）'), toolCalls, reasoning, rawReply, finishReason: data.choices?.[0]?.finish_reason || '' };
 }
 
-function buildStreamingRequestBody(apiMessages, apiCfg) {
+function buildStreamingRequestBody(apiMessages, apiCfg, conv = null) {
   const maxTokens = apiCfg.maxTokens || (isKimiModel(apiCfg) ? 8192 : 2048);
   const modelLower = String(apiCfg.model || '').toLowerCase();
   const body = {
@@ -297,6 +378,8 @@ function buildStreamingRequestBody(apiMessages, apiCfg) {
   if (modelLower.includes('k3') || modelLower.includes('k2.7')) body.max_completion_tokens = maxTokens;
   else body.max_tokens = maxTokens;
   if (!isKimiModel(apiCfg)) body.temperature = apiCfg.temperature;
+  const localNativeTools = selectedNativeLocalTools(conv, apiCfg);
+  if (localNativeTools.length > 0) body.tools = localNativeTools;
   return { body, maxTokens };
 }
 
@@ -349,12 +432,15 @@ function resultFromChatCompletionData(data, apiCfg, onDelta) {
     ? (message.reasoning_content || message.reasoning || message.thinking || '')
     : '';
   if (typeof onDelta === 'function') onDelta({ content: reply, reasoning, contentDelta: reply, reasoningDelta: reasoning });
-  const { cleanText, toolCalls } = extractToolCalls(reply);
+  const nativeToolCalls = parseNativeLocalToolCalls(message.tool_calls);
+  const extracted = extractToolCalls(reply);
+  const toolCalls = nativeToolCalls.length > 0 ? nativeToolCalls : extracted.toolCalls;
+  const rawReply = nativeToolCalls.length > 0 ? canonicalNativeToolReply(reply, nativeToolCalls) : reply;
   return {
-    cleanText: cleanText || reply || '（未收到回复）',
+    cleanText: extracted.cleanText || reply || (toolCalls.length ? '' : '（未收到回复）'),
     toolCalls,
     reasoning,
-    rawReply: reply,
+    rawReply,
     finishReason: choice?.finish_reason || ''
   };
 }
@@ -367,7 +453,7 @@ function isStreamingUnsupported(status, message) {
 async function callAiApiStream(apiMessages, apiCfg, conv, options) {
   if (typeof AIStream === 'undefined') return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
-  const { body, maxTokens } = buildStreamingRequestBody(apiMessages, apiCfg);
+  const { body, maxTokens } = buildStreamingRequestBody(apiMessages, apiCfg, conv);
   const requestTime = new Date().toISOString();
   let response;
   let latest = { content: '', reasoning: '' };
@@ -411,12 +497,15 @@ async function callAiApiStream(apiMessages, apiCfg, conv, options) {
     if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, streamed.usage);
     const reply = streamed.content || '';
     const reasoning = apiCfg.deepThink === true ? (streamed.reasoning || '') : '';
-    const { cleanText, toolCalls } = extractToolCalls(reply);
+    const nativeToolCalls = parseNativeLocalToolCalls(streamed.toolCalls);
+    const extracted = extractToolCalls(reply);
+    const toolCalls = nativeToolCalls.length > 0 ? nativeToolCalls : extracted.toolCalls;
+    const rawReply = nativeToolCalls.length > 0 ? canonicalNativeToolReply(reply, nativeToolCalls) : reply;
     const result = {
-      cleanText: cleanText || reply || '（未收到回复）',
+      cleanText: extracted.cleanText || reply || (toolCalls.length ? '' : '（未收到回复）'),
       toolCalls,
       reasoning,
-      rawReply: reply,
+      rawReply,
       finishReason: streamed.finishReason || ''
     };
     appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, {
@@ -469,10 +558,16 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
 // Build the apiMessages array from conversation history.
 // 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
 // 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
+function buildConversationSystemPrompt(conv, apiCfg = getEffectiveApiConfig()) {
+  const basePrompt = buildToolsSystemPrompt(apiCfg.conversationSettings || conv, apiCfg);
+  if (conv && conv.systemPromptMode === 'full') return String(conv.systemPrompt || '');
+  return conv && conv.systemPrompt
+    ? basePrompt + '\n\n【用户自定义角色】' + conv.systemPrompt
+    : basePrompt;
+}
+
 function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig()) {
-  const rawSystemPrompt = conv.systemPrompt
-    ? buildToolsSystemPrompt(apiCfg.conversationSettings || conv, apiCfg) + '\n\n【用户自定义角色】' + conv.systemPrompt
-    : buildToolsSystemPrompt(apiCfg.conversationSettings || conv, apiCfg);
+  const rawSystemPrompt = buildConversationSystemPrompt(conv, apiCfg);
   const systemPrompt = fitAiSystemPrompt(rawSystemPrompt, apiCfg);
 
   const msgs = [{ role: 'system', content: systemPrompt }];
@@ -548,7 +643,21 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
       // NOTE: Do NOT include reasoning in API history. Including it can make the
       // API think the conversation is still in thinking mode, causing it to return
       // reasoning_content even when thinking is explicitly disabled.
-      const assistantContent = typeof m.content === 'string' ? m.content : (m.content_text || '');
+      let assistantContent = typeof m.content === 'string' ? m.content : (m.content_text || '');
+      // Remove model-invented role/result tails from legacy tool rounds before
+      // sending history back, while preserving legitimate prose around calls.
+      if (typeof stripHallucinatedToolTranscript === 'function') {
+        assistantContent = stripHallucinatedToolTranscript(assistantContent);
+      }
+      if (typeof extractToolCalls === 'function' && typeof canonicalizeToolRoundReply === 'function') {
+        const extracted = extractToolCalls(assistantContent);
+        // Only use the preamble-only legacy repair when the old record itself
+        // is malformed. Valid rounds keep text before, between and after calls.
+        if (extracted.toolCalls.length === 0 && typeof canonicalizeLegacyToolRoundReply === 'function') {
+          const repairedLegacy = canonicalizeLegacyToolRoundReply(assistantContent);
+          if (repairedLegacy) assistantContent = repairedLegacy;
+        }
+      }
       const assistantMsg = { role: 'assistant', content: assistantContent };
       if (m.tool_calls) assistantMsg.tool_calls = m.tool_calls;
       msgs.push(assistantMsg);
@@ -574,6 +683,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   let stopped = false;
   let streamError = '';
   const executedWrites = new Map();
+  const persistentLedger = loadAiToolLedger();
   const outcomes = [];
   let incompleteReason = '';
 
@@ -590,7 +700,6 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       // Rebuild messages with the latest conversation state (including tool results)
       apiMessages = buildApiMessages(conv, null, apiCfg);
     }
-
     // Check if user requested stop (per-conversation)
     const convId = conv.id;
     if (isAiStopRequested(convId)) {
@@ -639,6 +748,39 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     }
 
     if (toolCalls.length === 0) {
+      const protocolIssue = typeof detectMalformedToolProtocol === 'function'
+        ? detectMalformedToolProtocol(rawReply)
+        : null;
+      if (protocolIssue) {
+        if (typeof onStreamDelta === 'function') onStreamDelta({ reset: true, loop });
+        const protocolResult = '❌ 工具指令格式错误：' + protocolIssue.message + '，上一轮操作未执行。' +
+          '请继续处理用户当前请求；禁止输出 DSML、Markdown 代码块、裸 JSON 或带反斜杠的标签。' +
+          '每个操作必须严格使用完整格式：<tool_call>{"action":"工具名","params":{参数对象}}</tool_call>。' +
+          'action 中的下划线不要转义；如果本意是不调用工具，请直接给出最终中文回答。';
+        const protocolOutcome = { action: 'tool_protocol', status: 'failed' };
+        outcomes.push(protocolOutcome);
+        allToolResults.push(protocolResult);
+
+        // Use the ordinary assistant -> tool result -> next AI round chain.
+        // The renderer marker hides raw DSML while preserving it for the model.
+        const assistantMsg = { role: 'assistant', content: rawReply || '', _malformedToolProtocol: true };
+        if (reasoning) assistantMsg.reasoning = reasoning;
+        appendMessage(conv, assistantMsg);
+        appendMessage(conv, {
+          role: 'system',
+          content: '【工具执行结果】\n' + protocolResult,
+          _toolInfo: {
+            toolNames: 'tool_protocol',
+            toolLabel: 'tool_protocol',
+            results: [protocolResult],
+            outcomes: [protocolOutcome]
+          }
+        });
+        if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
+        if (onIntermediate) onIntermediate(protocolResult);
+        else renderAiMessages();
+        continue;
+      }
       // No more tool calls — this is the final reply
       finalCleanText = cleanText;
       finalRawReply = rawReply; // Keep original for memory parsing
@@ -670,34 +812,119 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       repeatCount = 0;
     }
 
-    // Execute in order: later writes may depend on earlier results. Cache writes
-    // before any repeat can run, including failures whose effects may be partial.
-    const toolResults = [];
-    const roundOutcomes = [];
-    for (const [index, tc] of toolCalls.entries()) {
+    // Consecutive reads are independent and run with a small concurrency limit.
+    // Every write is a barrier, so later calls still observe earlier mutations.
+    const toolResults = new Array(toolCalls.length);
+    const roundOutcomes = new Array(toolCalls.length);
+    const preflight = toolCalls.map(tc => {
+      const checked = typeof validateAiToolCall === 'function' ? validateAiToolCall(tc.action, tc.params || {}) : { ok: true };
+      if (!checked.ok) return { ok: false, error: '参数校验失败：' + checked.error };
+      const authorized = typeof authorizeAiToolCall === 'function'
+        ? authorizeAiToolCall(tc.action, tc.params || {}, conv)
+        : { ok: true };
+      return authorized.ok ? { ok: true } : { ok: false, error: authorized.error };
+    });
+    const blockedWriteBatch = toolCalls.some((tc, index) => !isAiReadOnlyTool(tc.action) && !preflight[index].ok);
+    const roundTransaction = !blockedWriteBatch && toolCalls.some(tc => !isAiReadOnlyTool(tc.action)) && typeof beginAiToolTransaction === 'function'
+      ? beginAiToolTransaction(toolCalls.find(tc => !isAiReadOnlyTool(tc.action)).action)
+      : null;
+    let roundWriteFailed = false;
+    const executeOne = async (tc, index) => {
       const sig = aiToolSignature(tc.action, tc.params);
-      const readOnly = /^(?:get_|list_|search_)/.test(tc.action) || ['web_search', 'read_webpage', 'quest_get', 'quest_review'].includes(tc.action);
-      let result;
-      let status;
+      const readOnly = isAiReadOnlyTool(tc.action);
+      const ledgerKey = aiPersistentToolKey(conv, sig);
+      const callId = tc.callId || `${aiToolRequestId(conv)}:${loop + 1}:${index + 1}`;
+      let resultObject;
       if (isAiStopRequested(conv.id) || index >= 32) {
         stopped = isAiStopRequested(conv.id);
-        result = '⏹️ 未执行：' + tc.action + (stopped ? '（已停止）' : '（单轮工具数量达到上限）');
-        status = 'skipped';
+        const text = '⏹️ 未执行：' + tc.action + (stopped ? '（已停止）' : '（单轮工具数量达到上限）');
+        resultObject = { ok: false, status: 'skipped', text, error: text, durationMs: 0 };
+      } else if (!preflight[index].ok) {
+        resultObject = { ok: false, status: 'failed', text: '❌ ' + preflight[index].error, error: preflight[index].error, durationMs: 0 };
+      } else if (blockedWriteBatch && !readOnly) {
+        const text = '⏹️ 未执行：本轮写操作未通过完整预检，未产生部分修改';
+        resultObject = { ok: false, status: 'skipped', text, error: text, durationMs: 0 };
+      } else if (roundWriteFailed && !readOnly) {
+        const text = '⏹️ 未执行：本轮较早的写操作失败，已停止后续写入';
+        resultObject = { ok: false, status: 'skipped', text, error: text, durationMs: 0 };
       } else if (!readOnly && executedWrites.has(sig)) {
-        result = '已拦截重复操作，沿用本次请求的执行结果：' + executedWrites.get(sig);
-        status = 'duplicate';
+        const saved = executedWrites.get(sig);
+        const text = '已拦截重复操作，沿用本次请求的执行结果：' + saved.text;
+        resultObject = { ok: saved.ok, status: saved.ok ? 'duplicate' : 'failed', text, error: saved.error || null, data: null, durationMs: 0 };
+      } else if (!readOnly && persistentLedger[ledgerKey]) {
+        const saved = persistentLedger[ledgerKey];
+        const succeeded = saved.status === 'success';
+        const text = saved.status === 'running'
+          ? '⚠️ 已拦截可能重复的写入：上次执行被中断，结果未知，请先核对数据。'
+          : '已拦截跨刷新重复操作，沿用上次结果：' + saved.text;
+        resultObject = { ok: succeeded, status: succeeded ? 'duplicate' : 'failed', text, error: succeeded ? null : (saved.text || '上次写入结果不确定'), data: null, durationMs: 0 };
       } else {
-        try {
-          result = String(await executeToolCall(tc.action, tc.params || {}, { conv, apiCfg }));
-          status = /^(?:❌|错误|⚠️)/.test(result.trim()) ? 'failed' : 'success';
-        } catch (error) {
-          result = '❌ ' + tc.action + ' 执行失败：' + error.message;
-          status = 'failed';
+        {
+          if (typeof onStreamDelta === 'function') onStreamDelta({ toolProgress: true, content: `🔧 正在执行 ${tc.action}（${index + 1}/${Math.min(toolCalls.length, 32)}）…`, reasoning: '' });
+          if (!readOnly) {
+            persistentLedger[ledgerKey] = { status: 'running', text: '', updatedAt: Date.now() };
+            saveAiToolLedger(persistentLedger);
+          }
+          const startedAt = Date.now();
+          resultObject = typeof executeToolCallStructured === 'function'
+            ? await executeToolCallStructured(tc.action, tc.params || {}, { conv, apiCfg })
+            : normalizeAiToolResult(tc.action, await executeToolCall(tc.action, tc.params || {}, { conv, apiCfg }), Date.now() - startedAt);
+          if (!readOnly) {
+            if (resultObject.ok) persistentLedger[ledgerKey] = { status: 'success', text: resultObject.text, updatedAt: Date.now() };
+            else delete persistentLedger[ledgerKey];
+            saveAiToolLedger(persistentLedger);
+          }
+          if (typeof onStreamDelta === 'function') onStreamDelta({ toolProgress: true, content: `${resultObject.ok ? '✅' : '❌'} ${tc.action} · ${resultObject.durationMs || 0}ms`, reasoning: '' });
         }
-        if (!readOnly) executedWrites.set(sig, result);
+        if (!readOnly && resultObject.ok) executedWrites.set(sig, resultObject);
       }
-      toolResults.push(result);
-      roundOutcomes.push({ action: tc.action, status });
+      toolResults[index] = boundAiToolResult(resultObject.text);
+      roundOutcomes[index] = {
+        callId, action: tc.action, ok: !!resultObject.ok,
+        status: resultObject.status || (resultObject.ok ? 'success' : 'failed'),
+        code: resultObject.code || (resultObject.ok ? 'OK' : 'TOOL_ERROR'),
+        changed: resultObject.changed === true,
+        durationMs: resultObject.durationMs || 0, error: resultObject.error || null
+      };
+      if (!readOnly && ['failed','skipped'].includes(roundOutcomes[index].status)) roundWriteFailed = true;
+    };
+    for (let index = 0; index < toolCalls.length;) {
+      if (index >= 32 || !isAiReadOnlyTool(toolCalls[index].action)) {
+        await executeOne(toolCalls[index], index++);
+        continue;
+      }
+      const batch = [];
+      while (index < toolCalls.length && index < 32 && isAiReadOnlyTool(toolCalls[index].action) && batch.length < 3) {
+        batch.push(executeOne(toolCalls[index], index));
+        index++;
+      }
+      await Promise.all(batch);
+    }
+    const runtimeWriteFailure = toolCalls.some((tc, index) => !isAiReadOnlyTool(tc.action) && ['failed','skipped'].includes(roundOutcomes[index]?.status));
+    if (roundTransaction && runtimeWriteFailure) {
+      if (typeof rollbackAiToolTransaction === 'function') rollbackAiToolTransaction(roundTransaction);
+      for (let index = 0; index < toolCalls.length; index++) {
+        if (isAiReadOnlyTool(toolCalls[index].action) || !['success','duplicate'].includes(roundOutcomes[index]?.status)) continue;
+        roundOutcomes[index].ok = false;
+        roundOutcomes[index].status = 'rolled_back';
+        roundOutcomes[index].code = 'ROLLED_BACK';
+        roundOutcomes[index].changed = false;
+        roundOutcomes[index].error = '本轮后续写操作失败，已回滚';
+        toolResults[index] = boundAiToolResult(toolResults[index] + '\n↩️ 本轮写入已回滚。');
+        const sig = aiToolSignature(toolCalls[index].action, toolCalls[index].params);
+        executedWrites.delete(sig);
+        delete persistentLedger[aiPersistentToolKey(conv, sig)];
+      }
+      saveAiToolLedger(persistentLedger);
+    }
+    let roundResultBudget = 30000;
+    for (let index = 0; index < toolResults.length; index++) {
+      if (roundResultBudget <= 0) {
+        toolResults[index] = '[本轮工具结果已达 30000 字符上限，后续内容省略]';
+        continue;
+      }
+      toolResults[index] = boundAiToolResult(toolResults[index], Math.min(12000, roundResultBudget));
+      roundResultBudget -= toolResults[index].length;
     }
     outcomes.push(...roundOutcomes);
     const resultsText = toolResults.join('\n');
@@ -706,7 +933,10 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     // Store AI's original reply (with tool_call tags) as assistant message in conversation
     // Include the reasoning specific to this call, so each assistant message
     // has its own reasoning attached (not just the first one)
-    const assistantMsg = { role: 'assistant', content: rawReply };
+    const persistedToolReply = typeof stripHallucinatedToolTranscript === 'function'
+      ? stripHallucinatedToolTranscript(rawReply)
+      : rawReply;
+    const assistantMsg = { role: 'assistant', content: persistedToolReply, _toolRoundCleanText: cleanText };
     if (reasoning) assistantMsg.reasoning = reasoning;
     appendMessage(conv, assistantMsg);
 
@@ -715,10 +945,20 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     const toolLabel = toolCalls.length === 1 ? toolCalls[0].action : toolNames;
     // 压缩工具结果里的多余空行，避免 UI 中留大片空白
     const compactResults = String(resultsText || '').replace(/\n{3,}/g, '\n\n').trim();
+    const structuredStatus = roundOutcomes.map(item => ({
+      callId: item.callId,
+      action: item.action,
+      ok: item.status === 'success' || item.status === 'duplicate',
+      status: item.status,
+      code: item.code,
+      changed: item.changed === true,
+      error: item.error || null,
+      durationMs: item.durationMs || 0
+    }));
     appendMessage(conv, {
       role: 'system',
-      content: '【工具执行结果】\n' + compactResults,
-      _toolInfo: { toolNames, toolLabel, results: toolResults, outcomes: roundOutcomes }
+      content: '【工具执行结果】\n【结构化状态】' + JSON.stringify(structuredStatus) + '\n' + compactResults,
+      _toolInfo: { toolNames, toolLabel, results: toolResults, outcomes: roundOutcomes, structuredStatus }
     });
     // 持久化中间工具调用，刷新/重启后已完成的工具结果不丢失（配合 study_ai_pending 自动续传）
     if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
@@ -757,8 +997,8 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     incompleteReason = incompleteReason || '已达到工具调用轮次上限，任务尚未确认完成。';
     finalCleanText = '⚠️ ' + incompleteReason;
   }
-  const failedCount = outcomes.filter(item => item.status === 'failed').length;
-  const successCount = outcomes.filter(item => item.status === 'success').length;
+  const failedCount = outcomes.filter(item => item.status === 'failed' || item.status === 'rolled_back').length;
+  const successCount = outcomes.filter(item => item.status === 'success' || item.status === 'duplicate').length;
   const skippedCount = outcomes.filter(item => item.status === 'skipped').length;
   if (failedCount || incompleteReason) finalCleanText += `\n\n执行记录：成功 ${successCount} 项，失败 ${failedCount} 项，未执行 ${skippedCount} 项。详情见工具结果。`;
 

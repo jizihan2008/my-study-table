@@ -1518,10 +1518,53 @@ function formatText(type) {
   onNotesChange();
 }
 
-// Keyboard shortcuts for formatting
+function handleNotesTabKey(e, ta) {
+  if (e.key !== 'Tab') return false;
+  e.preventDefault();
+
+  const text = ta.value;
+  const start = ta.selectionStart;
+  const end = ta.selectionEnd;
+
+  // A plain Tab at the caret inserts a real tab character instead of moving
+  // focus to the next control (notably the immersive-mode exit button).
+  if (!e.shiftKey && start === end) {
+    ta.setRangeText('\t', start, end, 'end');
+    onNotesChange();
+    return true;
+  }
+
+  const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+  const selectionTail = end > start && text[end - 1] === '\n' ? end - 1 : end;
+  const nextBreak = text.indexOf('\n', selectionTail);
+  const lineEnd = nextBreak === -1 ? text.length : nextBreak;
+  const lines = text.slice(lineStart, lineEnd).split('\n');
+
+  if (!e.shiftKey) {
+    const replacement = lines.map(line => '\t' + line).join('\n');
+    ta.setRangeText(replacement, lineStart, lineEnd, 'select');
+    ta.selectionStart = start + 1;
+    ta.selectionEnd = end + lines.length;
+  } else {
+    const removed = lines.map(line => {
+      const match = line.match(/^(?:\t| {1,4})/);
+      return match ? match[0].length : 0;
+    });
+    const replacement = lines.map((line, index) => line.slice(removed[index])).join('\n');
+    ta.setRangeText(replacement, lineStart, lineEnd, 'select');
+    ta.selectionStart = Math.max(lineStart, start - removed[0]);
+    ta.selectionEnd = Math.max(ta.selectionStart, end - removed.reduce((sum, count) => sum + count, 0));
+  }
+
+  onNotesChange();
+  return true;
+}
+
+// Keyboard shortcuts for formatting and editor indentation
 document.addEventListener('keydown', function(e) {
   const ta = document.getElementById('notesTextarea');
   if (!ta || document.activeElement !== ta) return;
+  if (handleNotesTabKey(e, ta)) return;
   if (!e.ctrlKey && !e.metaKey) return;
   
   const key = e.key.toLowerCase();
@@ -1541,6 +1584,62 @@ let noteViewMode='preview';
 let notesTocVisible=localStorage.getItem('study_notes_toc_visible')!=='false';
 let notesTocMobileOpen=false;
 let _noteTocScrollFrame=0;
+let _noteTocJumpTarget='';
+let _noteTocJumpTimer=0;
+let notesImmersive=false;
+let _notesImmersiveMoveFrame=0;
+
+function setNotesImmersive(force){
+  const section=document.getElementById('section-notes');
+  if(!section)return;
+  const enabled=typeof force==='boolean'?force:!notesImmersive;
+  notesImmersive=enabled;
+  if(enabled){
+    notesGoMain();
+    switchNoteView('edit');
+  }
+  section.classList.toggle('notes-immersive',enabled);
+  section.classList.remove('show-top-controls','show-bottom-controls');
+  document.body.classList.toggle('notes-immersive',enabled);
+  const button=document.getElementById('notesImmersiveBtn');
+  if(button){
+    button.classList.toggle('active',enabled);
+    button.setAttribute('aria-pressed',enabled?'true':'false');
+  }
+  if(enabled)setTimeout(()=>document.getElementById('notesTextarea')?.focus(),0);
+}
+
+function toggleNotesImmersive(force){setNotesImmersive(force)}
+
+function updateNotesImmersiveControls(clientY){
+  const section=document.getElementById('section-notes');
+  if(!notesImmersive||!section)return;
+  const toolbar=document.getElementById('notesFormatToolbar');
+  const footer=section.querySelector('.notes-editor-footer');
+  const topLimit=section.classList.contains('show-top-controls')?(toolbar?.offsetHeight||44)+12:18;
+  const bottomLimit=section.classList.contains('show-bottom-controls')?(footer?.offsetHeight||42)+12:18;
+  section.classList.toggle('show-top-controls',clientY<=topLimit);
+  section.classList.toggle('show-bottom-controls',clientY>=window.innerHeight-bottomLimit);
+}
+
+document.addEventListener('pointermove',function(event){
+  if(!notesImmersive||_notesImmersiveMoveFrame)return;
+  const y=event.clientY;
+  _notesImmersiveMoveFrame=requestAnimationFrame(()=>{
+    _notesImmersiveMoveFrame=0;
+    updateNotesImmersiveControls(y);
+  });
+});
+document.addEventListener('mouseleave',function(){
+  if(!notesImmersive)return;
+  document.getElementById('section-notes')?.classList.remove('show-top-controls','show-bottom-controls');
+});
+document.addEventListener('keydown',function(event){
+  if(event.key!=='Escape'||!notesImmersive)return;
+  if(document.querySelector('.modal-overlay.open, .context-menu.visible'))return;
+  event.preventDefault();
+  setNotesImmersive(false);
+});
 
 function getNotePreviewHeadings(){
   const preview=document.getElementById('notesPreview');
@@ -1614,6 +1713,13 @@ function jumpToNoteHeading(targetId){
   const headingRect=heading.getBoundingClientRect();
   const top=preview.scrollTop+headingRect.top-previewRect.top-12;
   const reduceMotion=window.matchMedia&&window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  _noteTocJumpTarget=targetId;
+  if(_noteTocJumpTimer)clearTimeout(_noteTocJumpTimer);
+  _noteTocJumpTimer=setTimeout(()=>{
+    _noteTocJumpTarget='';
+    _noteTocJumpTimer=0;
+    onNotePreviewScroll();
+  },reduceMotion?80:1400);
   preview.scrollTo({top:Math.max(0,top),behavior:reduceMotion?'auto':'smooth'});
   setActiveNoteTocItem(targetId);
 }
@@ -1627,6 +1733,9 @@ function onNotePreviewScroll(){
     const preview=document.getElementById('notesPreview');
     const headings=getNotePreviewHeadings();
     if(!preview||!headings.length)return;
+    // Smooth scrolling over a long document can take over a second. Keep the
+    // clicked destination highlighted instead of flashing through prior headings.
+    if(_noteTocJumpTarget){setActiveNoteTocItem(_noteTocJumpTarget);return;}
     const threshold=preview.getBoundingClientRect().top+28;
     let active=headings[0];
     for(const heading of headings){

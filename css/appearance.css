@@ -128,6 +128,20 @@
 [data-glass-renderer="fallback"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .mobile-tabbar, .mobile-more-panel, .context-menu, .appearance-preview-card) {
   background:var(--ap-panel); backdrop-filter:none; -webkit-backdrop-filter:none;
 }
+/* Every nested card and large feature panel follows the same linear surface
+   alpha. Nested surfaces keep the cheaper frosted layer; the outer containers
+   below carry liquid refraction once, so SVG filters are not multiplied. */
+[data-glass="true"] :is([class$="-card"], [class*="-card "], .today-shortcuts button, .notes-sidebar, .notes-document-workspace, .ai-chat-messages, .prompt-studio, .prompt-library, .prompt-editor-header, .prompt-builder, .prompt-preview-panel, .ap-section) {
+  background:var(--glass-surface) !important;
+}
+[data-glass="true"]:not([data-glass-renderer="fallback"]) :is([class$="-card"], [class*="-card "], .today-shortcuts button, .notes-sidebar, .notes-document-workspace, .ai-chat-messages, .prompt-studio, .prompt-library, .prompt-editor-header, .prompt-builder, .prompt-preview-panel, .ap-section) {
+  -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
+  backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
+}
+[data-glass-renderer="liquid"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .appearance-preview-card) {
+  -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
+  backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
+}
 /* One foreground color is derived from accent luminance for custom colors. */
 :is(.welcome-focus-btn, #btnTodoToggle, #habitAddBtn, .btn-add, .btn-new-note, .today-checkin-btn:not(.done), .today-goals-add-btn) { color:var(--on-primary,#fff); }
 .btn-new-note svg { color:inherit !important; }

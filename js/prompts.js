@@ -48,6 +48,7 @@ let promptRawDirty = false;
 let promptConversationSearch = '';
 let promptLastFocusedSection = 'goal';
 let promptSaveTimer = null;
+const promptDefaultModels = new Map();
 
 function promptEsc(value) {
   if (typeof escapeHtml === 'function') return escapeHtml(String(value == null ? '' : value));
@@ -56,6 +57,19 @@ function promptEsc(value) {
 
 function emptyPromptSections() {
   return { role: '', goal: '', context: '', rules: '', output: '', examples: '' };
+}
+
+function getPromptStudioText(conv) {
+  if (!conv) return '';
+  if (typeof buildConversationSystemPrompt === 'function') {
+    try { return buildConversationSystemPrompt(conv, typeof getEffectiveApiConfig === 'function' ? getEffectiveApiConfig() : {}); }
+    catch (_) { /* Fall back to the stored value while settings are incomplete. */ }
+  }
+  return String(conv.systemPrompt || '');
+}
+
+function promptSectionsAreEmpty(sections) {
+  return PROMPT_SECTION_META.every(meta => !String(sections?.[meta.key] || '').trim());
 }
 
 function parseSystemPrompt(raw) {
@@ -81,8 +95,16 @@ function parseSystemPrompt(raw) {
 
 function ensureConversationPromptModel(conv) {
   if (!conv) return { sections: emptyPromptSections(), variableValues: {} };
+  const untouchedDefault = conv.systemPromptMode !== 'full' && !String(conv.systemPrompt || '').trim();
+  if (untouchedDefault && (!conv.promptBuilder?.sections || promptSectionsAreEmpty(conv.promptBuilder.sections))) {
+    const key = String(conv.id || 'active');
+    if (!promptDefaultModels.has(key)) {
+      promptDefaultModels.set(key, { sections: parseSystemPrompt(getPromptStudioText(conv)), variableValues: {} });
+    }
+    return promptDefaultModels.get(key);
+  }
   if (!conv.promptBuilder || !conv.promptBuilder.sections) {
-    conv.promptBuilder = { sections: parseSystemPrompt(conv.systemPrompt), variableValues: {} };
+    conv.promptBuilder = { sections: parseSystemPrompt(getPromptStudioText(conv)), variableValues: {} };
   }
   conv.promptBuilder.sections = Object.assign(emptyPromptSections(), conv.promptBuilder.sections || {});
   conv.promptBuilder.variableValues = Object.assign({}, conv.promptBuilder.variableValues || {});
@@ -149,7 +171,7 @@ function renderPromptStudio() {
     <main class="prompt-editor-shell">
       <header class="prompt-editor-header">
         <div class="prompt-title-fields"><span class="prompt-current-label">正在编辑当前对话</span><input id="promptNameInput" class="prompt-name-input" value="${promptEsc(conv.title || '未命名对话')}" maxlength="60" aria-label="当前对话名称" oninput="updatePromptConversationTitle(this.value)"></div>
-        <div class="prompt-editor-actions"><span class="prompt-save-state" id="promptSaveState"><i data-lucide="check-circle"></i> 已同步到对话</span><div class="prompt-mode-switch"><button class="${promptEditorMode === 'visual' ? 'active' : ''}" onclick="setPromptEditorMode('visual')"><i data-lucide="layout-grid"></i>可视化</button><button class="${promptEditorMode === 'raw' ? 'active' : ''}" onclick="setPromptEditorMode('raw')"><i data-lucide="code-2"></i>原始文本</button></div><button class="prompt-icon-btn" type="button" onclick="openCurrentAiConversation()" title="返回 AI 对话" aria-label="返回 AI 对话"><i data-lucide="message-circle"></i></button></div>
+        <div class="prompt-editor-actions"><span class="prompt-save-state" id="promptSaveState"><i data-lucide="check-circle"></i> 已同步到对话</span><button class="prompt-copy-btn" type="button" onclick="restoreDefaultSystemPrompt()" title="移除当前对话的覆盖内容"><i data-lucide="rotate-ccw"></i>恢复内置默认</button><div class="prompt-mode-switch"><button class="${promptEditorMode === 'visual' ? 'active' : ''}" onclick="setPromptEditorMode('visual')"><i data-lucide="layout-grid"></i>可视化</button><button class="${promptEditorMode === 'raw' ? 'active' : ''}" onclick="setPromptEditorMode('raw')"><i data-lucide="code-2"></i>原始文本</button></div><button class="prompt-icon-btn" type="button" onclick="openCurrentAiConversation()" title="返回 AI 对话" aria-label="返回 AI 对话"><i data-lucide="message-circle"></i></button></div>
       </header>
       ${promptEditorMode === 'raw' ? renderRawPromptEditor(conv) : renderVisualPromptEditor(conv, model, variables)}
     </main>`;
@@ -161,7 +183,9 @@ function renderPromptStudio() {
 function renderPromptConversationCard(conv) {
   const active = typeof getActiveConvId === 'function' && String(getActiveConvId()) === String(conv.id);
   const text = String(conv.systemPrompt || '').trim();
-  return `<button type="button" class="prompt-template-card ${active ? 'active' : ''}" onclick="selectPromptConversation('${promptEsc(conv.id)}')"><span class="prompt-template-icon"><i data-lucide="message-circle"></i></span><span class="prompt-template-copy"><strong>${promptEsc(conv.title || '未命名对话')}</strong><small>${promptEsc(text ? text.replace(/\s+/g, ' ').slice(0, 55) : '尚未设置系统提示词')}</small><em>${text.length} 字符 · ${conv.messages?.length || 0} 条消息</em></span></button>`;
+  const label = text ? text.replace(/\s+/g, ' ').slice(0, 55) : '使用内置默认系统提示词';
+  const lengthLabel = text ? text.length + ' 字符' : '内置默认';
+  return `<button type="button" class="prompt-template-card ${active ? 'active' : ''}" onclick="selectPromptConversation('${promptEsc(conv.id)}')"><span class="prompt-template-icon"><i data-lucide="message-circle"></i></span><span class="prompt-template-copy"><strong>${promptEsc(conv.title || '未命名对话')}</strong><small>${promptEsc(label)}</small><em>${lengthLabel} · ${conv.messages?.length || 0} 条消息</em></span></button>`;
 }
 
 function renderVisualPromptEditor(conv, model, variables) {
@@ -172,7 +196,9 @@ function renderVisualPromptEditor(conv, model, variables) {
 }
 
 function renderRawPromptEditor(conv) {
-  return `<div class="prompt-raw-editor"><div class="prompt-builder-intro"><div><h3>原始系统提示词</h3><p>适合直接编辑已有提示词；切回可视化模式时会识别“【角色设定】”等区块。</p></div><span>${String(conv.systemPrompt || '').length} 字符</span></div><textarea id="promptRawText" aria-label="原始系统提示词" placeholder="输入这个对话要使用的系统提示词…">${promptEsc(conv.systemPrompt || '')}</textarea><div class="prompt-direct-sync"><i data-lucide="refresh-cw"></i><span>输入内容会自动保存到当前对话</span></div><button type="button" class="prompt-apply-btn prompt-raw-back" onclick="openCurrentAiConversation()"><i data-lucide="message-circle"></i>返回当前对话</button></div>`;
+  const text = getPromptStudioText(conv);
+  const sourceLabel = conv.systemPromptMode === 'full' ? '当前对话专属版本' : '当前生效版本（含内置默认）';
+  return `<div class="prompt-raw-editor"><div class="prompt-builder-intro"><div><h3>原始系统提示词</h3><p>${sourceLabel}；首次修改后会保存为当前对话的完整系统提示词。</p></div><span>${text.length} 字符</span></div><textarea id="promptRawText" aria-label="原始系统提示词" placeholder="输入这个对话要使用的系统提示词…">${promptEsc(text)}</textarea><div class="prompt-direct-sync"><i data-lucide="refresh-cw"></i><span>输入内容会自动保存到当前对话</span></div><button type="button" class="prompt-apply-btn prompt-raw-back" onclick="openCurrentAiConversation()"><i data-lucide="message-circle"></i>返回当前对话</button></div>`;
 }
 
 function renderPromptSection(model, meta, index) {
@@ -198,6 +224,7 @@ function bindPromptEditorEvents() {
     if (event.target.id === 'promptRawText') {
       promptRawDirty = true;
       conv.systemPrompt = event.target.value;
+      conv.systemPromptMode = 'full';
       conv.promptBuilder = { sections: parseSystemPrompt(conv.systemPrompt), variableValues: conv.promptBuilder?.variableValues || {} };
       scheduleConversationPromptSave();
       return;
@@ -219,8 +246,10 @@ function bindPromptEditorEvents() {
 }
 
 function syncVisualPromptToConversation(conv, model) {
+  promptDefaultModels.delete(String(conv.id || 'active'));
   conv.promptBuilder = model;
   conv.systemPrompt = compileConversationPrompt(model, true);
+  conv.systemPromptMode = 'full';
   scheduleConversationPromptSave();
 }
 
@@ -244,7 +273,9 @@ function refreshPromptPreview() {
   const conv = typeof getActiveConv === 'function' ? getActiveConv() : null;
   const preview = document.getElementById('promptPreviewText');
   if (!conv || !preview) return;
-  const text = compileConversationPrompt(ensureConversationPromptModel(conv), true);
+  const text = conv.systemPromptMode === 'full'
+    ? compileConversationPrompt(ensureConversationPromptModel(conv), true)
+    : getPromptStudioText(conv);
   preview.textContent = text || '填写任一区块后，这里会实时显示发送给 AI 的系统提示词。';
   const unresolved = (text.match(/\{\{\s*[^{}]+?\s*\}\}/g) || []).length;
   const stats = document.getElementById('promptPreviewStats');
@@ -294,7 +325,7 @@ function setPromptEditorMode(mode) {
   if (!['visual', 'raw'].includes(mode)) return;
   if (mode === 'visual' && promptEditorMode === 'raw' && promptRawDirty) {
     const conv = getActiveConv();
-    if (conv) conv.promptBuilder = { sections: parseSystemPrompt(conv.systemPrompt), variableValues: conv.promptBuilder?.variableValues || {} };
+    if (conv) conv.promptBuilder = { sections: parseSystemPrompt(getPromptStudioText(conv)), variableValues: conv.promptBuilder?.variableValues || {} };
   }
   if (mode === 'raw') promptRawDirty = false;
   promptEditorMode = mode;
@@ -333,10 +364,26 @@ function insertPromptVariable(name) {
 }
 
 async function copyCompiledPrompt() {
-  const text = String(getActiveConv()?.systemPrompt || '');
+  const text = getPromptStudioText(getActiveConv());
   if (!text) { setPromptActionStatus('当前系统提示词为空', true); return; }
   try { await navigator.clipboard.writeText(text); setPromptActionStatus('系统提示词已复制'); }
   catch (_) { setPromptActionStatus('复制失败，请手动选择文本', true); }
+}
+
+async function restoreDefaultSystemPrompt() {
+  const conv = getActiveConv();
+  if (!conv) return;
+  if ((conv.systemPromptMode === 'full' || String(conv.systemPrompt || '').trim()) && typeof showCustomConfirm === 'function') {
+    const confirmed = await showCustomConfirm('恢复内置默认系统提示词吗？当前对话的提示词修改将被移除。');
+    if (!confirmed) return;
+  }
+  conv.systemPrompt = '';
+  promptDefaultModels.delete(String(conv.id || 'active'));
+  delete conv.systemPromptMode;
+  delete conv.promptBuilder;
+  if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
+  renderPromptStudio();
+  setPromptActionStatus('已恢复内置默认系统提示词');
 }
 
 function openCurrentAiConversation() {

@@ -13,7 +13,7 @@ let userDataPath;
 test.beforeAll(async () => {
   userDataPath = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-e2e-'));
   electronApp = await electron.launch({
-    args: [path.resolve('.')],
+    args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'],
     env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath }
   });
   page = await electronApp.firstWindow();
@@ -121,10 +121,10 @@ test('desktop sidebar stays open when moving between the sidebar and its edge', 
   await expect(sidebar).not.toHaveClass(/open/, { timeout: 1500 });
 });
 
-test('Electron drawer entry does not leave a mobile overlay or scroll lock', async () => {
+test('opening the Electron sidebar does not leave a mobile overlay or scroll lock', async () => {
   await page.setViewportSize({ width: 800, height: 700 });
   await page.mouse.move(600, 200);
-  await page.locator('#mobileHamburger').click();
+  await page.evaluate(() => openSidebar());
   await expect(page.locator('#sidebar')).toHaveClass(/open/);
   await expect(page.locator('body')).not.toHaveClass(/mobile-drawer-open/);
   await expect(page.locator('#mobileDrawerOverlay')).not.toHaveClass(/open/);
@@ -136,7 +136,7 @@ test('Electron drawer entry does not leave a mobile overlay or scroll lock', asy
   await page.setViewportSize({ width: 1100, height: 700 });
 });
 
-test('wide Electron windows retain both sidebar entries without an empty gutter', async () => {
+test('wide Electron windows retain the edge sidebar entry without an empty gutter', async () => {
   await page.setViewportSize({ width: 1400, height: 850 });
   await page.mouse.move(600, 200);
   await page.evaluate(() => closeSidebar());
@@ -152,9 +152,9 @@ test('wide Electron windows retain both sidebar entries without an empty gutter'
   await page.mouse.move(600, 200);
   await expect(sidebar).not.toHaveClass(/open/);
   await expect.poll(() => sidebar.evaluate(el => el.getBoundingClientRect().right)).toBeLessThanOrEqual(0);
-  await page.locator('#mobileHamburger').click();
+  await page.evaluate(() => openSidebar());
   await expect(sidebar).toHaveClass(/open/);
-  await page.locator('.header h1').click();
+  await page.locator('.app').click({ position: { x: 700, y: 300 } });
   await expect(sidebar).not.toHaveClass(/open/);
   await page.setViewportSize({ width: 1100, height: 700 });
 });
@@ -304,6 +304,11 @@ test('prompt studio visually edits the active conversation system prompt', async
 
   await expect(page.locator('#section-prompts')).toHaveClass(/active/);
   await expect(page.locator('.prompt-section-card')).toHaveCount(6);
+  await page.getByRole('button', { name: '原始文本' }).click();
+  await expect(page.locator('#promptRawText')).toContainText('你是「我的学习桌面」的内置 AI 助手');
+  const untouched = await page.evaluate(() => ({ prompt: getActiveConv().systemPrompt, mode: getActiveConv().systemPromptMode || '', hasBuilder: !!getActiveConv().promptBuilder }));
+  expect(untouched).toEqual({ prompt: '', mode: '', hasBuilder: false });
+  await page.getByRole('button', { name: '可视化', exact: true }).click();
   await page.getByRole('button', { name: '新建对话' }).click();
   await page.locator('#promptNameInput').fill('物理概念讲解');
   await page.locator('#promptSection-role').fill('你是一位物理老师。');
@@ -315,10 +320,11 @@ test('prompt studio visually edits the active conversation system prompt', async
   await expect(page.locator('#promptPreviewText')).toContainText('请解释 动量守恒');
   const applied = await page.evaluate(() => {
     const conv = getActiveConv();
-    return { systemPrompt: conv.systemPrompt, hasBuilder: !!conv.promptBuilder };
+    return { systemPrompt: conv.systemPrompt, mode: conv.systemPromptMode, hasBuilder: !!conv.promptBuilder };
   });
   expect(applied.systemPrompt).toContain('【角色设定】\n你是一位物理老师。');
   expect(applied.systemPrompt).toContain('动量守恒');
+  expect(applied.mode).toBe('full');
   expect(applied.hasBuilder).toBe(true);
   await page.getByRole('button', { name: /返回当前对话/ }).click();
   await expect(page.locator('#section-ai')).toHaveClass(/active/);

@@ -228,3 +228,48 @@ test('note preview builds a hierarchical TOC and jumps to the selected heading',
   await page.locator('#notesTocToggleBtn').click();
   await expect(page.locator('#notesTocPanel')).toHaveClass(/visible/);
 });
+
+test('immersive note editing fills the app window and reveals edge controls', async () => {
+  await page.setViewportSize({ width: 1186, height: 720 });
+  await page.evaluate(() => {
+    window.switchTab('notes');
+    window.setNotesImmersive(true);
+  });
+
+  const section = page.locator('#section-notes');
+  await expect(section).toHaveClass(/notes-immersive/);
+  const state = await page.evaluate(() => {
+    const bounds = document.getElementById('section-notes').getBoundingClientRect();
+    const display = selector => getComputedStyle(document.querySelector(selector)).display;
+    return {
+      bounds: [bounds.x, bounds.y, bounds.width, bounds.height].map(Math.round),
+      editorVisible: display('#notesTextarea') !== 'none',
+      title: display('.notes-editor-header'),
+      tags: display('#notesTagBar'),
+      keywords: display('#notesKeywordsBar')
+    };
+  });
+  expect(state).toEqual({
+    bounds: [0, 0, 1186, 720],
+    editorVisible: true,
+    title: 'none',
+    tags: 'none',
+    keywords: 'none'
+  });
+
+  const toolbar = page.locator('#notesFormatToolbar');
+  const footer = page.locator('#section-notes .notes-editor-footer');
+  await page.mouse.move(500, 360);
+  await expect(toolbar).toHaveCSS('visibility', 'hidden');
+  await expect(footer).toHaveCSS('visibility', 'hidden');
+  await page.mouse.move(500, 1);
+  await expect(toolbar).toHaveCSS('visibility', 'visible');
+  await page.mouse.move(500, 360);
+  await expect(toolbar).toHaveCSS('visibility', 'hidden');
+  await page.mouse.move(500, 719);
+  await expect(footer).toHaveCSS('visibility', 'visible');
+
+  await page.keyboard.press('Escape');
+  await expect(section).not.toHaveClass(/notes-immersive/);
+  await expect(page.locator('body')).not.toHaveClass(/notes-immersive/);
+});

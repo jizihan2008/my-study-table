@@ -4781,25 +4781,49 @@ switchSettingsTab = function(tab) {
   }
 };
 
-// ═══════════ CloudBase for Supabase 连接配置（好友 & 插件市场共享） ═══════════
+// ═══════════ Supabase 云服务连接配置（好友、同步与插件市场共享） ═══════════
 function loadSupabaseSettings() {
+  const providerEl = document.getElementById('supabaseProvider');
   const urlEl = document.getElementById('supabaseUrl');
   const keyEl = document.getElementById('supabaseAnonKey');
   if (!urlEl || !keyEl) return;
   const cfg = getFriendsConfig();
-  urlEl.value = cfg.envId || cfg.url || '';
-  keyEl.value = cfg.accessKey || cfg.anonKey || '';
+  const builtIn = cfg.platform === 'aliyun-free';
+  if (providerEl) providerEl.value = builtIn ? 'aliyun' : 'custom';
+  urlEl.value = builtIn ? '' : (cfg.url || '');
+  keyEl.value = builtIn ? '' : (cfg.anonKey || '');
+  updateSupabaseProviderFields();
 }
 
-// 保存 CloudBase 配置并测试连接（函数名保留，避免破坏旧版 HTML 调用）
+function updateSupabaseProviderFields(clearCustomValues) {
+  const provider = document.getElementById('supabaseProvider')?.value || 'aliyun';
+  const fields = document.getElementById('supabaseManualFields');
+  const hint = document.getElementById('supabaseConfigHint');
+  const builtIn = provider === 'aliyun';
+  if (fields) fields.style.display = builtIn ? 'none' : 'block';
+  if (clearCustomValues && builtIn) {
+    const urlEl = document.getElementById('supabaseUrl');
+    const keyEl = document.getElementById('supabaseAnonKey');
+    if (urlEl) urlEl.value = '';
+    if (keyEl) keyEl.value = '';
+  }
+  if (hint) hint.innerHTML = builtIn
+    ? '使用应用内置的阿里云 Supabase，无需填写连接信息。首次部署只需执行 <b>cloudbase/schema.sql</b>。'
+    : '连接你自己的 Supabase 兼容项目。请填写项目 URL 与 anon public key；不要填写 service_role key。';
+}
+
+// 保存云服务配置并测试连接（函数名保留，避免破坏旧版 HTML 调用）
 async function saveSupabaseSettings(reconnect) {
+  const providerEl = document.getElementById('supabaseProvider');
   const urlEl = document.getElementById('supabaseUrl');
   const keyEl = document.getElementById('supabaseAnonKey');
   const btn = document.getElementById('supabaseSaveBtn');
   const st = document.getElementById('supabaseStatus');
   if (!urlEl || !keyEl) return;
-  const envId = urlEl.value.trim();
-  const accessKey = keyEl.value.trim();
+  const provider = providerEl?.value || 'aliyun';
+  const endpoint = urlEl.value.trim();
+  const publicKey = keyEl.value.trim();
+  const builtIn = provider === 'aliyun';
 
   const showStatus = (cls, msg) => {
     if (!st) return;
@@ -4808,20 +4832,27 @@ async function saveSupabaseSettings(reconnect) {
     st.style.display = 'block';
   };
 
-  if (!envId || !accessKey) {
-    showStatus('error', '⚠️ 请先填写 Env ID 和 Publishable Key');
+  if (!builtIn && (!endpoint || !publicKey)) {
+    showStatus('error', '⚠️ 请先填写 Supabase URL 和 Anon Key');
     return;
   }
-  if (!/^[a-zA-Z0-9-]+$/.test(envId)) {
-    showStatus('error', '⚠️ Env ID 格式不正确');
-    return;
+  if (!builtIn) {
+    try {
+      const parsed = new URL(endpoint);
+      if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') throw new Error('protocol');
+    } catch (e) {
+      showStatus('error', '⚠️ Supabase URL 格式不正确，应以 https:// 或 http:// 开头');
+      return;
+    }
   }
 
   const btnHtml = btn ? btn.innerHTML : '';
   if (btn) { btn.disabled = true; btn.innerHTML = '⏳ 正在连接…'; }
   showStatus('info', '正在保存配置并测试连接…');
 
-  const nextConfig = { provider: 'cloudbase', envId, region: 'ap-shanghai', accessKey };
+  const nextConfig = builtIn
+    ? cloneBuiltinCloudConfig()
+    : { provider: 'supabase', platform: 'custom', url: endpoint.replace(/\/+$/, ''), anonKey: publicKey };
   saveFriendsConfig(nextConfig);
   // 重置两端客户端
   if (typeof resetSupabaseClient === 'function') resetSupabaseClient();
@@ -4834,17 +4865,17 @@ async function saveSupabaseSettings(reconnect) {
   try {
     const client = getSupabaseClient();
     if (!client) {
-      test = { ok: false, error: '客户端初始化失败，请检查 Env ID 和 Publishable Key' };
+      test = { ok: false, error: builtIn ? '内置阿里云客户端初始化失败' : '客户端初始化失败，请检查 Supabase URL 和 Anon Key' };
     } else {
-      const { error } = await client.from('profiles').select('id').limit(1);
+      const { error } = await client.from('plugin_store_items').select('id').limit(1);
       if (!error) {
         test = { ok: true };
       } else if (error.code === '42P01' || /relation.*does not exist/i.test(error.message || '')) {
-        test = { ok: false, error: '⚠️ 数据库中找不到表：请先在 CloudBase SQL Editor 执行 cloudbase/schema.sql' };
+        test = { ok: false, error: '⚠️ 数据库中找不到表：请先在 Supabase SQL Editor 执行 cloudbase/schema.sql' };
       } else if (error.code === '42501' || /permission denied/i.test(error.message || '')) {
         test = { ok: false, error: '⚠️ 无表访问权限：请确认已执行 schema.sql（含 GRANT 授权段），或打开 "Automatically expose new tables"' };
       } else if (error.code === 'PGRST301' || /JWT/i.test(error.message || '')) {
-        test = { ok: false, error: '⚠️ Publishable Key 无效，请从 CloudBase 控制台重新复制' };
+        test = { ok: false, error: '⚠️ 前端公开密钥无效，请从云服务控制台重新复制' };
       } else {
         test = { ok: false, error: '连接失败：' + (error.message || '未知错误') };
       }
@@ -4854,7 +4885,7 @@ async function saveSupabaseSettings(reconnect) {
   }
 
   if (test.ok) {
-    showStatus('success', '✅ 连接成功！已正确读写 profiles 表');
+    showStatus('success', '✅ 连接成功！已找到应用数据库结构');
     if (reconnect && typeof renderFriends === 'function') {
       if (document.getElementById('section-friends')?.classList.contains('active')) renderFriends();
     }

@@ -94,7 +94,12 @@ window.Store = (function () {
       ? { email, password, options }
       : { email, password });
     if (error) throw error;
-    if (data.user) _currentUser = data.user;
+    if (data.user) {
+      _currentUser = data.user;
+      if (data.session && typeof window.friendsEnsureProfile === 'function') {
+        await window.friendsEnsureProfile(data.user, { username, nickname: nickname || username });
+      }
+    }
     return data;
   }
 
@@ -106,13 +111,16 @@ window.Store = (function () {
       : { email: identifier.trim(), password };
     const { data, error } = await sb.auth.signInWithPassword(credentials);
     if (error) throw error;
-    if (data.user) _currentUser = data.user;
+    if (data.user) {
+      _currentUser = data.user;
+      if (typeof window.friendsEnsureProfile === 'function') await window.friendsEnsureProfile(data.user);
+    }
     return data;
   }
 
   async function storeSignOut() {
     const sb = getSupabaseClient();
-    if (sb) await sb.auth.signOut();
+    if (sb) await sb.auth.signOut(sb.provider === 'cloudbase' ? undefined : { scope: 'local' });
     _currentUser = null;
   }
 
@@ -139,6 +147,7 @@ window.Store = (function () {
   // 不涉及在线状态、简介等隐私字段（profiles 表 RLS 收紧为仅登录可读）。
   async function _enrichAuthorNames(list) {
     if (!list || !list.length) return;
+    if (getStoreConfig().platform === 'aliyun-free') return;
     const sb = getSupabaseClient();
     if (!sb) return;
     const ids = [...new Set(list.map(p => p.author_id).filter(Boolean))];
@@ -149,6 +158,31 @@ window.Store = (function () {
       (profs || []).forEach(p => { map[p.id] = (p.nickname || p.username || '').trim() || ''; });
       list.forEach(p => { if (map[p.author_id]) p.author_name = map[p.author_id]; });
     } catch (e) { /* 忽略 */ }
+  }
+
+  // 免费版不能用提权触发器维护平均分；评分明细公开可读，直接实时聚合。
+  async function _enrichRatingAverages(list) {
+    if (!list || !list.length) return;
+    const sb = getSupabaseClient();
+    if (!sb) return;
+    const ids = [...new Set(list.map(p => p.id).filter(Boolean))];
+    if (!ids.length) return;
+    try {
+      const { data, error } = await sb.from('plugin_ratings').select('plugin_id,rating').in('plugin_id', ids);
+      if (error) throw error;
+      const totals = {};
+      (data || []).forEach(row => {
+        const bucket = totals[row.plugin_id] || (totals[row.plugin_id] = { sum: 0, count: 0 });
+        bucket.sum += Number(row.rating) || 0;
+        bucket.count += 1;
+      });
+      list.forEach(item => {
+        const bucket = totals[item.id];
+        item.rating = bucket && bucket.count ? bucket.sum / bucket.count : 0;
+      });
+    } catch (e) {
+      console.warn('[store] enrich ratings error', e);
+    }
   }
 
   // ── 插件 CRUD ──
@@ -169,7 +203,7 @@ window.Store = (function () {
       const { data, error } = await q;
       if (error) throw error;
       _pluginsCache = data || [];
-      await _enrichAuthorNames(_pluginsCache);
+      await Promise.all([_enrichAuthorNames(_pluginsCache), _enrichRatingAverages(_pluginsCache)]);
       return _pluginsCache;
     } catch (e) {
       console.warn('[store] fetchPlugins error', e);
@@ -625,6 +659,7 @@ window.Store = (function () {
           <p>${_searchQuery || _tagFilter ? '没有匹配的插件' : '插件市场暂无内容，快去发布第一个插件吧！'}</p>
         </div>`;
       } else {
+        const showDownloadCount = getStoreConfig().platform !== 'aliyun-free';
         grid.innerHTML = plugins.map(p => {
           const installed = installedIds.has(p.ext_id);
           return `
@@ -642,7 +677,7 @@ window.Store = (function () {
             <div class="store-card-footer">
               <span class="store-card-author"><i data-lucide="user" style="width:13px;height:13px;"></i> ${_esc(p.author_name || '匿名')}</span>
               <span class="store-card-stats">
-                <span title="下载量"><i data-lucide="download" style="width:13px;height:13px;"></i> ${p.downloads || 0}</span>
+                ${showDownloadCount ? `<span title="下载量"><i data-lucide="download" style="width:13px;height:13px;"></i> ${p.downloads || 0}</span>` : ''}
                 <span title="评分" style="margin-left:8px;"><i data-lucide="star" style="width:13px;height:13px;"></i> ${p.rating ? p.rating.toFixed(1) : '-'}</span>
               </span>
             </div>

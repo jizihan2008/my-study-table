@@ -86,8 +86,16 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .nav-key-hint { font-size: 9px; opacity: .5; }
 .sidebar-nav-item.active .nav-key-hint { display: none; }
 .nav-badge { font-size: 9px; background: var(--badge-bg); color: var(--text-secondary); }
-.sidebar-edit-btn { margin-top: 14px; border-top: 1px solid var(--border); border-radius: 0; padding: 16px 13px 4px; font-size: 11px; }
-.app { max-width: 1500px; padding: 30px 36px 24px; }
+.sidebar-footer { flex-shrink: 0; border-top: 1px solid var(--border); padding-top: 10px; }
+.sidebar-edit-btn { margin-top: 0; border-top: 0; border-radius: 9px; padding: 8px 13px; font-size: 11px; }
+.sidebar-tools { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; padding: 8px 5px 0; }
+.sidebar-tool-btn {
+  width: 100%; min-width: 0; height: 32px; border: 0; border-radius: 8px;
+  display: grid; place-items: center; background: transparent; color: var(--text-secondary);
+  cursor: pointer; transition: var(--transition);
+}
+.sidebar-tool-btn:hover { color: var(--primary); background: var(--accent-soft); }
+.app { max-width: 1500px; padding: 22px 36px 24px; }
 .header { text-align: left; min-height: 102px; padding: 0 0 25px; display: flex; align-items: center; gap: 12px; }
 .header-heading { min-width: 0; flex: 1; }
 .workspace-eyebrow { font-size: 9px; font-weight: 650; letter-spacing: 2px; color: var(--text-secondary); margin-bottom: 5px; }
@@ -125,6 +133,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .notes-view-toggle { padding: 3px; background: var(--input-bg); border-radius: 8px; }
 .notes-view-btn { border-radius: 6px; font-size: 11px; }
 .notes-view-btn.active { box-shadow: var(--shadow); }
+.notes-immersive-toggle { display: inline-flex; align-items: center; gap: 5px; }
+.notes-immersive-toggle .lucide-icon { width: 13px; height: 13px; }
+.notes-immersive-exit { display: none; }
 .notes-format-toolbar { background: var(--card); border-color: var(--border); padding-top: 8px; padding-bottom: 8px; }
 .notes-editor-footer { color: var(--text-secondary); font-size: 10px; }
 .modal { border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-lg); }
@@ -206,7 +217,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   .mobile-hamburger { display: flex; position: static; width: 36px; height: 36px; border: 1px solid var(--border); border-radius: 9px; background: var(--card); }
 }
 @media (min-width: 801px) and (max-width: 1100px) {
-  .app { padding: 24px; }
+  .app { padding: 20px 24px 24px; }
   .study-illustration { transform: scale(.85); margin: 0 -10px; }
 }
 @media (min-width: 801px) and (max-height: 800px) {
@@ -219,7 +230,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 @media (max-width: 800px) {
   body { padding-left: 0; }
-  .app { padding: 0 12px calc(76px + env(safe-area-inset-bottom, 0px)); min-height: 100dvh; }
+  .app { padding: calc(12px + env(safe-area-inset-top, 0px)) 12px calc(76px + env(safe-area-inset-bottom, 0px)); min-height: 100dvh; }
   .header { display: flex !important; min-height: 82px; padding: 14px 2px; gap: 10px; }
   .workspace-eyebrow, .header p { display: none; }
   .header h1 { display: block; font-size: 21px; line-height: 1.3; letter-spacing: -.5px; }
@@ -271,9 +282,65 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 }
 
 /* Final reading and compact-layout refinements. */
-#section-notes > .card > .section-header { min-height: 0; margin-bottom: 0; }
-#section-notes .notes-layout { margin-top: 0; border-top: none; }
+#section-notes > .card { padding: 0; }
+#section-notes > .card > .section-header { display: none; }
+#section-notes .notes-layout { margin: 0; gap: 0; border-top: none; }
+#section-notes .notes-sidebar-wrap { border-right: 1px solid var(--border); }
+#section-notes .notes-sidebar,
+#section-notes .notes-editor { border-radius: 0; }
 .notes-editor-preview { background: var(--card); }
+
+/* Window-contained immersive note editor. This fills the app window without
+   requesting native/browser fullscreen. */
+body.notes-immersive { overflow: hidden; }
+body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mobile-drawer-overlay, .mobile-more-panel) {
+  visibility: hidden !important; pointer-events: none !important;
+}
+#section-notes.notes-immersive {
+  position: fixed; inset: 0; z-index: 500;
+  display: flex; width: 100vw; height: 100vh; height: 100dvh;
+  background: var(--bg); overflow: hidden;
+}
+#section-notes.notes-immersive > .card {
+  width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none;
+}
+#section-notes.notes-immersive .notes-layout,
+#section-notes.notes-immersive .notes-editor,
+#section-notes.notes-immersive .notes-document-workspace { width: 100%; height: 100%; }
+#section-notes.notes-immersive :is(.notes-sidebar-reopen, .notes-sidebar-wrap, .notes-editor-header, .notes-tag-bar, .notes-keywords-bar, .notes-mobile-views) {
+  display: none !important;
+}
+#section-notes.notes-immersive .notes-format-toolbar,
+#section-notes.notes-immersive .notes-editor-footer {
+  position: absolute; left: 0; right: 0; z-index: 6;
+  opacity: 0; visibility: hidden; pointer-events: none;
+  transition: transform .18s ease, opacity .18s ease, visibility 0s linear .18s;
+  background: color-mix(in srgb, var(--card) 94%, transparent);
+  backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
+  box-shadow: var(--shadow-lg);
+}
+#section-notes.notes-immersive .notes-format-toolbar {
+  top: 0; transform: translateY(calc(-100% - 2px));
+}
+#section-notes.notes-immersive .notes-editor-footer {
+  bottom: 0; transform: translateY(calc(100% + 2px));
+}
+#section-notes.notes-immersive.show-top-controls .notes-format-toolbar,
+#section-notes.notes-immersive.show-bottom-controls .notes-editor-footer {
+  opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0);
+  transition-delay: 0s;
+}
+#section-notes.notes-immersive .notes-immersive-exit {
+  position: absolute; top: 12px; right: 12px; z-index: 8;
+  display: grid; place-items: center; width: 34px; height: 34px;
+  padding: 0; border: 1px solid var(--border); border-radius: 9px;
+  color: var(--text-secondary); background: color-mix(in srgb, var(--card) 88%, transparent);
+  backdrop-filter: blur(10px); -webkit-backdrop-filter: blur(10px);
+  cursor: pointer; opacity: .45; transition: var(--transition);
+}
+#section-notes.notes-immersive .notes-immersive-exit:hover { opacity: 1; color: var(--primary); background: var(--card); }
+#section-notes.notes-immersive .notes-immersive-exit .lucide-icon { width: 16px; height: 16px; }
+#section-notes.notes-immersive .notes-editor-textarea { padding: 24px clamp(20px, 4vw, 64px); }
 .progress-bar-wrap { background: var(--input-bg); border: 1px solid var(--border); height: 24px; }
 .progress-bar-fill { background: color-mix(in srgb, var(--primary) 22%, var(--card)); }
 .progress-text { color: var(--text); text-shadow: none; font-size: 11px; }

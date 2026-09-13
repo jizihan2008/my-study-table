@@ -4,7 +4,7 @@
 
 **版本**: v0.3.0  
 **技术栈**: 纯前端 HTML + CSS + JavaScript（Electron 可选 / 手机端 PWA）  
-**数据存储**: localStorage + CloudBase for Supabase 云同步（跨设备）
+**数据存储**: localStorage + CloudBase / 阿里云 Supabase 云同步（跨设备）
 **自动更新**: electron-updater（GitHub Releases 发布）  
 
 My Study Table 是一款面向学习者的多功能桌面管理工具，集成了待办管理、笔记系统、日程追踪、AI 助手、计时器、习惯追踪、音乐播放器等功能，帮助你高效规划学习、记录知识、追踪进度。
@@ -625,7 +625,7 @@ npm start
 
 ## 17. 📱 手机端 PWA（跨设备）
 
-手机端采用 **PWA（渐进式 Web 应用）**，复用同一套前端代码，改造为响应式移动布局，部署到云端后手机浏览器可直接访问，并支持「添加到主屏幕」获得类原生体验。手机端与桌面端共用同一套学习数据，通过 **CloudBase 双向云同步**保持一致；PDF 电子书原文通过 **WebRTC 局域网传输**（类似 LocalSend）。
+手机端采用 **PWA（渐进式 Web 应用）**，复用同一套前端代码，改造为响应式移动布局，部署到云端后手机浏览器可直接访问，并支持「添加到主屏幕」获得类原生体验。手机端与桌面端共用同一套学习数据，通过 **Supabase 双向云同步**保持一致；PDF 电子书原文通过 **WebRTC 局域网传输**（类似 LocalSend）。
 
 ### 一、部署
 
@@ -633,13 +633,15 @@ npm start
 
 ### 二、云同步设置
 
-1. 手机端与桌面端都使用「好友」系统的 CloudBase 账号登录。
+1. 手机端与桌面端都使用「好友」系统中配置的同一云服务账号登录。
 2. 在「设置 → 同步」面板开启云同步。
 3. 首次同步：桌面端（本地已有数据）自动上传，手机端（新设备）自动拉取；之后双端在前台按低频轮询合并变更。
 
 **同步范围**：待办、笔记、计时记录、习惯、任务线、电子书元数据（含章节摘要）、日历、统计等学习数据。
 
-**绝不上传**：AI 对话 API Key、CloudBase 配置、邮箱授权码等敏感凭据（仅存各自本地）。手机端 AI 对话可独立配置自己的 API Key。
+**绝不上传**：AI 对话 API Key、云服务配置、邮箱授权码等敏感凭据（仅存各自本地）。手机端 AI 对话可独立配置自己的 API Key。
+
+阿里云 Supabase 免费版：在 Dashboard 的 SQL Editor 执行 `cloudbase/schema.sql`，然后进入“设置 → 云服务连接”，选择“阿里云 Supabase 免费版”并填写 `SUPABASE_URL` 与 `SUPABASE_ANON_KEY`。该兼容 Schema 不依赖免费实例禁用的 `SECURITY DEFINER`。
 
 ### 三、WebRTC 传输 PDF
 

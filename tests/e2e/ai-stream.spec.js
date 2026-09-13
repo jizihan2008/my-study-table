@@ -119,6 +119,7 @@ test('regeneration through real tool loop persists its final answer', async () =
   expect(calls).toBe(2);
   expect(output).toEqual({ final: '这是工具查询后的最终回答。', count: 1, keyName: '原始模型', loading: false });
   await expect(page.locator('#aiMessages')).toContainText('这是工具查询后的最终回答。');
+  await expect(page.locator('#aiMessages .ai-tool-status.success')).toContainText('list_todos');
 });
 
 test('context budget can be saved and new key form restores its default', async () => {
