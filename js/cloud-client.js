@@ -13,6 +13,53 @@
     return !!(config && config.url && config.anonKey && config.provider !== 'cloudbase');
   }
 
+  // Safari（尤其是添加到主屏幕、隐私模式或存储空间紧张时）可能允许登录请求
+  // 成功，却在 Supabase 保存会话时拒绝 localStorage。提供逐级回退，保证同一
+  // 运行会话内好友页、设置页和同步模块读取到完全相同的认证状态。
+  function createResilientAuthStorage() {
+    const memory = Object.create(null);
+
+    function availableStorage(name) {
+      try {
+        const storage = root && root[name];
+        return storage && typeof storage.getItem === 'function' ? storage : null;
+      } catch (e) { return null; }
+    }
+
+    return {
+      getItem: function (key) {
+        const stores = [availableStorage('localStorage'), availableStorage('sessionStorage')];
+        for (let i = 0; i < stores.length; i++) {
+          if (!stores[i]) continue;
+          try {
+            const value = stores[i].getItem(key);
+            if (value != null) {
+              memory[key] = value;
+              return value;
+            }
+          } catch (e) {}
+        }
+        return Object.prototype.hasOwnProperty.call(memory, key) ? memory[key] : null;
+      },
+      setItem: function (key, value) {
+        memory[key] = String(value);
+        const stores = [availableStorage('localStorage'), availableStorage('sessionStorage')];
+        for (let i = 0; i < stores.length; i++) {
+          if (!stores[i]) continue;
+          try { stores[i].setItem(key, String(value)); } catch (e) {}
+        }
+      },
+      removeItem: function (key) {
+        delete memory[key];
+        const stores = [availableStorage('localStorage'), availableStorage('sessionStorage')];
+        for (let i = 0; i < stores.length; i++) {
+          if (!stores[i]) continue;
+          try { stores[i].removeItem(key); } catch (e) {}
+        }
+      }
+    };
+  }
+
   function createCloudBaseClient(config) {
     if (!root.cloudbase || typeof root.cloudbase.init !== 'function') return null;
     const app = root.cloudbase.init({
@@ -45,7 +92,7 @@
         persistSession: true,
         autoRefreshToken: true,
         detectSessionInUrl: false,
-        storage: root.localStorage
+        storage: createResilientAuthStorage()
       }
     });
     client.provider = 'supabase';
@@ -60,6 +107,7 @@
 
   return {
     createClient,
+    createResilientAuthStorage,
     isCloudBaseConfig,
     isSupabaseConfig
   };

@@ -62,3 +62,12 @@ test('Supabase logout is local-scoped in both friends and plugin store flows', (
   assert.match(friends, /signOut\(client\.provider === 'cloudbase' \? undefined : \{ scope: 'local' \}\)/);
   assert.match(store, /signOut\(sb\.provider === 'cloudbase' \? undefined : \{ scope: 'local' \}\)/);
 });
+
+test('successful login renders from the returned session instead of immediately rereading mobile storage', () => {
+  const friends = fs.readFileSync(path.join(root, 'js', 'friends.js'), 'utf8');
+  assert.match(friends, /return \{ ok: true, data, profile \}/);
+  assert.match(friends, /friendsAuthUser = res\.profile/);
+  assert.match(friends, /await renderFriends\(res\.data && res\.data\.session\)/);
+  assert.match(friends, /const session = sessionHint \|\| await friendsGetSession\(\)/);
+  assert.match(friends, /friendsGetMyProfile\(session\.user\)/);
+});

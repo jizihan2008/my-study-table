@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v123';
+const VERSION = 'mst-v125';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -30,7 +30,7 @@ const PRECACHE_URLS = [
   './lib/markdown/highlight.min.js',
   './lib/markdown/highlight-github-dark-dimmed.min.css',
   './lib/cloudbase/cloudbase.js',
-  './js/cloud-client.js?v=20260910-r1',
+  './js/cloud-client.js?v=20260913-r2',
   './js/markdown.js?v=20260827-r1',
   './js/ai-tree.js?v=20260912-r3',
   './js/ai-render.js?v=20260914-r3',
@@ -50,7 +50,7 @@ const PRECACHE_URLS = [
   './js/env.js?v=20260911-r2',
   './js/core.js?v=20260911-r10',
   './js/friends-polling-policy.js?v=20260910-r1',
-  './js/friends.js?v=20260913-r3',
+  './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
   './js/settings.js?v=20260914-r5',
   './js/store.js?v=20260913-r2',

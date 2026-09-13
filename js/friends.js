@@ -159,11 +159,15 @@ async function friendsEnsureProfile(user, overrides) {
 }
 
 // 获取当前登录用户的 profile 行；缺失时自动补建。
-async function friendsGetMyProfile() {
+async function friendsGetMyProfile(userHint) {
   const client = getSupabaseClient();
   if (!client) return null;
   try {
-    const { data: { user } } = await client.auth.getUser();
+    let user = userHint || null;
+    if (!user) {
+      const authResult = await client.auth.getUser();
+      user = authResult && authResult.data ? authResult.data.user : null;
+    }
     if (!user) return null;
     const { data, error } = await client.from('profiles')
       .select('*').eq('id', user.id).maybeSingle();
@@ -232,8 +236,13 @@ async function friendsLogin(identifier, password) {
     const { data, error } = await client.auth.signInWithPassword(credentials);
     if (error) return { error: error.message };
     if (!data.user) return { error: '登录失败，请重试。' };
-    await friendsEnsureProfile(data.user);
-    return { ok: true, data };
+    // 直接使用 signIn 返回的 user 建立/读取资料。iPad Safari 中 localStorage
+    // 刚写入后立刻调用 getUser/getSession 偶尔会短暂返回空值，不能据此把成功登录误判为未登录。
+    const profile = await friendsEnsureProfile(data.user);
+    if (!profile) {
+      return { error: '账号已验证，但无法载入用户资料。请确认已执行最新版 cloudbase/schema.sql 后重试。' };
+    }
+    return { ok: true, data, profile };
   } catch (e) {
     return { error: '登录异常：' + e.message };
   }
@@ -1112,7 +1121,7 @@ async function refreshFriendsAll() {
 // ═══════════════ 主渲染入口 ═══════════════
 // 整体 try/catch：Supabase 服务端故障（如 504 网关超时）时渲染错误界面+重试按钮，
 // 而不是让 async 链路中断导致 friendsApp 停留在空白。
-async function renderFriends() {
+async function renderFriends(sessionHint) {
   const container = document.getElementById('friendsApp');
   if (!container) return;
   try {
@@ -1121,7 +1130,9 @@ async function renderFriends() {
       initFriendsLucide();
       return;
     }
-    const session = await friendsGetSession();
+    // 登录完成后的首次渲染优先使用 signIn 的直接返回值，避免移动端浏览器
+    // 在持久化会话尚未完全落盘的瞬间再次读取并误判为未登录。
+    const session = sessionHint || await friendsGetSession();
     if (!session) {
       container.innerHTML = renderFriendsLogin();
       initFriendsLucide();
@@ -1129,7 +1140,7 @@ async function renderFriends() {
     }
     // 已登录
     if (!friendsAuthUser) {
-      friendsAuthUser = await _withTimeout(friendsGetMyProfile(), 8000, 'getMyProfile');
+      friendsAuthUser = await _withTimeout(friendsGetMyProfile(session.user), 8000, 'getMyProfile');
     }
     if (!friendsAuthUser) {
       // profile 未建（可能刚注册），尝试重取或登出
@@ -1281,10 +1292,10 @@ async function frDoLogin() {
   frSetAuthStatus('登录中…');
   const res = await friendsLogin(identifier, password);
   if (!res.ok) { frSetAuthStatus(res.error, true); return; }
-  friendsAuthUser = await friendsGetMyProfile();
+  friendsAuthUser = res.profile;
   frSetAuthStatus('');
   friendsShowToast('✅ 登录成功，欢迎回来！');
-  renderFriends();
+  await renderFriends(res.data && res.data.session);
 }
 
 async function frDoRegister() {
