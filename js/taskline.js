@@ -1922,7 +1922,7 @@ async function tlAiGenerateDesc(questId) {
       { role: 'system', content: systemPrompt },
       { role: 'user', content: prompt }
     ];
-    const { cleanText } = await callAiApi(apiMessages, apiCfg, null);
+    const { cleanText } = await callAiApi(apiMessages, apiCfg, null, { feature: 'taskline' });
     if (cleanText) {
       // 去除可能的 markdown 代码块包裹和 <memory> 标签，取纯文本回填
       let text = cleanText

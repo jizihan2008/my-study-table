@@ -187,16 +187,28 @@ test('credentials leave localStorage after encrypted migration', async () => {
 });
 
 test('AI policy detects secrets and records token usage', async () => {
-  const result = await page.evaluate(() => {
+  const result = await page.evaluate(async () => {
+    window.AIClient.clearUsage();
     const matches = window.AIClient.findSensitiveContent([
       { role: 'user', content: 'password: hunter2 and sk-abcdefghijklmnopqrstuvwxyz' }
     ]);
-    const usage = window.AIClient.recordUsage('gpt-4o-mini', { prompt_tokens: 1000, completion_tokens: 500 });
-    return { matches, usage, store: JSON.parse(localStorage.getItem('study_ai_usage_v1') || '{}') };
+    const usage = window.AIClient.recordUsage('gpt-4o-mini', { prompt_tokens: 1000, completion_tokens: 500 }, { feature: 'chat' });
+    window.renderStats();
+    await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+    return {
+      matches, usage,
+      store: JSON.parse(localStorage.getItem('study_ai_usage_v2') || '{}'),
+      panel: document.getElementById('statsAiTotal')?.textContent,
+      models: document.getElementById('statsAiModels')?.textContent,
+      accuracy: document.getElementById('statsAiAccuracy')?.textContent
+    };
   });
   expect(result.matches).toEqual(expect.arrayContaining(['API Key', '密码字段']));
   expect(result.usage.inputTokens).toBe(1000);
-  expect(Object.values(result.store)[0].requests).toBeGreaterThan(0);
+  expect(Object.values(result.store.days)[0].requests).toBeGreaterThan(0);
+  expect(result.panel).toBe('1.5K');
+  expect(result.models).toContain('gpt-4o-mini');
+  expect(result.accuracy).toContain('精确 1 次');
 });
 
 test('calendar and task-line writes enter the persistent sync queue', async () => {

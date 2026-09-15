@@ -602,6 +602,9 @@ async function executeCallAiAndPush(params, conv) {
     }
 
     const data = await resp.json();
+    if (typeof AIClient !== 'undefined') AIClient.recordUsage(targetCfg.model, data.usage, {
+      feature: 'call_ai', input: promptText, output: data.choices?.[0]?.message
+    });
     const reply = data.choices?.[0]?.message?.content || '（未收到回复）';
     const now = new Date();
     const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;

@@ -20,7 +20,7 @@
     bgOverlay: .12, bgBlur: 0, material: 'solid', glass: false,
     glassBlur: 18, glassOpacity: 65, glassCurve: 35, glassDeflect: 25, glassGlow: 55,
     glassPointerIntensity: 20, glassPointerSize: 240,
-    glassSaturation: 125, glassQuality: 'auto', glassMotion: true
+    glassSaturation: 125, glassQuality: 'auto', glassMotion: true, disableModalOverlay: false
   };
   const LIMITS = { bgAngle: [0,360], bgOverlay: [0,.8], bgBlur: [0,24], glassBlur: [0,40],
     glassPointerIntensity: [0,100], glassPointerSize: [80,600], glassOpacity: [0,100], glassCurve: [0,100], glassDeflect: [0,100], glassGlow: [0,100], glassSaturation: [100,180] };
@@ -51,7 +51,7 @@
     if (key === 'bgType') return ['none','color','gradient','image','video'].includes(value) ? value : 'none';
     if (key === 'material') return ['solid','frosted','liquid'].includes(value) ? value : 'solid';
     if (key === 'glassQuality') return ['auto','high','low'].includes(value) ? value : 'auto';
-    if (key === 'glassMotion' || key === 'glass') return value === true;
+    if (key === 'glassMotion' || key === 'glass' || key === 'disableModalOverlay') return value === true;
     return value;
   }
   function presetMode(preset, mode) {

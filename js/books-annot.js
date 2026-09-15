@@ -328,7 +328,7 @@ function _bkAnnotRunAi(wrap) {
   callAiApi([
     { role: 'system', content: '你是学习伙伴。请针对用户提供的教材知识库节点，写一条简短的解释性旁批（1-3 句话），帮助学习者理解这个知识点。用中文直接输出旁批文本本身，不要任何前缀、标题或 Markdown 代码块。' },
     { role: 'user', content: '【节点类型】' + meta.label + '\n【节点内容】\n' + ctx }
-  ], cfg, null).then(res => {
+  ], cfg, null, { feature: 'books' }).then(res => {
     const raw = (res && (res.cleanText || res.rawReply)) || '';
     const clean = String(raw).replace(/```(?:markdown|md)?\s*|```/g, '').trim();
     if (clean) {

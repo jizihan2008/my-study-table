@@ -210,6 +210,47 @@
     });
   }
 
+  function installCollapsibleBlocks(md) {
+    const openPattern = /^ {0,3}:::fold(?:[ \t]+(.*?))?[ \t]*$/;
+    const closePattern = /^ {0,3}:::[ \t]*$/;
+
+    md.block.ruler.before('fence', 'collapsible_block', function (state, startLine, endLine, silent) {
+      const start = state.bMarks[startLine] + state.tShift[startLine];
+      const firstLine = state.src.slice(start, state.eMarks[startLine]);
+      const match = openPattern.exec(firstLine);
+      if (!match) return false;
+
+      let nextLine = startLine + 1;
+      for (; nextLine < endLine; nextLine++) {
+        const lineStart = state.bMarks[nextLine] + state.tShift[nextLine];
+        const line = state.src.slice(lineStart, state.eMarks[nextLine]);
+        if (closePattern.test(line)) break;
+      }
+      if (nextLine >= endLine) return false;
+      if (silent) return true;
+
+      const token = state.push('collapsible_block', 'details', 0);
+      token.block = true;
+      token.map = [startLine, nextLine + 1];
+      token.meta = {
+        title: String(match[1] || '').trim() || '折叠内容',
+        body: nextLine > startLine + 1
+          ? state.src.slice(state.bMarks[startLine + 1], state.bMarks[nextLine]).replace(/\n$/, '')
+          : ''
+      };
+      state.line = nextLine + 1;
+      return true;
+    }, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
+
+    md.renderer.rules.collapsible_block = function (tokens, idx, options, env) {
+      const meta = tokens[idx].meta || {};
+      const title = md.renderInline(meta.title || '折叠内容', env).trim();
+      const body = md.render(meta.body || '', env);
+      return '<details class="note-fold"><summary>' + title + '</summary>' +
+        '<div class="note-fold-body">' + body + '</div></details>\n';
+    };
+  }
+
   function createRenderer(deps) {
     const markdownit = deps && deps.markdownit;
     if (typeof markdownit !== 'function') return null;
@@ -238,6 +279,7 @@
     if (typeof footnote === 'function') md.use(footnote);
     installMath(md, katex);
     installTaskLists(md);
+    installCollapsibleBlocks(md);
 
     const defaultFence = md.renderer.rules.fence.bind(md.renderer.rules);
     md.renderer.rules.fence = function (tokens, idx, options, env, self) {

@@ -300,7 +300,7 @@ if (!Array.isArray(aiConvs)) aiConvs = [];
 let activeConvId = localStorage.getItem('study_active_conv') ? Number(localStorage.getItem('study_active_conv')) : null;
 let aiLoadingStates = {}; // { [convId]: true/false } — per-conversation loading state
 let aiStopRequests = {};  // { [convId]: true/false } — per-conversation stop request
-let aiAttachments = []; // [{name, file, size}] — txt files only
+let aiAttachments = []; // [{name, file, size, pdfMode?, ocrMode?, dataUrls?}]
 
 // Per-conversation helpers
 function isAiLoading(convId) { return !!aiLoadingStates[convId || getActiveConvId()]; }
@@ -2556,7 +2556,10 @@ async function generateConvTitle(conv) {
     });
     if (resp.ok) {
       const data = await resp.json();
-      const title = (data.choices?.[0]?.message?.content || '').trim().replace(/["""'']/g, '').slice(0, 20);
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+        feature: 'conversation_title', input: convContext, output: data.choices?.[0]?.message
+      });
+      const title = (data.choices?.[0]?.message?.content || '').trim().replace(/["“”'']/g, '').slice(0, 20);
       console.log('[TitleGen] Got title:', title);
       if (title && title.length >= 2) {
         conv.title = title;
@@ -2918,6 +2921,7 @@ const MIGRATION_KEYS = [
   'study_calendar_events', 'study_stats', 'study_longterm_goals', 'study_quick_access',
   // 打卡 / 今日 / 链接 / AI
   'study_checkin', 'study_today_focus', 'study_links_v3', 'study_ai_convs', 'study_ai_memory',
+  'study_ai_usage_v1', 'study_ai_usage_v2',
   // UI/状态/敏感（仅本地备份，不同步）
   'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv',
   'study_api_keys', 'study_active_api_key_id', 'study_developer_mode', 'study_debug_mode',
@@ -3438,11 +3442,40 @@ function doDailyCheckin() {
 
   renderToday();
 
-  // Auto-generate daily report via AI (respect morning report toggle)
+  // Ask for optional context before auto-generating the morning report.
   const morningCfg = JSON.parse(localStorage.getItem('study_morning_cfg') || '{"enabled":true}');
   if (morningCfg.enabled !== false) {
-    generateDailyReport();
+    openCheckinReportPrompt();
   }
+}
+
+function openCheckinReportPrompt() {
+  const overlay = document.getElementById('checkinReportOverlay');
+  const input = document.getElementById('checkinReportInput');
+  if (!overlay || !input) {
+    generateDailyReport(); // Keep report generation available if the dialog markup is unavailable.
+    return;
+  }
+  input.value = '';
+  overlay.classList.add('open');
+  setTimeout(() => input.focus(), 0);
+}
+
+function closeCheckinReportPrompt(event) {
+  if (event && event.target !== document.getElementById('checkinReportOverlay')) return;
+  skipCheckinDailyReport();
+}
+
+function skipCheckinDailyReport() {
+  const overlay = document.getElementById('checkinReportOverlay');
+  if (overlay) overlay.classList.remove('open');
+}
+
+function submitCheckinDailyReport() {
+  const input = document.getElementById('checkinReportInput');
+  const userInstruction = input ? input.value.trim() : '';
+  skipCheckinDailyReport();
+  generateDailyReport(false, userInstruction);
 }
 
 // Get or create the daily report conversation
@@ -3484,6 +3517,67 @@ function getPastDateStr(daysAgo) {
 }
 
 // ── Helper: collect yesterday's data for the daily report ──
+function formatDailyReportFocusPath(focusItem) {
+  const todo = (typeof todos !== 'undefined' && Array.isArray(todos))
+    ? todos.find(t => t.id === focusItem.todoId)
+    : null;
+  return todo ? formatDailyReportTodoPath(todo) : (focusItem.text || '未命名任务');
+}
+
+function formatDailyReportTodoPath(todo, fallbackText) {
+  if (!todo) return fallbackText || '未命名任务';
+  const ancestors = typeof getAncestorPath === 'function'
+    ? getAncestorPath(todo.id).map(item => item.text).filter(Boolean)
+    : [];
+  return [...ancestors, todo.text || '未命名任务'].join(' > ');
+}
+
+function formatDailyReportNotePath(noteId, fallbackTitle) {
+  const note = (typeof notes !== 'undefined' && Array.isArray(notes))
+    ? notes.find(item => item.id === noteId)
+    : null;
+  if (!note) return fallbackTitle || '未命名';
+
+  const ancestors = [];
+  const seen = new Set([note.id]);
+  let parentId = note.parentId;
+  while (parentId !== null && parentId !== undefined && !seen.has(parentId)) {
+    const folder = notes.find(item => item.id === parentId && item.type === 'folder');
+    if (!folder) break;
+    seen.add(folder.id);
+    if (folder.title) ancestors.unshift(folder.title);
+    parentId = folder.parentId;
+  }
+  return [...ancestors, note.title || fallbackTitle || '未命名'].join(' > ');
+}
+
+// Only include timer metadata that is still meaningful to the report.  A timer
+// name is independent from its optional todo/goal link, so never treat an
+// unlinked (or later removed) target as a deleted timer session.
+function formatDailyReportTimerLabel(record) {
+  const parts = [];
+  const sessionName = typeof record.name === 'string' ? record.name.trim() : '';
+  if (sessionName) parts.push('⏱ ' + sessionName);
+
+  const targetId = record.targetId ?? record.todoId;
+  const targetType = record.targetType || 'todo';
+  if (targetId !== null && targetId !== undefined) {
+    if (targetType === 'goal') {
+      const goal = typeof loadGoals === 'function'
+        ? loadGoals().find(g => g.id === targetId)
+        : null;
+      if (goal && goal.text) parts.push('🎯 ' + goal.text);
+    } else {
+      const todo = (typeof todos !== 'undefined' && Array.isArray(todos))
+        ? todos.find(t => t.id === targetId)
+        : null;
+      if (todo && todo.text) parts.push('📋 ' + todo.text);
+    }
+  }
+
+  return parts.length > 0 ? parts.join(' · ') : '自由计时';
+}
+
 function collectDailyReportData() {
   const todayStr = getTodayStr();
   const yesterdayStr = getPastDateStr(1);
@@ -3532,16 +3626,7 @@ function collectDailyReportData() {
         ydayTimerMs += r.totalMs || 0;
         // Collect session details
         if (r.sessions && r.sessions.length > 0) {
-          const targetId = r.targetId || r.todoId;
-          const targetType = r.targetType || 'todo';
-          let targetName = '(已删除)';
-          if (targetType === 'goal') {
-            const g = loadGoals().find(g => g.id === targetId);
-            if (g) targetName = '🎯 ' + g.text;
-          } else {
-            const t = todos.find(t => t.id === targetId);
-            if (t) targetName = '📋 ' + t.text;
-          }
+          const targetName = formatDailyReportTimerLabel(r);
           for (const s of r.sessions) {
             const startStr = formatTimeOnly(s.start);
             const endStr = formatTimeOnly(s.end);
@@ -3550,16 +3635,7 @@ function collectDailyReportData() {
           }
         } else {
           // Record without session breakdown (e.g. debug mode)
-          const targetId = r.targetId || r.todoId;
-          const targetType = r.targetType || 'todo';
-          let targetName = '(已删除)';
-          if (targetType === 'goal') {
-            const g = loadGoals().find(g => g.id === targetId);
-            if (g) targetName = '🎯 ' + g.text;
-          } else {
-            const t = todos.find(t => t.id === targetId);
-            if (t) targetName = '📋 ' + t.text;
-          }
+          const targetName = formatDailyReportTimerLabel(r);
           ydayTimerSessions.push({ timeRange: '全天', duration: fmtTimer(r.totalMs || 0), targetName });
         }
       }
@@ -3720,7 +3796,7 @@ function showMiniToast(msg, type, persist) {
 
 // Auto-generate daily report after check-in (morning review style)
 // 返回 { ok, error }：手动触发（debugTriggerReport）可 force=true 绕过晨间开关
-async function generateDailyReport(force) {
+async function generateDailyReport(force, userInstruction) {
   const apiCfg = getEffectiveReportApiConfig();
   if (!apiCfg.apiKey) return { ok: false, error: '未配置日报 API Key（设置 → 更多设置 → 日报 Key）' };
 
@@ -3734,19 +3810,19 @@ async function generateDailyReport(force) {
   // ── Build a guided, flexible prompt ──
   // Focus on YESTERDAY's review + TODAY's direction
   const focusLines = data.focusItems.length > 0
-    ? data.focusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${f.text}`).join('\n')
+    ? data.focusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
     : '  （昨日未设置聚焦任务）';
 
   const doneTodoLines = data.yesterdayDoneTodos.length > 0
-    ? data.yesterdayDoneTodos.map(t => `  - ✅ ${t.text}`).join('\n')
+    ? data.yesterdayDoneTodos.map(t => `  - ✅ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  （昨日没有完成的待办）';
 
   const overdueLines = data.overdueTodos.length > 0
-    ? data.overdueTodos.map(t => `  - ⏰ ${t.text}（原定 ${t.dueDate}）`).join('\n')
+    ? data.overdueTodos.map(t => `  - ⏰ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}（原定 ${t.dueDate}）`).join('\n')
     : '  无';
 
   const todayDueLines = data.todayDueTodos.length > 0
-    ? data.todayDueTodos.map(t => `  - 📅 ${t.text}`).join('\n')
+    ? data.todayDueTodos.map(t => `  - 📅 ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  无';
 
   const undoneLines = data.undoneTodos.length > 0
@@ -3757,11 +3833,15 @@ async function generateDailyReport(force) {
     : '  无';
 
   const noteLines = data.ydayNotes.length > 0
-    ? data.ydayNotes.map(n => `  - 📝 ${n.title}`).join('\n')
+    ? data.ydayNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
     : '  无';
 
   const prevReportBlock = data.prevReport
     ? `\n📋 昨日日报回顾（上次日报的结尾部分供参考）：\n\`\`\`\n${data.prevReport.slice(0, 500)}\n\`\`\``
+    : '';
+
+  const userInstructionBlock = userInstruction
+    ? `\n\n📝 **我的补充 / 日报请求**\n${userInstruction}\n\n请将以上补充作为本次日报的重要上下文，并据此调整建议。`
     : '';
 
   const reportPrompt = `☀️ 晨间回顾 — ${data.todayStr}
@@ -3791,7 +3871,7 @@ ${data.reviewDueNotes.length > 0
   ? data.reviewDueNotes.map(n => {
       const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
       const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
-      return `  - 📖 ${n.title}（${stage}${overdue}）`;
+      return `  - 📖 ${formatDailyReportNotePath(n.id, n.title)}（${stage}${overdue}）`;
     }).join('\n')
   : '  （暂无待复习笔记）'}
 ${data.overdueReviewCount > 0 ? `⚠️ 其中 ${data.overdueReviewCount} 篇已逾期` : ''}
@@ -3821,7 +3901,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 8. **🗺️ 任务线推进** — 当前主线章节与激活任务进展如何？昨日完成了任务线里的哪些任务？今天建议优先推进哪个任务线目标（可生成对应待办）？
 9. **💪 一句话鼓励** — 给我一句适合今天状态的鼓励
 
-格式自由，语气自然、清醒、有方向感。用 Markdown 但不要太刻板。`;
+格式自由，语气自然、清醒、有方向感。用 Markdown 但不要太刻板。${userInstructionBlock}`;
 
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
   showMiniToast('☀️ 正在生成晨间日报…', 'info', true);
@@ -3838,10 +3918,10 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       ...conv.messages.slice(-20),
       { role: 'user', content: reportPrompt }
     ];
-    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null);
+    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null, { feature: 'morning_report' });
     const report = (cleanText || '').trim();
     if (report) {
-      appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' });
+      appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
       appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
       // Keep only last 30 messages to avoid bloating
       trimConvMessages(conv, 30);
@@ -4002,16 +4082,7 @@ function collectEveningReportData() {
       if (r.date === todayStr) {
         todayTimerMs += r.totalMs || 0;
         if (r.sessions && r.sessions.length > 0) {
-          const targetId = r.targetId || r.todoId;
-          const targetType = r.targetType || 'todo';
-          let targetName = '(已删除)';
-          if (targetType === 'goal') {
-            const g = loadGoals().find(g => g.id === targetId);
-            if (g) targetName = '🎯 ' + g.text;
-          } else {
-            const t = todos.find(t => t.id === targetId);
-            if (t) targetName = '📋 ' + t.text;
-          }
+          const targetName = formatDailyReportTimerLabel(r);
           for (const s of r.sessions) {
             const startStr = fmtTimeOnly(s.start);
             const endStr = fmtTimeOnly(s.end);
@@ -4019,16 +4090,7 @@ function collectEveningReportData() {
             todayTimerSessions.push({ timeRange: `${startStr} — ${endStr}`, duration: fmtDuration(dur), targetName });
           }
         } else {
-          const targetId = r.targetId || r.todoId;
-          const targetType = r.targetType || 'todo';
-          let targetName = '(已删除)';
-          if (targetType === 'goal') {
-            const g = loadGoals().find(g => g.id === targetId);
-            if (g) targetName = '🎯 ' + g.text;
-          } else {
-            const t = todos.find(t => t.id === targetId);
-            if (t) targetName = '📋 ' + t.text;
-          }
+          const targetName = formatDailyReportTimerLabel(r);
           todayTimerSessions.push({ timeRange: '全天', duration: fmtDuration(r.totalMs || 0), targetName });
         }
       }
@@ -4121,27 +4183,27 @@ async function generateEveningReport() {
 
   // Build prompt lines
   const focusLines = data.focusItems.length > 0
-    ? data.focusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${f.text}`).join('\n')
+    ? data.focusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
     : '  （今日未设置聚焦任务）';
 
   const doneTodoLines = data.todayDoneTodos.length > 0
-    ? data.todayDoneTodos.map(t => `  - ✅ ${t.text}`).join('\n')
+    ? data.todayDoneTodos.map(t => `  - ✅ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  （今天还没有完成待办）';
 
   const archivedTodoLines = data.todayArchived && data.todayArchived.length > 0
-    ? data.todayArchived.map(t => `  - 📦 ${t.text}`).join('\n')
+    ? data.todayArchived.map(t => `  - 📦 ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '';
 
   const dueLines = data.todayDueTodos.length > 0
-    ? data.todayDueTodos.map(t => `  - 📅 ${t.text}`).join('\n')
+    ? data.todayDueTodos.map(t => `  - 📅 ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  无';
 
   const overdueLines = data.overdueTodos.length > 0
-    ? data.overdueTodos.map(t => `  - ⚠️ ${t.text}（原定 ${t.dueDate}）`).join('\n')
+    ? data.overdueTodos.map(t => `  - ⚠️ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}（原定 ${t.dueDate}）`).join('\n')
     : '  无';
 
   const tomorrowLines = data.tomorrowDueTodos.length > 0
-    ? data.tomorrowDueTodos.map(t => `  - 📅 ${t.text}`).join('\n')
+    ? data.tomorrowDueTodos.map(t => `  - 📅 ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  无';
 
   const undoneLines = data.undoneTodos.length > 0
@@ -4152,7 +4214,7 @@ async function generateEveningReport() {
     : '  无';
 
   const noteLines = data.todayNotes.length > 0
-    ? data.todayNotes.map(n => `  - 📝 ${n.title}`).join('\n')
+    ? data.todayNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
     : '  无';
 
   const prevReportBlock = data.prevReport
@@ -4190,7 +4252,7 @@ ${data.reviewDueNotes.length > 0
   ? data.reviewDueNotes.map(n => {
       const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
       const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
-      return `  - 📖 ${n.title}（${stage}${overdue}）`;
+      return `  - 📖 ${formatDailyReportNotePath(n.id, n.title)}（${stage}${overdue}）`;
     }).join('\n')
   : ''}
 【今日习惯】${data.habitsDoneToday}/${data.habitsCount} 已完成
@@ -4238,7 +4300,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       ...conv.messages.slice(-20),
       { role: 'user', content: reportPrompt }
     ];
-    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null);
+    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null, { feature: 'evening_report' });
     const report = (cleanText || '').trim();
     if (report) {
       appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' });

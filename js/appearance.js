@@ -126,7 +126,7 @@ function applyCustomTheme() {
     '--sub-input-bg':rgba(.9),'--path-bg':rgba(alpha),
     '--hover-bg':dark?'rgba(43,54,73,.9)':'rgba(239,244,252,.9)',
     '--badge-bg':dark?'#303b50':'#e9edf5','--progress-bg':dark?'#273245':'#e9edf5',
-    '--modal-overlay':dark?'rgba(5,9,18,.6)':'rgba(32,44,67,.28)',
+    '--modal-overlay':eff.disableModalOverlay ? 'transparent' : (dark?'rgba(5,9,18,.6)':'rgba(32,44,67,.28)'),
     '--glass-surface':rgba(alpha),'--glass-modal':rgba(alpha),
     '--glass-pointer-intensity':(eff.glassPointerIntensity/100).toFixed(2),'--glass-pointer-size':eff.glassPointerSize+'px',
     '--glass-glow':(eff.glassGlow/100).toFixed(2),'--glass-blur':eff.glassBlur+'px',
@@ -250,7 +250,8 @@ function renderAppearancePanel() {
     '<div class="ap-column"><section class="ap-section"><div class="ap-section-head"><h3>'+apIcon('layers')+'界面材质</h3></div><div class="ap-materials">'+
     [['solid','实色','干净，专注内容','square'],['frosted','磨砂','柔和，朦胧透光','cloud'],['liquid','液态玻璃','流光，轻盈折射','sparkles']].map(([id,label,hint,icon])=>'<button type="button" data-material="'+id+'" class="ap-material '+(eff.material===id?'active':'')+'" aria-pressed="'+(eff.material===id)+'">'+apIcon(icon)+'<strong>'+label+'</strong><small>'+hint+'</small></button>').join('')+'</div><div class="ap-material-controls">'+glassControls+'</div>'+
     (eff.glass?'<div class="ap-performance"><label for="glassQuality">效果质量</label><select id="glassQuality"><option value="auto" '+(eff.glassQuality==='auto'?'selected':'')+'>自动适配</option><option value="high" '+(eff.glassQuality==='high'?'selected':'')+'>精细效果</option><option value="low" '+(eff.glassQuality==='low'?'selected':'')+'>流畅优先</option></select></div><p class="ap-hint">自动模式会在手机上减轻效果。减少动态效果开启时，暂停折射动态与视频背景。</p>'+
-    (eff.material==='liquid'?'<label class="ap-switch-row" for="glassMotion"><span>跟随光影<small>移动到预览或面板上查看效果，强度为 0 时隐藏</small></span><input type="checkbox" id="glassMotion" '+(eff.glassMotion?'checked':'')+'></label>':''):'')+'</section>'+
+    (eff.material==='liquid'?'<label class="ap-switch-row" for="glassMotion"><span>跟随光影<small>移动到预览或面板上查看效果，强度为 0 时隐藏</small></span><input type="checkbox" id="glassMotion" '+(eff.glassMotion?'checked':'')+'></label>':''):'')+
+    '<label class="ap-switch-row" for="disableModalOverlay"><span>禁用弹窗遮罩<small>弹窗仍会显示，但背景不再变暗</small></span><input type="checkbox" id="disableModalOverlay" '+(eff.disableModalOverlay?'checked':'')+'></label></section>'+
     '<section class="ap-section"><div class="ap-section-head"><h3>'+apIcon('scan')+'界面大小</h3></div>'+apRange('uiZoomSlider','uiZoom','页面缩放',Math.round(getUiZoom()*100),70,150,'%',5)+'</section></div></div>'+
     '<div class="ap-footer"><p>主题与材质独立调整，自建预设会保存完整外观。</p><button type="button" id="themeResetBtn">'+apIcon('rotate-ccw')+'恢复默认外观</button></div></div>';
   if(typeof lucide!=='undefined')lucide.createIcons();
@@ -323,6 +324,7 @@ function bindAppearanceEvents() {
     const input=event.target;
     if(input.id==='glassQuality')updateAppearance({glassQuality:input.value});
     if(input.id==='glassMotion')updateAppearance({glassMotion:input.checked});
+    if(input.id==='disableModalOverlay')updateAppearance({disableModalOverlay:input.checked});
     if(input.id==='apMediaFile'&&input.files?.[0]){
       const file=input.files[0],kind=getEffectiveTheme(loadCustomTheme()).bgType,revision=appearanceRevision;
       appearanceNotice('正在保存本地背景…');

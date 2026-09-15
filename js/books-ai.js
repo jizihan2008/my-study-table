@@ -131,7 +131,7 @@ async function bkAskTutorCore(chapter, question) {
     { role: 'user', content: q }
   ];
 
-  const res = await callAiApi(messages, cfg, null);
+  const res = await callAiApi(messages, cfg, null, { feature: 'books' });
   const answer = (res && res.cleanText) || '（AI 未返回内容，请重试）';
   _bkExplainLogAppend(chapter.id, 'assistant', answer);
   return answer;
@@ -414,7 +414,7 @@ async function bkSendQa() {
         + '回答用中文、条理清晰，可引用章节出处。若原文不足，明确说明并结合常识补充。\n\n【检索到的教材内容】\n' + context },
       ...ctxHistory,
       { role: 'user', content: q }
-    ], cfg, null);
+    ], cfg, null, { feature: 'books' });
     const answer = (res && res.cleanText) || '（AI 未返回内容，请重试）';
 
     flow.insertAdjacentHTML('beforeend', `
@@ -791,7 +791,7 @@ async function bkGenerateQuiz() {
         + `\n4. ${typeDesc}`
         + '\n5. 题目难度循序渐进，覆盖本章核心概念。' },
       { role: 'user', content: `章节：${chapter.title}\n知识库：\n${kbText}\n\n原文片段：\n${snippet}` }
-    ], cfg, null);
+    ], cfg, null, { feature: 'books' });
 
     const raw = (res && (res.cleanText || res.rawReply)) || '';
     let parsed = bkParseQuizJson(raw);
@@ -1016,7 +1016,7 @@ async function bkSubmitQuiz() {
         const res = await callAiApi([
           { role: 'system', content: '你是批改老师。逐题评判学生的简答答案，输出 JSON：{"grades":[{"index":题号(从0开始),"score":0或1,"comment":"简短点评"}]}' },
           { role: 'user', content: gradeText }
-        ], cfg, null);
+        ], cfg, null, { feature: 'books' });
         const grades = bkParseGradeJson((res && (res.cleanText || res.rawReply)) || '', shortQs.length);
         shortQs.forEach((q, si) => {
           const g = grades.find(x => x.index === _bkQuiz.indexOf(q)) || null;
@@ -1410,7 +1410,7 @@ async function bkSummarizeChapterToNote() {
       { role: 'system', content: '你是学习笔记整理助手。根据提供的章节原文、知识库摘要导图和章节讲解记录，把本章内容整理成一篇结构清晰、便于复习的 Markdown 笔记。要求：\n1. 用中文书写；\n2. 覆盖本章核心概念、原理、步骤与结论；\n3. 结构组织清晰，善用标题层级、列表、粗体等 Markdown 语法；\n4. 突出重点，避免冗长堆砌；\n5. 不输出多余开场白，直接输出笔记正文。' },
       { role: 'user', content: '书籍：《' + book.title + '》\n章节：' + ch.title + '\n\n【章节原文】\n' + (textSnippet || '（无）') + '\n\n【摘要导图】\n' + (kbSnippet || '（无）') + '\n\n【章节讲解记录】\n' + (explainSnippet || '（无）') }
     ];
-    const res = await callAiApi(messages, cfg, null);
+    const res = await callAiApi(messages, cfg, null, { feature: 'books' });
     const answer = (res && res.cleanText) || '';
     if (!answer || !answer.trim()) {
       showMiniToast('AI 未返回内容，请重试', 'error');
@@ -2650,7 +2650,7 @@ async function bkAiExplainTerm(term) {
   const userContent = `术语：${term}\n\n【本章内容片段】\n${chapterSnippet}\n\n【全书出现位置】\n${contexts.length ? contexts.join('\n') : '（全书未找到该词，请仅依据本章内容推断）'}`;
 
   try {
-    const res = await callAiApi([{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }], cfg, null);
+    const res = await callAiApi([{ role: 'system', content: systemPrompt }, { role: 'user', content: userContent }], cfg, null, { feature: 'books' });
     const raw = (res && (res.cleanText || res.rawReply)) || '';
     const m = raw.match(/```(?:json)?\s*([\s\S]*?)```/) || raw.match(/\{[\s\S]*\}/);
     const jsonStr = m ? (m[1] || m[0]) : raw;

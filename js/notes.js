@@ -34,6 +34,7 @@
     if (n.type === 'note' && !Array.isArray(n.tags)) n.tags = [];
     if (n.type === 'note' && !Array.isArray(n.keywords)) n.keywords = [];
     if (n.type === 'note' && !Array.isArray(n._annotations)) n._annotations = [];
+    if (n.type === 'note' && (!n._foldStates || typeof n._foldStates !== 'object' || Array.isArray(n._foldStates))) n._foldStates = {};
   }
 })();
 
@@ -45,6 +46,52 @@ function getActiveNote() {
   if (!activeNoteId) return null;
   return notes.find(n => n.id === activeNoteId && n.type === 'note') || null;
 }
+
+let _applyingNoteFoldStates = false;
+
+function findNoteForFoldState(noteId) {
+  return notes.find(item => item.type === 'note' && String(item.id) === String(noteId)) || null;
+}
+
+function applyNoteFoldStates(container, noteId) {
+  if (!container) return;
+  const note = findNoteForFoldState(noteId);
+  if (!note) return;
+  container.dataset.noteId = String(note.id);
+  const states = note._foldStates && typeof note._foldStates === 'object' ? note._foldStates : {};
+  _applyingNoteFoldStates = true;
+  try {
+    container.querySelectorAll('details.note-fold').forEach((fold, index) => {
+      fold.dataset.foldIndex = String(index);
+      if (typeof states[index] === 'boolean') fold.open = states[index];
+    });
+  } finally {
+    _applyingNoteFoldStates = false;
+  }
+}
+
+function captureNoteFoldStates(container, noteId, persist) {
+  if (!container) return;
+  const note = findNoteForFoldState(noteId);
+  if (!note) return;
+  const states = {};
+  container.querySelectorAll('details.note-fold').forEach((fold, index) => {
+    fold.dataset.foldIndex = String(index);
+    states[index] = fold.open;
+  });
+  note._foldStates = states;
+  if (persist) saveData('study_notes_v2', notes);
+}
+
+document.addEventListener('toggle', function(event) {
+  if (_applyingNoteFoldStates) return;
+  const fold = event.target;
+  if (!(fold instanceof HTMLDetailsElement) || !fold.classList.contains('note-fold')) return;
+  const container = fold.closest('#notesPreview, #notesRichEditor, #notesSplitPreview, #notesSplitRichEditor');
+  if (!container) return;
+  const noteId = container.dataset.noteId || (container.id.startsWith('notesSplit') ? notesSplitNoteId : activeNoteId);
+  captureNoteFoldStates(container, noteId, true);
+}, true);
 
 function findNoteItem(id) { return notes.find(n => n.id === id); }
 function getNoteItemChildren(parentId) { return notes.filter(n => n.parentId === parentId); }
@@ -131,7 +178,7 @@ function toggleNotesMobileViewMenu() {
   // 标记菜单里当前激活的视图
   if (show) {
     const btns = menu.querySelectorAll('button');
-    const active = ['preview', 'edit', 'summary'].indexOf(noteViewMode);
+    const active = ['preview', 'rich', 'edit', 'summary'].indexOf(noteViewMode);
     btns.forEach(function(b, i) { b.classList.toggle('active', i === active); });
   }
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
@@ -163,14 +210,15 @@ function onNoteTitleChange() {
   const note = getActiveNote();
   if (!note) return;
   const titleInput = document.getElementById('noteTitleInput');
-  note.title = titleInput.value;
-  note.updatedAt = new Date().toISOString();
-  updateLastEditedDisplay(note);
+  const previousTitle = note.title || '';
   if (!note._dirtyTitle) {
-    pushNotesUndo(note.id, note.content, note.title);
+    pushNotesUndo(note.id, note.content, previousTitle);
     note._dirtyTitle = true;
     notesRedoStack = [];
   }
+  note.title = titleInput.value;
+  note.updatedAt = new Date().toISOString();
+  updateLastEditedDisplay(note);
   if (notesDebounceId) clearTimeout(notesDebounceId);
   notesDebounceId = setTimeout(() => {
     note._summaryFresh = false;
@@ -185,23 +233,54 @@ function onNotesChange() {
   if (!note) return;
   const textarea = document.getElementById('notesTextarea');
   if (!textarea) return;
+  const previousContent = note.content || '';
+  if (!note._dirtyContent) {
+    pushNotesUndo(note.id, previousContent, note.title);
+    note._dirtyContent = true;
+    notesRedoStack = [];
+  }
   note.content = textarea.value;
   note.updatedAt = new Date().toISOString();
   const chars = note.content.replace(/\s/g, '').length;
   document.getElementById('notesWordCount').textContent = chars + ' 字';
   document.getElementById('notesStatus').textContent = '保存中…';
   updateLastEditedDisplay(note);
-  if (!note._dirtyContent) {
-    pushNotesUndo(note.id, note.content, note.title);
-    note._dirtyContent = true;
-    notesRedoStack = [];
-  }
   if (notesDebounceId) clearTimeout(notesDebounceId);
   notesDebounceId = setTimeout(() => {
     note._summaryFresh = false;
     // 编辑笔记不再重置复习周期（改为右键菜单手动「重置复习周期」）
     saveData('study_notes_v2', notes);
     document.getElementById('notesStatus').textContent = '已保存';
+    note._dirtyContent = false;
+    renderNoteList();
+  }, 500);
+}
+
+function onRichNotesChange(markdown, previousMarkdown) {
+  const note = getActiveNote();
+  if (!note || typeof RichNoteEditor === 'undefined') return;
+  if (RichNoteEditor.getCurrentNoteId() !== note.id || markdown === note.content) return;
+  if (!note._dirtyContent) {
+    pushNotesUndo(note.id, previousMarkdown == null ? (note.content || '') : previousMarkdown, note.title);
+    note._dirtyContent = true;
+    notesRedoStack = [];
+  }
+  note.content = markdown;
+  note.updatedAt = new Date().toISOString();
+  const textarea = document.getElementById('notesTextarea');
+  if (textarea) textarea.value = markdown;
+  const chars = markdown.replace(/\s/g, '').length;
+  const count = document.getElementById('notesWordCount');
+  const status = document.getElementById('notesStatus');
+  if (count) count.textContent = chars + ' 字';
+  if (status) status.textContent = '保存中…';
+  updateLastEditedDisplay(note);
+  renderNoteToc();
+  if (notesDebounceId) clearTimeout(notesDebounceId);
+  notesDebounceId = setTimeout(() => {
+    note._summaryFresh = false;
+    saveData('study_notes_v2', notes);
+    if (status) status.textContent = '已保存';
     note._dirtyContent = false;
     renderNoteList();
   }, 500);
@@ -235,7 +314,7 @@ function updateUndoRedoButtons() {
 
 function undoNote() {
   if (notesUndoStack.length === 0) return;
-  if (noteViewMode === 'preview') switchNoteView('edit');
+  if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   const snapshot = notesUndoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
   if (!note) { updateUndoRedoButtons(); return; }
@@ -250,6 +329,7 @@ function undoNote() {
   const titleInput = document.getElementById('noteTitleInput');
   if (textarea) textarea.value = note.content;
   if (titleInput) titleInput.value = note.title;
+  if (typeof RichNoteEditor !== 'undefined' && noteViewMode === 'rich') RichNoteEditor.setMarkdown(note.content || '', note.id);
   document.getElementById('notesStatus').textContent = '已撤销';
   updateLastEditedDisplay(note);
   const chars = (note.content || '').replace(/\s/g, '').length;
@@ -260,7 +340,7 @@ function undoNote() {
 
 function redoNote() {
   if (notesRedoStack.length === 0) return;
-  if (noteViewMode === 'preview') switchNoteView('edit');
+  if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   const snapshot = notesRedoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
   if (!note) { updateUndoRedoButtons(); return; }
@@ -275,6 +355,7 @@ function redoNote() {
   const titleInput = document.getElementById('noteTitleInput');
   if (textarea) textarea.value = note.content;
   if (titleInput) titleInput.value = note.title;
+  if (typeof RichNoteEditor !== 'undefined' && noteViewMode === 'rich') RichNoteEditor.setMarkdown(note.content || '', note.id);
   document.getElementById('notesStatus').textContent = '已恢复';
   updateLastEditedDisplay(note);
   const chars = (note.content || '').replace(/\s/g, '').length;
@@ -312,6 +393,99 @@ function repairCircularFolderRefs() {
   }
 }
 
+let notesSearchQuery = '';
+let notesSortMode = localStorage.getItem('study_notes_sort_mode') || 'manual';
+if (!['manual', 'updated-desc', 'created-desc', 'title-asc'].includes(notesSortMode)) notesSortMode = 'manual';
+
+function normalizeNoteSearch(value) {
+  return String(value || '').normalize('NFKC').toLocaleLowerCase('zh-CN').trim();
+}
+
+function noteSearchText(note) {
+  return normalizeNoteSearch([
+    note.title || '',
+    note.content || '',
+    ...(Array.isArray(note.tags) ? note.tags : []),
+    ...(Array.isArray(note.keywords) ? note.keywords : [])
+  ].join('\n'));
+}
+
+function notePassesActiveFilters(note) {
+  if (!note || note.type !== 'note') return false;
+  if (notesTagFilter && (!Array.isArray(note.tags) || !note.tags.includes(notesTagFilter))) return false;
+  return !notesSearchQuery || noteSearchText(note).includes(notesSearchQuery);
+}
+
+function sortNoteItems(items) {
+  const result = items.slice();
+  if (notesSortMode === 'manual') return result;
+  return result.sort((a, b) => {
+    if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
+    if (notesSortMode === 'title-asc') {
+      return String(a.title || '').localeCompare(String(b.title || ''), 'zh-CN', { numeric: true, sensitivity: 'base' });
+    }
+    const field = notesSortMode === 'created-desc' ? 'createdAt' : 'updatedAt';
+    const timeA = Date.parse(a[field] || a.createdAt || 0) || 0;
+    const timeB = Date.parse(b[field] || b.createdAt || 0) || 0;
+    return timeB - timeA;
+  });
+}
+
+function noteTreeMatches(item, visited) {
+  if (!item) return false;
+  visited = visited || new Set();
+  if (visited.has(item.id)) return false;
+  visited.add(item.id);
+  if (item.type === 'note') return notePassesActiveFilters(item);
+  const ownFolderMatch = !notesTagFilter && notesSearchQuery && normalizeNoteSearch(item.title).includes(notesSearchQuery);
+  return ownFolderMatch || getNoteItemChildren(item.id).some(child => noteTreeMatches(child, new Set(visited)));
+}
+
+function highlightNoteSearch(value) {
+  const text = String(value || '');
+  if (!notesSearchQuery) return escapeHtml(text);
+  const normalized = normalizeNoteSearch(text);
+  const index = normalized.indexOf(notesSearchQuery);
+  if (index < 0) return escapeHtml(text);
+  const end = index + notesSearchQuery.length;
+  return escapeHtml(text.slice(0, index)) + '<mark class="notes-search-mark">' + escapeHtml(text.slice(index, end)) + '</mark>' + escapeHtml(text.slice(end));
+}
+
+function getNoteSearchSnippet(note) {
+  if (!notesSearchQuery) return '';
+  const plain = String(note.content || '')
+    .replace(/```[\s\S]*?```/g, ' ')
+    .replace(/[#>*_`~\[\](){|}]/g, ' ')
+    .replace(/\s+/g, ' ').trim();
+  const normalized = normalizeNoteSearch(plain);
+  const index = normalized.indexOf(notesSearchQuery);
+  if (index < 0) return '';
+  const start = Math.max(0, index - 24);
+  const end = Math.min(plain.length, index + notesSearchQuery.length + 38);
+  return (start ? '…' : '') + plain.slice(start, end) + (end < plain.length ? '…' : '');
+}
+
+function handleNotesSearchInput(value) {
+  notesSearchQuery = normalizeNoteSearch(value);
+  renderNoteList();
+}
+
+function handleNotesSearchKey(event) {
+  if (event.key !== 'Escape') return;
+  event.preventDefault();
+  const input = document.getElementById('notesSearchInput');
+  if (input) input.value = '';
+  notesSearchQuery = '';
+  renderNoteList();
+}
+
+function changeNotesSort(mode) {
+  if (!['manual', 'updated-desc', 'created-desc', 'title-asc'].includes(mode)) return;
+  notesSortMode = mode;
+  localStorage.setItem('study_notes_sort_mode', mode);
+  renderNoteList();
+}
+
 function renderNoteList() {
   const list = document.getElementById('notesList');
   if (!list) return;
@@ -323,14 +497,18 @@ function renderNoteList() {
   const tagFilterMatchIds = notesTagFilter
     ? new Set(notes.filter(n => n.type==='note' && Array.isArray(n.tags) && n.tags.includes(notesTagFilter)).map(n=>n.id))
     : null;
+  const allowManualDrag = !notesSearchQuery && !notesTagFilter && notesSortMode === 'manual';
 
-  function renderItem(item, depth, visited) {
+  function renderItem(item, depth, visited, includeAll) {
     if (depth > 50) return ''; // Safety: prevent infinite recursion
     visited = visited || new Set();
     if (visited.has(item.id)) return ''; // Circular reference detected
     visited.add(item.id);
     if (item.type === 'folder') {
-      const children = getNoteItemChildren(item.id);
+      const ownFolderMatch = !notesTagFilter && notesSearchQuery && normalizeNoteSearch(item.title).includes(notesSearchQuery);
+      const showAllChildren = !!includeAll || !!ownFolderMatch;
+      const children = sortNoteItems(getNoteItemChildren(item.id)).filter(child => showAllChildren ? (!notesTagFilter || noteTreeMatches(child)) : noteTreeMatches(child));
+      if ((notesSearchQuery || notesTagFilter) && !ownFolderMatch && children.length === 0) return '';
       const expandId = 'ns-exp-' + item.id;
       const isRenaming = item.id === renamingFolderId;
       const nameHtml = isRenaming
@@ -339,23 +517,24 @@ function renderNoteList() {
              onblur="commitFolderRename(${item.id},this)"
              onclick="event.stopPropagation()"
              data-folder-id="${item.id}">`
-        : `<span class="ns-name">📁 ${escapeHtml(item.title||'')}</span>`;
+        : `<span class="ns-name">📁 ${highlightNoteSearch(item.title||'')}</span>`;
       // 展开状态：用户点击过 → 用持久化值；未点击过 → 按深度默认（<2 展开）。
       // 原 depth<2 硬编码会在每次重渲染（打开笔记/完成复习等）时重置开合，故持久化修复。
       // key 统一为数字（genId 返回数字；toggleNoteFolder 保存时已 Number() 归一化）。
       const expMap = getNotesExpandedFolders();
       const fid = Number(item.id);
-      const isExpanded = !isNaN(fid) && expMap.has(fid) ? expMap.get(fid) : (depth < 2);
-      return `<li class="ns-folder" draggable="true" data-item-id="${item.id}" style="padding-left:${depth*16+4}px">
+      const isExpanded = (notesSearchQuery || notesTagFilter) ? true : (!isNaN(fid) && expMap.has(fid) ? expMap.get(fid) : (depth < 2));
+      return `<li class="ns-folder" draggable="${allowManualDrag}" data-item-id="${item.id}" style="padding-left:${depth*16+4}px">
         <div class="ns-folder-header" onclick="toggleNoteFolder('${expandId}')">
           <span class="ns-toggle">${(children.length>0&&isExpanded)?'▾':'▸'}</span>
           ${nameHtml}
         </div>
-        <ul class="ns-children" id="${expandId}" style="display:${isExpanded?'block':'none'}">${children.map(c=>renderItem(c,depth+1,visited)).join('')}</ul>
+        <ul class="ns-children" id="${expandId}" style="display:${isExpanded?'block':'none'}">${children.map(c=>renderItem(c,depth+1,new Set(visited),showAllChildren)).join('')}</ul>
       </li>`;
     } else {
       // Apply tag filter
       if (tagFilterMatchIds && !tagFilterMatchIds.has(item.id)) return '';
+      if (notesSearchQuery && !includeAll && !notePassesActiveFilters(item)) return '';
 
       // Review status badge
       let reviewBadge = '';
@@ -376,12 +555,13 @@ function renderNoteList() {
         : '';
       // Summary line (only if enabled globally)
       const summaryText = item.summary||'';
-      const summaryHtml = (notesSummaryVisible && summaryText)
-        ? `<div class="ns-note-summary">${escapeHtml(summaryText)}</div>`
-        : '';
-      return `<li class="ns-note${item.id===activeNoteId?' active':''}" draggable="true" data-item-id="${item.id}" onclick="selectNote(${item.id})" style="padding-left:${depth*16+12}px">
+      const searchSnippet = getNoteSearchSnippet(item);
+      const summaryHtml = searchSnippet
+        ? `<div class="ns-note-summary ns-search-snippet">${highlightNoteSearch(searchSnippet)}</div>`
+        : ((notesSummaryVisible && summaryText) ? `<div class="ns-note-summary">${escapeHtml(summaryText)}</div>` : '');
+      return `<li class="ns-note${item.id===activeNoteId?' active':''}" draggable="${allowManualDrag}" data-item-id="${item.id}" onclick="selectNote(${item.id})" style="padding-left:${depth*16+12}px">
         <div class="ns-note-top">
-          <span class="ns-note-title">${escapeHtml(item.title||'')||'未命名笔记'}</span>
+          <span class="ns-note-title">${highlightNoteSearch(item.title||'')||'未命名笔记'}</span>
           ${tagsHtml}
           ${reviewBadge}
         </div>
@@ -390,7 +570,7 @@ function renderNoteList() {
     }
   }
   
-  const rootItems = notes.filter(n => !n.parentId);
+  const rootItems = sortNoteItems(notes.filter(n => !n.parentId)).filter(item => (!notesSearchQuery && !notesTagFilter) || noteTreeMatches(item));
   
   // Build tag filter bar HTML
   let filterBarHtml = '';
@@ -402,9 +582,18 @@ function renderNoteList() {
     </div>`;
   }
   
-  const hasAny = rootItems.length > 0;
-  list.innerHTML = filterBarHtml + `<ul class="ns-root">${hasAny?'':''}${rootItems.map(n=>renderItem(n,0,new Set())).join('')}</ul>`;
-  if (!hasAny) list.innerHTML += '<div class="notes-empty-hint" style="padding:16px;text-align:center;color:var(--text-secondary);font-size:13px;">暂无笔记，右键可新建文件夹</div>';
+  const rootHtml = rootItems.map(n=>renderItem(n,0,new Set(),false)).join('');
+  const hasAny = !!rootHtml;
+  list.innerHTML = filterBarHtml + `<ul class="ns-root">${rootHtml}</ul>`;
+  if (!hasAny) list.innerHTML += `<div class="notes-empty-hint">${notesSearchQuery || notesTagFilter ? '没有找到匹配的笔记' : '暂无笔记，右键可新建文件夹'}</div>`;
+  const searchCount = document.getElementById('notesSearchCount');
+  if (searchCount) {
+    const count = notes.filter(note => note.type === 'note' && notePassesActiveFilters(note)).length;
+    searchCount.textContent = notesSearchQuery ? String(count) : '';
+    searchCount.title = notesSearchQuery ? `找到 ${count} 篇笔记` : '';
+  }
+  const sortSelect = document.getElementById('notesSortSelect');
+  if (sortSelect && sortSelect.value !== notesSortMode) sortSelect.value = notesSortMode;
   
   // Auto-focus rename input if in renaming mode
   if (renamingFolderId !== null) {
@@ -614,6 +803,7 @@ function reorderItem(draggedId,targetId,zone){
 }
 
 document.addEventListener('dragstart',function(e){
+  if(notesSearchQuery||notesTagFilter||notesSortMode!=='manual'){e.preventDefault();return;}
   if(e.target.closest('button,input,textarea'))return;
   const notesList=document.getElementById('notesList');
   let li=null;
@@ -1330,6 +1520,7 @@ function renderNotes(){
   const textarea=document.getElementById('notesTextarea');
   if(titleInput)titleInput.value=note.title;
   if(textarea)textarea.value=note.content;
+  if(typeof RichNoteEditor!=='undefined')RichNoteEditor.setMarkdown(note.content||'',note.id);
   switchNoteView(noteViewMode);
   const chars=(note.content||'').replace(/\s/g,'').length;
   const wcEl=document.getElementById('notesWordCount');
@@ -1343,6 +1534,7 @@ function renderNotes(){
   applyTagFilterBar();
   notesApplyMobileView();
   renderNoteAnnBadge();
+  renderNotesImmersiveSplit();
 }
 
 // ═══════════ Notes: 侧边栏宽度拖拽调整 ═══════════
@@ -1408,6 +1600,17 @@ const FORMAT_DEFS = {
 };
 
 function formatText(type) {
+  const selectionNode=window.getSelection()?.anchorNode;
+  const selectionElement=selectionNode?.nodeType===Node.ELEMENT_NODE?selectionNode:selectionNode?.parentElement;
+  const editingSecondary=notesImmersive&&notesImmersiveSplit&&selectionElement?.closest('#notesSplitRichEditor');
+  if (editingSecondary&&notesSplitMode==='rich') {
+    getNotesSplitRichEditor()?.command(type);
+    return;
+  }
+  if (noteViewMode === 'rich' && typeof RichNoteEditor !== 'undefined') {
+    RichNoteEditor.command(type);
+    return;
+  }
   const ta = document.getElementById('notesTextarea');
   if (!ta) return;
   const start = ta.selectionStart;
@@ -1459,6 +1662,19 @@ function formatText(type) {
       const firstCell = start + beforeNl.length + 2;
       ta.selectionStart = firstCell;
       ta.selectionEnd = firstCell + 3;
+      ta.focus();
+      onNotesChange();
+      return;
+    }
+    case 'fold': {
+      const body = sel || '正文内容';
+      const block = ':::fold 折叠标题\n' + body + '\n:::';
+      const beforeNl = start > 0 && text[start - 1] !== '\n' ? '\n' : '';
+      const afterNl = end < text.length && text[end] !== '\n' ? '\n' : '';
+      ta.value = text.substring(0, start) + beforeNl + block + afterNl + text.substring(end);
+      const titleStart = start + beforeNl.length + ':::fold '.length;
+      ta.selectionStart = titleStart;
+      ta.selectionEnd = titleStart + '折叠标题'.length;
       ta.focus();
       onNotesChange();
       return;
@@ -1580,7 +1796,8 @@ document.addEventListener('keydown', function(e) {
   }
 });
 
-let noteViewMode='preview';
+let noteViewMode=localStorage.getItem('study_note_view_mode')||'rich';
+if(!['rich','edit','summary','preview'].includes(noteViewMode))noteViewMode='rich';
 let notesTocVisible=localStorage.getItem('study_notes_toc_visible')!=='false';
 let notesTocMobileOpen=false;
 let _noteTocScrollFrame=0;
@@ -1588,6 +1805,180 @@ let _noteTocJumpTarget='';
 let _noteTocJumpTimer=0;
 let notesImmersive=false;
 let _notesImmersiveMoveFrame=0;
+let notesImmersiveZoom=Number(localStorage.getItem('study_notes_immersive_zoom'))||100;
+notesImmersiveZoom=Math.min(180,Math.max(70,Math.round(notesImmersiveZoom/10)*10));
+let notesImmersiveSplit=localStorage.getItem('study_notes_immersive_split')==='true';
+let notesSplitNoteId=localStorage.getItem('study_notes_split_note')||'';
+let notesSplitMode=localStorage.getItem('study_notes_split_mode')||'preview';
+if(notesSplitMode==='edit')notesSplitMode='rich';
+if(!['preview','rich'].includes(notesSplitMode))notesSplitMode='preview';
+let notesSplitDebounceId=null;
+let notesSplitRichEditor=null;
+
+function getNotesSplitRichEditor(){
+  if(notesSplitRichEditor)return notesSplitRichEditor;
+  if(typeof createRichNoteEditor!=='function')return null;
+  notesSplitRichEditor=createRichNoteEditor({
+    hostId:'notesSplitRichEditor',
+    toolbarSelector:'#notesFormatToolbar',
+    onChange:(markdown,_previous,noteId)=>onNotesSplitRichChange(markdown,noteId)
+  });
+  notesSplitRichEditor.init();
+  return notesSplitRichEditor;
+}
+
+function findNoteByLooseId(id){
+  return notes.find(item=>item.type==='note'&&String(item.id)===String(id))||null;
+}
+
+function ensureNotesSplitNote(){
+  const candidates=notes.filter(item=>item.type==='note'&&String(item.id)!==String(activeNoteId));
+  if(!candidates.length){notesSplitNoteId='';return null;}
+  let note=candidates.find(item=>String(item.id)===String(notesSplitNoteId));
+  if(!note)note=candidates[0];
+  notesSplitNoteId=String(note.id);
+  localStorage.setItem('study_notes_split_note',notesSplitNoteId);
+  return note;
+}
+
+function notesSplitOptions(items,selectedId){
+  return items.map(note=>`<option value="${escapeHtml(String(note.id))}"${String(note.id)===String(selectedId)?' selected':''}>${escapeHtml(note.title||'未命名笔记')}</option>`).join('');
+}
+
+function renderNotesImmersiveSplit(){
+  const section=document.getElementById('section-notes');
+  const pane=document.getElementById('notesSplitPane');
+  const toggle=document.getElementById('notesImmersiveSplit');
+  if(!section||!pane)return;
+  const enabled=notesImmersive&&notesImmersiveSplit;
+  section.classList.toggle('notes-split',enabled);
+  if(toggle){
+    toggle.classList.toggle('active',enabled);
+    toggle.setAttribute('aria-pressed',enabled?'true':'false');
+    toggle.title=enabled?'关闭沉浸分屏':'打开沉浸分屏';
+    toggle.setAttribute('aria-label',toggle.title);
+  }
+  if(!enabled)return;
+
+  const secondary=ensureNotesSplitNote();
+  if(!secondary){
+    notesImmersiveSplit=false;
+    localStorage.setItem('study_notes_immersive_split','false');
+    section.classList.remove('notes-split');
+    return;
+  }
+  const allNotes=notes.filter(item=>item.type==='note');
+  const primarySelect=document.getElementById('notesSplitPrimarySelect');
+  const secondarySelect=document.getElementById('notesSplitSecondarySelect');
+  if(primarySelect)primarySelect.innerHTML=notesSplitOptions(allNotes.filter(item=>String(item.id)!==String(secondary.id)),activeNoteId);
+  if(secondarySelect)secondarySelect.innerHTML=notesSplitOptions(allNotes.filter(item=>String(item.id)!==String(activeNoteId)),secondary.id);
+
+  const primaryReading=noteViewMode==='preview';
+  document.getElementById('notesSplitPrimaryRead')?.classList.toggle('active',primaryReading);
+  document.getElementById('notesSplitPrimaryEdit')?.classList.toggle('active',!primaryReading);
+  document.getElementById('notesSplitSecondaryRead')?.classList.toggle('active',notesSplitMode==='preview');
+  document.getElementById('notesSplitSecondaryEdit')?.classList.toggle('active',notesSplitMode==='rich');
+
+  const preview=document.getElementById('notesSplitPreview');
+  const editor=document.getElementById('notesSplitRichEditor');
+  const richEditor=getNotesSplitRichEditor();
+  if(preview){
+    preview.style.display=notesSplitMode==='preview'?'block':'none';
+    if(notesSplitMode==='preview'){
+      preview.innerHTML=formatNoteContent(secondary.content||'');
+      applyNoteFoldStates(preview,secondary.id);
+    }
+  }
+  if(editor){
+    editor.classList.toggle('active',notesSplitMode==='rich');
+    if(editor.dataset.noteId!==String(secondary.id)||document.activeElement!==editor){
+      richEditor?.setMarkdown(secondary.content||'',secondary.id);
+      editor.dataset.noteId=String(secondary.id);
+    }
+  }
+  const status=document.getElementById('notesSplitStatus');
+  if(status&&document.activeElement!==editor)status.textContent='已保存';
+}
+
+function setNotesImmersiveSplit(force){
+  const enabled=typeof force==='boolean'?force:!notesImmersiveSplit;
+  if(enabled&&notes.filter(item=>item.type==='note').length<2){
+    if(typeof showMiniToast==='function')showMiniToast('至少需要两篇笔记才能开启分屏','error');
+    else alert('至少需要两篇笔记才能开启分屏');
+    return;
+  }
+  notesImmersiveSplit=enabled;
+  localStorage.setItem('study_notes_immersive_split',String(enabled));
+  renderNotesImmersiveSplit();
+}
+
+function toggleNotesImmersiveSplit(force){setNotesImmersiveSplit(force)}
+
+function selectNotesPrimaryPane(id){
+  const next=findNoteByLooseId(id);
+  if(!next)return;
+  if(String(next.id)===String(notesSplitNoteId))notesSplitNoteId=String(activeNoteId);
+  selectNote(next.id);
+  renderNotesImmersiveSplit();
+}
+
+function selectNotesSplitNote(id){
+  const next=findNoteByLooseId(id);
+  if(!next||String(next.id)===String(activeNoteId))return;
+  notesSplitNoteId=String(next.id);
+  localStorage.setItem('study_notes_split_note',notesSplitNoteId);
+  renderNotesImmersiveSplit();
+}
+
+function setNotesSplitPrimaryMode(mode){
+  switchNoteView(mode==='preview'?'preview':'rich');
+  renderNotesImmersiveSplit();
+}
+
+function setNotesSplitSecondaryMode(mode){
+  notesSplitMode=(mode==='rich'||mode==='edit')?'rich':'preview';
+  localStorage.setItem('study_notes_split_mode',notesSplitMode);
+  renderNotesImmersiveSplit();
+  if(notesSplitMode==='rich')setTimeout(()=>document.getElementById('notesSplitRichEditor')?.focus(),0);
+}
+
+function onNotesSplitRichChange(value,noteId){
+  const note=findNoteByLooseId(noteId||notesSplitNoteId);
+  if(!note||String(note.id)===String(activeNoteId)||note.content===String(value))return;
+  note.content=String(value);
+  note.updatedAt=new Date().toISOString();
+  note._summaryFresh=false;
+  const status=document.getElementById('notesSplitStatus');
+  if(status)status.textContent='保存中…';
+  if(notesSplitDebounceId)clearTimeout(notesSplitDebounceId);
+  notesSplitDebounceId=setTimeout(()=>{
+    saveData('study_notes_v2',notes);
+    if(status)status.textContent='已保存';
+    renderNoteList();
+  },500);
+}
+
+function applyNotesImmersiveZoom(){
+  const section=document.getElementById('section-notes');
+  const label=document.getElementById('notesImmersiveZoomValue');
+  if(!section)return;
+  section.style.setProperty('--notes-immersive-content-size',(15*notesImmersiveZoom/100)+'px');
+  section.style.setProperty('--notes-immersive-source-size',(14*notesImmersiveZoom/100)+'px');
+  if(label){
+    label.textContent=notesImmersiveZoom+'%';
+    label.title=notesImmersiveZoom===100?'当前为默认大小':'点击恢复 100%';
+  }
+}
+
+function setNotesImmersiveZoom(value){
+  const next=Math.min(180,Math.max(70,Math.round(Number(value)/10)*10));
+  if(!Number.isFinite(next))return;
+  notesImmersiveZoom=next;
+  localStorage.setItem('study_notes_immersive_zoom',String(next));
+  applyNotesImmersiveZoom();
+}
+
+function changeNotesImmersiveZoom(delta){setNotesImmersiveZoom(notesImmersiveZoom+Number(delta||0));}
 
 function setNotesImmersive(force){
   const section=document.getElementById('section-notes');
@@ -1596,9 +1987,11 @@ function setNotesImmersive(force){
   notesImmersive=enabled;
   if(enabled){
     notesGoMain();
-    switchNoteView('edit');
+    if(noteViewMode==='summary')switchNoteView('preview');
+    applyNotesImmersiveZoom();
   }
   section.classList.toggle('notes-immersive',enabled);
+  section.classList.toggle('notes-split',enabled&&notesImmersiveSplit);
   section.classList.remove('show-top-controls','show-bottom-controls');
   document.body.classList.toggle('notes-immersive',enabled);
   const button=document.getElementById('notesImmersiveBtn');
@@ -1606,7 +1999,9 @@ function setNotesImmersive(force){
     button.classList.toggle('active',enabled);
     button.setAttribute('aria-pressed',enabled?'true':'false');
   }
-  if(enabled)setTimeout(()=>document.getElementById('notesTextarea')?.focus(),0);
+  if(enabled&&noteViewMode==='rich')setTimeout(()=>document.getElementById('notesRichEditor')?.focus(),0);
+  else if(enabled&&noteViewMode==='edit')setTimeout(()=>document.getElementById('notesTextarea')?.focus(),0);
+  renderNotesImmersiveSplit();
 }
 
 function toggleNotesImmersive(force){setNotesImmersive(force)}
@@ -1635,6 +2030,11 @@ document.addEventListener('mouseleave',function(){
   document.getElementById('section-notes')?.classList.remove('show-top-controls','show-bottom-controls');
 });
 document.addEventListener('keydown',function(event){
+  if(notesImmersive&&(event.ctrlKey||event.metaKey)&&!event.altKey){
+    if(event.key==='0'){event.preventDefault();setNotesImmersiveZoom(100);return;}
+    if(event.key==='+'||event.key==='='||event.key==='Add'){event.preventDefault();changeNotesImmersiveZoom(10);return;}
+    if(event.key==='-'||event.key==='Subtract'){event.preventDefault();changeNotesImmersiveZoom(-10);return;}
+  }
   if(event.key!=='Escape'||!notesImmersive)return;
   if(document.querySelector('.modal-overlay.open, .context-menu.visible'))return;
   event.preventDefault();
@@ -1642,7 +2042,7 @@ document.addEventListener('keydown',function(event){
 });
 
 function getNotePreviewHeadings(){
-  const preview=document.getElementById('notesPreview');
+  const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
   if(!preview)return[];
   return Array.from(preview.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]'));
 }
@@ -1652,7 +2052,8 @@ function renderNoteToc(){
   const list=document.getElementById('notesTocList');
   const toggle=document.getElementById('notesTocToggleBtn');
   if(!panel||!list)return;
-  const shouldShow=noteViewMode==='preview'&&(notesIsMobile()?notesTocMobileOpen:notesTocVisible);
+  const supportsToc=noteViewMode==='preview'||noteViewMode==='rich';
+  const shouldShow=supportsToc&&(notesIsMobile()?notesTocMobileOpen:notesTocVisible);
   panel.classList.toggle('visible',shouldShow);
   panel.setAttribute('aria-hidden',shouldShow?'false':'true');
   if(toggle){
@@ -1660,7 +2061,7 @@ function renderNoteToc(){
     toggle.setAttribute('aria-pressed',shouldShow?'true':'false');
     toggle.title=notesTocVisible?'隐藏智能目录':'显示智能目录';
   }
-  if(noteViewMode!=='preview')return;
+  if(!supportsToc)return;
 
   const headings=getNotePreviewHeadings();
   if(!headings.length){
@@ -1679,8 +2080,8 @@ function renderNoteToc(){
 function toggleNoteToc(force){
   if(notesIsMobile()){
     notesTocMobileOpen=typeof force==='boolean'?force:!notesTocMobileOpen;
-    if(notesTocMobileOpen&&noteViewMode!=='preview'){
-      switchNoteView('preview');
+    if(notesTocMobileOpen&&noteViewMode!=='preview'&&noteViewMode!=='rich'){
+      switchNoteView('rich');
       return;
     }
     renderNoteToc();
@@ -1688,8 +2089,8 @@ function toggleNoteToc(force){
   }
   notesTocVisible=typeof force==='boolean'?force:!notesTocVisible;
   localStorage.setItem('study_notes_toc_visible',String(notesTocVisible));
-  if(notesTocVisible&&noteViewMode!=='preview'){
-    switchNoteView('preview');
+  if(notesTocVisible&&noteViewMode!=='preview'&&noteViewMode!=='rich'){
+    switchNoteView('rich');
     return;
   }
   renderNoteToc();
@@ -1705,7 +2106,7 @@ function setActiveNoteTocItem(targetId){
 }
 
 function jumpToNoteHeading(targetId){
-  const preview=document.getElementById('notesPreview');
+  const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
   if(!preview)return;
   const heading=getNotePreviewHeadings().find(item=>item.id===targetId);
   if(!heading)return;
@@ -1729,8 +2130,9 @@ function onNotePreviewScroll(){
   const schedule=window.requestAnimationFrame||function(callback){return setTimeout(callback,16)};
   _noteTocScrollFrame=schedule(()=>{
     _noteTocScrollFrame=0;
-    if(noteViewMode!=='preview'||!notesTocVisible)return;
-    const preview=document.getElementById('notesPreview');
+    const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
+    updateNoteReadingProgress(preview);
+    if((noteViewMode!=='preview'&&noteViewMode!=='rich')||!notesTocVisible)return;
     const headings=getNotePreviewHeadings();
     if(!preview||!headings.length)return;
     // Smooth scrolling over a long document can take over a second. Keep the
@@ -1747,19 +2149,45 @@ function onNotePreviewScroll(){
   });
 }
 
+function updateNoteReadingProgress(preview){
+  const progress=document.getElementById('notesReadingProgress');
+  const fill=document.getElementById('notesReadingProgressFill');
+  const reading=noteViewMode==='preview'||noteViewMode==='rich';
+  if(!progress||!fill)return;
+  progress.classList.toggle('visible',reading);
+  progress.setAttribute('aria-hidden',reading?'false':'true');
+  if(!reading||!preview)return;
+  const scrollableHeight=Math.max(0,preview.scrollHeight-preview.clientHeight);
+  const percent=scrollableHeight<=1?100:Math.round(Math.min(1,Math.max(0,preview.scrollTop/scrollableHeight))*100);
+  fill.style.transform='scaleY('+(percent/100)+')';
+  progress.setAttribute('aria-valuenow',String(percent));
+}
+
 function switchNoteView(mode){
   noteViewMode=mode;
-  if(mode!=='preview')notesTocMobileOpen=false;
-  const ta=document.getElementById('notesTextarea'),pv=document.getElementById('notesPreview'),sp=document.getElementById('notesSummaryPanel');
-  const eb=document.getElementById('notesEditBtn'),pb=document.getElementById('notesPreviewBtn'),sb=document.getElementById('notesSummaryBtn');
-  ta.classList.add('hidden');pv.classList.remove('active');if(sp)sp.style.display='none';
-  [eb,pb,sb].forEach(b=>{if(b)b.classList.remove('active')});
-  // Show/hide format toolbar: only visible in edit mode
-  const tb=document.getElementById('notesFormatToolbar');if(tb)tb.style.display=mode==='edit'?'':'none';
-  if(mode==='preview'){const n=getActiveNote();pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';pv.classList.add('active');if(pb)pb.classList.add('active');}
+  localStorage.setItem('study_note_view_mode',mode);
+  const section=document.getElementById('section-notes');
+  if(section)section.dataset.noteMode=mode;
+  if(mode!=='preview'&&mode!=='rich')notesTocMobileOpen=false;
+  const ta=document.getElementById('notesTextarea'),rich=document.getElementById('notesRichEditor'),pv=document.getElementById('notesPreview'),sp=document.getElementById('notesSummaryPanel');
+  const eb=document.getElementById('notesEditBtn'),rb=document.getElementById('notesRichBtn'),pb=document.getElementById('notesPreviewBtn'),sb=document.getElementById('notesSummaryBtn');
+  ta.classList.add('hidden');rich?.classList.remove('active');pv.classList.remove('active');if(sp)sp.style.display='none';
+  [eb,rb,pb,sb].forEach(b=>{if(b)b.classList.remove('active')});
+  const tb=document.getElementById('notesFormatToolbar');if(tb)tb.style.display=(mode==='edit'||mode==='rich')?'':'none';
+  if(mode==='preview'){const n=getActiveNote();pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';if(n)applyNoteFoldStates(pv,n.id);pv.classList.add('active');if(pb)pb.classList.add('active');}
   else if(mode==='summary'){if(sp)sp.style.display='flex';if(sb)sb.classList.add('active');renderNoteSummary();const n=getActiveNote();if(n&&!n._summaryFresh&&(n.content||'').trim().length>0&&isAutoSummaryEnabled()){n._summaryUpdating=true;renderNoteSummary();generateNoteSummary(n).then(()=>{n._summaryUpdating=false;renderNoteSummary()});}}
-  else{ta.classList.remove('hidden');if(eb)eb.classList.add('active');} // 不自动聚焦，避免移动端切编辑模式弹键盘
+  else if(mode==='rich'){const n=getActiveNote();if(typeof RichNoteEditor!=='undefined')RichNoteEditor.setMarkdown(n?.content||'',n?.id);rich?.classList.add('active');if(rb)rb.classList.add('active');}
+  else{const n=getActiveNote();if(ta&&n)ta.value=n.content||'';ta.classList.remove('hidden');if(eb)eb.classList.add('active');} // 不自动聚焦，避免移动端切编辑模式弹键盘
+  const immersiveButton=document.getElementById('notesImmersiveBtn');
+  const exitButton=document.getElementById('notesImmersiveExit');
+  const reading=mode==='preview';
+  if(immersiveButton)immersiveButton.title=reading?'沉浸阅读':'沉浸编辑';
+  if(exitButton){exitButton.title=reading?'退出沉浸阅读 (Esc)':'退出沉浸编辑 (Esc)';exitButton.setAttribute('aria-label',reading?'退出沉浸阅读':'退出沉浸编辑');}
   renderNoteToc();
+  // Wait for preview content/layout to settle so scrollHeight reflects the current note.
+  if(mode==='preview'||mode==='rich')requestAnimationFrame(()=>updateNoteReadingProgress(mode==='rich'?rich:pv));
+  else updateNoteReadingProgress(null);
+  if(notesImmersive)renderNotesImmersiveSplit();
 }
 
 // ═══════════ Notes: Summary ═══════════
@@ -1775,7 +2203,7 @@ async function generateNoteSummary(note){
       method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+aiKey.key},
       body:JSON.stringify({model:aiKey.model||'gpt-3.5-turbo',messages:[{role:'system',content:'你是一个笔记摘要助手。根据以下笔记内容，生成一段简短的中文摘要（不超过100字），概括核心要点。只输出摘要文本，不要加额外说明。'},{role:'user',content:'笔记标题：'+(note.title||'未命名')+'\n\n笔记内容：\n'+truncContent}],temperature:0.3,max_tokens:200})
     });
-    if(resp.ok){const data=await resp.json();note.summary=(data.choices?.[0]?.message?.content||'').trim().slice(0,200);}else note.summary='（摘要生成失败）';
+    if(resp.ok){const data=await resp.json();if(typeof AIClient!=='undefined')AIClient.recordUsage(aiKey.model||'gpt-3.5-turbo',data.usage,{feature:'note_summary',input:truncContent,output:data.choices?.[0]?.message});note.summary=(data.choices?.[0]?.message?.content||'').trim().slice(0,200);}else note.summary='（摘要生成失败）';
   }catch{note.summary='（摘要生成失败）';}
   note._summaryFresh=true;saveData('study_notes_v2',notes);renderNoteSummary();
 }
@@ -1930,6 +2358,9 @@ async function aiExtractNoteKeywords() {
     });
     if (resp.ok) {
       const data = await resp.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(aiKey.model || 'gpt-3.5-turbo', data.usage, {
+        feature: 'note_keywords', input: truncContent, output: data.choices?.[0]?.message
+      });
       const raw = (data.choices?.[0]?.message?.content || '').trim();
       const arr = parseKeywordList(raw);
       if (!Array.isArray(arr) || arr.length === 0) {

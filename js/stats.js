@@ -97,6 +97,108 @@ function formatStatsTime(minutes) {
   return m > 0 ? h + 'h ' + m + 'm' : h + '小时';
 }
 
+const AI_USAGE_FEATURE_LABELS = {
+  chat: 'AI 对话', chat_tool_followup: '工具调用续答', call_ai: '子模型调用',
+  conversation_title: '对话标题', note_summary: '笔记摘要', note_keywords: '笔记关键词',
+  memory_dedup: '记忆去重', memory_conversation_summary: '对话记忆摘要', memory_extract: '记忆提取',
+  memory_daily_summary: '每日记忆整合', memory_profile: '用户画像', stats_analysis: '统计分析', other: '其他',
+  morning_report: '晨间日报', evening_report: '晚间日报', taskline: '任务线', books: '教材学习',
+  inbox_summary: '消息摘要', inbox_daily_report: '消息日报'
+};
+
+function emptyAiUsageSummary() {
+  return { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0, exactRequests: 0, estimatedRequests: 0 };
+}
+
+function mergeAiUsageBucket(target, source) {
+  for (const key of ['inputTokens', 'outputTokens', 'totalTokens', 'requests', 'exactRequests', 'estimatedRequests']) {
+    target[key] = (Number(target[key]) || 0) + (Number(source?.[key]) || 0);
+  }
+}
+
+function collectAiUsageStats(days) {
+  const range = collectDateRange(days);
+  let store = { days: {}, legacyMonths: {} };
+  try {
+    store = typeof AIClient !== 'undefined' && AIClient.getUsageData
+      ? AIClient.getUsageData()
+      : JSON.parse(localStorage.getItem('study_ai_usage_v2') || '{}');
+  } catch (_) {}
+  const total = emptyAiUsageSummary();
+  const daily = {};
+  const byModel = {};
+  const byFeature = {};
+  for (const date of range) {
+    const row = store.days?.[date] || emptyAiUsageSummary();
+    daily[date] = Number(row.totalTokens) || (Number(row.inputTokens) || 0) + (Number(row.outputTokens) || 0);
+    mergeAiUsageBucket(total, row);
+    for (const [name, bucket] of Object.entries(row.byModel || {})) {
+      mergeAiUsageBucket(byModel[name] || (byModel[name] = emptyAiUsageSummary()), bucket);
+    }
+    for (const [name, bucket] of Object.entries(row.byFeature || {})) {
+      mergeAiUsageBucket(byFeature[name] || (byFeature[name] = emptyAiUsageSummary()), bucket);
+    }
+  }
+  let legacyTokens = 0;
+  for (const row of Object.values(store.legacyMonths || {})) {
+    legacyTokens += (Number(row?.inputTokens) || 0) + (Number(row?.outputTokens) || 0);
+  }
+  return { range, daily, total, byModel, byFeature, legacyTokens };
+}
+
+function formatTokenCount(value) {
+  const n = Math.max(0, Number(value) || 0);
+  if (n >= 1000000) return (n / 1000000).toFixed(n >= 10000000 ? 1 : 2).replace(/\.0+$/, '') + 'M';
+  if (n >= 1000) return (n / 1000).toFixed(n >= 100000 ? 0 : 1).replace(/\.0$/, '') + 'K';
+  return String(Math.round(n));
+}
+
+function aiUsageBreakdownHtml(entries, labels) {
+  const sorted = Object.entries(entries || {}).sort((a, b) => (b[1].totalTokens || 0) - (a[1].totalTokens || 0)).slice(0, 6);
+  if (!sorted.length) return '<div class="stats-ai-empty">暂无数据</div>';
+  const max = Math.max(1, ...sorted.map(([, row]) => Number(row.totalTokens) || 0));
+  return sorted.map(([name, row]) => {
+    const label = labels?.[name] || name;
+    const width = Math.max(3, Math.round((Number(row.totalTokens) || 0) / max * 100));
+    return '<div class="stats-ai-breakdown-row"><div class="stats-ai-breakdown-meta"><span>'+escapeHtml(label)+'</span><span>'+formatTokenCount(row.totalTokens)+' · '+(row.requests||0)+'次</span></div><div class="stats-ai-breakdown-track"><span style="width:'+width+'%"></span></div></div>';
+  }).join('');
+}
+
+function renderAiTokenTrend(cId, stats) {
+  const el = document.getElementById(cId); if (!el) return;
+  const values = stats.range.map(date => stats.daily[date] || 0);
+  const max = Math.max(1, ...values);
+  el.innerHTML = '<div class="stats-ai-bars">' + values.map((value, index) => {
+    const height = value > 0 ? Math.max(4, Math.round(value / max * 100)) : 2;
+    const label = stats.range.length <= 7 || index % (stats.range.length > 14 ? 5 : 2) === 0 ? stats.range[index].slice(5) : '';
+    return '<div class="stats-ai-bar-col" title="'+stats.range[index]+'：'+Math.round(value)+' Token"><span class="stats-ai-bar" style="height:'+height+'%"></span><small>'+label+'</small></div>';
+  }).join('') + '</div>';
+}
+
+function refreshAiUsagePanel() {
+  const stats = collectAiUsageStats(STATS_PERIOD);
+  const values = {
+    statsAiTotal: formatTokenCount(stats.total.totalTokens), statsAiInput: formatTokenCount(stats.total.inputTokens),
+    statsAiOutput: formatTokenCount(stats.total.outputTokens), statsAiRequests: String(stats.total.requests || 0)
+  };
+  for (const [id, value] of Object.entries(values)) { const el = document.getElementById(id); if (el) el.textContent = value; }
+  const accuracy = document.getElementById('statsAiAccuracy');
+  if (accuracy) accuracy.textContent = '精确 '+(stats.total.exactRequests||0)+' 次 · 估算 '+(stats.total.estimatedRequests||0)+' 次'
+    + (stats.legacyTokens ? ' · 另有旧版累计 '+formatTokenCount(stats.legacyTokens)+' Token' : '');
+  const models = document.getElementById('statsAiModels'); if (models) models.innerHTML = aiUsageBreakdownHtml(stats.byModel);
+  const features = document.getElementById('statsAiFeatures'); if (features) features.innerHTML = aiUsageBreakdownHtml(stats.byFeature, AI_USAGE_FEATURE_LABELS);
+  renderAiTokenTrend('statsAiTrend', stats);
+}
+
+async function clearAiUsageStats() {
+  const accepted = typeof showCustomConfirm === 'function'
+    ? await showCustomConfirm('确定清空全部 AI Token 统计吗？此操作不会删除对话。', { title: '清空 Token 统计', okText: '清空', danger: true })
+    : confirm('确定清空全部 AI Token 统计吗？');
+  if (!accepted || typeof AIClient === 'undefined') return;
+  AIClient.clearUsage();
+  refreshAiUsagePanel();
+}
+
 // ═══════════ Stats: SVG Charts ═══════════
 function renderTodoLineChart(cId, stats) {
   const el = document.getElementById(cId); if (!el) return;
@@ -268,6 +370,10 @@ ${ts.range.slice(-7).map(d => d.slice(5)+': 待办'+ts.completed[d]+' 专注'+Ma
     });
     if (!resp.ok) throw new Error('API ' + resp.status + ': ' + await resp.text());
     const data = await resp.json();
+    if (typeof AIClient !== 'undefined') AIClient.recordUsage(cfg.model || 'gpt-3.5-turbo', data.usage, {
+      feature: 'stats_analysis', input: [sp, dataText], output: data.choices?.[0]?.message
+    });
+    refreshAiUsagePanel();
     const text = data.choices?.[0]?.message?.content || '（无内容返回）';
     result.innerHTML = parseAnalysisSections(text);
     result.style.display = 'block';
@@ -318,6 +424,17 @@ function renderStats() {
       '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="pie-chart" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 习惯完成率</h3><div class="stats-chart-body" id="statsHabitDoughnut" style="justify-content:center"></div></div>'+
       '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="grid" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 活动热力图</h3><div class="stats-chart-body" id="statsHeatmap" style="justify-content:center;overflow-x:auto"></div></div>'+
     '</div>'+
+    '<div class="stats-ai-card">'+
+      '<div class="stats-ai-header"><div><h3><i data-lucide="cpu" class="lucide-icon"></i> AI Token 消耗</h3><p id="statsAiAccuracy">按接口返回值统计；缺失 usage 时使用本地估算</p></div><button class="stats-ai-clear" onclick="clearAiUsageStats()"><i data-lucide="trash-2" class="lucide-icon"></i> 清空统计</button></div>'+
+      '<div class="stats-ai-overview">'+
+        '<div><strong id="statsAiTotal">0</strong><span>总 Token</span></div><div><strong id="statsAiInput">0</strong><span>输入 Token</span></div><div><strong id="statsAiOutput">0</strong><span>输出 Token</span></div><div><strong id="statsAiRequests">0</strong><span>请求次数</span></div>'+
+      '</div>'+
+      '<div class="stats-ai-grid">'+
+        '<div class="stats-ai-pane"><h4>每日消耗趋势</h4><div id="statsAiTrend" class="stats-ai-trend"></div></div>'+
+        '<div class="stats-ai-pane"><h4>按模型</h4><div id="statsAiModels"></div></div>'+
+        '<div class="stats-ai-pane"><h4>按功能</h4><div id="statsAiFeatures"></div></div>'+
+      '</div>'+
+    '</div>'+
     '<div class="stats-analysis-card">'+
       '<div class="stats-analysis-header"><h3 class="stats-chart-title" style="margin:0"><i data-lucide="sparkles" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> AI 趋势分析</h3>'+
         '<button class="stats-analysis-btn" id="statsAnalysisBtn" onclick="generateStatsAnalysis()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 生成分析</button>'+
@@ -330,6 +447,10 @@ function renderStats() {
       '</div>'+
     '</div>';
 
+  // Text summaries do not depend on layout width, so update them even while
+  // the stats section is hidden. Charts will be retried once the tab is visible.
+  refreshAiUsagePanel();
+
   // Render charts — retry until layout is ready
   let tries = 0;
   function tryRenderCharts() {
@@ -339,6 +460,7 @@ function renderStats() {
       renderFocusBarChart('statsFocusChart', ms);
       renderHabitDoughnut('statsHabitDoughnut', hs);
       renderHeatmap('statsHeatmap');
+      refreshAiUsagePanel();
       if (typeof lucide !== 'undefined') lucide.createIcons();
       return;
     }

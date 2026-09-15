@@ -499,7 +499,7 @@ async function bkJudgeProgrammingBook(book, cfg) {
     const res = await callAiApi([
       { role: 'system', content: systemPrompt },
       { role: 'user', content: `书名：${book.title}\n章节目录：${titles}` }
-    ], cfg, null);
+    ], cfg, null, { feature: 'books' });
     const raw = (res && (res.cleanText || res.rawReply)) || '';
     const obj = bkSafeParseJson(raw);
     return !!(obj && obj.isProgramming === true);
@@ -696,7 +696,8 @@ async function bkBuildChapterKb(chapter, chapterText, cfg, collectPseudocode, fi
       { role: 'user', content: userContent }
     ],
     kbCfg,
-    null
+    null,
+    { feature: 'books' }
   );
   const raw = (res && (res.cleanText || res.rawReply)) || '';
   return bkParseKbJson(raw);
@@ -729,7 +730,8 @@ async function bkBuildChapterSummary(chapter, chapterText, cfg, detailLevel) {
       { role: 'user', content: `章节标题：${chapter.title}\n\n章节原文：\n${content}` }
     ],
     kbCfg,
-    null
+    null,
+    { feature: 'books' }
   );
   const raw = (res && (res.cleanText || res.rawReply)) || '';
   const obj = bkParseKbJson(raw);

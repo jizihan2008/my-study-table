@@ -5,6 +5,7 @@ const { _electron: electron } = require('playwright');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+const { buildTestPdf } = require('../fixtures/books-pdf');
 
 let electronApp;
 let page;
@@ -270,6 +271,53 @@ test('images attach to deepseek-flash and reach the API as base64 image_url bloc
   expect(userMessage.content[1].type).toBe('image_url');
   expect(userMessage.content[1].image_url.url.startsWith('data:image/png;base64,')).toBe(true);
   expect(requestBody.model).toBe('deepseek-flash');
+});
+
+test('PDF compatibility lets the user choose extracted text or rendered page images', async () => {
+  const pdfBase64 = buildTestPdf(3).toString('base64');
+  const output = await page.evaluate(async ({ pdfBase64 }) => {
+    const originalConfig = window.getEffectiveApiConfig;
+    window.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'deepseek-flash', name: 'PDF 测试' });
+    try {
+      window.switchTab('ai');
+      while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
+      const bin = atob(pdfBase64);
+      const bytes = new Uint8Array(bin.length);
+      for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+      const file = new File([bytes], 'test.pdf', { type: 'application/pdf' });
+      window.addAiAttachmentFiles([file]);
+      const defaultMode = window.getAiAttachmentsSnapshot()[0].pdfMode;
+      const defaultPreview = document.getElementById('aiAttachPreview').textContent;
+      const extracted = await window.extractPdfAttachmentText(file);
+      window.toggleAttachPdfMode(0);
+      const imageMode = window.getAiAttachmentsSnapshot()[0].pdfMode;
+      const imagePreview = document.getElementById('aiAttachPreview').textContent;
+      const rendered = await window.renderPdfAttachmentPages(file, { maxPages: 2, maxWidth: 600 });
+      return {
+        defaultMode,
+        defaultPreview,
+        extracted: extracted.text,
+        pageCount: extracted.pageCount,
+        imageMode,
+        imagePreview,
+        renderedPages: rendered.renderedPages,
+        imagePrefixes: rendered.dataUrls.map(url => url.slice(0, 23))
+      };
+    } finally {
+      window.getEffectiveApiConfig = originalConfig;
+      while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
+    }
+  }, { pdfBase64 });
+
+  expect(output.defaultMode).toBe('text');
+  expect(output.defaultPreview).toContain('提取文字');
+  expect(output.extracted).toContain('[第 1 页]');
+  expect(output.extracted).toContain('Test Page 3');
+  expect(output.pageCount).toBe(3);
+  expect(output.imageMode).toBe('image');
+  expect(output.imagePreview).toContain('页面图片');
+  expect(output.renderedPages).toBe(2);
+  expect(output.imagePrefixes).toEqual(['data:image/jpeg;base64,', 'data:image/jpeg;base64,']);
 });
 
 test('deepseek files api uploads a photo once and later turns reference the same file_id', async () => {

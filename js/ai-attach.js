@@ -1,11 +1,223 @@
 // ═══════════════════════════════════════════════
-//  AI 附件处理：文件上传、预览、Kimi 文件处理、图片（视觉）识别与预处理
+//  AI 附件处理：文件上传、预览、PDF 本地兼容、Kimi 文件处理、图片识别与预处理
 //  · 文本类附件：按纯文本读取后拼进提示词
+//  · PDF 附件：非 Kimi 模型可由用户选择提取文字，或逐页渲染为图片
 //  · 图片附件：走 OpenAI 兼容的 image_url base64 内联（deepseek-flash / Kimi / *vision* 模型）
 //  · 本地预处理：超大图缩放、BMP 等不支持格式转 PNG/JPEG、按扩展名补齐 MIME
 // ═══════════════════════════════════════════════
 
 // ═══════════ AI Chat: Attachments ═══════════
+// Selected local items are injected into the next user message as readable
+// context, rather than uploaded as files.
+let aiContextInserts = []; // [{ type: 'note'|'todo', id }]
+let aiContextPickerType = null;
+let aiContextPickerQuery = '';
+let aiContextPickerExpandedIds = new Set();
+
+function getAiContextTodoPath(todo) {
+  if (!todo) return '';
+  const ancestors = typeof getAncestorPath === 'function'
+    ? getAncestorPath(todo.id).map(item => item.text).filter(Boolean)
+    : [];
+  return [...ancestors, todo.text || '未命名待办'].join(' > ');
+}
+
+function getAiContextNotePath(note) {
+  if (!note) return '';
+  const ancestors = [];
+  const seen = new Set([note.id]);
+  let parentId = note.parentId;
+  while (parentId !== null && parentId !== undefined && !seen.has(parentId)) {
+    const folder = (typeof notes !== 'undefined' ? notes : []).find(item => item.id === parentId && item.type === 'folder');
+    if (!folder) break;
+    seen.add(folder.id);
+    if (folder.title) ancestors.unshift(folder.title);
+    parentId = folder.parentId;
+  }
+  return [...ancestors, note.title || '未命名笔记'].join(' > ');
+}
+
+function getAiContextInsertSnapshot() {
+  if (!Array.isArray(aiContextInserts)) return [];
+  return aiContextInserts.map(item => {
+    if (item.type === 'note') {
+      const note = (typeof notes !== 'undefined' ? notes : []).find(n => n.id === item.id && n.type === 'note');
+      return note ? { type: 'note', id: note.id, label: getAiContextNotePath(note), content: note.content || '' } : null;
+    }
+    const todo = typeof findTodo === 'function' ? findTodo(item.id) : null;
+    return todo ? { type: 'todo', id: todo.id, label: getAiContextTodoPath(todo) } : null;
+  }).filter(Boolean);
+}
+
+function buildAiContextInsertText(snapshot) {
+  const items = Array.isArray(snapshot) ? snapshot : getAiContextInsertSnapshot();
+  if (items.length === 0) return '';
+  const blocks = items.map(item => item.type === 'note'
+    ? `【插入笔记】${item.label}\n正文：\n${item.content || '（空笔记）'}`
+    : `【插入待办】${item.label}`);
+  return blocks.length ? `\n\n---\n${blocks.join('\n\n')}\n---` : '';
+}
+
+function clearAiContextInserts() {
+  aiContextInserts = [];
+  renderAiContextPreview();
+}
+
+function removeAiContextInsert(index) {
+  aiContextInserts.splice(index, 1);
+  renderAiContextPreview();
+}
+
+function renderAiContextPreview() {
+  const wrap = document.getElementById('aiContextPreview');
+  if (!wrap) return;
+  const valid = aiContextInserts.map((item, index) => ({ item, index })).filter(({ item }) => {
+    return item.type === 'note'
+      ? (typeof notes !== 'undefined' && notes.some(n => n.id === item.id && n.type === 'note'))
+      : (typeof findTodo === 'function' && !!findTodo(item.id));
+  });
+  if (valid.length !== aiContextInserts.length) aiContextInserts = valid.map(x => x.item);
+  if (valid.length === 0) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
+  wrap.style.display = 'flex';
+  wrap.innerHTML = valid.map(({ item }, index) => {
+    const isNote = item.type === 'note';
+    const source = isNote ? notes.find(n => n.id === item.id) : findTodo(item.id);
+    const label = isNote ? getAiContextNotePath(source) : getAiContextTodoPath(source);
+    return `<span class="ai-attach-preview" title="${escapeHtml(label)}">${isNote ? '📝 笔记正文：' : '📋 待办路径：'}<span class="preview-name">${escapeHtml(label)}</span><button class="preview-remove" onclick="removeAiContextInsert(${index})">✕</button></span>`;
+  }).join('');
+}
+
+function openAiContextPicker(type) {
+  aiContextPickerType = type;
+  aiContextPickerQuery = '';
+  aiContextPickerExpandedIds = new Set();
+  let overlay = document.getElementById('aiContextPickerOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'aiContextPickerOverlay';
+    overlay.className = 'timer-picker-overlay';
+    overlay.onclick = event => { if (event.target === overlay) closeAiContextPicker(); };
+    document.body.appendChild(overlay);
+  }
+  overlay.style.display = '';
+  renderAiContextPicker();
+}
+
+function closeAiContextPicker() {
+  const overlay = document.getElementById('aiContextPickerOverlay');
+  if (overlay) overlay.style.display = 'none';
+  aiContextPickerExpandedIds = new Set();
+}
+
+function updateAiContextPickerQuery(value) {
+  aiContextPickerQuery = value || '';
+  renderAiContextPicker();
+}
+
+function toggleAiContextPickerExpand(id, event) {
+  if (event) event.stopPropagation();
+  if (aiContextPickerExpandedIds.has(id)) aiContextPickerExpandedIds.delete(id);
+  else aiContextPickerExpandedIds.add(id);
+  renderAiContextPicker();
+}
+
+function getAiContextPickerChildren(item, isNote) {
+  const source = isNote
+    ? (typeof notes !== 'undefined' ? notes : [])
+    : (typeof todos !== 'undefined' ? todos : []);
+  return source.filter(child => child.parentId === item.id);
+}
+
+function renderAiContextPickerNode(item, depth, isNote, visited) {
+  if (!item || depth > 50) return '';
+  const branch = visited || new Set();
+  if (branch.has(item.id)) return '';
+  const nextBranch = new Set(branch);
+  nextBranch.add(item.id);
+
+  const children = getAiContextPickerChildren(item, isNote);
+  const isFolder = isNote && item.type === 'folder';
+  const hasKids = children.length > 0;
+  const isExpanded = aiContextPickerExpandedIds.has(item.id);
+  const isSelected = !isFolder && aiContextInserts.some(insert => insert.type === aiContextPickerType && insert.id === item.id);
+  const title = isNote ? (item.title || '未命名笔记') : (item.text || '未命名待办');
+  const indent = depth * 16;
+  const childHtml = children.map(child => renderAiContextPickerNode(child, depth + 1, isNote, nextBranch)).join('');
+  const action = isFolder
+    ? `toggleAiContextPickerExpand(${item.id}, event)`
+    : `insertAiContext('${aiContextPickerType}', ${item.id})`;
+
+  return `<div>
+    <div class="todo-picker-item${isSelected ? ' selected' : ''}${isFolder ? ' ai-context-folder' : ''}" onclick="${action}" style="padding-left:${14 + indent}px;">
+      ${hasKids ? `<button class="picker-expand${isExpanded ? ' expanded' : ''}" onclick="toggleAiContextPickerExpand(${item.id}, event)" title="展开/折叠">▶</button>` : '<span class="picker-expand-spacer"></span>'}
+      ${isFolder
+        ? '<span class="ai-context-folder-icon"><i data-lucide="folder" class="lucide-icon"></i></span>'
+        : '<div class="picker-check"></div>'}
+      <span class="picker-text${!isNote && item.done ? ' done' : ''}">${escapeHtml(title)}</span>
+      ${hasKids ? `<span class="picker-badge">${children.length}</span>` : ''}
+      ${!isNote && item.dueDate ? `<span class="picker-due">📅 ${escapeHtml(item.dueDate)}</span>` : ''}
+    </div>
+    ${(hasKids && childHtml) ? `<div class="picker-children${isExpanded ? '' : ' collapsed'}">${childHtml}</div>` : ''}
+  </div>`;
+}
+
+function renderAiContextPicker() {
+  const overlay = document.getElementById('aiContextPickerOverlay');
+  if (!overlay || !aiContextPickerType) return;
+  const previousScrollTop = overlay.querySelector('.todo-picker-list')?.scrollTop || 0;
+  const isNote = aiContextPickerType === 'note';
+  const query = aiContextPickerQuery.trim().toLowerCase();
+  const source = isNote
+    ? (typeof notes !== 'undefined' ? notes : [])
+    : (typeof todos !== 'undefined' ? todos : []);
+  const selectableItems = isNote ? source.filter(item => item.type === 'note') : source;
+  let listHtml = '';
+
+  if (query) {
+    const matches = selectableItems
+      .map(item => ({ item, label: isNote ? getAiContextNotePath(item) : getAiContextTodoPath(item) }))
+      .filter(row => row.label.toLowerCase().includes(query));
+    listHtml = matches.map(({ item, label }) => {
+      const selected = aiContextInserts.some(insert => insert.type === aiContextPickerType && insert.id === item.id);
+      return `<div class="todo-picker-item${selected ? ' selected' : ''}" onclick="insertAiContext('${aiContextPickerType}', ${item.id})">
+        <span class="picker-expand-spacer"></span>
+        <div class="picker-check"></div>
+        <span class="picker-text">${escapeHtml(label)}</span>
+        ${!isNote && item.dueDate ? `<span class="picker-due">📅 ${escapeHtml(item.dueDate)}</span>` : ''}
+      </div>`;
+    }).join('');
+    if (!listHtml) listHtml = `<div class="todo-picker-empty">没有匹配的${isNote ? '笔记' : '待办事项'}</div>`;
+  } else {
+    const roots = source.filter(item => item.parentId === null || item.parentId === undefined);
+    listHtml = roots.map(item => renderAiContextPickerNode(item, 0, isNote)).join('');
+    if (!listHtml) listHtml = `<div class="todo-picker-empty">暂无${isNote ? '笔记' : '待办事项'}</div>`;
+  }
+
+  overlay.innerHTML = `<div class="timer-picker ai-context-picker" role="dialog" aria-modal="true" aria-label="选择${isNote ? '笔记' : '待办事项'}">
+    <div class="todo-picker-header">
+      <span><i data-lucide="${isNote ? 'notebook-pen' : 'clipboard-list'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择${isNote ? '笔记' : '待办事项'}</span>
+      <button class="todo-picker-close" onclick="closeAiContextPicker()" title="关闭"><i data-lucide="x" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+    </div>
+    <div class="todo-picker-search">
+      <input autofocus placeholder="搜索${isNote ? '笔记' : '待办'}..." value="${escapeAttr(aiContextPickerQuery)}" oninput="updateAiContextPickerQuery(this.value)" onkeydown="if(event.key==='Escape')closeAiContextPicker()">
+    </div>
+    <div class="todo-picker-list">${listHtml}</div>
+  </div>`;
+  const list = overlay.querySelector('.todo-picker-list');
+  if (list) list.scrollTop = previousScrollTop;
+  if (typeof lucide !== 'undefined') {
+    try { lucide.createIcons(); } catch (_) {}
+  }
+  const input = overlay.querySelector('input');
+  if (input) { input.focus(); input.setSelectionRange(input.value.length, input.value.length); }
+}
+
+function insertAiContext(type, id) {
+  if (!aiContextInserts.some(item => item.type === type && item.id === id)) aiContextInserts.push({ type, id });
+  closeAiContextPicker();
+  renderAiContextPreview();
+}
+
 function handleAiFileSelect(event) {
   addAiAttachmentFiles(event.target.files);
   event.target.value = '';
@@ -24,6 +236,12 @@ function isTextFile(file) {
   const ext = (file.name.match(/\.([^.]+)$/) || [])[1];
   if (!ext) return false;
   return TEXT_FILE_EXTS.includes('.' + ext.toLowerCase());
+}
+
+function isPdfFile(file) {
+  if (!file) return false;
+  const name = String(file.name || '').toLowerCase();
+  return String(file.type || '').toLowerCase() === 'application/pdf' || name.endsWith('.pdf');
 }
 
 // 附件大小上限：Kimi 文档 100MB；图片按“最宽松的一条路径”放行，
@@ -57,26 +275,29 @@ function addAiAttachmentFiles(fileList) {
       alert(`文件 "${file.name}" 超过 ${limit.label} 限制，已跳过`);
       continue;
     }
-    // 非多模态模型只接受文本类文件（发送时按纯文本读取，二进制会乱码）。
-    // 多模态模型（Kimi / deepseek-flash 等）额外放行「图片」——注意只认图片，
+    // 所有模型都可通过本地文本提取读取 PDF；多模态模型（Kimi / deepseek-flash 等）
+    // 额外放行「图片」——注意只认图片，
     // 否则 .exe/.zip 这类二进制也会被放行并按文本读取，产生乱码垃圾。
     const isImage = isImageFile(file);
-    if (!isTextFile(file) && !(isMultimodalModel(apiCfg) && isImage)) {
+    const isPdf = isPdfFile(file);
+    if (!isTextFile(file) && !isPdf && !(isMultimodalModel(apiCfg) && isImage)) {
       alert(`当前模型（${apiCfg.model || '未知'}）不支持 "${file.name}"，`
         + (isMultimodalModel(apiCfg)
-          ? '仅支持图片（PNG / JPEG / GIF / WebP / BMP）与文本类文件（.txt / .md / .json / 代码文件等）'
-          : '仅支持文本类文件（.txt / .md / .json / 代码文件等），图片需切换到支持看图的模型'));
+          ? '支持 PDF、图片（PNG / JPEG / GIF / WebP / BMP）与文本类文件（.txt / .md / .json / 代码文件等）'
+          : '支持 PDF 与文本类文件（.txt / .md / .json / 代码文件等），图片需切换到支持看图的模型'));
       continue;
     }
     const attach = { name: file.name, file: file, size: file.size };
+    // Kimi 保留原生 file-extract；其余模型统一走本地 PDF 兼容层，由用户选择文字或页面图片。
+    if (isPdf && !isKimiModel(apiCfg)) attach.pdfMode = 'text';
     // For Kimi image files, default to inline (base64), user can switch to OCR
     if (isKimiModel(apiCfg) && isImage) {
       attach.ocrMode = false; // false = base64 inline, true = OCR via file-extract
     }
     aiAttachments.push(attach);
-    // DeepSeek 等视觉模型：本地预处理图片（超大图缩放、BMP 等不支持格式转 PNG/JPEG、补齐 MIME），
-    // 避免上传后才由服务端报错，同时明显减小请求体
-    if (!isKimiModel(apiCfg) && isImage) preprocessAiImageAttachment(attach);
+    // 所有视觉模型都先在本地规范化。Kimi 的内联分支过去会绕过这里，导致真实格式正确、
+    // 但单边极长的 PNG 被服务端笼统报成 "unsupported image"。
+    if (isImage) preprocessAiImageAttachment(attach);
   }
   renderAttachPreview();
 }
@@ -84,6 +305,9 @@ function addAiAttachmentFiles(fileList) {
 // 内联图片体积：base64 约等于原始字节 ×1.37（预处理结果存在时按其实际长度精确计算）
 function getInlineImageBytes(attach) {
   if (!attach) return 0;
+  if (Array.isArray(attach.dataUrls) && attach.dataUrls.length > 0) {
+    return attach.dataUrls.reduce((total, url) => total + (typeof url === 'string' ? Math.ceil(url.length * 0.73) : 0), 0);
+  }
   if (typeof attach.dataUrl === 'string' && attach.dataUrl.length > 0) return Math.ceil(attach.dataUrl.length * 0.73);
   const size = Number(attach.size) || (attach.file && attach.file.size) || 0;
   return Math.ceil(size * 1.37);
@@ -218,13 +442,12 @@ async function makeImageThumb(attach) {
   return out.dataUrl;
 }
 
-// 在历史消息里找同一张图已上传的 file_id：
-//  · 同一 API Key 上传的文件才能被该 Key 引用（换 Key 后必须重新上传）
-//  · 会话内多次发送同名图片（同一张图配不同问题）时命中，直接复用不再上传
-//  · 跨会话命中依赖文件名相同，属于尽力而为的优化
-function findReusableUploadedImage(name, apiCfg = getEffectiveApiConfig()) {
-  const target = String(name || '');
-  if (!target) return null;
+// 在历史消息里找内容完全相同的图片 file_id。文件名不能作为身份：手机/截图导出的
+// "1.png"、"image.png" 极易重名，曾因此把别的图片的 file_id 错发给模型。
+// 旧记录没有 SHA-256 指纹时宁可重新上传，也绝不按文件名猜测复用。
+function findReusableUploadedImage(attach, apiCfg = getEffectiveApiConfig()) {
+  const fingerprint = String(attach && attach.imageFingerprint || '');
+  if (!fingerprint) return null;
   const keyId = apiCfg.keyId || '';
   const convs = (typeof aiConvs !== 'undefined' && Array.isArray(aiConvs)) ? aiConvs : [];
   for (const conv of convs) {
@@ -232,13 +455,21 @@ function findReusableUploadedImage(name, apiCfg = getEffectiveApiConfig()) {
     for (const m of messages) {
       if (!m || !Array.isArray(m.visionFiles)) continue;
       for (const vf of m.visionFiles) {
-        if (vf && vf.type === 'file' && vf.fileId && vf.name === target && (vf.uploadKeyId || '') === keyId) {
-          return { fileId: vf.fileId, uploadKeyId: vf.uploadKeyId || '', thumb: vf.dataUrl || '' };
+        if (vf && vf.type === 'file' && vf.fileId && vf.imageFingerprint === fingerprint && (vf.uploadKeyId || '') === keyId) {
+          return { fileId: vf.fileId, uploadKeyId: vf.uploadKeyId || '', thumb: vf.dataUrl || '', imageFingerprint: fingerprint };
         }
       }
     }
   }
   return null;
+}
+
+async function fingerprintImageFile(file) {
+  const subtle = typeof globalThis !== 'undefined' && globalThis.crypto && globalThis.crypto.subtle;
+  if (!file || !subtle) return '';
+  const buffer = typeof file.arrayBuffer === 'function' ? await file.arrayBuffer() : await readFileAsArrayBuffer(file);
+  const digest = new Uint8Array(await subtle.digest('SHA-256', buffer));
+  return Array.from(digest, byte => byte.toString(16).padStart(2, '0')).join('');
 }
 
 // 剔除只能内联、且内联后超出单图限制的图片附件：同时清掉编辑器里的待发附件与本次快照，
@@ -274,13 +505,29 @@ function pruneOversizedImageAttachments(attachments, apiCfg = getEffectiveApiCon
 // 同时把这次处理的 Promise 存到 attach._processPromise，发送时 await 它即可，
 // 既不必重复解码一次，也不会出现「刚点发送时预处理还没完成」的竞态。
 // 两条路径：
-//   · Files API（大图/照片）：上传原图换 file_id → 之后每轮只发 file_id，另存小缩略图供界面预览
-//   · 内联 base64（小图 / 非官方端点 / 用户关闭上传）：缩放转码后内联
+//   · Files API（普通大图/照片）：规范化后上传换 file_id → 之后每轮只发 file_id，另存小缩略图供界面预览
+//   · 内联 base64（小图 / 长图切片 / 非官方端点 / 用户关闭上传）：缩放或切片后内联
 function preprocessAiImageAttachment(attach) {
   if (attach._processPromise) return attach._processPromise;
   attach.imageProcessing = true;
   attach._processPromise = (async () => {
     const apiCfg = getEffectiveApiConfig();
+    attach.imageFingerprint = await fingerprintImageFile(attach.file).catch(() => '');
+    // 教材扫描、网页截图等极长图片不能整张缩到 2048px 高，否则文字会小到不可读。
+    // 将它们切成多个合规图片块；普通图片仍沿用单图缩放路径。
+    const split = await splitTallImageForApi(attach.file);
+    if (split) {
+      attach.dataUrls = split.dataUrls;
+      attach.dataUrl = split.dataUrls[0] || '';
+      attach.imageInfo = split.info;
+      attach.imageStrategy = 'inline';
+      return attach;
+    }
+    const processed = await downscaleImageForApi(attach.file);
+    attach.file = processed.file;
+    attach.dataUrl = processed.dataUrl;
+    attach.dataUrls = [processed.dataUrl];
+    attach.imageInfo = processed.info;
     if (shouldUploadImageToFiles(attach, apiCfg)) {
       try {
         attach.uploadFileId = await uploadImageToDeepSeek(attach.file, apiCfg);
@@ -295,17 +542,12 @@ function preprocessAiImageAttachment(attach) {
         if (isDebugMode()) console.warn('[AI attach] Files API 上传失败，改用内联：', attach.uploadError);
       }
     }
-    try {
-      const processed = await downscaleImageForApi(attach.file);
-      attach.file = processed.file;
-      attach.dataUrl = processed.dataUrl;
-      attach.imageInfo = processed.info;
-    } catch (err) {
-      attach._preprocessError = (err && err.message) || String(err);
-      if (isDebugMode()) console.warn('[AI attach] 图片预处理失败，发送时将按原文件读取：', attach._preprocessError);
-    }
     return attach;
-  })().finally(() => {
+  })().catch(err => {
+    attach._preprocessError = (err && err.message) || String(err);
+    if (isDebugMode()) console.warn('[AI attach] 图片预处理失败，发送时将按原文件读取：', attach._preprocessError);
+    return attach;
+  }).finally(() => {
     attach.imageProcessing = false;
     renderAttachPreview();
   });
@@ -353,8 +595,12 @@ function getAiAttachmentsSnapshot() {
     size: a.size,
     type: (a.file && a.file.type) || '',
     ocrMode: a.ocrMode,
+    pdfMode: a.pdfMode,
+    pdfInfo: a.pdfInfo || null,
     imageProcessing: a.imageProcessing === true,
     imageInfo: a.imageInfo || null,
+    imagePartCount: Array.isArray(a.dataUrls) ? a.dataUrls.length : 0,
+    imageFingerprint: a.imageFingerprint || null,
     preprocessError: a._preprocessError || null,
     imageStrategy: a.imageStrategy || null,
     uploadFileId: a.uploadFileId || null,
@@ -375,6 +621,18 @@ function toggleAttachOcrMode(idx) {
   renderAttachPreview();
 }
 
+function toggleAttachPdfMode(idx) {
+  const a = aiAttachments[idx];
+  if (!a || a.pdfMode === undefined) return;
+  const next = a.pdfMode === 'text' ? 'image' : 'text';
+  if (next === 'image' && !isMultimodalModel()) {
+    alert('当前模型不支持图片输入；PDF 仍可使用“提取文字”模式。若是扫描版 PDF，请切换到支持看图的模型。');
+    return;
+  }
+  a.pdfMode = next;
+  renderAttachPreview();
+}
+
 function renderAttachPreview() {
   const wrap = document.getElementById('aiAttachPreview');
   const btn = document.getElementById('aiAttachBtn');
@@ -389,13 +647,21 @@ function renderAttachPreview() {
   wrap.style.display = 'flex';
   const multimodal = isMultimodalModel();
   wrap.innerHTML = aiAttachments.map((a, i) => {
+    const isPdf = isPdfFile(a.file);
     const isImage = (isKimiModel() && a.ocrMode !== undefined) || (multimodal && isImageFile(a.file));
     // 已预处理的图片直接显示缩略图（BMP 等不支持格式转换后也能看到效果）
     const thumb = isImage && a.dataUrl
       ? `<img class="preview-thumb" src="${a.dataUrl}" alt="">`
-      : `<span class="preview-icon">${isImage ? '🖼️' : '📝'}</span>`;
+      : `<span class="preview-icon">${isImage ? '🖼️' : (isPdf ? '📕' : '📝')}</span>`;
     let modeToggle = '';
-    if (isImage && a.ocrMode !== undefined) {
+    if (isPdf && a.pdfMode !== undefined) {
+      const imageMode = a.pdfMode === 'image';
+      const modeLabel = imageMode ? '🖼️ 页面图片' : '📄 提取文字';
+      const title = imageMode
+        ? '切换到提取 PDF 文本层（所有模型可用）'
+        : (multimodal ? '切换到逐页渲染图片（最多 24 页）' : '当前模型不支持图片；切换视觉模型后可用页面图片');
+      modeToggle = `<button class="preview-mode-btn" onclick="toggleAttachPdfMode(${i})" title="${title}">${modeLabel}</button>`;
+    } else if (isImage && a.ocrMode !== undefined) {
       const modeLabel = a.ocrMode ? '📄 OCR' : '🖼️ 内联';
       modeToggle = `<button class="preview-mode-btn" onclick="toggleAttachOcrMode(${i})" title="${a.ocrMode ? '切换到内联(base64)上传' : '切换到 OCR 提取文字'}">${modeLabel}</button>`;
     } else if (isImage && a.uploadFileId) {
@@ -407,7 +673,7 @@ function renderAttachPreview() {
       if (a.uploadError) {
         tip = `Files API 上传失败，已回退为内联(base64)：${a.uploadError}`;
       } else if (a.imageInfo) {
-        tip = `图片内联(base64)分析：${a.imageInfo.width}×${a.imageInfo.height}${a.imageInfo.converted ? '（已转为 ' + a.imageInfo.format.toUpperCase() + '）' : ''}${a.imageInfo.resized ? '（已缩放）' : ''}`;
+        tip = `图片内联(base64)分析：${a.imageInfo.width}×${a.imageInfo.height}${a.imageInfo.parts > 1 ? `（已切为 ${a.imageInfo.parts} 段）` : ''}${a.imageInfo.converted ? '（已转为 ' + a.imageInfo.format.toUpperCase() + '）' : ''}${a.imageInfo.resized ? '（已缩放）' : ''}`;
       } else {
         tip = '图片内联(base64)分析';
       }
@@ -422,6 +688,92 @@ function renderAttachPreview() {
       <button class="preview-remove" onclick="removeAttachment(${i})">✕</button>
     </span>`;
   }).join('');
+}
+
+// ═══════════ 通用 PDF 兼容层：文本提取 / 页面图片 ═══════════
+const PDF_TEXT_MAX_CHARS = 80000;
+const PDF_IMAGE_MAX_PAGES = 24;
+const PDF_IMAGE_MAX_WIDTH = 1600;
+const PDF_IMAGE_JPEG_QUALITY = 0.86;
+
+async function getPdfJsForAttachment() {
+  if (typeof ensurePdfJs === 'function') {
+    const lib = await ensurePdfJs();
+    if (lib) return lib;
+  }
+  if (typeof window !== 'undefined' && window.pdfjsLib) return window.pdfjsLib;
+  throw new Error('PDF 引擎尚未加载，请稍后重试');
+}
+
+async function openPdfAttachment(file) {
+  const pdfjsLib = await getPdfJsForAttachment();
+  const buffer = await readFileAsArrayBuffer(file);
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
+  return { pdfjsLib, pdf: await loadingTask.promise };
+}
+
+async function extractPdfAttachmentText(file, opts = {}) {
+  const maxChars = Number(opts.maxChars) > 0 ? Number(opts.maxChars) : PDF_TEXT_MAX_CHARS;
+  const opened = await openPdfAttachment(file);
+  const pdf = opened.pdf;
+  const pages = [];
+  let charCount = 0;
+  let truncated = false;
+  try {
+    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
+      const page = await pdf.getPage(pageNo);
+      const content = await page.getTextContent();
+      const text = (content.items || [])
+        .map(item => item && item.str !== undefined ? item.str : '')
+        .join(' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+      if (!text) continue;
+      const marker = `[第 ${pageNo} 页]\n`;
+      const remaining = maxChars - charCount - marker.length;
+      if (remaining <= 0) { truncated = true; break; }
+      const pageText = text.length > remaining ? text.slice(0, remaining) : text;
+      pages.push(marker + pageText);
+      charCount += marker.length + pageText.length;
+      if (pageText.length < text.length) { truncated = true; break; }
+    }
+    return { text: pages.join('\n\n'), pageCount: pdf.numPages, textPageCount: pages.length, truncated };
+  } finally {
+    try { await pdf.destroy(); } catch (e) {}
+  }
+}
+
+async function renderPdfAttachmentPages(file, opts = {}) {
+  const maxPages = Number(opts.maxPages) > 0 ? Math.floor(Number(opts.maxPages)) : PDF_IMAGE_MAX_PAGES;
+  const maxWidth = Number(opts.maxWidth) > 0 ? Number(opts.maxWidth) : PDF_IMAGE_MAX_WIDTH;
+  const opened = await openPdfAttachment(file);
+  const pdf = opened.pdf;
+  const dataUrls = [];
+  const renderCount = Math.min(pdf.numPages, maxPages);
+  try {
+    for (let pageNo = 1; pageNo <= renderCount; pageNo++) {
+      const page = await pdf.getPage(pageNo);
+      const baseViewport = page.getViewport({ scale: 1 });
+      const scale = Math.min(2, maxWidth / Math.max(1, baseViewport.width));
+      const viewport = page.getViewport({ scale });
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.ceil(viewport.width);
+      canvas.height = Math.ceil(viewport.height);
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('无法创建 PDF 页面画布');
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      await page.render({ canvasContext: ctx, viewport }).promise;
+      const blob = await canvasToBlob(canvas, 'image/jpeg', PDF_IMAGE_JPEG_QUALITY);
+      dataUrls.push(await blobToDataUrl(blob));
+      // 及时释放画布后端，长文档逐页处理时避免占用过多显存。
+      canvas.width = 1;
+      canvas.height = 1;
+    }
+    return { dataUrls, pageCount: pdf.numPages, renderedPages: renderCount, truncated: pdf.numPages > renderCount };
+  } finally {
+    try { await pdf.destroy(); } catch (e) {}
+  }
 }
 
 function formatFileSize(bytes) {
@@ -467,13 +819,13 @@ function updateAiFileInput() {
     input.accept = '';
     placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF / Word / Excel / 图片 / 视频等文件)';
   } else if (isVisionModel()) {
-    // 视觉模型（deepseek-flash / DeepSeek V4.1 Flash 等）：图片支持内联分析，其他文件按文本读取
+    // 视觉模型：PDF 可选提取文字或逐页转图片，普通图片继续内联分析。
     input.accept = '';
-    placeholder.placeholder = '输入你的问题，回车发送... (支持图片分析 / 拖拽或粘贴图片 / .txt / .md / .json / 代码文件等)';
+    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF 文字/页面图片、图片分析、文本附件等)';
   } else {
-    // 非视觉模型（DeepSeek 等）：文本类文件按纯文本读取，支持常见文本格式
-    input.accept = TEXT_FILE_EXTS.join(',');
-    placeholder.placeholder = '输入你的问题，回车发送... (支持 .txt / .md / .json / 代码文件等文本附件)';
+    // 非视觉模型也可通过本地文本提取使用 PDF；页面图片模式只在视觉模型下开放。
+    input.accept = ['.pdf', 'application/pdf'].concat(TEXT_FILE_EXTS).join(',');
+    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF 提取文字 / .txt / .md / .json / 代码文件等)';
   }
 }
 
@@ -567,6 +919,37 @@ function readFileAsDataURL(file) {
   });
 }
 
+// 同步检查已保存在对话历史里的内联图片。旧版本可能已经把超长原图存进 visionFiles；
+// 每次后续请求都会再次携带它，所以必须在构建请求时拦截，而不能只校验本次新附件。
+function inspectInlineImageForApi(dataUrl) {
+  const match = String(dataUrl || '').match(/^data:image\/(png|jpe?g|gif|webp);base64,/i);
+  if (!match) return { ok: false, reason: 'MIME 或 data URL 不受支持' };
+  if (typeof atob !== 'function') return { ok: true };
+  try {
+    const payload = dataUrl.slice(dataUrl.indexOf(',') + 1);
+    const prefixLength = Math.min(payload.length, 512) & ~3;
+    const binary = atob(payload.slice(0, prefixLength));
+    if (binary.length < 12) return { ok: true }; // 测试桩/极短数据交由服务端最终校验
+    const bytes = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+    const detected = detectImageFormatFromBytes(bytes);
+    const declared = match[1].toLowerCase().replace('jpg', 'jpeg');
+    if (!detected || detected !== declared) return { ok: false, reason: '声明格式与文件内容不一致' };
+    if (detected === 'png' && bytes.length >= 24) {
+      const readU32 = offset => (((bytes[offset] << 24) >>> 0) + (bytes[offset + 1] << 16) + (bytes[offset + 2] << 8) + bytes[offset + 3]) >>> 0;
+      const width = readU32(16);
+      const height = readU32(20);
+      if (!width || !height || width > 8192 || height > 8192) {
+        return { ok: false, reason: `PNG 尺寸 ${width}×${height} 超出接口限制`, width, height };
+      }
+      return { ok: true, width, height };
+    }
+    return { ok: true };
+  } catch (err) {
+    return { ok: false, reason: 'Base64 图片数据损坏' };
+  }
+}
+
 // ═══════════ 图片预处理：格式归一 + 超大图缩放 ═══════════
 // 依据 DeepSeek 图像理解限制：仅支持 JPEG / PNG / GIF / WebP；单边最长 8192 像素；单图内联 32 MiB。
 // 这里把不支持/过大的图片在本地转成 JPEG(照片) 或 PNG(含透明/小图)，既保证可发送也减小请求体。
@@ -574,7 +957,10 @@ const DS_IMAGE_FORMATS = ['jpeg', 'png', 'gif', 'webp'];
 const IMAGE_MAX_EDGE_PX = 2048;     // 超过则等比缩小（远低于服务端 8192 上限，显著减小 base64 体积）
 const IMAGE_REENCODE_EDGE_PX = 1600; // 原本已合规但尺寸偏大时也压缩一次，便于本地存档与传输
 const IMAGE_JPEG_QUALITY = 0.85;
+const IMAGE_LONG_JPEG_QUALITY = 0.9; // 长图多为文字截图，略高质量以保住细字，同时显著小于分段 PNG
 const IMAGE_PNG_KEEP_MAX_PX = 1024 * 1024; // png/webp/gif 且像素不多、无缩放宽高时保留原图（无损）
+const IMAGE_LONG_RATIO = 2.5;       // 仅切教材/网页截图等明显长图，普通照片继续等比缩放
+const IMAGE_MAX_PARTS = 12;         // 控制单条消息的图片块数量；超长图会先按总高度等比缩小
 
 // 按文件内容（魔数）判断图片真实格式，避免扩展名/MIME 撒谎
 function detectImageFormatFromBytes(bytes) {
@@ -643,6 +1029,71 @@ function canvasToBlob(canvas, type, quality) {
       resolve(new Blob([bytes], { type: type }));
     } catch (err) { reject(err); }
   });
+}
+
+// 将竖向长图按阅读顺序切成多个图片块，每块的宽高都不超过 maxEdge。
+// 返回 null 表示不是长图，调用方继续走 downscaleImageForApi 的普通单图路径。
+async function splitTallImageForApi(file, opts = {}) {
+  const maxEdge = Number(opts.maxEdge) > 0 ? Number(opts.maxEdge) : IMAGE_MAX_EDGE_PX;
+  const maxParts = Number(opts.maxParts) > 0 ? Math.floor(Number(opts.maxParts)) : IMAGE_MAX_PARTS;
+  let bitmap = null;
+  let release = null;
+  try {
+    const decoded = await decodeImageBitmap(file);
+    bitmap = decoded.bitmap;
+    if (decoded.revoke && bitmap.src) release = () => URL.revokeObjectURL(bitmap.src);
+    const width = bitmap.width || bitmap.naturalWidth || 0;
+    const height = bitmap.height || bitmap.naturalHeight || 0;
+    if (!width || !height || height <= maxEdge || height / width < IMAGE_LONG_RATIO) return null;
+
+    // 先保证宽度不超限；若切片仍超过上限，再整体缩小到最多 maxParts 块。
+    let scale = Math.min(1, maxEdge / width);
+    const partsAtWidthScale = Math.ceil(height * scale / maxEdge);
+    if (partsAtWidthScale > maxParts) scale = Math.min(scale, maxEdge * maxParts / height);
+    const outW = Math.max(1, Math.round(width * scale));
+    const sourceSliceH = Math.max(1, Math.floor(maxEdge / scale));
+    const partCount = Math.ceil(height / sourceSliceH);
+    const ext = '.' + (String(file.name || '').split('.').pop() || '').toLowerCase();
+    const outFormat = 'jpeg';
+    const dataUrls = [];
+
+    for (let i = 0; i < partCount; i++) {
+      const sourceY = i * sourceSliceH;
+      const sourceH = Math.min(sourceSliceH, height - sourceY);
+      const outH = Math.max(1, Math.round(sourceH * scale));
+      const canvas = document.createElement('canvas');
+      canvas.width = outW;
+      canvas.height = outH;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) throw new Error('无法创建画布上下文');
+      // JPEG 没有透明通道；先铺白底，避免带透明区域的截图被编码成黑底。
+      ctx.fillStyle = '#fff';
+      ctx.fillRect(0, 0, outW, outH);
+      ctx.drawImage(bitmap, 0, sourceY, width, sourceH, 0, 0, outW, outH);
+      const blob = await canvasToBlob(canvas, 'image/' + outFormat, IMAGE_LONG_JPEG_QUALITY);
+      dataUrls.push(await blobToDataUrl(blob));
+    }
+    return {
+      dataUrls,
+      info: {
+        width: outW,
+        height: Math.min(maxEdge, Math.round(sourceSliceH * scale)),
+        sourceWidth: width,
+        sourceHeight: height,
+        format: outFormat,
+        converted: !['.jpg', '.jpeg'].includes(ext),
+        resized: scale < 1,
+        original: false,
+        parts: dataUrls.length
+      }
+    };
+  } catch (err) {
+    // 解码/切片失败时交回普通单图预处理；后者还有原文件 data URL 兜底。
+    return null;
+  } finally {
+    if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+    if (release) release();
+  }
 }
 
 // 把图片规范化为服务端一定接受的格式与尺寸；返回 { file, dataUrl, info }

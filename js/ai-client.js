@@ -4,6 +4,8 @@
 
   const active = new Map();
   const approvedFingerprints = new Set();
+  const USAGE_KEY = 'study_ai_usage_v2';
+  const LEGACY_USAGE_KEY = 'study_ai_usage_v1';
   const COSTS_PER_MILLION = Object.freeze({
     'gpt-4o-mini': { input: 0.15, output: 0.60 },
     'gpt-4o': { input: 2.50, output: 10.00 },
@@ -145,28 +147,104 @@
     return !!accepted;
   }
 
-  function recordUsage(model, usage) {
-    if (!usage) return null;
-    const inputTokens = Number(usage.prompt_tokens || usage.input_tokens) || 0;
-    const outputTokens = Number(usage.completion_tokens || usage.output_tokens) || 0;
-    const modelName = String(model || 'unknown');
+  // Conservative fallback for OpenAI-compatible providers that omit usage.
+  // The result is deliberately marked as estimated in the stored aggregates.
+  function estimateTokens(value) {
+    let text = '';
+    try { text = typeof value === 'string' ? value : JSON.stringify(value == null ? '' : value); }
+    catch (_) { text = String(value || ''); }
+    const nonAscii = (text.match(/[^\x00-\x7f]/g) || []).length;
+    return Math.max(0, Math.ceil((text.length - nonAscii) / 3 + nonAscii));
+  }
+
+  function localDateKey(value = new Date()) {
+    const date = value instanceof Date ? value : new Date(value);
+    return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+  }
+
+  function emptyUsageStore() {
+    return { version: 2, days: {}, legacyMonths: {} };
+  }
+
+  function loadUsageStore() {
+    let store = null;
+    try { store = JSON.parse(localStorage.getItem(USAGE_KEY) || 'null'); } catch (_) {}
+    if (!store || store.version !== 2 || !store.days) store = emptyUsageStore();
+    if (!store.legacyMonths || typeof store.legacyMonths !== 'object') store.legacyMonths = {};
+    if (Object.keys(store.legacyMonths).length === 0) {
+      try {
+        const legacy = JSON.parse(localStorage.getItem(LEGACY_USAGE_KEY) || '{}');
+        if (legacy && typeof legacy === 'object') store.legacyMonths = legacy;
+      } catch (_) {}
+    }
+    return store;
+  }
+
+  function saveUsageStore(store) {
+    if (global.StudyPlatform) global.StudyPlatform.storage.setJson(USAGE_KEY, store);
+    else localStorage.setItem(USAGE_KEY, JSON.stringify(store));
+  }
+
+  function emptyUsageBucket() {
+    return { inputTokens: 0, outputTokens: 0, totalTokens: 0, requests: 0, exactRequests: 0, estimatedRequests: 0, estimatedUsd: 0 };
+  }
+
+  function addToBucket(bucket, inputTokens, outputTokens, exact, estimatedUsd) {
+    bucket.inputTokens = (Number(bucket.inputTokens) || 0) + inputTokens;
+    bucket.outputTokens = (Number(bucket.outputTokens) || 0) + outputTokens;
+    bucket.totalTokens = (Number(bucket.totalTokens) || 0) + inputTokens + outputTokens;
+    bucket.requests = (Number(bucket.requests) || 0) + 1;
+    const accuracyKey = exact ? 'exactRequests' : 'estimatedRequests';
+    bucket[accuracyKey] = (Number(bucket[accuracyKey]) || 0) + 1;
+    if (estimatedUsd != null) bucket.estimatedUsd = (Number(bucket.estimatedUsd) || 0) + estimatedUsd;
+    return bucket;
+  }
+
+  function safeDimension(value, fallback) {
+    const text = String(value || fallback).trim().slice(0, 80);
+    const safe = text || fallback;
+    return ['__proto__', 'prototype', 'constructor'].includes(safe) ? '_' + safe : safe;
+  }
+
+  function recordUsage(model, usage, metadata = {}) {
+    const hasProviderUsage = !!usage && [usage.prompt_tokens, usage.input_tokens, usage.completion_tokens, usage.output_tokens, usage.total_tokens]
+      .some(value => value != null && Number.isFinite(Number(value)));
+    let inputTokens = hasProviderUsage ? (Number(usage.prompt_tokens ?? usage.input_tokens) || 0) : estimateTokens(metadata.input);
+    let outputTokens = hasProviderUsage ? (Number(usage.completion_tokens ?? usage.output_tokens) || 0) : estimateTokens(metadata.output);
+    if (hasProviderUsage && inputTokens === 0 && outputTokens === 0 && Number(usage.total_tokens) > 0) {
+      outputTokens = Number(usage.total_tokens);
+    }
+    inputTokens = Math.max(0, Math.round(inputTokens));
+    outputTokens = Math.max(0, Math.round(outputTokens));
+    if (!hasProviderUsage && inputTokens === 0 && outputTokens === 0) return null;
+    const modelName = safeDimension(model, 'unknown');
     const priceKey = Object.keys(COSTS_PER_MILLION).find(key => modelName.toLowerCase().includes(key));
     const price = priceKey ? COSTS_PER_MILLION[priceKey] : null;
     const estimatedUsd = price ? (inputTokens * price.input + outputTokens * price.output) / 1000000 : null;
-    const month = new Date().toISOString().slice(0, 7);
-    const key = 'study_ai_usage_v1';
-    let store = {};
-    try { store = JSON.parse(localStorage.getItem(key)) || {}; } catch {}
-    const row = store[month] || { inputTokens: 0, outputTokens: 0, requests: 0, estimatedUsd: 0 };
-    row.inputTokens += inputTokens;
-    row.outputTokens += outputTokens;
-    row.requests += 1;
-    if (estimatedUsd != null) row.estimatedUsd += estimatedUsd;
-    store[month] = row;
-    if (global.StudyPlatform) global.StudyPlatform.storage.setJson(key, store);
-    else localStorage.setItem(key, JSON.stringify(store));
-    if (global.StudyPlatform) global.StudyPlatform.events.emit('ai:usage', { model: modelName, inputTokens, outputTokens, estimatedUsd });
-    return { inputTokens, outputTokens, estimatedUsd };
+    const exact = hasProviderUsage;
+    const feature = safeDimension(metadata.feature, 'other');
+    const dayKey = localDateKey(metadata.timestamp);
+    const store = loadUsageStore();
+    const day = store.days[dayKey] || { ...emptyUsageBucket(), byModel: {}, byFeature: {} };
+    addToBucket(day, inputTokens, outputTokens, exact, estimatedUsd);
+    day.byModel = day.byModel || {};
+    day.byFeature = day.byFeature || {};
+    addToBucket(day.byModel[modelName] || (day.byModel[modelName] = emptyUsageBucket()), inputTokens, outputTokens, exact, estimatedUsd);
+    addToBucket(day.byFeature[feature] || (day.byFeature[feature] = emptyUsageBucket()), inputTokens, outputTokens, exact, estimatedUsd);
+    store.days[dayKey] = day;
+    saveUsageStore(store);
+    const detail = { model: modelName, feature, inputTokens, outputTokens, totalTokens: inputTokens + outputTokens, exact, estimatedUsd, day: dayKey };
+    if (global.StudyPlatform) global.StudyPlatform.events.emit('ai:usage', detail);
+    return detail;
+  }
+
+  function clearUsage() {
+    const store = emptyUsageStore();
+    saveUsageStore(store);
+    if (global.StudyPlatform) global.StudyPlatform.storage.remove(LEGACY_USAGE_KEY);
+    else localStorage.removeItem(LEGACY_USAGE_KEY);
+    if (global.StudyPlatform) global.StudyPlatform.events.emit('ai:usage-cleared', {});
+    return store;
   }
 
   global.AIClient = Object.freeze({
@@ -181,8 +259,11 @@
       return count;
     },
     confirmSensitiveContent,
+    clearUsage,
+    estimateTokens,
     fetchWithPolicy,
     findSensitiveContent,
+    getUsageData: loadUsageStore,
     recordUsage
   });
   if (global.StudyPlatform) global.StudyPlatform.defineModule('ai-client', global.AIClient);

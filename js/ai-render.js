@@ -168,6 +168,7 @@ function renderAiChat() {
     ${noKeyBanner}
     <div class="ai-chat-messages" id="aiMessages"></div>
     <div class="ai-attach-preview-wrap" id="aiAttachPreview" style="display:none;"></div>
+    <div class="ai-attach-preview-wrap" id="aiContextPreview" style="display:none;"></div>
     <!-- Toolbar: API Key selector + toggles + quick actions -->
     <div class="ai-toolbar" id="aiToolbar">
       <div class="ai-toolbar-row">
@@ -208,6 +209,12 @@ function renderAiChat() {
                 onkeydown="handleAiInputKey(event)"
                 oninput="autoResizeAiInput()"></textarea>
       <input type="file" id="aiFileInput" accept="" multiple style="display:none;" onchange="handleAiFileSelect(event)">
+      <button class="ai-attach-btn" id="aiInsertNoteBtn" ${noKey ? 'disabled' : ''} onclick="openAiContextPicker('note')" title="插入笔记正文">
+        <i data-lucide="notebook-pen" class="lucide-icon" style="width:18px;height:18px;"></i>
+      </button>
+      <button class="ai-attach-btn" id="aiInsertTodoBtn" ${noKey ? 'disabled' : ''} onclick="openAiContextPicker('todo')" title="插入待办路径">
+        <i data-lucide="list-todo" class="lucide-icon" style="width:18px;height:18px;"></i>
+      </button>
       <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
       </button>
@@ -218,6 +225,7 @@ function renderAiChat() {
   `;
   renderAiMessages();
   renderAttachPreview(); // Restore attachment preview after DOM rebuild
+  if (typeof renderAiContextPreview === 'function') renderAiContextPreview();
   updateAiFileInput(); // Update file input based on current model
   initAiPasteZone(); // 输入框已重建 → 重新绑定剪贴板粘贴图片
   // Restore loading state after DOM rebuild: toggle send/stop button
@@ -232,6 +240,10 @@ function renderAiChat() {
     if (_inp) _inp.disabled = true;
     if (_send) _send.disabled = true;
     if (_at) _at.disabled = true;
+    const _note = document.getElementById('aiInsertNoteBtn');
+    const _todo = document.getElementById('aiInsertTodoBtn');
+    if (_note) _note.disabled = true;
+    if (_todo) _todo.disabled = true;
   }
   setTimeout(() => {
     const msgs = document.getElementById('aiMessages');
@@ -258,6 +270,7 @@ function renderAiChat() {
   updateSidebarAiBadge();
   // Initialize toolbar state
   initAiToolbar();
+  if (typeof lucide !== 'undefined') lucide.createIcons();
   // Restore tree float open state after DOM rebuild
   if (_aiTreePanelOpen) {
     const overlay = document.getElementById('aiTreeFloatOverlay');
@@ -298,6 +311,134 @@ function openAiAttachmentImage(imgEl) {
   document.body.appendChild(overlay);
   document.addEventListener('keydown', onKey);
 }
+
+// ── AI 回复沉浸查看 ──
+let _aiMessageImmersiveZoom = (typeof localStorage !== 'undefined' ? Number(localStorage.getItem('study_ai_message_immersive_zoom')) : 100) || 100;
+_aiMessageImmersiveZoom = Math.min(180, Math.max(70, Math.round(_aiMessageImmersiveZoom / 10) * 10));
+let _aiMessageImmersiveOpener = null;
+
+function updateAiMessageImmersiveZoom(value) {
+  const next = Math.min(180, Math.max(70, Math.round(Number(value) / 10) * 10));
+  if (!Number.isFinite(next)) return;
+  _aiMessageImmersiveZoom = next;
+  if (typeof localStorage !== 'undefined') localStorage.setItem('study_ai_message_immersive_zoom', String(next));
+  const overlay = document.getElementById('aiMessageImmersive');
+  const label = document.getElementById('aiMessageImmersiveZoomValue');
+  if (overlay) overlay.style.setProperty('--ai-message-immersive-size', (16 * next / 100) + 'px');
+  if (label) label.textContent = next + '%';
+}
+
+function changeAiMessageImmersiveZoom(delta) {
+  updateAiMessageImmersiveZoom(_aiMessageImmersiveZoom + Number(delta || 0));
+}
+
+function buildAiMessageImmersiveToc() {
+  const article = document.getElementById('aiMessageImmersiveArticle');
+  const toc = document.getElementById('aiMessageImmersiveToc');
+  const list = document.getElementById('aiMessageImmersiveTocList');
+  const toggle = document.getElementById('aiMessageImmersiveTocToggle');
+  if (!article || !toc || !list || !toggle) return;
+  const headings = Array.from(article.querySelectorAll('h1,h2,h3,h4,h5,h6'));
+  if (!headings.length) {
+    toc.hidden = true;
+    toggle.hidden = true;
+    return;
+  }
+  const minLevel = Math.min(...headings.map(heading => Number(heading.tagName.slice(1)) || 1));
+  document.getElementById('aiMessageImmersive')?.classList.add('toc-open');
+  list.innerHTML = headings.map((heading, index) => {
+    const id = 'ai-message-immersive-heading-' + index;
+    heading.id = id;
+    const depth = Math.max(0, (Number(heading.tagName.slice(1)) || 1) - minLevel);
+    return `<button type="button" style="--ai-toc-indent:${depth * 12}px" onclick="jumpToAiMessageImmersiveHeading('${id}')">${escapeHtml((heading.textContent || '').trim() || ('章节 ' + (index + 1)))}</button>`;
+  }).join('');
+}
+
+function jumpToAiMessageImmersiveHeading(id) {
+  const article = document.getElementById('aiMessageImmersiveArticle');
+  const heading = document.getElementById(id);
+  if (!article || !heading) return;
+  article.scrollTo({ top: Math.max(0, heading.offsetTop - 24), behavior: 'smooth' });
+}
+
+function toggleAiMessageImmersiveToc(force) {
+  const overlay = document.getElementById('aiMessageImmersive');
+  const toc = document.getElementById('aiMessageImmersiveToc');
+  if (!overlay || !toc || toc.hidden) return;
+  const open = typeof force === 'boolean' ? force : !overlay.classList.contains('toc-open');
+  overlay.classList.toggle('toc-open', open);
+}
+
+function closeAiMessageImmersive() {
+  const overlay = document.getElementById('aiMessageImmersive');
+  if (!overlay) return;
+  overlay.remove();
+  document.body.classList.remove('ai-message-immersive-open');
+  const opener = _aiMessageImmersiveOpener;
+  _aiMessageImmersiveOpener = null;
+  if (opener && opener.isConnected) opener.focus();
+}
+
+function openAiMessageImmersive(trigger) {
+  const row = trigger && trigger.closest ? trigger.closest('.ai-chat-msg.assistant') : null;
+  const source = row ? row.querySelector('.ai-chat-bubble') : null;
+  if (!source) return;
+  closeAiMessageImmersive();
+  _aiMessageImmersiveOpener = trigger;
+
+  const article = document.createElement('article');
+  article.className = 'ai-message-immersive-article';
+  article.id = 'aiMessageImmersiveArticle';
+  article.innerHTML = source.innerHTML;
+  article.querySelectorAll('.ai-chat-time,.ai-reasoning-toggle,.ai-reasoning-content').forEach(element => element.remove());
+  article.querySelectorAll('[onclick]').forEach(element => element.removeAttribute('onclick'));
+  article.querySelectorAll('[role="button"]').forEach(element => {
+    element.removeAttribute('role');
+    element.removeAttribute('tabindex');
+  });
+  article.querySelectorAll('input').forEach(input => { input.disabled = true; });
+
+  const overlay = document.createElement('div');
+  overlay.className = 'ai-message-immersive';
+  overlay.id = 'aiMessageImmersive';
+  overlay.setAttribute('role', 'dialog');
+  overlay.setAttribute('aria-modal', 'true');
+  overlay.setAttribute('aria-label', '沉浸查看 AI 回复');
+  overlay.innerHTML = `
+    <header class="ai-message-immersive-header">
+      <span class="ai-message-immersive-title"><i data-lucide="sparkles" class="lucide-icon"></i>AI 回复</span>
+      <div class="ai-message-immersive-actions">
+        <div class="ai-message-immersive-zoom" role="group" aria-label="显示缩放">
+          <button type="button" onclick="changeAiMessageImmersiveZoom(-10)" title="缩小 (Ctrl+-)" aria-label="缩小"><i data-lucide="minus" class="lucide-icon"></i></button>
+          <button type="button" id="aiMessageImmersiveZoomValue" onclick="updateAiMessageImmersiveZoom(100)" title="恢复 100%">100%</button>
+          <button type="button" onclick="changeAiMessageImmersiveZoom(10)" title="放大 (Ctrl++)" aria-label="放大"><i data-lucide="plus" class="lucide-icon"></i></button>
+        </div>
+        <button type="button" id="aiMessageImmersiveTocToggle" onclick="toggleAiMessageImmersiveToc()" title="显示或隐藏目录"><i data-lucide="list-tree" class="lucide-icon"></i><span>目录</span></button>
+        <button type="button" onclick="closeAiMessageImmersive()" title="退出沉浸查看 (Esc)" aria-label="退出沉浸查看"><i data-lucide="x" class="lucide-icon"></i></button>
+      </div>
+    </header>
+    <div class="ai-message-immersive-main">
+      <div class="ai-message-immersive-content"></div>
+      <aside class="ai-message-immersive-toc" id="aiMessageImmersiveToc"><div class="ai-message-immersive-toc-title">本条回复</div><nav id="aiMessageImmersiveTocList"></nav></aside>
+    </div>`;
+  overlay.querySelector('.ai-message-immersive-content').appendChild(article);
+  document.body.appendChild(overlay);
+  document.body.classList.add('ai-message-immersive-open');
+  updateAiMessageImmersiveZoom(_aiMessageImmersiveZoom);
+  buildAiMessageImmersiveToc();
+  if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
+  overlay.querySelector('[aria-label="退出沉浸查看"]')?.focus();
+}
+
+document.addEventListener('keydown', function(event) {
+  if (!document.getElementById('aiMessageImmersive')) return;
+  if ((event.ctrlKey || event.metaKey) && !event.altKey) {
+    if (event.key === '0') { event.preventDefault(); updateAiMessageImmersiveZoom(100); return; }
+    if (event.key === '+' || event.key === '=' || event.key === 'Add') { event.preventDefault(); changeAiMessageImmersiveZoom(10); return; }
+    if (event.key === '-' || event.key === 'Subtract') { event.preventDefault(); changeAiMessageImmersiveZoom(-10); return; }
+  }
+  if (event.key === 'Escape') { event.preventDefault(); closeAiMessageImmersive(); }
+});
 
 function renderAiMessages() {
   const container = document.getElementById('aiMessages');
@@ -388,7 +529,18 @@ function renderAiMessages() {
 
     // Render attachments in user messages
     let attachHtml = '';
+    let contextHtml = '';
     let cleanContent = m.content;
+    if (item.type === 'user' && Array.isArray(m.contextInserts) && m.contextInserts.length > 0) {
+      if (typeof m.displayContent === 'string') cleanContent = m.displayContent;
+      contextHtml = '<div class="ai-message-context-list">' + m.contextInserts.map(context => {
+        const label = escapeHtml(context.label || (context.type === 'note' ? '未命名笔记' : '未命名待办'));
+        if (context.type === 'note') {
+          return `<details class="note-fold ai-message-note-context"><summary>📝 ${label}</summary><div class="note-fold-body">${formatAiContent(context.content || '（空笔记）')}</div></details>`;
+        }
+        return `<div class="ai-message-todo-context">📋 ${label}</div>`;
+      }).join('') + '</div>';
+    }
     if (item.type === 'user' && m.attachments && m.attachments.length > 0) {
       // 图片附件：优先用发送时记录在附件上的图片地址（可能是 Files API 的小缩略图），
       // 旧消息没有该字段时退回按顺序取 visionFiles 里的 dataUrl
@@ -559,12 +711,16 @@ function renderAiMessages() {
           </button>`;
       }
       // 换一条 / 从这里分叉：在父 user 下新建分支
+      const immersiveBtn = !loading ? `<button class="ai-msg-immersive" onclick="openAiMessageImmersive(this)" title="沉浸查看这条回复">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+        沉浸查看
+      </button>` : '';
       const regenBtn = !loading ? `<button class="ai-msg-regen" onclick="regenerateAiMessage(${item.nodeId})" title="换一条（在父节点下新建分支）">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
         换一条
       </button>` : '';
-      if (pagerHtml || regenBtn) {
-        bottomHtml = `<div class="ai-msg-controls"><div class="ai-msg-cand-pager">${pagerHtml}</div><div class="ai-msg-actions">${regenBtn}</div></div>`;
+      if (pagerHtml || immersiveBtn || regenBtn) {
+        bottomHtml = `<div class="ai-msg-controls"><div class="ai-msg-cand-pager">${pagerHtml}</div><div class="ai-msg-actions">${immersiveBtn}${regenBtn}</div></div>`;
       }
     } else if (item.type === 'user') {
       // 用户消息下方操作栏：编辑按钮（始终显示）+ 分叉时显示候选分支切换
@@ -600,7 +756,7 @@ function renderAiMessages() {
         <div class="ai-chat-avatar">${avatar}</div>
         <div class="ai-chat-msg-body">
           ${keyNameHtml}
-          <div class="ai-chat-bubble">${kimiSearchBadge}${attachHtml}${reasoningHtml}${contentHtml}${timeLabel}</div>
+          <div class="ai-chat-bubble">${kimiSearchBadge}${attachHtml}${reasoningHtml}${contentHtml}${contextHtml}${timeLabel}</div>
           ${bottomHtml}
         </div>
       </div>

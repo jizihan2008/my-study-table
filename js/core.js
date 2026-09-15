@@ -377,6 +377,7 @@ function switchTab(tab) {
   if (tab === 'notes') renderNotes();
   if (tab === 'books') { if (typeof renderBooks === 'function') renderBooks(); }
   if (tab === 'keywords') { if (typeof renderKeywords === 'function') renderKeywords(); }
+  if (tab === 'translation') { if (typeof window.GlobalTranslation?.renderPage === 'function') window.GlobalTranslation.renderPage(); }
   if (tab === 'ai') renderAiChat();
   if (tab === 'prompts' && typeof renderPromptStudio === 'function') renderPromptStudio();
   if (tab === 'today') renderToday();
@@ -560,6 +561,7 @@ function updateWorkspaceHeading(tab) {
     notes: ['我的笔记', '记录、思考，让知识慢慢成为自己的。'],
     books: ['我的书架', '翻开一本书，打开新的可能。'],
     keywords: ['关键词', '串联知识，让每个概念都有迹可循。'],
+    translation: ['划词翻译', '回看理解过的英文，把重要表达留进生词本。'],
     calendar: ['学习日历', '为重要的事，留出刚刚好的时间。'],
     timer: ['专注时光', '一次只做一件事，沉浸在此刻。'],
     habits: ['习惯追踪', '用微小的坚持，积累看得见的改变。'],
@@ -584,6 +586,7 @@ const ALL_NAV_ITEMS = [
   { id: 'notes',     icon: 'file-text',     label: '笔记' },
   { id: 'books',     icon: 'library',       label: '教材' },
   { id: 'keywords',  icon: 'key-round',     label: '关键词' },
+  { id: 'translation', icon: 'languages',   label: '划词翻译' },
   { id: 'today',     icon: 'calendar-check',label: '今天' },
   { id: 'calendar',  icon: 'calendar',      label: '日历' },
   { id: 'timer',     icon: 'timer',         label: '计时器' },

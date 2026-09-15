@@ -448,9 +448,17 @@ function applyTheme(theme) {
 ### 8.4 编辑/预览/摘要三模式
 
 **原理**：
-- 编辑模式：显示 `<textarea>` + Markdown 格式工具栏（粗体/斜体/标题/代码/链接/列表/引用/任务列表/分割线等，快捷键 Ctrl+B/I/U/K）
+- 编辑模式：默认使用 Markdown-backed 富文本编辑器，也可切换源码 `<textarea>`；格式工具栏支持粗体、标题、
+  列表、任务、表格、脚注和折叠文字块等（快捷键 Ctrl+B/I/U/K）
 - 预览模式：隐藏 `<textarea>`，显示格式化后的 HTML（KaTeX 渲染 LaTeX）
 - 摘要模式：AI 生成的笔记摘要（可自动/手动触发）
+
+折叠文字块使用 `:::fold 标题` / `:::` 围栏保存；阅读模式默认收起，只显示标题，展开后显示标题和
+可继续包含 Markdown 的正文。富文本编辑器必须把 `<details class="note-fold">` 无损序列化回该围栏。
+
+沉浸模式支持双笔记分屏：左栏复用当前笔记的富文本编辑/阅读视图，右栏独立选择另一篇笔记并在
+Markdown-backed 富文本编辑与阅读预览之间切换。两栏笔记 ID 必须互斥，右栏使用独立防抖保存状态，禁止通过全局
+`activeNoteId` 写入左栏；窄屏自动从左右分栏切换为上下分栏。
 
 ### 8.5 文件夹系统与防循环
 
@@ -647,20 +655,27 @@ aiConvs = [{
 ### 11.5 附件处理（ai-attach.js）
 
 - 支持 `.txt`、PDF、Word、Excel、图片等附件（20MB 限制）
+- PDF 对未原生接入文档解析的模型走本地兼容层：用户可选“提取文字”（所有模型可用）或“页面图片”
+  （仅视觉模型可用，JPEG 分页内联，单次最多 24 页）；无文本层的扫描 PDF 会提示切换页面图片模式
 - 支持从文件管理器**拖拽文件**到对话区域添加附件，也支持 **Ctrl+V 粘贴剪贴板图片**
 - Kimi 视觉模型可分析图片/视频
 - 图片附件走 OpenAI 兼容的 `image_url` base64 内联，能力判定统一在 `modelSupportsVision()`：
   `deepseek-flash`（DeepSeek-V4.1-Flash，官方支持图像理解）/ 旧名 `deepseek-v4-flash`、
   `deepseek-v4-flash-vision-exp` / 模型名含 `vision` 的模型；
   `deepseek-v4-pro` 官方标注**不支持**图像理解，不要加入白名单
-- 图片在本地预处理（`downscaleImageForApi()`）：超过 2048px 单边等比缩放、BMP 等不支持格式转 PNG/JPEG、
-  按扩展名补齐 data URL 的 MIME；预处理结果缓存在附件上，发送时直接复用
+- 图片在本地预处理：普通大图由 `downscaleImageForApi()` 缩至 2048px 单边以内；教材扫描、网页截图等
+  纵向长图由 `splitTallImageForApi()` 按阅读顺序切成最多 12 段，避免整图缩小后文字不可读。BMP 等不支持
+  格式转 PNG/JPEG，并按扩展名补齐 data URL 的 MIME；DeepSeek 与 Kimi 内联路径统一复用预处理结果
+- 构建请求时会再次检查历史内联图片的真实魔数；旧版本遗留的超限 PNG 会从 API 请求中跳过并提示重新上传，
+  避免一张失败图片持续污染该对话的所有后续请求；若图片消息后紧跟服务端图片错误，则同时剔除该消息
+  中无法从缩略图验证原文件的旧 Files API `file_id`
 - 图片内联体积约等于原始字节 ×1.37（base64 膨胀），单图上限 20MB；超限附件发送前剔除并在消息中说明
-- **图片复用（DeepSeek Files API）**：官方端点上大图会先 `POST /files`（`purpose=user_data`，不传
+- **图片复用（DeepSeek Files API）**：官方端点上的普通大图会先规范化，再 `POST /files`（`purpose=user_data`，不传
   `expires_after` → 永久有效）拿到 `file_id`，之后每轮只发 `{"type":"file","file_id":…}` 内容块，
   不再重复传图；为让模型在后续轮次仍“看得到”图，紧跟一个极小（长边 320px）的 `file_data` 缩略图
   （`file_id` 与 `file_data` 互斥，故拆两块）
   - 能力判定：`supportsDeepSeekFilesApi()` = DeepSeek 官方主机（`getApiHostname()`）+ `modelSupportsVision()`
+  - 复用身份使用原文件内容的 SHA-256；禁止仅凭 `1.png` 等文件名跨消息或跨会话复用 `file_id`
   - 策略：`getAiImageUploadMode()` = auto（>1MiB 才上传）/ always / never，可在设置或聊天工具栏切换
   - 上传失败自动回退内联；`file_id` 按 API Key 归属，换 Key 必须重传（`findReusableUploadedImage()` 会校验）
   - 对话历史里只存小缩略图与 `file_id`，原图只在服务端；`quote` 清理入口在设置面板（仅允许删除未被引用的文件）
@@ -671,7 +686,7 @@ aiConvs = [{
 
 **处理链**：
 1. Markdown-It 15 解析 CommonMark/GFM（表格、删除线、嵌套列表、引用、链接、图片等）
-2. 项目扩展处理任务列表、唯一标题锚点、脚注、KaTeX 和 `mindmap` 围栏
+2. 项目扩展处理任务列表、唯一标题锚点、脚注、KaTeX、`mindmap` 围栏和 `:::fold` 折叠文字块
 3. Highlight.js 按围栏语言标记进行代码高亮
 4. 执行受控 `extraProcessor`（如 AI 消息中的 `[ID:数字]`）
 5. DOMPurify 对最终 HTML 统一消毒后才允许写入 `innerHTML`

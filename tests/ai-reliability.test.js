@@ -665,6 +665,32 @@ test('native tool call IDs survive history construction and display names are no
   assert.equal(messages.at(-2).name, undefined);
 });
 
+test('DeepSeek thinking history echoes reasoning_content for every assistant turn', () => {
+  const ctx = harness();
+  const conv = {
+    messages: [
+      { role: 'user', content: 'first question' },
+      { role: 'assistant', content: 'first answer', reasoning: 'full first reasoning' },
+      { role: 'user', content: 'second question' },
+      { role: 'assistant', content: 'second answer' }
+    ],
+    systemPrompt: ''
+  };
+  const cfg = { model: 'deepseek-flash', deepThink: true, contextBudget: 32768, maxTokens: 2048 };
+  const assistants = ctx.buildApiMessages(conv, null, cfg).filter(message => message.role === 'assistant');
+  assert.equal(assistants[0].reasoning_content, 'full first reasoning');
+  assert.equal(assistants[1].reasoning_content, '');
+});
+
+test('reasoning_content is omitted outside DeepSeek thinking mode', () => {
+  const ctx = harness();
+  const conv = { messages: [{ role: 'user', content: 'question' }, { role: 'assistant', content: 'answer', reasoning: 'private reasoning' }], systemPrompt: '' };
+  const disabled = ctx.buildApiMessages(conv, null, { model: 'deepseek-flash', deepThink: false });
+  const other = ctx.buildApiMessages(conv, null, { model: 'other-model', deepThink: true });
+  assert.equal(Object.hasOwn(disabled.at(-1), 'reasoning_content'), false);
+  assert.equal(Object.hasOwn(other.at(-1), 'reasoning_content'), false);
+});
+
 test('model capability checks use supplied configuration rather than active selection', () => {
   const ctx = harness();
   ctx.getEffectiveApiConfig = () => ({ model: 'kimi' });
@@ -720,6 +746,90 @@ test('reminder writes retain origin conversation, date and source and deduplicat
 
 // ═══════════ 图片（视觉）附件适配 ═══════════
 
+test('PDF attachments are accepted for every model and expose user-selectable local modes', () => {
+  const ctx = harness();
+  const pdf = { name: '讲义.pdf', type: 'application/pdf', size: 1024 };
+  const alerts = [];
+  ctx.renderAttachPreview = () => {};
+  ctx.alert = message => alerts.push(message);
+  ctx.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'deepseek-v4-pro' });
+  ctx.setAiAttachments([]);
+  ctx.addAiAttachmentFiles([pdf]);
+  let attach = ctx.getAiAttachments()[0];
+  assert.equal(ctx.isPdfFile(pdf), true);
+  assert.equal(attach.pdfMode, 'text');
+
+  // 非视觉模型仍可提取文字，但不能误选页面图片。
+  ctx.toggleAttachPdfMode(0);
+  assert.equal(ctx.getAiAttachments()[0].pdfMode, 'text');
+  assert.equal(alerts.length, 1);
+
+  // 切换到视觉模型后，用户可在两种模式之间切换。
+  ctx.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'deepseek-flash' });
+  ctx.toggleAttachPdfMode(0);
+  attach = ctx.getAiAttachments()[0];
+  assert.equal(attach.pdfMode, 'image');
+  ctx.toggleAttachPdfMode(0);
+  assert.equal(ctx.getAiAttachments()[0].pdfMode, 'text');
+});
+
+test('PDF text mode extracts page-labelled text and reports truncation', async () => {
+  const ctx = harness();
+  let destroyed = false;
+  const pageTexts = [['第一页', ' 内容'], [], ['第三页很长的内容']];
+  ctx.openPdfAttachment = async () => ({
+    pdf: {
+      numPages: pageTexts.length,
+      async getPage(pageNo) {
+        return { async getTextContent() { return { items: pageTexts[pageNo - 1].map(str => ({ str })) }; } };
+      },
+      async destroy() { destroyed = true; }
+    }
+  });
+  const full = await ctx.extractPdfAttachmentText({}, { maxChars: 200 });
+  assert.match(full.text, /\[第 1 页\]\n第一页 内容/);
+  assert.doesNotMatch(full.text, /第 2 页/);
+  assert.match(full.text, /\[第 3 页\]/);
+  assert.equal(full.textPageCount, 2);
+  assert.equal(full.truncated, false);
+  assert.equal(destroyed, true);
+
+  const short = await ctx.extractPdfAttachmentText({}, { maxChars: 15 });
+  assert.equal(short.truncated, true);
+});
+
+test('PDF image mode renders ordered JPEG pages and caps oversized documents', async () => {
+  const ctx = harness();
+  let destroyed = false;
+  const rendered = [];
+  ctx.openPdfAttachment = async () => ({
+    pdf: {
+      numPages: 4,
+      async getPage(pageNo) {
+        return {
+          getViewport({ scale }) { return { width: 800 * scale, height: 1000 * scale }; },
+          render() { rendered.push(pageNo); return { promise: Promise.resolve() }; }
+        };
+      },
+      async destroy() { destroyed = true; }
+    }
+  });
+  ctx.document.createElement = () => ({
+    width: 0, height: 0,
+    getContext: () => ({ fillRect() {} })
+  });
+  ctx.canvasToBlob = async canvas => ({ width: canvas.width, height: canvas.height });
+  let imageNo = 0;
+  ctx.blobToDataUrl = async () => `data:image/jpeg;base64,page-${++imageNo}`;
+  const output = await ctx.renderPdfAttachmentPages({}, { maxPages: 2, maxWidth: 1600 });
+  assert.deepEqual(rendered, [1, 2]);
+  assert.equal(output.dataUrls.length, 2);
+  assert.equal(output.pageCount, 4);
+  assert.equal(output.renderedPages, 2);
+  assert.equal(output.truncated, true);
+  assert.equal(destroyed, true);
+});
+
 test('deepseek-flash counts as an image-capable model while deepseek-v4-pro does not', () => {
   const ctx = harness();
   // 官方文档：deepseek-flash（DeepSeek-V4.1-Flash）图像理解支持；deepseek-v4-pro 不支持
@@ -766,6 +876,51 @@ test('image attachments are accepted for deepseek-flash and preprocessed to an i
   assert.equal(attach.imageInfo.format, 'png');
 });
 
+test('very tall images are split into ordered API-safe parts without shrinking document text to thumbnail size', async () => {
+  const ctx = harness();
+  const draws = [];
+  let closed = false;
+  ctx.decodeImageBitmap = async () => ({
+    bitmap: { width: 1782, height: 15888, close() { closed = true; } },
+    revoke: false
+  });
+  ctx.document.createElement = tag => {
+    assert.equal(tag, 'canvas');
+    return {
+      width: 0,
+      height: 0,
+      getContext: () => ({ fillRect() {}, drawImage: (...args) => draws.push(args) })
+    };
+  };
+  ctx.canvasToBlob = async canvas => ({ width: canvas.width, height: canvas.height });
+  ctx.blobToDataUrl = async blob => `data:image/png;base64,${blob.width}x${blob.height}`;
+
+  const output = await ctx.splitTallImageForApi({ name: '教材长图.png' });
+  assert.equal(output.dataUrls.length, 8);
+  assert.equal(output.info.sourceWidth, 1782);
+  assert.equal(output.info.sourceHeight, 15888);
+  assert.equal(output.info.width, 1782);
+  assert.equal(output.info.parts, 8);
+  assert.equal(draws.length, 8);
+  assert.equal(draws[0][2], 0); // 第一段从图片顶部开始
+  assert.equal(draws[1][2], 2048); // 第二段紧接第一段，保持阅读顺序
+  assert.equal(closed, true);
+});
+
+test('Kimi image attachments use the same local preprocessing pipeline as other vision models', async () => {
+  const ctx = harness();
+  let processed = 0;
+  ctx.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'kimi-k2' });
+  ctx.preprocessAiImageAttachment = attach => {
+    processed++;
+    attach._processPromise = Promise.resolve(attach);
+    return attach._processPromise;
+  };
+  ctx.renderAttachPreview = () => {};
+  ctx.addAiAttachmentFiles([{ name: 'long.png', type: 'image/png', size: 1024 }]);
+  assert.equal(processed, 1);
+});
+
 test('inline images are sent as base64 image_url blocks for the vision model', () => {
   const ctx = harness();
   const conv = { id: 'foreground', messages: [], systemPrompt: '' };
@@ -790,6 +945,49 @@ test('inline images are sent as base64 image_url blocks for the vision model', (
   // 非视觉模型不携带图片块，只保留文本（避免服务端 400）
   const plain = ctx.buildApiMessages(conv, null, { apiKey: 'fake', model: 'deepseek-v4-pro', contextLimit: 20, contextBudget: 32768 });
   assert.equal(typeof plain[plain.length - 1].content, 'string');
+});
+
+test('legacy oversized PNG images are omitted from later requests instead of poisoning the conversation forever', () => {
+  const ctx = harness();
+  ctx.atob = atob;
+  // PNG signature + IHDR length/type + width=1782 + height=15888，后续 CRC/像素无需读取。
+  const header = Buffer.from([
+    0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a, 0,0,0,13, 0x49,0x48,0x44,0x52,
+    0,0,0x06,0xf6, 0,0,0x3e,0x10, 8,2,0,0,0
+  ]).toString('base64');
+  const dataUrl = 'data:image/png;base64,' + header;
+  const inspected = ctx.inspectInlineImageForApi(dataUrl);
+  assert.equal(inspected.ok, false);
+  assert.equal(inspected.width, 1782);
+  assert.equal(inspected.height, 15888);
+
+  const conv = { messages: [{ role: 'user', content: '旧图片', visionFiles: [{ type: 'image_url', name: 'old.png', dataUrl }] }], systemPrompt: '' };
+  const messages = ctx.buildApiMessages(conv, null, { apiKey: 'fake', model: 'deepseek-flash', contextLimit: 20, contextBudget: 32768 });
+  const content = messages.at(-1).content;
+  assert.equal(content.some(part => part.type === 'image_url'), false);
+  assert.match(content[0].text, /历史图片.+已跳过/);
+});
+
+test('a file_id from a previously rejected image message is removed from later conversation history', () => {
+  const ctx = harness();
+  const conv = {
+    messages: [
+      {
+        role: 'user', content: '分析旧长图',
+        visionFiles: [{ type: 'file', fileId: 'file-api-bad-long-image', name: 'old.png', dataUrl: 'data:image/jpeg;base64,AAAA' }]
+      },
+      { role: 'assistant', content: '❌ 图片发送失败：.messages[1].image[0]: You have uploaded an unsupported image.' },
+      { role: 'user', content: '分析这次新上传的图片', visionFiles: [{ type: 'image_url', name: 'new.jpg', dataUrl: 'data:image/jpeg;base64,AAAA' }] }
+    ],
+    systemPrompt: ''
+  };
+  const messages = ctx.buildApiMessages(conv, null, { apiKey: 'fake', model: 'deepseek-flash', contextLimit: 20, contextBudget: 32768 });
+  const oldMessage = messages.find(message => typeof message.content === 'string' && message.content.includes('分析旧长图'));
+  assert.ok(oldMessage);
+  assert.match(oldMessage.content, /不再重复发送/);
+  assert.equal(JSON.stringify(messages).includes('file-api-bad-long-image'), false);
+  const currentMessage = messages.at(-1);
+  assert.equal(currentMessage.content.some(part => part.type === 'image_url'), true);
 });
 
 test('oversized inline images are dropped from the pending attachments before sending', () => {
@@ -853,20 +1051,23 @@ test('files api strategy applies to deepseek only and by size threshold', () => 
 test('uploaded images are reused by file_id within the same api key only', () => {
   const ctx = harness();
   const cfg = { keyId: 'key1', model: 'deepseek-flash' };
+  const fingerprint = 'sha256-photo-content';
   ctx.aiConvs = [{
     id: 'c1',
     messages: [
       { role: 'user', content: '看图', attachments: [{ name: 'photo.jpg', size: 10 }], visionFiles: [
-        { type: 'file', fileId: 'file-api-abc', uploadKeyId: 'key1', name: 'photo.jpg', dataUrl: 'data:image/jpeg;base64,TINY' }
+        { type: 'file', fileId: 'file-api-abc', uploadKeyId: 'key1', imageFingerprint: fingerprint, name: 'photo.jpg', dataUrl: 'data:image/jpeg;base64,TINY' }
       ] }
     ]
   }];
-  const hit = ctx.findReusableUploadedImage('photo.jpg', cfg);
+  const hit = ctx.findReusableUploadedImage({ name: 'photo.jpg', imageFingerprint: fingerprint }, cfg);
   assert.equal(hit.fileId, 'file-api-abc');
   assert.equal(hit.thumb, 'data:image/jpeg;base64,TINY');
-  assert.equal(ctx.findReusableUploadedImage('other.jpg', cfg), null);
+  // 同名但内容不同、或旧记录没有指纹，都不得复用。
+  assert.equal(ctx.findReusableUploadedImage({ name: 'photo.jpg', imageFingerprint: 'different-content' }, cfg), null);
+  assert.equal(ctx.findReusableUploadedImage({ name: 'photo.jpg' }, cfg), null);
   // 换了 API Key → 归属不同，不能复用
-  assert.equal(ctx.findReusableUploadedImage('photo.jpg', { keyId: 'key2', model: 'deepseek-flash' }), null);
+  assert.equal(ctx.findReusableUploadedImage({ name: 'photo.jpg', imageFingerprint: fingerprint }, { keyId: 'key2', model: 'deepseek-flash' }), null);
   assert.equal(ctx.collectReferencedFileIds().has('file-api-abc'), true);
 });
 

@@ -265,7 +265,9 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
 
   const responseTime = new Date().toISOString();
   const data = await readAiResponseJson(response);
-  if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage);
+  if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+    feature: options.feature || 'chat', input: apiMessages, output: data.choices?.[0]?.message
+  });
   const choice = data.choices?.[0]?.message;
   const reply = choice?.content || '';
   const reasoning = (apiCfg.deepThink === true) ? (choice?.reasoning_content || '') : '';
@@ -341,7 +343,9 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
 
     if (followUpResp.ok) {
       const followUpData = await readAiResponseJson(followUpResp);
-      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, followUpData.usage);
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, followUpData.usage, {
+        feature: options.feature ? options.feature + '_tool_followup' : 'chat_tool_followup', input: followUpBody.messages, output: followUpData.choices?.[0]?.message
+      });
       const followUpChoice = followUpData.choices?.[0]?.message;
       const finalReply = followUpChoice?.content || '';
       const { cleanText: ct, toolCalls: tcs } = extractToolCalls(finalReply);
@@ -484,7 +488,9 @@ async function callAiApiStream(apiMessages, apiCfg, conv, options) {
     const contentType = String(response.headers?.get('content-type') || '').toLowerCase();
     if (contentType.includes('application/json')) {
       const data = await readAiResponseJson(response);
-      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage);
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+        feature: options.feature || 'chat', input: apiMessages, output: data.choices?.[0]?.message
+      });
       const result = resultFromChatCompletionData(data, apiCfg, options.onDelta);
       appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, { stream: false, compatibilityResponse: data });
       return result;
@@ -494,7 +500,9 @@ async function callAiApiStream(apiMessages, apiCfg, conv, options) {
       latest = apiCfg.deepThink === true ? snapshot : { ...snapshot, reasoning: '', reasoningDelta: '' };
       if (typeof options.onDelta === 'function') options.onDelta(latest);
     });
-    if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, streamed.usage);
+    if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, streamed.usage, {
+      feature: options.feature || 'chat', input: apiMessages, output: { content: streamed.content, reasoning: streamed.reasoning, tool_calls: streamed.toolCalls }
+    });
     const reply = streamed.content || '';
     const reasoning = apiCfg.deepThink === true ? (streamed.reasoning || '') : '';
     const nativeToolCalls = parseNativeLocalToolCalls(streamed.toolCalls);
@@ -552,7 +560,7 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
   if (streamEnabled && !kimiNativeSearch && typeof options.onDelta === 'function') {
     return callAiApiStream(apiMessages, apiCfg, conv, options);
   }
-  return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
+  return callAiApiNonStream(apiMessages, apiCfg, conv, { ...options, skipSensitiveCheck: true });
 }
 
 // Build the apiMessages array from conversation history.
@@ -564,6 +572,16 @@ function buildConversationSystemPrompt(conv, apiCfg = getEffectiveApiConfig()) {
   return conv && conv.systemPrompt
     ? basePrompt + '\n\n【用户自定义角色】' + conv.systemPrompt
     : basePrompt;
+}
+
+// DeepSeek thinking-mode requests that expose tools are stateful at the
+// message-protocol level: every earlier assistant message must echo the
+// reasoning_content returned by the API.  We keep it in the local model as
+// `reasoning`, then translate it back only for DeepSeek thinking requests so
+// other OpenAI-compatible providers never see an unsupported field.
+function shouldEchoDeepSeekReasoning(apiCfg) {
+  const model = String(apiCfg?.model || '').toLowerCase();
+  return apiCfg?.deepThink === true && model.includes('deepseek');
 }
 
 function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig()) {
@@ -591,8 +609,15 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
     } else if (m.role === 'user') {
       // Build multimodal content if vision files are present
       let userContent;
-      if (m.visionFiles && m.visionFiles.length > 0 && isMultimodalModel(apiCfg)) {
+      // 若这条图片消息紧接着收到服务端的图片格式错误，它携带的可能是旧版本已上传的坏 file_id。
+      // file_id 指向服务端原文件，本地缩略图无法反推出原图尺寸，因此整条图片输入都必须从后续历史中剔除。
+      const nextHistoryMessage = recentMsgs[mi + 1];
+      const imageWasRejected = !!(m.visionFiles && m.visionFiles.length > 0
+        && nextHistoryMessage && nextHistoryMessage.role === 'assistant'
+        && /unsupported image|图片发送失败|图片.+(?:格式|不支持|无效)/i.test(String(nextHistoryMessage.content || '')));
+      if (m.visionFiles && m.visionFiles.length > 0 && isMultimodalModel(apiCfg) && !imageWasRejected) {
         userContent = [];
+        let skippedLegacyImages = 0;
         // Add text part first
         if (m.content && m.content.trim()) {
           userContent.push({ type: 'text', text: m.content });
@@ -605,7 +630,9 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
             // file 与 file_data 互斥，故拆成两个内容块。
             userContent.push({ type: 'file', file_id: vf.fileId });
             if (typeof vf.dataUrl === 'string' && vf.dataUrl.startsWith('data:image/')) {
-              userContent.push({ type: 'file', file_data: vf.dataUrl, filename: vf.name || 'image.png' });
+              const inspected = typeof inspectInlineImageForApi === 'function' ? inspectInlineImageForApi(vf.dataUrl) : { ok: true };
+              if (inspected.ok) userContent.push({ type: 'file', file_data: vf.dataUrl, filename: vf.name || 'image.png' });
+              else skippedLegacyImages++;
             }
           } else if (vf.type === 'video_url' && vf.fileId) {
             // Video: use ms:// protocol (uploaded to Kimi server)
@@ -615,14 +642,28 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
             });
           } else if (vf.dataUrl) {
             // Image: use base64 data URL inline
-            userContent.push({
-              type: vf.type,
-              [vf.type]: { url: vf.dataUrl }
-            });
+            const inspected = typeof inspectInlineImageForApi === 'function' ? inspectInlineImageForApi(vf.dataUrl) : { ok: true };
+            if (inspected.ok) {
+              userContent.push({
+                type: vf.type,
+                [vf.type]: { url: vf.dataUrl }
+              });
+            } else {
+              skippedLegacyImages++;
+            }
           }
+        }
+        if (skippedLegacyImages > 0) {
+          const notice = `[${skippedLegacyImages} 张历史图片因格式或尺寸不兼容已跳过，请重新上传图片]`;
+          const textPart = userContent.find(part => part && part.type === 'text');
+          if (textPart) textPart.text = (textPart.text ? textPart.text + '\n\n' : '') + notice;
+          else userContent.unshift({ type: 'text', text: notice });
         }
       } else {
         userContent = m.content;
+        if (imageWasRejected) {
+          userContent = String(userContent || '') + '\n\n[此前附带的图片已被服务端拒绝，本次不再重复发送；请以新上传的图片为准]';
+        }
       }
       const userApiMsg = { role: 'user', content: userContent };
       if (m.time) {
@@ -640,9 +681,6 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
     } else if (m.role === 'tool' && m.tool_call_id) {
       msgs.push({ role: 'tool', content: m.content, tool_call_id: m.tool_call_id });
     } else if (m.role === 'assistant') {
-      // NOTE: Do NOT include reasoning in API history. Including it can make the
-      // API think the conversation is still in thinking mode, causing it to return
-      // reasoning_content even when thinking is explicitly disabled.
       let assistantContent = typeof m.content === 'string' ? m.content : (m.content_text || '');
       // Remove model-invented role/result tails from legacy tool rounds before
       // sending history back, while preserving legitimate prose around calls.
@@ -659,6 +697,12 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
         }
       }
       const assistantMsg = { role: 'assistant', content: assistantContent };
+      if (shouldEchoDeepSeekReasoning(apiCfg)) {
+        // Keep the key even for legacy/non-reasoning turns. DeepSeek validates
+        // the presence of this field for every prior assistant turn whenever a
+        // thinking-mode request carries tools.
+        assistantMsg.reasoning_content = String(m.reasoning_content ?? m.reasoning ?? '');
+      }
       if (m.tool_calls) assistantMsg.tool_calls = m.tool_calls;
       msgs.push(assistantMsg);
     }

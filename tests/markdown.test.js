@@ -119,3 +119,25 @@ test('raw HTML and dangerous URL schemes never become executable markup', () => 
   assert.doesNotMatch(html, /src="file:/);
   assert.match(html, /&lt;img src=x onerror=alert\(1\)&gt;/);
 });
+
+test('collapsible note blocks render a title and Markdown body safely', () => {
+  const renderer = createRenderer();
+  const html = renderer.render([
+    ':::fold **核心概念**',
+    '这里是正文，包含 **重点**。',
+    '',
+    '- 第一项',
+    '- 第二项',
+    ':::'
+  ].join('\n'));
+
+  assert.match(html, /<details class="note-fold">/);
+  assert.match(html, /<summary><strong>核心概念<\/strong><\/summary>/);
+  assert.match(html, /class="note-fold-body"/);
+  assert.match(html, /这里是正文，包含 <strong>重点<\/strong>/);
+  assert.match(html, /<ul>[\s\S]*第一项[\s\S]*第二项/);
+
+  const unsafeTitle = renderer.render(':::fold <img src=x onerror=alert(1)>\n正文\n:::');
+  assert.doesNotMatch(unsafeTitle, /<img src=x/);
+  assert.match(unsafeTitle, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});

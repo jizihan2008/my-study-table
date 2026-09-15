@@ -641,7 +641,8 @@ async function aiSplitChapters(pages, onMsg) {
         { role: 'user', content: '教材文本片段：\n' + sampleText }
       ],
       cfg,
-      null
+      null,
+      { feature: 'books' }
     );
     const text = (res && (res.cleanText || res.rawReply)) || '';
     const m = text.match(/```(?:json)?\s*([\s\S]*?)```/) || text.match(/\{[\s\S]*\}/);

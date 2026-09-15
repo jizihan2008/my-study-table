@@ -444,7 +444,7 @@ window.Inbox = (function () {
             { type: 'image_url', image_url: { url: imgRes.dataUrl } }
           ]}
         ];
-        const res = await callAiApi(apiMessages, apiCfg, null);
+        const res = await callAiApi(apiMessages, apiCfg, null, { feature: 'inbox_summary' });
         resultText = res.cleanText || '（未收到回复）';
       } else {
         // 文本概括（邮件 / 粘贴 / 文本文件）
@@ -453,7 +453,7 @@ window.Inbox = (function () {
           { role: 'system', content: systemPrompt },
           { role: 'user', content: '【' + (msg.subject || msg.fileName || '消息') + '】\n\n' + content }
         ];
-        const res = await callAiApi(apiMessages, apiCfg, null);
+        const res = await callAiApi(apiMessages, apiCfg, null, { feature: 'inbox_summary' });
         resultText = res.cleanText || '（未收到回复）';
       }
       msg.summary = resultText.trim();
@@ -2085,7 +2085,7 @@ window.Inbox = (function () {
       const res = await callAiApi([
         { role: 'system', content: sys },
         { role: 'user', content: content }
-      ], apiCfg, null);
+      ], apiCfg, null, { feature: 'inbox_daily_report' });
       const t = (res && res.cleanText) ? res.cleanText.trim() : '';
       const itemList = [];
       if (t) {
@@ -2161,7 +2161,7 @@ window.Inbox = (function () {
     const res = await callAiApi([
       { role: 'system', content: sys },
       { role: 'user', content: content }
-    ], apiCfg, null);
+    ], apiCfg, null, { feature: 'inbox_daily_report' });
     return (res && res.cleanText) ? res.cleanText : '（未收到回复）';
   }
 

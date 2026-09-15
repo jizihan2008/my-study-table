@@ -57,6 +57,8 @@ document.addEventListener('keydown', function(e) {
       closeChangelogModal();
     } else if (helpModalOpen) {
       closeHelpModal();
+    } else if (document.getElementById('checkinReportOverlay') && document.getElementById('checkinReportOverlay').classList.contains('open')) {
+      skipCheckinDailyReport();
     } else if (document.getElementById('checkinQuoteOverlay').classList.contains('open')) {
       closeCheckinQuote();
     } else if (editModalOpen) {
@@ -66,8 +68,8 @@ document.addEventListener('keydown', function(e) {
   // Undo/redo: notes when textarea focused, else todo operations
   // 焦点在任意输入框时保留浏览器原生撤销/重做，避免 Ctrl+Z 误触发待办回滚
   const activeEl = document.activeElement;
-  const inTextInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA');
-  const inNoteField = activeEl && (activeEl.id === 'notesTextarea' || activeEl.id === 'noteTitleInput');
+  const inTextInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
+  const inNoteField = activeEl && (activeEl.id === 'notesTextarea' || activeEl.id === 'noteTitleInput' || activeEl.id === 'notesRichEditor');
   if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
     if (inTextInput && !inNoteField) return; // 交给原生输入撤销
     e.preventDefault();

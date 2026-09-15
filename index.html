@@ -12,8 +12,8 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260914-r2">
-<link rel="stylesheet" href="css/workspace.css?v=20260913-r5">
+<link rel="stylesheet" href="css/style.css?v=20260915-r2">
+<link rel="stylesheet" href="css/workspace.css?v=20260915-r3">
 <link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -161,6 +161,23 @@
                 <button class="btn-new-note" onclick="createNewNote()" title="新建笔记"><i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;color:#fff;"></i></button>
               </span>
             </div>
+            <div class="notes-sidebar-tools">
+              <label class="notes-search-box" for="notesSearchInput">
+                <i data-lucide="search" class="lucide-icon" aria-hidden="true"></i>
+                <input id="notesSearchInput" type="search" placeholder="搜索标题、正文、标签…"
+                       autocomplete="off" oninput="handleNotesSearchInput(this.value)" onkeydown="handleNotesSearchKey(event)">
+                <span class="notes-search-count" id="notesSearchCount" aria-live="polite"></span>
+              </label>
+              <div class="notes-sort-row">
+                <span class="notes-sort-label"><i data-lucide="arrow-up-down" class="lucide-icon" aria-hidden="true"></i>排序方式</span>
+                <select class="notes-sort-select" id="notesSortSelect" onchange="changeNotesSort(this.value)" aria-label="笔记排序" title="笔记排序">
+                  <option value="manual">自定义顺序</option>
+                  <option value="updated-desc">最近编辑</option>
+                  <option value="created-desc">最近创建</option>
+                  <option value="title-asc">标题 A–Z</option>
+                </select>
+              </div>
+            </div>
             <div class="notes-list" id="notesList"></div>
           </div>
           <div class="notes-sidebar-resizer" id="notesSidebarResizer" title="拖动调整宽度"></div>
@@ -173,20 +190,30 @@
             <input type="text" class="notes-editor-title-input" id="noteTitleInput"
                    placeholder="笔记标题..." oninput="onNoteTitleChange()">
             <div class="notes-view-toggle">
-              <button class="notes-view-btn" id="notesPreviewBtn" onclick="switchNoteView('preview')">预览</button>
-              <button class="notes-view-btn" id="notesEditBtn" onclick="switchNoteView('edit')">编辑</button>
+              <button class="notes-view-btn" id="notesPreviewBtn" onclick="switchNoteView('preview')">阅读</button>
+              <button class="notes-view-btn" id="notesRichBtn" onclick="switchNoteView('rich')">编辑</button>
+              <button class="notes-view-btn" id="notesEditBtn" onclick="switchNoteView('edit')">源码</button>
               <button class="notes-view-btn" id="notesSummaryBtn" onclick="switchNoteView('summary')">摘要</button>
               <button class="notes-view-btn notes-toc-toggle" id="notesTocToggleBtn" onclick="toggleNoteToc()" title="显示或隐藏智能目录">目录</button>
               <button class="notes-view-btn notes-ann-btn" id="notesAnnBtn" onclick="toggleNoteAnnPanel()" title="批注列表">批注<span id="notesAnnCount"></span></button>
               <button class="notes-view-btn notes-immersive-toggle" id="notesImmersiveBtn" onclick="toggleNotesImmersive()" title="沉浸编辑" aria-pressed="false"><i data-lucide="maximize-2" class="lucide-icon"></i>沉浸</button>
             </div>
           </div>
-          <div class="notes-tag-bar" id="notesTagBar"></div>
-          <div class="notes-keywords-bar" id="notesKeywordsBar"></div>
+          <div class="notes-meta-bar" id="notesMetaBar">
+            <div class="notes-meta-group notes-meta-tags">
+              <span class="notes-meta-label" title="标签"><i data-lucide="tags" class="lucide-icon" aria-hidden="true"></i><span>标签</span></span>
+              <div class="notes-tag-bar" id="notesTagBar"></div>
+            </div>
+            <span class="notes-meta-divider" aria-hidden="true"></span>
+            <div class="notes-meta-group notes-meta-keywords">
+              <span class="notes-meta-label" title="关键词"><i data-lucide="key-round" class="lucide-icon" aria-hidden="true"></i><span>关键词</span></span>
+              <div class="notes-keywords-bar" id="notesKeywordsBar"></div>
+            </div>
+          </div>
           <div class="notes-format-toolbar" id="notesFormatToolbar">
-            <button class="fmt-btn" onclick="formatText('bold')" title="粗体 (Ctrl+B)"><b>B</b></button>
-            <button class="fmt-btn" onclick="formatText('italic')" title="斜体 (Ctrl+I)"><i>I</i></button>
-            <button class="fmt-btn" onclick="formatText('strikethrough')" title="删除线"><s>S</s></button>
+            <button class="fmt-btn" data-format="bold" onclick="formatText('bold')" title="粗体 (Ctrl+B)"><b>B</b></button>
+            <button class="fmt-btn" data-format="italic" onclick="formatText('italic')" title="斜体 (Ctrl+I)"><i>I</i></button>
+            <button class="fmt-btn" data-format="strikethrough" onclick="formatText('strikethrough')" title="删除线"><s>S</s></button>
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('heading')" title="标题"><b>H</b></button>
             <button class="fmt-btn" onclick="formatText('code')" title="行内代码">&lt;/&gt;</button>
@@ -195,21 +222,36 @@
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('link')" title="链接"><i data-lucide="link" class="lucide-icon" style="width:14px;height:14px;"></i></button>
             <button class="fmt-btn" onclick="formatText('image')" title="网络图片"><i data-lucide="image" class="lucide-icon" style="width:14px;height:14px;"></i></button>
-            <button class="fmt-btn" onclick="formatText('ul')" title="无序列表">•</button>
-            <button class="fmt-btn" onclick="formatText('ol')" title="有序列表">1.</button>
+            <button class="fmt-btn" data-format="ul" onclick="formatText('ul')" title="无序列表">•</button>
+            <button class="fmt-btn" data-format="ol" onclick="formatText('ol')" title="有序列表">1.</button>
             <button class="fmt-btn" onclick="formatText('quote')" title="引用">❝</button>
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('task')" title="任务列表">☐</button>
             <button class="fmt-btn" onclick="formatText('table')" title="表格">▦</button>
+            <button class="fmt-btn" onclick="formatText('fold')" title="折叠文字块"><i data-lucide="panel-top-close" class="lucide-icon" style="width:14px;height:14px;"></i></button>
             <button class="fmt-btn" onclick="formatText('footnote')" title="脚注">¹</button>
             <button class="fmt-btn" onclick="formatText('hr')" title="分割线">—</button>
           </div>
           <div class="notes-document-workspace">
+            <div class="notes-split-pane-bar notes-split-primary-bar" id="notesSplitPrimaryBar">
+              <select id="notesSplitPrimarySelect" onchange="selectNotesPrimaryPane(this.value)" aria-label="左栏笔记"></select>
+              <div class="notes-split-mode" role="group" aria-label="左栏模式">
+                <button type="button" id="notesSplitPrimaryRead" onclick="setNotesSplitPrimaryMode('preview')">阅读</button>
+                <button type="button" id="notesSplitPrimaryEdit" onclick="setNotesSplitPrimaryMode('rich')">编辑</button>
+              </div>
+            </div>
+            <div class="notes-rich-editor" id="notesRichEditor" contenteditable="true"
+                 role="textbox" aria-multiline="true" aria-label="笔记正文"
+                 data-placeholder="在这里记录你的想法、笔记、备忘……"
+                 spellcheck="true"></div>
             <textarea class="notes-editor-textarea" id="notesTextarea"
                       placeholder="在这里记录你的想法、笔记、备忘……&#10;内容会自动保存 ✨"
                       spellcheck="false"
                       oninput="onNotesChange()"></textarea>
             <div class="notes-editor-preview" id="notesPreview" onscroll="onNotePreviewScroll()"></div>
+            <div class="notes-reading-progress" id="notesReadingProgress" role="progressbar" aria-label="笔记阅读进度" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-hidden="true">
+              <span class="notes-reading-progress-track"><span class="notes-reading-progress-fill" id="notesReadingProgressFill"></span></span>
+            </div>
             <div class="notes-summary-panel" id="notesSummaryPanel" style="display:none;">
               <div class="notes-summary-actions">
                 <button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 更新摘要</button>
@@ -223,6 +265,20 @@
               <nav class="notes-toc-list" id="notesTocList"></nav>
             </aside>
           </div>
+          <section class="notes-split-pane" id="notesSplitPane" aria-label="第二篇笔记">
+            <header class="notes-split-pane-bar">
+              <select id="notesSplitSecondarySelect" onchange="selectNotesSplitNote(this.value)" aria-label="右栏笔记"></select>
+              <div class="notes-split-mode" role="group" aria-label="右栏模式">
+                <button type="button" id="notesSplitSecondaryRead" onclick="setNotesSplitSecondaryMode('preview')">阅读</button>
+                <button type="button" id="notesSplitSecondaryEdit" onclick="setNotesSplitSecondaryMode('rich')">编辑</button>
+              </div>
+              <span class="notes-split-status" id="notesSplitStatus">已保存</span>
+            </header>
+            <div class="notes-split-preview notes-editor-preview active" id="notesSplitPreview"></div>
+            <div class="notes-rich-editor notes-split-rich-editor" id="notesSplitRichEditor"
+                 contenteditable="true" role="textbox" aria-multiline="true" aria-label="右栏笔记富文本编辑器"
+                 data-placeholder="在这里编辑第二篇笔记" spellcheck="true"></div>
+          </section>
           <div class="notes-editor-footer">
             <span id="notesWordCount">0 字</span>
             <span id="notesLastEdited">—</span>
@@ -233,6 +289,17 @@
           <button class="notes-immersive-exit" id="notesImmersiveExit" onclick="toggleNotesImmersive(false)" title="退出沉浸编辑 (Esc)" aria-label="退出沉浸编辑">
             <i data-lucide="minimize-2" class="lucide-icon"></i>
           </button>
+          <button class="notes-immersive-toc" id="notesImmersiveToc" onclick="toggleNoteToc()" title="显示或隐藏目录" aria-label="显示或隐藏目录">
+            <i data-lucide="list-tree" class="lucide-icon"></i>
+          </button>
+          <button class="notes-immersive-split-toggle" id="notesImmersiveSplit" onclick="toggleNotesImmersiveSplit()" title="打开沉浸分屏" aria-label="打开沉浸分屏" aria-pressed="false">
+            <i data-lucide="columns-2" class="lucide-icon"></i>
+          </button>
+          <div class="notes-immersive-zoom" id="notesImmersiveZoom" role="group" aria-label="沉浸模式显示缩放">
+            <button type="button" onclick="changeNotesImmersiveZoom(-10)" title="缩小显示 (Ctrl+-)" aria-label="缩小显示"><i data-lucide="minus" class="lucide-icon"></i></button>
+            <button type="button" class="notes-immersive-zoom-value" id="notesImmersiveZoomValue" onclick="setNotesImmersiveZoom(100)" title="恢复 100% (Ctrl+0)" aria-label="恢复默认显示比例">100%</button>
+            <button type="button" onclick="changeNotesImmersiveZoom(10)" title="放大显示 (Ctrl++)" aria-label="放大显示"><i data-lucide="plus" class="lucide-icon"></i></button>
+          </div>
         </div>
         <!-- 移动端右下角：视图切换（预览/编辑/摘要） -->
         <div class="notes-mobile-views" id="notesMobileViews">
@@ -240,8 +307,9 @@
             <i data-lucide="layout-panel-left" class="lucide-icon" id="notesMvFabIcon"></i>
           </button>
           <div class="notes-mv-menu" id="notesMvMenu" style="display:none;">
-            <button onclick="switchNoteView('preview');hideNotesMobileViewMenu()"><i data-lucide="eye" class="lucide-icon"></i>预览</button>
-            <button onclick="switchNoteView('edit');hideNotesMobileViewMenu()"><i data-lucide="square-pen" class="lucide-icon"></i>编辑</button>
+            <button onclick="switchNoteView('preview');hideNotesMobileViewMenu()"><i data-lucide="book-open" class="lucide-icon"></i>阅读</button>
+            <button onclick="switchNoteView('rich');hideNotesMobileViewMenu()"><i data-lucide="square-pen" class="lucide-icon"></i>编辑</button>
+            <button onclick="switchNoteView('edit');hideNotesMobileViewMenu()"><i data-lucide="code-2" class="lucide-icon"></i>源码</button>
           <button onclick="switchNoteView('summary');hideNotesMobileViewMenu()"><i data-lucide="sparkles" class="lucide-icon"></i>摘要</button>
           <button onclick="toggleNoteToc(true);hideNotesMobileViewMenu()"><i data-lucide="list-tree" class="lucide-icon"></i>目录</button>
           <button onclick="toggleNoteAnnPanel();hideNotesMobileViewMenu()"><i data-lucide="message-square" class="lucide-icon"></i>批注<span id="notesAnnCountMobile"></span></button>
@@ -490,6 +558,15 @@
     <div class="card" style="padding:0;overflow:hidden;border-radius:var(--radius);">
       <div id="keywordsApp" class="kw-layout">
         <!-- rendered by renderKeywords() -->
+      </div>
+    </div>
+  </div>
+
+  <!-- ── 划词翻译历史 / 生词本 Section ── -->
+  <div class="section" id="section-translation">
+    <div class="card" style="padding:0;overflow:hidden;border-radius:var(--radius);">
+      <div id="translationApp" class="translation-page">
+        <!-- rendered by GlobalTranslation.renderPage() -->
       </div>
     </div>
   </div>
@@ -1332,6 +1409,20 @@
   </div>
 </div>
 
+<!-- Morning report input after daily check-in -->
+<div class="checkin-report-overlay" id="checkinReportOverlay" onclick="closeCheckinReportPrompt(event)">
+  <div class="checkin-report-card" role="dialog" aria-modal="true" aria-labelledby="checkinReportTitle" onclick="event.stopPropagation()">
+    <div class="checkin-report-icon"><i data-lucide="newspaper" class="lucide-icon" style="width:26px;height:26px;"></i></div>
+    <div class="checkin-report-title" id="checkinReportTitle">生成晨间日报</div>
+    <p class="checkin-report-hint">可以补充今天的心情、计划或希望日报重点关注的内容；它会和日报请求一同发送给 AI。</p>
+    <textarea id="checkinReportInput" rows="4" maxlength="2000" placeholder="例如：今天状态一般，帮我安排一个轻量但可执行的计划…"></textarea>
+    <div class="checkin-report-actions">
+      <button class="checkin-report-cancel" type="button" onclick="skipCheckinDailyReport()">暂不生成</button>
+      <button class="checkin-report-submit" type="button" onclick="submitCheckinDailyReport()">生成日报</button>
+    </div>
+  </div>
+</div>
+
 <!-- Checkin Quote Modal -->
 <div class="checkin-quote-overlay" id="checkinQuoteOverlay" onclick="closeCheckinQuote(event)">
   <div class="checkin-quote-card" onclick="event.stopPropagation()">
@@ -1409,43 +1500,44 @@
 <script src="lib/markdown/purify.min.js"></script>
 <script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/markdown.js?v=20260827-r1"></script>
+<script src="js/markdown.js?v=20260915-r1"></script>
+<script src="js/note-rich-editor.js?v=20260915-r4"></script>
 <script src="js/platform.js?v=20260826-r2"></script>
 <script src="js/secrets.js?v=20260827-r2"></script>
 <script src="js/data-store.js?v=20260825-r1"></script>
 <script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260911-r2"></script>
-<script src="js/theme-model.js?v=20260913-r4"></script>
+<script src="js/theme-model.js?v=20260914-r5"></script>
 <script src="js/liquid-glass.js?v=20260906-r2"></script>
-<script src="js/core.js?v=20260911-r10"></script>
+<script src="js/core.js?v=20260914-r11"></script>
 <script src="js/trash.js?v=20260804-r4"></script>
 <script src="js/todos.js?v=20260823-r4"></script>
-<script src="js/notes.js?v=20260913-r10"></script>
+<script src="js/notes.js?v=20260915-r4"></script>
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20260905-r2"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260912-r1"></script>
-<script src="js/ai-attach.js?v=20260914-r2"></script>
-<script src="js/ai-render.js?v=20260914-r3"></script>
-<script src="js/ai-tools.js?v=20260912-r3"></script>
+<script src="js/ai-attach.js?v=20260915-r3"></script>
+<script src="js/ai-render.js?v=20260915-r2"></script>
+<script src="js/ai-tools.js?v=20260914-r4"></script>
 <script src="js/ai-search.js"></script>
-<script src="js/ai-client.js?v=20260827-r2"></script>
+<script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
-<script src="js/ai-api.js?v=20260914-r5"></script>
-<script src="js/ai-send.js?v=20260914-r3"></script>
+<script src="js/ai-api.js?v=20260914-r8"></script>
+<script src="js/ai-send.js?v=20260915-r3"></script>
 <script src="js/prompts.js?v=20260912-r3"></script>
 <script src="js/music.js"></script>
-<script src="js/memory.js?v=20260812-r4"></script>
+<script src="js/memory.js?v=20260914-r5"></script>
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
-<script src="js/appearance.js?v=20260913-r5"></script>
+<script src="js/appearance.js?v=20260914-r6"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260914-r5"></script>
-<script src="js/utils.js?v=20260813-r1"></script>
+<script src="js/settings.js?v=20260914-r8"></script>
+<script src="js/utils.js?v=20260914-r2"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
-<script src="js/inbox.js?v=20260901-r1"></script>
+<script src="js/inbox.js?v=20260914-r2"></script>
 <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
 <script type="module">
   import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
@@ -1454,17 +1546,17 @@
 </script>
 <script src="js/books-pdfstore.js?v=20260812-r2"></script>
 <script src="js/books.js?v=20260814-r1"></script>
-<script src="js/books-pdf.js?v=20260813-r6"></script>
-<script src="js/books-kb.js?v=20260901-r1"></script>
-<script src="js/books-ai.js?v=20260814-r7"></script>
-<script src="js/books-annot.js?v=20260813-r4"></script>
+<script src="js/books-pdf.js?v=20260914-r7"></script>
+<script src="js/books-kb.js?v=20260914-r2"></script>
+<script src="js/books-ai.js?v=20260914-r8"></script>
+<script src="js/books-annot.js?v=20260914-r5"></script>
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
 <script src="js/calendar.js?v=20260825-r8"></script>
-<script src="js/taskline.js?v=20260912-r13"></script>
-<script src="js/timer.js?v=20260814-r1"></script>
+<script src="js/taskline.js?v=20260914-r14"></script>
+<script src="js/timer.js?v=20260914-r3"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
-<script src="js/stats.js?v=20260827-r2"></script>
+<script src="js/stats.js?v=20260914-r3"></script>
 <script src="js/updater.js?v=20260802-r1"></script>
 <!-- 好友系统 -->
 <script src="lib/supabase/supabase.js"></script>
@@ -1483,10 +1575,11 @@
 <script src="js/store.js?v=20260913-r2"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260910-r13"></script>
+<script src="js/sync.js?v=20260914-r14"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260910-r6"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
+<script src="js/translation.js?v=20260914-r3"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
 <div class="context-menu" id="notesContextMenu">

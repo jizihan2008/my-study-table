@@ -2,7 +2,7 @@
 // Records time spent on linked todos or long-term goals.
 // Data stored in localStorage key: study_timer_records
 //
-// Record format: { id, targetId, targetType: 'todo'|'goal', date (YYYY-MM-DD), totalMs, sessions: [{ start: timestamp_ms, end: timestamp_ms }], affectsFocus: bool, manual: bool }
+// Record format: { id, name, targetId, targetType: 'todo'|'goal', date (YYYY-MM-DD), totalMs, sessions: [{ start: timestamp_ms, end: timestamp_ms }], affectsFocus: bool, manual: bool }
 
 // ═══════════ Data persistence ═══════════
 // 计数器从「当前时间戳」与「已存记录最大 id+1」中取较大者，避免加载历史记录后
@@ -53,6 +53,7 @@ let timerRunning = false;
 let timerSessionStart = 0;   // timestamp when current segment started
 let timerElapsed = 0;        // ms accumulated from completed segments
 let timerSessions = [];      // completed segments: [{ start: timestamp, end: timestamp }]
+let timerSessionName = '';
 let timerLinkedTodoId = null;
 let timerLinkedGoalId = null;
 let timerPickerMode = 'todo'; // 'todo' or 'goal'
@@ -67,6 +68,7 @@ function saveTimerState() {
     elapsed: timerElapsed,
     sessionStart: timerSessionStart,
     sessions: timerSessions,
+    name: timerSessionName,
     linkedTodoId: timerLinkedTodoId,
     linkedGoalId: timerLinkedGoalId,
     savedAt: Date.now()
@@ -91,6 +93,7 @@ function loadAndRestoreTimerState() {
   // Restore completed sessions & elapsed
   timerElapsed = state.elapsed || 0;
   timerSessions = state.sessions || [];
+  timerSessionName = typeof state.name === 'string' ? state.name.slice(0, 80) : '';
   timerStateRestored = true;
 
   if (state.running) {
@@ -101,7 +104,7 @@ function loadAndRestoreTimerState() {
     // Continue the same segment seamlessly (keep original sessionStart)
     timerSessionStart = origSessionStart;
     timerInterval = setInterval(function() {
-      renderTimer();
+      updateTimerTick();
       saveTimerState(); // persist on every tick
     }, 500);
     // 恢复运行中的计时器 → 显示右下角浮窗
@@ -182,10 +185,18 @@ function renderTimer() {
         <button class="timer-unlink-btn" onclick="event.stopPropagation(); unlinkTimerGoal()" title="解除关联">✕</button>
       </div>`
     : `<button class="timer-link-btn" onclick="openTimerGoalPicker()">🎯 关联目标</button>`;
+  const nameHtml = `<label class="timer-name-field" title="为这次计时时段命名">
+      <span class="timer-name-icon">✎</span>
+      <input id="timerSessionName" type="text" maxlength="80" value="${escapeAttr(timerSessionName)}" placeholder="给计时时段命名" oninput="setTimerSessionName(this.value)" onkeydown="if(event.key === 'Enter') this.blur()">
+    </label>`;
   const isCentered = !timerHistoryExpanded;
   const pickerHtml = isCentered
-    ? `<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;justify-content:center;">${todoHtml}${goalHtml}</div>`
-    : `<div style="display:flex;flex-direction:column;gap:4px;"><div style="display:flex;gap:6px;align-items:center;">${todoHtml}</div><div style="display:flex;gap:6px;align-items:center;">${goalHtml}</div></div>`;
+    ? `<div class="timer-context-row centered">${nameHtml}${todoHtml}${goalHtml}</div>`
+    : `<div class="timer-context-stack">
+        <div class="timer-context-item">${nameHtml}</div>
+        <div class="timer-context-item">${todoHtml}</div>
+        <div class="timer-context-item">${goalHtml}</div>
+      </div>`;
 
   // Today's sessions
   let sessionsHtml = '';
@@ -207,7 +218,7 @@ function renderTimer() {
   container.innerHTML = `
     <div class="timer-panel">
       ${pickerHtml}
-      <div class="timer-display">${display}</div>
+      <div class="timer-display" id="timerDisplay">${display}</div>
       <div class="timer-today">今日累计：${formatTimerTime(todayMs)}</div>
       ${sessionsHtml}
       <div class="timer-controls">
@@ -317,21 +328,23 @@ function renderTimerHistory(records) {
     let dayTotal = 0;
     const itemHtml = [];
     for (const rec of items) {
-      let name = '⏱ 自由计时';
+      let targetName = '自由计时';
       if (rec.targetType === 'goal' || rec.targetId) {
         const targetId = rec.targetId || rec.todoId;
         const targetType = rec.targetType || 'todo';
         if (targetType === 'goal') {
           const goal = loadGoals().find(g => g.id === targetId);
-          name = goal ? '🎯 ' + goal.text : '(已删除的目标)';
+          targetName = goal ? '🎯 ' + goal.text : '(已删除的目标)';
         } else {
           const todo = findTodo(targetId);
-          name = todo ? todo.text : '(已删除)';
+          targetName = todo ? todo.text : '(已删除)';
         }
       } else if (rec.todoId) {
         const todo = findTodo(rec.todoId);
-        name = todo ? todo.text : '(已删除)';
+        targetName = todo ? todo.text : '(已删除)';
       }
+      const sessionName = typeof rec.name === 'string' ? rec.name.trim() : '';
+      const name = sessionName ? `⏱ ${sessionName} · ${targetName}` : (targetName === '自由计时' ? '⏱ 自由计时' : targetName);
       dayTotal += rec.totalMs;
       if (rec.totalMs >= 1000) {
         let sessionDetail = '';
@@ -396,6 +409,19 @@ function formatTimeOnly(ts) {
   return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
 
+function setTimerSessionName(value) {
+  timerSessionName = String(value || '').slice(0, 80);
+  saveTimerState();
+  updateTimerFloat();
+}
+
+function updateTimerTick() {
+  const totalMs = timerElapsed + (timerRunning ? Date.now() - timerSessionStart : 0);
+  const displayEl = document.getElementById('timerDisplay');
+  if (displayEl) displayEl.textContent = formatTimerTime(totalMs);
+  updateTimerFloat();
+}
+
 // ═══════════ Timer controls ═══════════
 function timerStart() {
   if (timerRunning) return;
@@ -405,7 +431,7 @@ function timerStart() {
   // 专注开始：空闲计时器归零（空闲提醒逻辑）
   if (typeof resetIdleTimerOnFocus === 'function') { try { resetIdleTimerOnFocus(); } catch (e) {} }
   timerInterval = setInterval(function() {
-    renderTimer();
+    updateTimerTick();
     saveTimerState();
   }, 500);
   saveTimerState();
@@ -440,7 +466,7 @@ function timerStop() {
     const records = loadTimerRecords();
     const todayStr = formatDate(new Date());
     const sessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
-    const baseRecord = { id: genTimerRecordId(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
+    const baseRecord = { id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
     // Save for todo if linked
     if (timerLinkedTodoId) {
       records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedTodoId, targetType: 'todo' });
@@ -457,6 +483,7 @@ function timerStop() {
   }
   timerElapsed = 0;
   timerSessions = [];
+  timerSessionName = '';
   clearTimerState();
   if (!timerHistoryExpanded) { timerHistoryExpanded = true; animateTimerHistoryExpand(); }
   else renderTimer();
@@ -469,7 +496,7 @@ function timerSave() {
   const records = loadTimerRecords();
   const todayStr = formatDate(new Date());
   const sessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
-  const baseRecord = { id: genTimerRecordId(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
+  const baseRecord = { id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
   if (timerLinkedTodoId) {
     records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedTodoId, targetType: 'todo' });
   }
@@ -482,6 +509,7 @@ function timerSave() {
   saveTimerRecords(records);
   timerElapsed = 0;
   timerSessions = [];
+  timerSessionName = '';
   clearTimerState();
   if (!timerHistoryExpanded) { timerHistoryExpanded = true; animateTimerHistoryExpand(); }
   else renderTimer();
@@ -495,6 +523,7 @@ function timerReset() {
   }
   timerElapsed = 0;
   timerSessions = [];
+  timerSessionName = '';
   clearTimerState();
   renderTimer();
 }
@@ -605,29 +634,32 @@ function renderTimerPickerNode(t, depth) {
 
 function renderTimerPickerQuickSelect() {
   const records = loadTimerRecords();
-  if (!records.length) return '';
-
+  // "今日聚焦" 应直接使用首页的聚焦清单，不能从今天已有的计时记录
+  // 推导；否则尚未开始计时的聚焦任务会在快捷选择中缺失。
+  const focusData = typeof getTodayFocusItems === 'function' ? getTodayFocusItems() : {};
   const todayStr = formatDate(new Date());
-  const todayIds = []; // unique todo ids focused today
+  const todayIds = [];
   const seenToday = new Set();
+  for (const item of (focusData.items || [])) {
+    const id = item?.todoId;
+    if (!id || seenToday.has(id) || !findTodo(id)) continue;
+    seenToday.add(id);
+    todayIds.push(id);
+  }
   const histIds = []; // recent 3 unique todo ids from past
   const seenHist = new Set();
+
+  if (!todayIds.length && !records.length) return '';
 
   // Process most recent first
   for (const r of records.slice().reverse()) {
     if (r.targetType !== 'todo' || !r.targetId) continue;
     const todo = findTodo(r.targetId);
     if (!todo) continue;
-    if (r.date === todayStr) {
-      if (!seenToday.has(r.targetId)) {
-        seenToday.add(r.targetId);
-        todayIds.push(r.targetId);
-      }
-    } else {
-      if (!seenHist.has(r.targetId) && histIds.length < 3) {
-        seenHist.add(r.targetId);
-        histIds.push(r.targetId);
-      }
+    if (r.date === todayStr) continue;
+    if (!seenHist.has(r.targetId) && histIds.length < 3) {
+      seenHist.add(r.targetId);
+      histIds.push(r.targetId);
     }
   }
 
@@ -751,6 +783,7 @@ function renderManualRecordForm() {
   const defaultStart = rec && rec.sessions && rec.sessions.length ? new Date(rec.sessions[0].start) : new Date(now.getTime() - 25 * 60000);
   const defaultEnd = rec && rec.sessions && rec.sessions.length ? new Date(rec.sessions[rec.sessions.length - 1].end) : now;
   const defaultAffectsFocus = rec ? rec.affectsFocus : true;
+  const defaultName = rec && typeof rec.name === 'string' ? rec.name : '';
 
   // Normalize target for old-format records
   const recTargetType = rec ? (rec.targetType || (rec.todoId ? 'todo' : null)) : null;
@@ -759,6 +792,12 @@ function renderManualRecordForm() {
   return `
     <div class="timer-manual-form">
       <div class="timer-manual-form-title">${isEdit ? '编辑记录' : '手动添加专注记录'}</div>
+      <div class="timer-manual-row">
+        <div class="timer-manual-field timer-manual-field-wide">
+          <label>时段名称（可选）</label>
+          <input type="text" id="manualRecName" maxlength="80" value="${escapeAttr(defaultName)}" placeholder="例如：复习线性代数">
+        </div>
+      </div>
       <div class="timer-manual-row">
         <div class="timer-manual-field">
           <label>日期</label>
@@ -844,6 +883,7 @@ function onManualRecGoalChange() {
 }
 
 function saveManualRecord() {
+  const nameEl = document.getElementById('manualRecName');
   const dateEl = document.getElementById('manualRecDate');
   const startEl = document.getElementById('manualRecStart');
   const endEl = document.getElementById('manualRecEnd');
@@ -875,6 +915,7 @@ function saveManualRecord() {
   const todoId = todoEl ? parseInt(todoEl.value) || null : null;
   const goalId = goalEl ? parseInt(goalEl.value) || null : null;
   const affectsFocus = affectsEl ? affectsEl.checked : true;
+  const name = nameEl ? nameEl.value.trim().slice(0, 80) : '';
 
   // Determine target
   let targetId = null, targetType = null;
@@ -889,7 +930,7 @@ function saveManualRecord() {
     if (idx >= 0) {
       records[idx] = {
         ...records[idx],
-        targetId, targetType,
+        name, targetId, targetType,
         date: dateStr, totalMs,
         sessions: [{ start: startTs, end: endTs }],
         affectsFocus, manual: true
@@ -899,6 +940,7 @@ function saveManualRecord() {
     // Add mode
     records.push({
       id: genTimerRecordId(),
+      name,
       targetId, targetType,
       date: dateStr, totalMs,
       sessions: [{ start: startTs, end: endTs }],
@@ -925,7 +967,9 @@ function deleteTimerRecord(recordId) {
   if (!rec) return;
 
   let name = '记录';
-  if (rec.targetType === 'goal') {
+  if (typeof rec.name === 'string' && rec.name.trim()) {
+    name = `时段「${rec.name.trim()}」`;
+  } else if (rec.targetType === 'goal') {
     const goal = loadGoals().find(g => g.id === rec.targetId);
     if (goal) name = '目标「' + goal.text + '」';
   } else if (rec.targetType === 'todo' || rec.todoId) {
@@ -960,6 +1004,9 @@ function timerFloatTargetHtml() {
   const linkedTodo = timerLinkedTodoId ? findTodo(timerLinkedTodoId) : null;
   const linkedGoal = timerLinkedGoalId ? loadGoals().find(g => g.id === timerLinkedGoalId) : null;
   let html = '';
+  if (timerSessionName.trim()) {
+    html += `<div class="tf-target-row"><span class="tf-target-ico">✎</span><span class="tf-target-text" title="${escapeAttr(timerSessionName.trim())}">${escapeHtml(timerSessionName.trim())}</span></div>`;
+  }
   // 只显示待办名称，不显示目录路径
   if (linkedTodo) {
     html += `<div class="tf-target-row"><span class="tf-target-ico">📋</span><span class="tf-target-text" title="${escapeHtml(linkedTodo.text)}">${escapeHtml(linkedTodo.text)}</span></div>`;

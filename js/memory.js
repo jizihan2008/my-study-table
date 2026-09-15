@@ -439,6 +439,9 @@ async function requestAIDedupSuggestions(memory) {
     });
     if (!resp.ok) return [];
     const data = await resp.json();
+    if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+      feature: 'memory_dedup', input: listText, output: data.choices?.[0]?.message
+    });
     const rawText = (data.choices?.[0]?.message?.content || '').trim();
     const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
     const result = [];
@@ -735,6 +738,9 @@ async function extractMemoryFromConv(conv) {
 
     if (summaryResp.ok) {
       const data = await summaryResp.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+        feature: 'memory_conversation_summary', input: convContext, output: data.choices?.[0]?.message
+      });
       summaryText = (data.choices?.[0]?.message?.content || '').trim();
       if (summaryText) {
         addConvSummary(memory, conv.id, conv.title, summaryText, currentCount);
@@ -796,6 +802,9 @@ ${existingMemBlock}
 
     if (factResp.ok) {
       const data = await factResp.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+        feature: 'memory_extract', input: [existingMemBlock, convContext], output: data.choices?.[0]?.message
+      });
       const rawText = (data.choices?.[0]?.message?.content || '').trim();
       // Parse JSON lines
       const lines = rawText.split('\n').map(l => l.trim()).filter(l => l.length > 0);
@@ -951,6 +960,9 @@ async function runDailyMemoryIntegration() {
 
     if (summaryResp.ok) {
       const data = await summaryResp.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+        feature: 'memory_daily_summary', input: context, output: data.choices?.[0]?.message
+      });
       const summary = (data.choices?.[0]?.message?.content || '').trim();
       if (summary) {
         memory.dailySummary = summary;
@@ -993,6 +1005,9 @@ async function runDailyMemoryIntegration() {
 
     if (profileResp.ok) {
       const data = await profileResp.json();
+      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
+        feature: 'memory_profile', input: context, output: data.choices?.[0]?.message
+      });
       const rawProfile = (data.choices?.[0]?.message?.content || '').trim();
       if (rawProfile && rawProfile.length > 10) {
         // Remove any leading/trailing quotes

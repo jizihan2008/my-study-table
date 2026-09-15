@@ -41,7 +41,7 @@ function updateAiSendButton() {
 }
 
 // ═══════════ AI 发送队列：回复中发送的消息排队，回复完成后自动发送下一条 ═══════════
-let _aiSendQueue = [];       // [{ id, convId, text, attachments }]
+let _aiSendQueue = [];       // [{ id, convId, text, attachments, contextInserts, displayContent }]
 let _aiQueueDraining = false; // 防止队列递归触发
 let _aiQueueSeq = 0;         // 队列项唯一 id 序号
 let _aiQueuePanelOpen = false; // 预览面板展开状态
@@ -55,6 +55,9 @@ function _queueTextPreview(text, maxLen) {
 
 function formatAiRequestError(error) {
   const message = String(error?.message || error || '未知错误');
+  if (/unsupported image|image.+(?:format|invalid|unsupported)|图片.+(?:格式|不支持|无效)/i.test(message)) {
+    return '❌ 图片发送失败：' + message + '\n\n该图片可能来自旧对话记录，或尺寸/编码不被当前模型接受。请刷新应用后重新上传；应用会自动跳过历史中的不兼容原图。';
+  }
   if (/上下文预算|系统提示词|Max Tokens/.test(message)) {
     return '❌ 出错了：' + message + '\n\n可在“设置 → AI 设置 → 编辑当前 Key → 更多设置”中调整。';
   }
@@ -152,7 +155,7 @@ async function drainAiSendQueue(convId) {
       if (idx < 0) break;
       const item = _aiSendQueue.splice(idx, 1)[0];
       updateAiQueueIndicator();
-      await sendAiMessage(item.text, item.attachments);
+      await sendAiMessage(item.text, item.attachments, item.contextInserts, item.displayContent);
     }
   } finally {
     _aiQueueDraining = false;
@@ -160,10 +163,10 @@ async function drainAiSendQueue(convId) {
   }
 }
 
-// sendAiMessage(externalText, externalAttachments)：
+// sendAiMessage(externalText, externalAttachments, externalContextInserts, externalDisplayContent)：
 //   - 不传参：从输入框读取（用户手动发送）。若当前正在回复 → 入队等待，回复完成后自动发送。
 //   - 传参：由队列自动发送（drainAiSendQueue 调用），文本/附件来自队列快照。
-async function sendAiMessage(externalText, externalAttachments) {
+async function sendAiMessage(externalText, externalAttachments, externalContextInserts, externalDisplayContent) {
   const convId = getActiveConvId();
   const fromQueue = externalText !== undefined;
   const input = document.getElementById('aiInput');
@@ -171,22 +174,31 @@ async function sendAiMessage(externalText, externalAttachments) {
   // 用户手动发送但 AI 正在回复 → 加入发送队列（不清空输入框，提示排队）
   if (!fromQueue && isAiLoading(convId)) {
     if (!input) return null;
-    const qText = input.value.trim();
-    if (!qText && aiAttachments.length === 0) return null;
+    const displayContent = input.value.trim();
+    const contextInserts = typeof getAiContextInsertSnapshot === 'function' ? getAiContextInsertSnapshot() : [];
+    const qText = displayContent + (typeof buildAiContextInsertText === 'function' ? buildAiContextInsertText(contextInserts) : '');
+    const hasContext = typeof aiContextInserts !== 'undefined' && aiContextInserts.length > 0;
+    if (!qText && aiAttachments.length === 0 && !hasContext) return null;
     _aiQueueSeq++;
-    _aiSendQueue.push({ id: 'q' + _aiQueueSeq, convId, text: qText, attachments: [...aiAttachments] });
+    _aiSendQueue.push({ id: 'q' + _aiQueueSeq, convId, text: qText, attachments: [...aiAttachments], contextInserts, displayContent });
     updateAiQueueIndicator();
     if (typeof showAiToast === 'function') showAiToast('已加入发送队列（' + _aiSendQueue.length + ' 条待发送）');
     clearAiDraft();
     input.value = '';
     input.style.height = 'auto';
     aiAttachments = [];
+    if (typeof clearAiContextInserts === 'function') clearAiContextInserts();
     renderAttachPreview();
     return null;
   }
 
   if (!fromQueue && !input) return null;
-  const text = fromQueue ? String(externalText) : input.value.trim();
+  const contextInserts = fromQueue
+    ? (Array.isArray(externalContextInserts) ? externalContextInserts : [])
+    : (typeof getAiContextInsertSnapshot === 'function' ? getAiContextInsertSnapshot() : []);
+  const displayContent = fromQueue ? String(externalDisplayContent ?? externalText ?? '') : input.value.trim();
+  const contextText = !fromQueue && typeof buildAiContextInsertText === 'function' ? buildAiContextInsertText(contextInserts) : '';
+  const text = (fromQueue ? String(externalText) : displayContent) + contextText;
   // Allow empty text if there are attachments
   const hasAttach = fromQueue ? (externalAttachments && externalAttachments.length > 0) : aiAttachments.length > 0;
   if (!text && !hasAttach) return null;
@@ -201,7 +213,7 @@ async function sendAiMessage(externalText, externalAttachments) {
   // （drainAiSendQueue 检测到会话不匹配时会 break，等待切回后继续）
   if (fromQueue && conv.id !== convId) {
     _aiQueueSeq++;
-    _aiSendQueue.unshift({ id: 'q' + _aiQueueSeq, convId, text: String(externalText), attachments: externalAttachments || [] });
+    _aiSendQueue.unshift({ id: 'q' + _aiQueueSeq, convId, text: String(externalText), attachments: externalAttachments || [], contextInserts, displayContent });
     updateAiQueueIndicator();
     return null;
   }
@@ -218,6 +230,7 @@ async function sendAiMessage(externalText, externalAttachments) {
     input.style.height = 'auto';
     aiAttachments = [];
     renderAttachPreview();
+    if (typeof clearAiContextInserts === 'function') clearAiContextInserts();
   }
   setAiLoading(conv.id, true);
   setAiStopRequested(conv.id, false);
@@ -226,7 +239,7 @@ async function sendAiMessage(externalText, externalAttachments) {
   // 附件在消息里的展示信息（displayUrl 在下面处理附件时补上：可能是 Files API 的小缩略图）
   const displayAttachments = currentAttachments.map(a => ({ name: a.name, size: a.size, displayUrl: a.dataUrl || '' }));
 
-  // Process attachments: for Kimi use file upload API, for others read as txt
+  // Process attachments: Kimi uses its file API; other models use local PDF conversion or text/image input.
   let docTexts = '';
   const isKimi = isKimiModel(apiCfg);
   const isVision = isVisionModel(apiCfg);
@@ -246,7 +259,41 @@ async function sendAiMessage(externalText, externalAttachments) {
   for (const a of currentAttachments) {
     if (isAiStopRequested(conv.id)) break;
     try {
-      if (isKimi) {
+      // Kimi 已有原生 file-extract；其他模型的 PDF 统一在本地转为文本或页面图片。
+      if (!isKimi && isPdfFile(a.file)) {
+        if (a.pdfMode === 'image') {
+          if (!isVision) {
+            docTexts += `\n\n[附件：${a.name} — 当前模型不支持图片输入，请改用“提取文字”模式]`;
+            continue;
+          }
+          const rendered = await renderPdfAttachmentPages(a.file);
+          a.pdfInfo = rendered;
+          a.dataUrls = rendered.dataUrls;
+          a.dataUrl = rendered.dataUrls[0] || '';
+          rendered.dataUrls.forEach((dataUrl, index) => visionFiles.push({
+            dataUrl,
+            name: `${a.name}（PDF 第 ${index + 1}/${rendered.pageCount} 页）`,
+            type: 'image_url'
+          }));
+          if (rendered.truncated) {
+            docTexts += `\n\n[PDF：${a.name} — 共 ${rendered.pageCount} 页，页面图片模式本次仅发送前 ${rendered.renderedPages} 页]`;
+          }
+          const idx = displayAttachments.findIndex(d => d.name === a.name);
+          if (idx >= 0) displayAttachments[idx].displayUrl = a.dataUrl;
+        } else {
+          const extracted = await extractPdfAttachmentText(a.file);
+          a.pdfInfo = extracted;
+          let content = extracted.text;
+          if (!content) {
+            content = '[未检测到可提取的文字层；这可能是扫描版 PDF。请切换到“页面图片”模式并使用支持看图的模型。]';
+          } else if (extracted.truncated) {
+            content += '\n\n[PDF 文字内容过长，已截断]';
+          }
+          docTexts += `\n\n[PDF附件（提取文字）：${a.name}，共 ${extracted.pageCount} 页]\n` + content;
+          const idx = displayAttachments.findIndex(d => d.name === a.name);
+          if (idx >= 0) displayAttachments[idx].content = content;
+        }
+      } else if (isKimi) {
         if (isVisionFile(a.file)) {
           // Video: must upload to Kimi first, reference via ms://<fileId>
           if (isVideoFile(a.file)) {
@@ -269,12 +316,17 @@ async function sendAiMessage(externalText, externalAttachments) {
           } else {
             // Image inline mode: read as base64 data URL for multimodal analysis
             if (isDebugMode()) console.log('[DEBUG] Vision path: reading as base64', a.name);
-            const dataUrl = await readFileAsDataURL(a.file);
-            visionFiles.push({
+            if (a._processPromise) {
+              try { await a._processPromise; } catch (e) { /* 失败时走原文件兜底 */ }
+            }
+            const dataUrls = Array.isArray(a.dataUrls) && a.dataUrls.length
+              ? a.dataUrls
+              : [a.dataUrl || await readFileAsDataURL(a.file)];
+            dataUrls.forEach((dataUrl, index) => visionFiles.push({
               dataUrl: dataUrl,
-              name: a.name,
+              name: dataUrls.length > 1 ? `${a.name}（第 ${index + 1}/${dataUrls.length} 段）` : a.name,
               type: 'image_url'
-            });
+            }));
           }
         } else {
           if (isDebugMode()) console.log('[DEBUG] Doc path: uploading', a.name);
@@ -288,20 +340,21 @@ async function sendAiMessage(externalText, externalAttachments) {
         }
       } else if (isVision) {
         // 视觉模型（deepseek-flash / DeepSeek V4.1 Flash 等）：图片 → 文件引用或 base64 内联；其他文件 → 文本读取
-        // 优先复用历史里已上传的 file_id（同一张图在后续轮次不再重复传输），否则用本次附件预处理的结果
+        // 仅按 SHA-256 内容指纹复用历史 file_id；同名文件不代表同一张图。
         if (isImageFile(a.file)) {
           if (isDebugMode()) console.log('[DEBUG] Vision path: inline image', a.name, a.imageInfo || '(未预处理)');
           // 添加附件时就已开始处理（上传或本地转码）：这里直接等它，避免重复解码，也避免"点发送时还没处理完"
           if (a._processPromise) {
             try { await a._processPromise; } catch (e) { /* 失败已在预处理里记录，走下面兜底 */ }
           }
-          const reused = findReusableUploadedImage(a.name, apiCfg);
+          const reused = findReusableUploadedImage(a, apiCfg);
           if (reused) {
             if (isDebugMode()) console.log('[DEBUG] Vision path: reuse uploaded file', a.name, reused.fileId);
             visionFiles.push({
               type: 'file',
               fileId: reused.fileId,
               uploadKeyId: reused.uploadKeyId,
+              imageFingerprint: reused.imageFingerprint,
               name: a.name,
               dataUrl: reused.thumb || '' // 缩略图沿用原消息里的，仅用于界面回显
             });
@@ -311,31 +364,39 @@ async function sendAiMessage(externalText, externalAttachments) {
               type: 'file',
               fileId: a.uploadFileId,
               uploadKeyId: a.uploadKeyId || apiCfg.keyId || '',
+              imageFingerprint: a.imageFingerprint || '',
               name: a.name,
               dataUrl: a.dataUrl || ''
             });
           } else {
-            let dataUrl = a.dataUrl;
-            if (!dataUrl) {
+            let dataUrls = Array.isArray(a.dataUrls) && a.dataUrls.length ? a.dataUrls : null;
+            if (!dataUrls) {
               // 附件是在切到视觉模型前添加的（那时没预处理）→ 现场补一次，仍失败则退回原文件
               try {
-                const processed = await downscaleImageForApi(a.file);
-                dataUrl = processed.dataUrl;
-                a.file = processed.file;
-                a.imageInfo = processed.info;
+                const split = await splitTallImageForApi(a.file);
+                if (split) {
+                  dataUrls = split.dataUrls;
+                  a.imageInfo = split.info;
+                } else {
+                  const processed = await downscaleImageForApi(a.file);
+                  dataUrls = [processed.dataUrl];
+                  a.file = processed.file;
+                  a.imageInfo = processed.info;
+                }
               } catch (e) {
-                dataUrl = await readFileAsDataURL(a.file);
+                dataUrls = [await readFileAsDataURL(a.file)];
               }
             }
             if (a._preprocessError) {
               docTexts += `\n\n[附件：${a.name} — 图片本地转换失败（${a._preprocessError}），已按原文件内联发送]`;
             }
-            a.dataUrl = dataUrl; // 缓存，避免同一附件在多轮工具调用中重复编码
-            visionFiles.push({
+            a.dataUrls = dataUrls;
+            a.dataUrl = dataUrls[0] || ''; // 首段用于缩略图；完整分段用于模型输入
+            dataUrls.forEach((dataUrl, index) => visionFiles.push({
               dataUrl: dataUrl,
-              name: a.name,
+              name: dataUrls.length > 1 ? `${a.name}（第 ${index + 1}/${dataUrls.length} 段）` : a.name,
               type: 'image_url'
-            });
+            }));
           }
         } else if (isVideoFile(a.file)) {
           // 视觉模型不支持视频内联，提示跳过
@@ -388,6 +449,10 @@ async function sendAiMessage(externalText, externalAttachments) {
   const now = new Date();
   const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
   const userMsg = { role: 'user', content: userContent, time: timeStr };
+  if (contextInserts.length > 0) {
+    userMsg.contextInserts = contextInserts;
+    userMsg.displayContent = displayContent;
+  }
   if (displayAttachments.length > 0) {
     userMsg.attachments = displayAttachments;
   }
