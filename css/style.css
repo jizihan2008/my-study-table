@@ -2528,6 +2528,14 @@ body {
   font-size: 13px; font-weight: 600; color: #8b5cf6;
   background: rgba(139,92,246,0.1); padding: 4px 12px; border-radius: 10px;
 }
+.today-review-filter-row { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.today-review-filter-row label { flex-shrink: 0; font-size: 12px; color: var(--text-secondary); }
+.today-review-filter-row select {
+  min-width: 0; max-width: 240px; padding: 6px 9px; border: 1px solid var(--border);
+  border-radius: 7px; background: var(--input-bg); color: var(--text); font: 12px/1.4 inherit;
+  cursor: pointer;
+}
+.today-review-filter-row select:focus { outline: 2px solid #8b5cf6; outline-offset: 1px; }
 .today-review-list { display: flex; flex-direction: column; gap: 8px; }
 .review-item {
   display: flex; flex-direction: column; gap: 6px;
@@ -11455,3 +11463,42 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
   .prompt-editor-actions { gap: 4px; }
   .prompt-editor-actions .prompt-icon-btn.danger { display: none; }
 }
+/* AI 技能库 */
+.skills-studio{display:grid;grid-template-columns:minmax(220px,290px) minmax(0,1fr);gap:16px;min-height:560px;height:calc(100% - 4px);color:var(--text)}
+.skills-list-panel,.skills-editor-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);min-width:0;overflow:hidden}
+.skills-list-panel{display:flex;flex-direction:column}
+.skills-panel-head,.skills-editor-head{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:20px;border-bottom:1px solid var(--border)}
+.skills-panel-head h2,.skills-editor-head h2{font-size:18px;margin:0 0 4px}
+.skills-panel-head p,.skills-editor-head p{font-size:12px;color:var(--text-secondary);margin:0}
+.skills-primary-btn,.skills-secondary-btn,.skills-delete-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;border-radius:8px;padding:8px 12px;cursor:pointer;font:inherit;font-size:13px;white-space:nowrap}
+.skills-primary-btn{background:var(--primary);border:1px solid var(--primary);color:#fff}
+.skills-secondary-btn{background:var(--input-bg,var(--bg));border:1px solid var(--border);color:var(--text)}
+.skills-delete-btn{background:transparent;border:1px solid var(--border);color:var(--danger,#e74c3c)}
+.skills-primary-btn svg,.skills-secondary-btn svg,.skills-delete-btn svg{width:15px;height:15px}
+.skills-list{overflow:auto;flex:1;padding:8px}
+.skills-list-item{display:flex;flex-direction:column;gap:5px;width:100%;text-align:left;border:1px solid transparent;background:transparent;color:var(--text);border-radius:9px;padding:12px;cursor:pointer;margin-bottom:4px}
+.skills-list-item:hover,.skills-list-item.active{background:var(--hover-bg,var(--input-bg));border-color:var(--border)}
+.skills-list-item strong{font-size:14px}
+.skills-list-item span{color:var(--text-secondary);font-size:12px;line-height:1.45;overflow:hidden;white-space:nowrap;text-overflow:ellipsis}
+.skills-empty{padding:25px 15px;color:var(--text-secondary);font-size:13px;line-height:1.7}
+.skills-editor-panel{overflow:auto;padding-bottom:24px}
+.skills-editor-panel>.skills-field-label,.skills-editor-panel>.skills-input,.skills-editor-panel>.skills-content,.skills-save-row,.skills-generate-box{margin-left:20px;margin-right:20px}
+.skills-field-label{display:block;font-size:13px;font-weight:600;margin-top:18px;margin-bottom:7px}
+.skills-input,.skills-content,.skills-generate-box textarea{display:block;width:calc(100% - 40px);box-sizing:border-box;border:1px solid var(--border);background:var(--input-bg,var(--bg));color:var(--text);border-radius:8px;padding:10px 12px;font:inherit;font-size:13px}
+.skills-content{min-height:185px;resize:vertical;line-height:1.7}
+.skills-save-row{display:flex;align-items:center;gap:12px;margin-top:13px;min-height:36px}
+.skills-save-row span{font-size:12px;color:var(--text-secondary)}
+.skills-generate-box{border-top:1px solid var(--border);margin-top:24px;padding-top:19px}
+.skills-generate-box h3{display:flex;align-items:center;gap:7px;margin:0 0 5px;font-size:15px}
+.skills-generate-box h3 svg{width:17px;height:17px}
+.skills-generate-box p{font-size:12px;color:var(--text-secondary);line-height:1.6;margin:0 0 12px}
+.skills-generate-box textarea{width:100%;min-height:90px;resize:vertical;line-height:1.6;margin-bottom:10px}
+.ai-skill-picker .todo-picker-list{max-height:50vh;overflow:auto}
+.skills-picker-item{display:flex;align-items:flex-start;gap:10px;width:100%;text-align:left;background:transparent;border:0;border-bottom:1px solid var(--border);padding:12px 14px;color:var(--text);cursor:pointer}
+.skills-picker-item:hover,.skills-picker-item.selected{background:var(--hover-bg,var(--input-bg))}
+.skills-picker-item .picker-check{flex:none;margin-top:3px}
+.skills-picker-item strong,.skills-picker-item small{display:block}
+.skills-picker-item strong{font-size:13px;margin-bottom:4px}
+.skills-picker-item small{font-size:12px;line-height:1.45;color:var(--text-secondary)}
+.skills-picker-foot{display:flex;align-items:center;justify-content:space-between;padding:12px 14px;border-top:1px solid var(--border)}
+@media(max-width:700px){.skills-studio{display:flex;flex-direction:column;height:auto;min-height:0}.skills-list-panel{max-height:250px}.skills-editor-panel{min-height:520px}}

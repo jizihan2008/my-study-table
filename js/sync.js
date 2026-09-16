@@ -54,6 +54,7 @@
     // 注：study_ai_convs / study_bk_explain_logs_v1 / study_bk_qa_logs_v1
     // 已剥离到独立通道 sync-logs.js（gzip 压缩 + 分片 + 配额），不再走普通同步
     'study_ai_memory',         // AI 记忆画像
+    'study_ai_skills_v1',      // 用户创建的 AI 技能
     'study_bk_quiz_state_v1',  // 教材测验状态
     'study_translation_history_v1', // 划词翻译历史与生词本
     'study_todo_completed_log' // 待办完成日志（历史完成记录）
@@ -93,12 +94,13 @@
     'study_links_v3': '快捷链接',
     'study_quick_access': '快捷访问',
     'study_ai_memory': 'AI 记忆画像',
+    'study_ai_skills_v1': 'AI 技能',
     'study_bk_quiz_state_v1': '教材测验状态',
     'study_translation_history_v1': '划词翻译与生词本',
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260916-r15';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260916-r16';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const PENDING_CONFLICTS_KEY = 'study_sync_pending_conflicts_v1';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）

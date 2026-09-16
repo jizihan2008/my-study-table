@@ -96,6 +96,26 @@ const AI_TOOLS = {
     description: '获取昨天或今天有修改的笔记列表，用于回顾学习进展。可以看到哪些笔记被编辑过',
     params: { period: '时间范围：today（今天）或 yesterday（昨天），默认today（string，可选）' }
   },
+  create_skill: {
+    description: '在技能库创建一条可复用的 AI 行为或处理准则。先把用户要求整理成可直接插入提示词的文字，再保存。用户只要求草拟时不要调用',
+    params: { name: '技能名称（string，必填）', content: '完整技能准则文字（string，必填）' }
+  },
+  list_skills: {
+    description: '列出技能库中的技能名称、ID 和准则摘要。查看完整文字请使用 get_skill',
+    params: { search: '按名称或准则搜索（string，可选）', page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
+  },
+  get_skill: {
+    description: '查看指定技能的完整准则文字',
+    params: { skillId: '技能 ID（string，必填，来自 list_skills）' }
+  },
+  update_skill: {
+    description: '编辑已有技能的名称或准则文字。先用 list_skills/get_skill 确认目标；content 为修改后的完整准则，不是补丁',
+    params: { skillId: '技能 ID（string，必填）', name: '新名称（string，可选）', content: '修改后的完整准则文字（string，可选）' }
+  },
+  delete_skill: {
+    description: '删除指定技能。仅当用户本轮明确要求删除时调用；已发送对话中的文字快照不受影响',
+    params: { skillId: '技能 ID（string，必填）' }
+  },
   add_link: {
     description: '添加一个快捷访问链接',
     params: { name: '名称（string）', url: 'URL地址（string）', category: '分类名（string，可选，默认"默认分类"）', type: '类型：link或app（string，可选，默认link）' }
@@ -210,6 +230,7 @@ function selectAiToolsForPrompt(conv, webEnabled, kimiNative) {
   const groups = {
     todo: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','list_todos','get_todo_detail','get_today_status','get_focus_tasks','set_focus_task','get_stats','get_todo_stats','batch_update_todos','get_review_status','get_habits_status'],
     note: ['add_note','update_note','move_note','delete_note','list_notes','search_notes','get_note_detail','get_note_changes'],
+    skill: ['create_skill','list_skills','get_skill','update_skill','delete_skill'],
     link: ['add_link','delete_link','list_links'],
     automation: ['schedule_automation','list_automations','delete_automation'],
     memory: ['list_memories','get_memory_detail'],
@@ -218,6 +239,7 @@ function selectAiToolsForPrompt(conv, webEnabled, kimiNative) {
   };
   if (!text || /待办|任务|计划|今日|聚焦|统计|复习|习惯|todo/.test(text)) add(groups.todo);
   if (/笔记|note|记录|知识/.test(text)) add(groups.note);
+  if (/技能|skill|行为准则|处理准则/.test(String(latest?.displayContent ?? text))) add(groups.skill);
   if (/链接|网址|网站|快捷访问|link|url/.test(text)) add(groups.link);
   if (/提醒|定时|自动化|每天|每日|闹钟/.test(text)) add(groups.automation);
   if (/记忆|偏好|了解我|memory/.test(text)) add(groups.memory);
@@ -247,20 +269,21 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '═══ 系统模块概览 ═══\n';
   prompt += '1. 📋 待办管理：支持多层级任务、截止日期、进度状态、预计时长、正文备注、标签、搜索筛选\n';
   const maxFocusCount = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;
-  prompt += '2. 🎯 今日聚焦：每天最多设置' + maxFocusCount + '个聚焦任务，支持打卡（连续天数统计）\n';
+  prompt += '2. 🎯 每日聚焦：可分别设置昨日、今日、明日的聚焦任务，每天最多' + maxFocusCount + '个；各日期的完成状态独立保存\n';
   prompt += '3. 📝 笔记管理：多篇笔记，支持文件夹多级分类，每篇有标题和正文，自动保存。add_note 和 move_note 支持 path 参数自动创建文件夹层级\n';
-  prompt += '4. 🔗 快捷访问：常用网站/应用链接，支持分类\n';
-  prompt += '5. 🤖 AI 助手：多对话标签页，支持多种模型，可上传附件，可通过工具调用操作系统数据\n';
+  prompt += '4. ✨ 技能库：保存可复用的 AI 行为准则。用户要求管理技能时，可用 list_skills/get_skill 查看，用 create_skill/update_skill/delete_skill 修改。技能 ID 为字符串。\n';
+  prompt += '5. 🔗 快捷访问：常用网站/应用链接，支持分类\n';
+  prompt += '6. 🤖 AI 助手：多对话标签页，支持多种模型，可上传附件，可通过工具调用操作系统数据\n';
   if (_wsEnabled) {
     if (_isKimiNative) {
-      prompt += '6. 🌐 联网搜索（Kimi 原生）：已开启 $web_search 内置搜索，你的回复会自动调用 Kimi 原生搜索引擎获取最新信息\n';
-      prompt += '7. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
+      prompt += '7. 🌐 联网搜索（Kimi 原生）：已开启 $web_search 内置搜索，你的回复会自动调用 Kimi 原生搜索引擎获取最新信息\n';
+      prompt += '8. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
     } else {
-      prompt += '6. 🌐 网络搜索（已开启）：你可以使用 web_search 工具搜索互联网获取最新信息。用户已开启了「网络搜索」开关，请在适当情况下主动使用 web_search 获取实时信息\n';
-      prompt += '7. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
+      prompt += '7. 🌐 网络搜索（已开启）：你可以使用 web_search 工具搜索互联网获取最新信息。用户已开启了「网络搜索」开关，请在适当情况下主动使用 web_search 获取实时信息\n';
+      prompt += '8. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
     }
   } else {
-    prompt += '6. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
+    prompt += '7. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
   }
 
   prompt += '═══ 工具调用说明 ═══\n';
@@ -287,7 +310,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += _nativeLocalTools
     ? '1. 一轮可以调用多个原生工具；写操作按依赖顺序排列。\n'
     : '1. 一个回复可以包含多个 <tool_call>，按操作顺序排列，文本说明放在各工具调用的前后\n';
-  prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_links / get_today_status / get_stats / get_todo_stats / list_chats / search_chat_messages）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
+  prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_skills / get_skill / list_links / get_today_status / get_stats / get_todo_stats / list_chats / search_chat_messages）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
   prompt += '   注意：当前数据快照（═══ 当前数据快照 ═══）与工具返回的数据来自同一数据源，查询结果应完全一致。如果快照已包含足够信息，可不必重复调用 list_todos / list_notes / list_links 等查询工具，直接基于快照回答即可。需要详细信息时才调用 get_todo_detail / get_note_detail。\n';
   prompt += '3. 注意：待办支持多层级（父子任务）。一个顶级任务下可能有子任务、孙任务、甚至更多层。list_todos 会以编号方式展示所有层级（如 [1] → [1.1] → [1.1.1]），请根据编号正确理解层级关系。优先使用 list_todos 获取完整层级，需要详细信息时才调用 get_todo_detail。\n';
   prompt += '4. 定时自动化触发时，你会收到一条以「[🤖 系统自动触发]」开头的消息，其中包含任务内容，请直接执行任务并在回复中向用户说明完成了什么。这条消息不是用户手动发送的，而是系统自动注入的\n';
@@ -389,18 +412,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
     });
   }
 
-  // 今日聚焦
-  const focusData = getTodayFocusItems();
-  const focusItems = focusData.items || [];
-  if (focusItems.length > 0) {
-    const focusDone = focusItems.filter(i => i.done).length;
-    prompt += `🎯 今日聚焦：${focusDone}/${focusItems.length}（已完成数/已设置数）\n`;
-    focusItems.forEach(item => {
-      prompt += `   ${item.done ? '✅' : '⬜'} [ID:${item.todoId}] ${item.text}\n`;
-    });
-  } else {
-    prompt += '🎯 今日聚焦：未设置\n';
-  }
+  prompt += buildAiFocusSnapshot(conv);
 
   // 打卡
   const checkinData = loadCheckinData();
@@ -533,6 +545,26 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   return prompt;
 }
 
+function buildAiFocusSnapshot(conv) {
+  // 日报由 settings.js 单独生成提示词；在日报对话里保留原有的今日聚焦快照。
+  const days = conv?._dailyReport ? [[0, '今日']] : [[-1, '昨日'], [0, '今日'], [1, '明日']];
+  return days.map(([offset, label]) => {
+    const date = getFocusDateByOffset(offset);
+    const items = getFocusItemsForDate(date).items || [];
+    if (!items.length) return `🎯 ${label}聚焦（${date}）：未设置\n`;
+    let text = `🎯 ${label}聚焦（${date}）：${items.filter(item => item.done).length}/${items.length}（已完成数/已设置数）\n`;
+    for (const item of items) {
+      const todo = todos.find(t => t.id === item.todoId);
+      const name = todo && typeof getFocusTodoDisplayPath === 'function'
+        ? getFocusTodoDisplayPath(todo).full : (item.text || '未命名待办');
+      text += `   ${item.done ? '✅' : '⬜'} [ID:${item.todoId}] ${name}`;
+      if (item.note) text += `｜备注：${item.note}`;
+      text += '\n';
+    }
+    return text;
+  }).join('');
+}
+
 // ═══════════ Helper: resolve a path array to a parent ID ═══════════
 // Traverses/creates intermediate nodes along the path, returns the deepest node's ID.
 function resolveTodoPath(pathArr) {
@@ -628,6 +660,7 @@ async function executeCallAiAndPush(params, conv) {
 const AI_TOOL_REQUIRED_PARAMS = {
   add_todo:['text'], batch_add_todos:['todos'], update_todo:['id'], delete_todo:['id'], toggle_todo:['id'], set_todo_completed:['id','completed'], move_todo:['id'], get_todo_detail:['id'],
   batch_update_todos:['ids','action'], add_note:['title'], update_note:['id'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'],
+  create_skill:['name','content'], get_skill:['skillId'], update_skill:['skillId'], delete_skill:['skillId'],
   add_link:['name','url'], delete_link:['id'], schedule_automation:['at','prompt'], delete_automation:['id'], get_memory_detail:['id'], web_search:['query'], read_webpage:['url'],
   quest_create_line:['name'], quest_update_line:['id'], quest_create:['lineId','title'], quest_update:['id'], quest_link_todo:['questId','todoId'],
   quest_link_note:['questId','noteId'], quest_link_timer:['questId','targetId','minutes'], quest_add_manual_cond:['questId','label'], quest_complete:['id'],
@@ -636,11 +669,11 @@ const AI_TOOL_REQUIRED_PARAMS = {
 
 const AI_TOOL_READ_ONLY = new Set([
   'list_todos','get_todo_detail','get_today_status','get_focus_tasks','get_stats','get_todo_stats',
-  'list_notes','search_notes','get_note_detail','get_note_changes','list_links','list_automations',
+  'list_notes','search_notes','get_note_detail','get_note_changes','list_skills','get_skill','list_links','list_automations',
   'list_memories','get_memory_detail','web_search','read_webpage','quest_get','quest_review',
   'get_habits_status','get_review_status','list_chats','search_chat_messages'
 ]);
-const AI_TOOL_DESTRUCTIVE = new Set(['delete_todo','delete_note','delete_link','delete_automation']);
+const AI_TOOL_DESTRUCTIVE = new Set(['delete_todo','delete_note','delete_skill','delete_link','delete_automation']);
 const AI_TOOL_ENUMS = {
   repeat: ['', 'once', 'daily', 'weekly', 'monthly'],
   targetType: ['todo', 'goal'], period: ['today', 'yesterday']
@@ -729,6 +762,13 @@ function validateAiToolCall(action, params) {
     const value = name === 'text' ? (params.text ?? params.content) : params[name];
     if (value === undefined || value === null || value === '') return { ok: false, error: `缺少必填参数 ${name}` };
   }
+  if (['create_skill','update_skill'].includes(action)) {
+    if (action === 'update_skill' && params.name === undefined && params.content === undefined) return { ok: false, error: '至少提供 name 或 content' };
+    for (const key of ['name','content']) {
+      if (params[key] !== undefined && (typeof params[key] !== 'string' || !params[key].trim())) return { ok: false, error: `${key} 必须是非空文字` };
+    }
+  }
+  if (['get_skill','update_skill','delete_skill'].includes(action) && (typeof params.skillId !== 'string' || !params.skillId.trim())) return { ok: false, error: 'skillId 必须是非空字符串' };
   for (const key of ['id','parentId','folderId','todoId','noteId','questId','lineId','targetId','minutes','estMinutes','page','pageSize','max_results','maxChars','maxResults']) {
     if (params[key] !== undefined && params[key] !== null && (!Number.isFinite(Number(params[key])) || Number(params[key]) < 0)) return { ok: false, error: `参数 ${key} 必须是有效数字` };
   }
@@ -846,7 +886,7 @@ function authorizeAiToolCall(action, params, conv) {
   const text = String(latestUser?.content || '');
   const deleteWord = /(?:删除|删掉|移除|清空|丢弃|delete|remove)/i;
   const negated = /(?:不要|别|不许|不许|禁止|do\s+not|don't).{0,12}(?:删除|删掉|移除|清空|丢弃|delete|remove)/i.test(text);
-  const questionOnly = /(?:为什么|怎么会|是否|能否|可以吗).{0,12}(?:删除|删掉|移除|清空|丢弃)/i.test(text);
+  const questionOnly = /(?:为什么|怎么会|是否|能否|能不能|可不可以|可以吗).{0,12}(?:删除|删掉|移除|清空|丢弃)/i.test(text);
   if (deleteWord.test(text) && !negated && !questionOnly) return { ok: true };
   return { ok: false, error: '本轮用户没有明确表达删除意图，已拦截高风险操作' };
 }
@@ -871,7 +911,7 @@ function normalizeAiToolResult(action, value, durationMs = 0) {
 
 const AI_TOOL_TRANSACTION_KEYS = [
   'study_todos_v2','study_todo_completed_log','study_notes_v2','study_links_v3',
-  'study_automations','study_taskline_v1','study_todos_trash','study_notes_trash','study_links_trash','study_today_focus'
+  'study_automations','study_taskline_v1','study_todos_trash','study_notes_trash','study_links_trash','study_today_focus','study_ai_skills_v1'
 ];
 
 function beginAiToolTransaction(action) {
@@ -903,6 +943,7 @@ function rollbackAiToolTransaction(snapshot) {
     } else if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
   }
+  if (typeof refreshAiSkillViews === 'function') refreshAiSkillViews();
 }
 
 async function executeToolCallStructured(action, params, context = {}) {
@@ -1704,6 +1745,48 @@ async function executeToolCall(action, params, context = {}) {
       if (activeNoteId === id) activeNoteId = notes[0] ? notes[0].id : null;
       if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记删除结果保存失败';
       return `✅ 已删除笔记：${note.title}`;
+    }
+    case 'create_skill': {
+      const skills = loadAiSkills();
+      const now = new Date().toISOString();
+      const skill = { id: aiSkillId(), name: params.name.trim(), content: params.content.trim(), createdAt: now, updatedAt: now };
+      skills.push(skill);
+      saveAiSkills(skills);
+      refreshAiSkillViews();
+      return `✅ 已创建技能：${skill.name} [ID:${skill.id}]`;
+    }
+    case 'list_skills': {
+      const search = String(params.search || '').trim().toLowerCase();
+      const skills = loadAiSkills().filter(skill => !search || (skill.name + '\n' + skill.content).toLowerCase().includes(search));
+      const page = paginateAiToolItems(skills, params);
+      if (!skills.length) return search ? `✨ 没有匹配“${params.search}”的技能。` : '✨ 技能库中还没有技能。';
+      return `✨ 技能库：共 ${page.total} 个，第 ${page.page}/${page.pageCount} 页\n` + page.items.map(skill =>
+        `- [ID:${skill.id}] ${skill.name}：${skill.content.replace(/\s+/g, ' ').slice(0, 100)}${skill.content.length > 100 ? '…' : ''}`
+      ).join('\n');
+    }
+    case 'get_skill': {
+      const skill = getAiSkill(params.skillId);
+      if (!skill) return `❌ 未找到技能 ID ${params.skillId}`;
+      return `✨ 技能：${skill.name} [ID:${skill.id}]\n准则：\n${skill.content}`;
+    }
+    case 'update_skill': {
+      const skills = loadAiSkills();
+      const skill = skills.find(item => item.id === params.skillId);
+      if (!skill) return `❌ 未找到技能 ID ${params.skillId}`;
+      if (params.name !== undefined) skill.name = params.name.trim();
+      if (params.content !== undefined) skill.content = params.content.trim();
+      skill.updatedAt = new Date().toISOString();
+      saveAiSkills(skills);
+      refreshAiSkillViews();
+      return `✅ 已更新技能：${skill.name} [ID:${skill.id}]`;
+    }
+    case 'delete_skill': {
+      const skills = loadAiSkills();
+      const skill = skills.find(item => item.id === params.skillId);
+      if (!skill) return `❌ 未找到技能 ID ${params.skillId}`;
+      saveAiSkills(skills.filter(item => item.id !== skill.id));
+      refreshAiSkillViews();
+      return `✅ 已删除技能：${skill.name}`;
     }
     case 'list_notes': {
       if (notes.length === 0) return '📝 当前没有笔记。';

@@ -51,3 +51,36 @@ test('yesterday completion stays independent from the current todo', () => {
   context.saveFocusData({ _date: context.getFocusDateByOffset(1), items: [{ todoId: 2, text: '乙', done: false }] });
   assert.equal(context.getFocusItemsForDate(yesterday).items[0].done, true);
 });
+
+test('ordinary AI prompt includes yesterday, today and tomorrow focus while report chat keeps today only', () => {
+  const { context, todos } = focusContext();
+  const yesterday = context.getFocusDateByOffset(-1);
+  const today = context.getTodayStr();
+  const tomorrow = context.getFocusDateByOffset(1);
+  context.saveFocusData({ _date: yesterday, items: [{ todoId: 1, text: '甲', done: true }] });
+  context.saveFocusData({ _date: today, items: [{ todoId: 2, text: '乙', done: false }] });
+  context.saveFocusData({ _date: tomorrow, items: [{ todoId: 1, text: '甲', done: false, note: '提前准备' }] });
+  Object.assign(context, {
+    notes: [], links: [], automations: [], window: {},
+    loadTodoCompletedLog: () => [], getAllDescendantIds: id => [id], getChildren: () => [], getTodoTimerStr: () => '',
+    loadCheckinData: () => ({ streak: 0, dates: [] }), getSettings: () => ({ developerMode: false }),
+    getEffectiveApiConfig: () => ({ name: 'test', model: 'test' }), getActiveConv: () => null
+  });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'ai-tools.js'), 'utf8'), context);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'ai-api.js'), 'utf8'), context);
+  const config = { name: 'test', model: 'test', conversationSettings: { id: 1, _webSearchMode: null } };
+  const ordinary = { id: 1, messages: [{ role: 'user', content: '查看我的聚焦' }] };
+  const prompt = context.buildConversationSystemPrompt(ordinary, config);
+  assert.match(prompt, new RegExp(`昨日聚焦（${yesterday}）`));
+  assert.match(prompt, new RegExp(`今日聚焦（${today}）`));
+  assert.match(prompt, new RegExp(`明日聚焦（${tomorrow}）`));
+  assert.match(prompt, /✅ \[ID:1\] 甲/);
+  assert.match(prompt, /备注：提前准备/);
+  assert.equal(prompt.includes('昨日聚焦：未设置'), false);
+  assert.equal(todos[0].done, false);
+
+  const report = context.buildConversationSystemPrompt({ ...ordinary, _dailyReport: true }, config);
+  assert.match(report, /今日聚焦/);
+  assert.equal(report.includes('昨日聚焦'), false);
+  assert.equal(report.includes('明日聚焦'), false);
+});

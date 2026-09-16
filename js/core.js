@@ -380,6 +380,7 @@ function switchTab(tab) {
   if (tab === 'translation') { if (typeof window.GlobalTranslation?.renderPage === 'function') window.GlobalTranslation.renderPage(); }
   if (tab === 'ai') renderAiChat();
   if (tab === 'prompts' && typeof renderPromptStudio === 'function') renderPromptStudio();
+  if (tab === 'skills' && typeof renderSkillsStudio === 'function') renderSkillsStudio();
   if (tab === 'today') renderToday();
   if (tab === 'calendar') renderCalendar();
   if (tab === 'timer') renderTimer();
@@ -567,6 +568,7 @@ function updateWorkspaceHeading(tab) {
     habits: ['习惯追踪', '用微小的坚持，积累看得见的改变。'],
     ai: ['AI 助手', '一起提问、探索，让学习多一点启发。'],
     prompts: ['提示词工作台', '把想法拆成结构，清楚地告诉 AI 如何协助你。'],
+    skills: ['技能', '保存常用的处理准则，在对话中按需使用。'],
     inbox: ['收件箱', '把消息归于一处，让注意力回到学习。'],
     friends: ['学习伙伴', '分享进步，也分享沿途的风景。']
   };
@@ -595,6 +597,7 @@ const ALL_NAV_ITEMS = [
   { id: 'habits',    icon: 'target',        label: '习惯' },
   { id: 'ai',        icon: 'bot',           label: 'AI 助手' },
   { id: 'prompts',   icon: 'wand-sparkles', label: '提示词' },
+  { id: 'skills',    icon: 'sparkles',      label: '技能' },
   { id: 'codegen',   icon: 'code-2',        label: 'AI 编程' },
   { id: 'extensions',icon: 'puzzle',        label: '扩展' },
   { id: 'store',     icon: 'store',         label: '插件市场' },

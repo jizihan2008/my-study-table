@@ -29,7 +29,7 @@ function harness() {
     setTimeout, clearTimeout
   };
   vm.createContext(ctx);
-  for (const file of ['ai-tree', 'ai-attach', 'ai-tools', 'ai-api', 'ai-send']) {
+  for (const file of ['ai-tree', 'ai-attach', 'skills', 'ai-tools', 'ai-api', 'ai-send']) {
     // aiAttachments 在应用里由 js/settings.js 以 let 声明（全局词法绑定），测试里显式补上，
     // 否则对 ctx.aiAttachments 的赋值只会写到宿主对象上，源码里的 push/读改写都看不到
     vm.runInContext(file === 'ai-attach' ? 'let aiAttachments = [];\n' + source(file) : source(file), ctx);
@@ -47,6 +47,35 @@ function conversation(ctx) {
   return conv;
 }
 const result = (tools = [], text = 'final answer') => ({ toolCalls: tools, cleanText: text, rawReply: text, finishReason: 'stop' });
+
+test('AI skill tools support create, list, read, edit and explicit deletion', async () => {
+  const ctx = harness();
+  const selected = ctx.selectAiToolsForPrompt({ messages: [{ role: 'user', content: '帮我查看技能' }] }, false, false);
+  for (const name of ['create_skill','list_skills','get_skill','update_skill','delete_skill']) assert.equal(selected.has(name), true);
+  assert.equal(ctx.validateAiToolCall('create_skill', { name: '核对事实', content: '先核对来源。' }).ok, true);
+  assert.equal(ctx.validateAiToolCall('create_skill', { name: '核对事实', content: ' ' }).ok, false);
+  assert.equal(ctx.validateAiToolCall('update_skill', { skillId: 'id' }).ok, false);
+  assert.equal(ctx.validateAiToolCall('get_skill', { skillId: 123 }).ok, false);
+  assert.equal(ctx.getAiToolJsonSchema('get_skill').properties.skillId.type, 'string');
+
+  const created = await ctx.executeToolCallStructured('create_skill', { name: '核对事实', content: '先核对来源。' });
+  assert.equal(created.ok, true);
+  const skill = ctx.loadAiSkills()[0];
+  assert.equal(typeof skill.id, 'string');
+  assert.match((await ctx.executeToolCallStructured('list_skills', {})).text, /核对事实/);
+  assert.match((await ctx.executeToolCallStructured('get_skill', { skillId: skill.id })).text, /先核对来源/);
+  assert.equal((await ctx.executeToolCallStructured('update_skill', { skillId: skill.id, content: '核对两个来源。' })).ok, true);
+  assert.equal(ctx.getAiSkill(skill.id).content, '核对两个来源。');
+
+  assert.equal(ctx.authorizeAiToolCall('delete_skill', { skillId: skill.id }, { messages: [{ role: 'user', content: '帮我整理这个技能' }] }).ok, false);
+  assert.equal(ctx.authorizeAiToolCall('delete_skill', { skillId: skill.id }, { messages: [{ role: 'user', content: '能不能删除技能？' }] }).ok, false);
+  assert.equal(ctx.authorizeAiToolCall('delete_skill', { skillId: skill.id }, { messages: [{ role: 'user', content: '删除这个技能' }] }).ok, true);
+  const snapshot = ctx.beginAiToolTransaction('delete_skill');
+  assert.equal((await ctx.executeToolCallStructured('delete_skill', { skillId: skill.id })).ok, true);
+  assert.equal(ctx.loadAiSkills().length, 0);
+  ctx.rollbackAiToolTransaction(snapshot);
+  assert.equal(ctx.loadAiSkills().length, 1);
+});
 
 test('tree normalization repairs stale message cache from the active path', () => {
   const ctx = harness();

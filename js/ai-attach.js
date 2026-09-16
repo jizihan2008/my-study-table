@@ -9,7 +9,7 @@
 // ═══════════ AI Chat: Attachments ═══════════
 // Selected local items are injected into the next user message as readable
 // context, rather than uploaded as files.
-let aiContextInserts = []; // [{ type: 'note'|'todo', id }]
+let aiContextInserts = []; // [{ type: 'note'|'todo'|'skill', id }]
 let aiContextPickerType = null;
 let aiContextPickerQuery = '';
 let aiContextPickerExpandedIds = new Set();
@@ -44,6 +44,10 @@ function getAiContextInsertSnapshot() {
       const note = (typeof notes !== 'undefined' ? notes : []).find(n => n.id === item.id && n.type === 'note');
       return note ? { type: 'note', id: note.id, label: getAiContextNotePath(note), content: note.content || '' } : null;
     }
+    if (item.type === 'skill') {
+      const skill = typeof getAiSkill === 'function' ? getAiSkill(item.id) : null;
+      return skill ? { type: 'skill', id: skill.id, label: skill.name, content: skill.content } : null;
+    }
     const todo = typeof findTodo === 'function' ? findTodo(item.id) : null;
     return todo ? { type: 'todo', id: todo.id, label: getAiContextTodoPath(todo) } : null;
   }).filter(Boolean);
@@ -54,7 +58,9 @@ function buildAiContextInsertText(snapshot) {
   if (items.length === 0) return '';
   const blocks = items.map(item => item.type === 'note'
     ? `【插入笔记】${item.label}\n正文：\n${item.content || '（空笔记）'}`
-    : `【插入待办】${item.label}`);
+    : item.type === 'skill'
+      ? `【启用技能：${item.label}】\n${item.content}`
+      : `【插入待办】${item.label}`);
   return blocks.length ? `\n\n---\n${blocks.join('\n\n')}\n---` : '';
 }
 
@@ -72,6 +78,7 @@ function renderAiContextPreview() {
   const wrap = document.getElementById('aiContextPreview');
   if (!wrap) return;
   const valid = aiContextInserts.map((item, index) => ({ item, index })).filter(({ item }) => {
+    if (item.type === 'skill') return typeof getAiSkill === 'function' && !!getAiSkill(item.id);
     return item.type === 'note'
       ? (typeof notes !== 'undefined' && notes.some(n => n.id === item.id && n.type === 'note'))
       : (typeof findTodo === 'function' && !!findTodo(item.id));
@@ -81,9 +88,10 @@ function renderAiContextPreview() {
   wrap.style.display = 'flex';
   wrap.innerHTML = valid.map(({ item }, index) => {
     const isNote = item.type === 'note';
-    const source = isNote ? notes.find(n => n.id === item.id) : findTodo(item.id);
-    const label = isNote ? getAiContextNotePath(source) : getAiContextTodoPath(source);
-    return `<span class="ai-attach-preview" title="${escapeHtml(label)}">${isNote ? '📝 笔记正文：' : '📋 待办路径：'}<span class="preview-name">${escapeHtml(label)}</span><button class="preview-remove" onclick="removeAiContextInsert(${index})">✕</button></span>`;
+    const isSkill = item.type === 'skill';
+    const source = isNote ? notes.find(n => n.id === item.id) : isSkill ? getAiSkill(item.id) : findTodo(item.id);
+    const label = isNote ? getAiContextNotePath(source) : isSkill ? source.name : getAiContextTodoPath(source);
+    return `<span class="ai-attach-preview" title="${escapeAttr(label)}">${isNote ? '📝 笔记正文：' : isSkill ? '✨ 技能：' : '📋 待办路径：'}<span class="preview-name">${escapeHtml(label)}</span><button class="preview-remove" onclick="removeAiContextInsert(${index})">✕</button></span>`;
   }).join('');
 }
 

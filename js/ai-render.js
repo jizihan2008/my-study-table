@@ -215,6 +215,9 @@ function renderAiChat() {
       <button class="ai-attach-btn" id="aiInsertTodoBtn" ${noKey ? 'disabled' : ''} onclick="openAiContextPicker('todo')" title="插入待办路径">
         <i data-lucide="list-todo" class="lucide-icon" style="width:18px;height:18px;"></i>
       </button>
+      <button class="ai-attach-btn" id="aiInsertSkillBtn" ${noKey ? 'disabled' : ''} onclick="openAiSkillPicker()" title="插入技能（可多选）" aria-label="插入技能">
+        <i data-lucide="sparkles" class="lucide-icon" style="width:18px;height:18px;"></i>
+      </button>
       <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
       </button>
@@ -244,6 +247,8 @@ function renderAiChat() {
     const _todo = document.getElementById('aiInsertTodoBtn');
     if (_note) _note.disabled = true;
     if (_todo) _todo.disabled = true;
+    const _skill = document.getElementById('aiInsertSkillBtn');
+    if (_skill) _skill.disabled = true;
   }
   setTimeout(() => {
     const msgs = document.getElementById('aiMessages');
@@ -538,6 +543,9 @@ function renderAiMessages() {
         if (context.type === 'note') {
           return `<details class="note-fold ai-message-note-context"><summary>📝 ${label}</summary><div class="note-fold-body">${formatAiContent(context.content || '（空笔记）')}</div></details>`;
         }
+        if (context.type === 'skill') {
+          return `<details class="note-fold ai-message-note-context"><summary>✨ 技能：${label}</summary><div class="note-fold-body">${formatAiContent(context.content || '')}</div></details>`;
+        }
         return `<div class="ai-message-todo-context">📋 ${label}</div>`;
       }).join('') + '</div>';
     }
@@ -585,6 +593,11 @@ function renderAiMessages() {
         'search_notes': '🔍 笔记搜索结果',
         'get_note_detail': '📝 笔记详情',
         'get_note_changes': '📝 笔记变更',
+        'create_skill': '✨ 创建技能',
+        'list_skills': '✨ 技能列表',
+        'get_skill': '✨ 查看技能',
+        'update_skill': '✨ 更新技能',
+        'delete_skill': '✨ 删除技能',
         'list_links': '🔗 链接列表',
         'list_automations': '⏰ 自动化列表',
         'add_todo': '➕ 创建待办',

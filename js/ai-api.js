@@ -230,7 +230,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
       function: { name: '$web_search' }
     }];
   }
-  const localNativeTools = selectedNativeLocalTools(conv, apiCfg);
+  const localNativeTools = options.disableTools ? [] : selectedNativeLocalTools(conv, apiCfg);
   if (localNativeTools.length > 0) requestBody.tools = [...(requestBody.tools || []), ...localNativeTools];
 
   const requestTime = new Date().toISOString();
@@ -567,7 +567,11 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
 // 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
 // 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
 function buildConversationSystemPrompt(conv, apiCfg = getEffectiveApiConfig()) {
-  const basePrompt = buildToolsSystemPrompt(apiCfg.conversationSettings || conv, apiCfg);
+  // Keep the actual conversation's messages and report marker while applying
+  // request-specific settings such as the web-search toggle.
+  const promptConv = conv ? { ...conv, ...(apiCfg.conversationSettings || {}), _dailyReport: conv._dailyReport === true }
+    : apiCfg.conversationSettings;
+  const basePrompt = buildToolsSystemPrompt(promptConv, apiCfg);
   if (conv && conv.systemPromptMode === 'full') return String(conv.systemPrompt || '');
   return conv && conv.systemPrompt
     ? basePrompt + '\n\n【用户自定义角色】' + conv.systemPrompt

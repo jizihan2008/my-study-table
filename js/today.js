@@ -506,6 +506,23 @@ function deleteTodayFocus(idx) {
 
 // ═══════════ Today: Review Card ═══════════
 let todayReviewCollapsed = localStorage.getItem('study_today_review_collapsed') === 'true';
+let todayReviewTagFilter = localStorage.getItem('study_today_review_tag_filter') || 'all';
+
+function getFilteredTodayReviewNotes(dueNotes) {
+  if (todayReviewTagFilter === 'all') return dueNotes;
+  if (todayReviewTagFilter === 'untagged') return dueNotes.filter(note => !note.tags?.length);
+  if (todayReviewTagFilter.startsWith('tag:')) {
+    const tag = todayReviewTagFilter.slice(4);
+    return dueNotes.filter(note => note.tags?.includes(tag));
+  }
+  return dueNotes;
+}
+
+function setTodayReviewTagFilter(value) {
+  todayReviewTagFilter = value;
+  localStorage.setItem('study_today_review_tag_filter', value);
+  renderReviewCard();
+}
 
 function syncTodayReviewCollapsed() {
   const card = document.getElementById('todayReviewCard');
@@ -534,10 +551,32 @@ function renderReviewCard() {
   syncTodayReviewCollapsed();
 
   const summary = getReviewSummary();
+  const tags = [...new Set(summary.dueNotes.flatMap(note => note.tags || []))]
+    .filter(tag => typeof tag === 'string' && tag.trim())
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  const hasUntagged = summary.dueNotes.some(note => !note.tags?.length);
+  if ((todayReviewTagFilter.startsWith('tag:') && !tags.includes(todayReviewTagFilter.slice(4)))
+      || (todayReviewTagFilter === 'untagged' && !hasUntagged)
+      || (todayReviewTagFilter !== 'all' && todayReviewTagFilter !== 'untagged' && !todayReviewTagFilter.startsWith('tag:'))) {
+    todayReviewTagFilter = 'all';
+    localStorage.setItem('study_today_review_tag_filter', 'all');
+  }
+  const filterRow = document.querySelector('.today-review-filter-row');
+  const filterSelect = document.getElementById('todayReviewTagFilter');
+  if (filterRow) filterRow.style.display = tags.length ? 'flex' : 'none';
+  if (filterSelect) {
+    filterSelect.innerHTML = '<option value="all">全部标签</option>'
+      + (hasUntagged ? '<option value="untagged">无标签</option>' : '')
+      + tags.map(tag => `<option value="${escapeAttr('tag:' + tag)}">${escapeHtml(tag)}</option>`).join('');
+    filterSelect.value = todayReviewTagFilter;
+  }
+  const visibleNotes = getFilteredTodayReviewNotes(summary.dueNotes);
   const count = document.getElementById('todayReviewCount');
-  if (count) count.textContent = summary.totalDue + ' 篇';
+  if (count) count.textContent = todayReviewTagFilter === 'all'
+    ? summary.totalDue + ' 篇'
+    : visibleNotes.length + '/' + summary.totalDue + ' 篇';
   const toggle = document.getElementById('todayReviewToggle');
-  if (toggle) toggle.style.display = summary.dueNotes.length > 3 ? '' : 'none';
+  if (toggle) toggle.style.display = visibleNotes.length > 3 ? '' : 'none';
 
   if (summary.totalDue === 0) {
     // Show empty state with a brief explanation
@@ -550,7 +589,12 @@ function renderReviewCard() {
     return;
   }
 
-  list.innerHTML = summary.dueNotes.map(n => {
+  if (visibleNotes.length === 0) {
+    list.innerHTML = '<div class="review-empty"><span>该标签下暂无待复习笔记</span><span class="review-empty-hint">可以切换标签查看其他笔记</span></div>';
+    return;
+  }
+
+  list.innerHTML = visibleNotes.map(n => {
     // Calculate review stage label
     const stageLabels = getReviewStageLabels();
     const stageIdx = Math.min(n.reviewCount, stageLabels.length - 1);
@@ -598,8 +642,8 @@ let reviewFloatExpanded = new Set(); // which items are expanded (showing summar
 // Now: jumps to notes tab + selects the note so user can review content behind the float
 function reviewOpenNote(noteId) {
   const summary = getReviewSummary();
-  reviewFloatNotes = summary.dueNotes;
-  reviewFloatIndex = summary.dueNotes.findIndex(n => n.id === noteId);
+  reviewFloatNotes = getFilteredTodayReviewNotes(summary.dueNotes);
+  reviewFloatIndex = reviewFloatNotes.findIndex(n => n.id === noteId);
   if (reviewFloatIndex < 0) reviewFloatIndex = 0;
   // Switch to notes tab and select the note for background review
   if (typeof selectNote === 'function') selectNote(noteId);

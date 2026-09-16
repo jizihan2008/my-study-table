@@ -2588,7 +2588,8 @@ function getReviewSummary() {
       title: d.note.title || '未命名笔记',
       reviewCount: d.reviewCount,
       nextReviewDate: d.nextReviewDate,
-      summary: d.note.summary || ''
+      summary: d.note.summary || '',
+      tags: Array.isArray(d.note.tags) ? [...d.note.tags] : []
     }))
   };
 }

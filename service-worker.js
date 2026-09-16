@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v151';
+const VERSION = 'mst-v154';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,7 +14,7 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260915-r5',
+  './css/style.css?v=20260916-r1',
   './css/workspace.css?v=20260915-r3',
   './css/appearance.css?v=20260913-r6',
   './js/theme-model.js?v=20260913-r4',
@@ -34,9 +34,9 @@ const PRECACHE_URLS = [
   './js/markdown.js?v=20260915-r1',
   './js/note-rich-editor.js?v=20260915-r4',
   './js/ai-tree.js?v=20260912-r3',
-  './js/ai-attach.js?v=20260915-r5',
-  './js/ai-render.js?v=20260915-r2',
-  './js/ai-tools.js?v=20260914-r4',
+  './js/ai-attach.js?v=20260916-r1',
+  './js/ai-render.js?v=20260916-r2',
+  './js/ai-tools.js?v=20260916-r2',
   './js/notes.js?v=20260915-r4',
   './js/stats.js?v=20260914-r3',
   './js/platform.js?v=20260826-r2',
@@ -46,18 +46,19 @@ const PRECACHE_URLS = [
   './js/ext-sandbox.js?v=20260825-r1',
   './js/ai-client.js?v=20260914-r3',
   './js/ai-stream.js?v=20260827-r1',
-  './js/ai-api.js?v=20260914-r8',
+  './js/ai-api.js?v=20260916-r2',
   './js/ai-send.js?v=20260915-r3',
+  './js/skills.js?v=20260916-r1',
   './js/prompts.js?v=20260912-r3',
   './js/env.js?v=20260911-r2',
-  './js/core.js?v=20260914-r11',
+  './js/core.js?v=20260916-r1',
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20260914-r8',
+  './js/settings.js?v=20260916-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20260825-r1',
-  './js/sync.js?v=20260916-r15',
+  './js/sync.js?v=20260916-r16',
   './js/sync-logs.js?v=20260916-r7',
   './js/ai-utils.js?v=20260826-r2',
   './js/bg-media-idb.js?v=20260906-r2',

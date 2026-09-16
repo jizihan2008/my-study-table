@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260915-r5">
+<link rel="stylesheet" href="css/style.css?v=20260916-r1">
 <link rel="stylesheet" href="css/workspace.css?v=20260915-r3">
 <link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -434,6 +434,12 @@
               </button>
             </div>
           </div>
+          <div class="today-review-filter-row">
+            <label for="todayReviewTagFilter">标签</label>
+            <select id="todayReviewTagFilter" onchange="setTodayReviewTagFilter(this.value)" aria-label="按标签筛选待复习笔记">
+              <option value="all">全部标签</option>
+            </select>
+          </div>
           <div class="today-review-list" id="todayReviewList"></div>
         </div>
       </div>
@@ -484,6 +490,11 @@
   <!-- ── Prompt Studio Section ── -->
   <div class="section" id="section-prompts">
     <div class="prompt-studio" id="promptStudio" aria-live="polite"></div>
+  </div>
+
+  <!-- ── Skills Section ── -->
+  <div class="section" id="section-skills">
+    <div class="skills-studio" id="skillsStudio"></div>
   </div>
 
   <!-- ── Friends Section ── -->
@@ -1525,7 +1536,7 @@
 <script src="js/env.js?v=20260911-r2"></script>
 <script src="js/theme-model.js?v=20260914-r5"></script>
 <script src="js/liquid-glass.js?v=20260906-r2"></script>
-<script src="js/core.js?v=20260914-r11"></script>
+<script src="js/core.js?v=20260916-r1"></script>
 <script src="js/trash.js?v=20260804-r4"></script>
 <script src="js/todos.js?v=20260823-r4"></script>
 <script src="js/notes.js?v=20260915-r4"></script>
@@ -1535,21 +1546,22 @@
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260912-r1"></script>
-<script src="js/ai-attach.js?v=20260915-r5"></script>
-<script src="js/ai-render.js?v=20260915-r2"></script>
-<script src="js/ai-tools.js?v=20260914-r4"></script>
+<script src="js/ai-attach.js?v=20260916-r1"></script>
+<script src="js/ai-render.js?v=20260916-r2"></script>
+<script src="js/ai-tools.js?v=20260916-r2"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
-<script src="js/ai-api.js?v=20260914-r8"></script>
+<script src="js/ai-api.js?v=20260916-r2"></script>
 <script src="js/ai-send.js?v=20260915-r3"></script>
+<script src="js/skills.js?v=20260916-r1"></script>
 <script src="js/prompts.js?v=20260912-r3"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260914-r5"></script>
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
 <script src="js/appearance.js?v=20260914-r6"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260914-r8"></script>
+<script src="js/settings.js?v=20260916-r1"></script>
 <script src="js/utils.js?v=20260914-r2"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
@@ -1591,7 +1603,7 @@
 <script src="js/store.js?v=20260913-r2"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260916-r15"></script>
+<script src="js/sync.js?v=20260916-r16"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260916-r7"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>

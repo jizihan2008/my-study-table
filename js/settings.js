@@ -2920,7 +2920,7 @@ const MIGRATION_KEYS = [
   // 日历 / 统计 / 目标
   'study_calendar_events', 'study_stats', 'study_longterm_goals', 'study_quick_access',
   // 打卡 / 今日 / 链接 / AI
-  'study_checkin', 'study_today_focus', 'study_links_v3', 'study_ai_convs', 'study_ai_memory',
+  'study_checkin', 'study_today_focus', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
   'study_ai_usage_v1', 'study_ai_usage_v2',
   // UI/状态/敏感（仅本地备份，不同步）
   'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv',
