@@ -1288,13 +1288,7 @@ async function executeToolCall(action, params, context = {}) {
     }
     case 'set_focus_task': {
       const todoId = params.todoId || params.todo_id;
-      const data = loadFocusData();
-      // Initialize if needed
-      const todayStr = getTodayStr();
-      if (!data._date || data._date !== todayStr) {
-        data._date = todayStr;
-        data.items = [];
-      }
+      const data = getTodayFocusItems();
       if (!data.items) data.items = [];
 
       const maxFocus = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;

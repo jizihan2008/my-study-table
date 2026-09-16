@@ -393,16 +393,22 @@
         <!-- Focus Card -->
         <div class="today-focus-card" id="todayFocusCard">
           <div class="today-focus-header">
-            <span class="today-section-title"><i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 今日聚焦</span>
+            <span class="today-section-title"><i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 每日聚焦</span>
             <div class="today-focus-header-actions">
               <span class="today-focus-count" id="todayFocusCount">0/0</span>
-              <button class="today-focus-limit-btn" onclick="editMaxFocusCount()" title="设置今日聚焦任务数量">
+              <button class="today-focus-limit-btn" onclick="editMaxFocusCount()" title="设置每日聚焦任务数量">
                 <i data-lucide="sliders-horizontal" class="lucide-icon"></i><span id="todayFocusLimitLabel">上限 3</span>
               </button>
             </div>
           </div>
+          <div class="today-focus-days" aria-label="选择聚焦日期">
+            <button type="button" data-focus-day="" onclick="selectFocusDay(-1)">昨天</button>
+            <button type="button" data-focus-day="" onclick="selectFocusDay(0)">今天</button>
+            <button type="button" data-focus-day="" onclick="selectFocusDay(1)">明天</button>
+          </div>
+          <div class="today-focus-save-hint">修改自动保存</div>
           <div class="today-focus-list" id="todayFocusList"></div>
-          <button class="today-focus-add-btn" id="todayFocusAddBtn" onclick="showTodoPicker()" title="从待办中选择今日目标">
+          <button class="today-focus-add-btn" id="todayFocusAddBtn" onclick="showTodoPicker()" title="从待办中选择这天的聚焦目标">
             <i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>从待办选择
           </button>
           <!-- Todo Picker Panel -->
@@ -421,7 +427,12 @@
         <div class="today-review-card" id="todayReviewCard">
           <div class="today-review-header">
             <span class="today-section-title"><i data-lucide="refresh-cw" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;color:#8b5cf6;"></i> 待复习笔记</span>
-            <span class="today-review-count" id="todayReviewCount">0 篇</span>
+            <div class="today-review-header-actions">
+              <span class="today-review-count" id="todayReviewCount">0 篇</span>
+              <button type="button" class="today-review-toggle" id="todayReviewToggle" onclick="toggleTodayReviewList()" aria-controls="todayReviewList" aria-expanded="true" title="折叠待复习笔记列表">
+                <span id="todayReviewToggleLabel">折叠</span><i data-lucide="chevron-up" class="lucide-icon" aria-hidden="true"></i>
+              </button>
+            </div>
           </div>
           <div class="today-review-list" id="todayReviewList"></div>
         </div>

@@ -2383,6 +2383,15 @@ body {
 }
 .today-focus-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
 .today-focus-header-actions { display: flex; align-items: center; gap: 7px; }
+.today-focus-days { display: flex; gap: 6px; margin-bottom: 14px; }
+.today-focus-days button {
+  flex: 1; padding: 7px 10px; border: 1px solid var(--border); border-radius: 8px;
+  background: var(--input-bg); color: var(--text-secondary); font: 600 12px/1.3 inherit;
+  cursor: pointer; transition: var(--transition);
+}
+.today-focus-days button:hover { border-color: var(--primary); color: var(--primary); }
+.today-focus-days button.active { border-color: var(--primary); background: rgba(79,110,247,.1); color: var(--primary); }
+.today-focus-save-hint { margin: -9px 0 10px; text-align: right; font-size: 11px; color: var(--text-secondary); }
 .today-focus-count {
   font-size: 13px; font-weight: 600; color: var(--primary);
   background: rgba(79,110,247,0.1); padding: 4px 12px; border-radius: 10px;
@@ -2397,11 +2406,12 @@ body {
 .today-focus-limit-btn .lucide-icon { width: 12px; height: 12px; }
 .today-focus-list { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .today-focus-item {
-  display: flex; align-items: center; gap: 10px;
+  display: flex; flex-direction: column; gap: 5px;
   padding: 12px 14px; background: var(--input-bg);
   border-radius: var(--radius-sm); border: 1px solid var(--border);
   transition: var(--transition);
 }
+.today-focus-main { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
 .today-focus-item:hover { border-color: var(--primary); }
 .today-focus-item .focus-check {
   width: 20px; height: 20px; border-radius: 50%;
@@ -2410,6 +2420,7 @@ body {
   display: flex; align-items: center; justify-content: center;
 }
 .today-focus-item .focus-check:hover { border-color: var(--primary); }
+.today-focus-item .focus-check.disabled { cursor: default; opacity: .55; }
 .today-focus-item .focus-check.done {
   background: var(--done); border-color: var(--done);
 }
@@ -2442,8 +2453,15 @@ body {
 }
 .today-focus-item .focus-note-edit:hover { color: var(--primary); border-color: var(--border); background: rgba(79,110,247,.08); }
 .today-focus-item .focus-note-edit .lucide-icon { width: 14px; height: 14px; }
+.today-focus-item .focus-timer-start {
+  width: 26px; height: 26px; padding: 0; border: 1px solid transparent; background: transparent;
+  border-radius: 6px; color: var(--primary); cursor: pointer; flex-shrink: 0;
+  display: flex; align-items: center; justify-content: center; transition: var(--transition);
+}
+.today-focus-item .focus-timer-start:hover { border-color: var(--primary); background: rgba(79,110,247,.08); }
+.today-focus-item .focus-timer-start .lucide-icon { width: 14px; height: 14px; }
 .today-focus-note-row {
-  width: calc(100% - 30px); margin: -4px 0 2px 30px; padding: 4px 10px;
+  width: calc(100% - 30px); margin: 0 0 0 30px; padding: 4px 10px;
   border: 0; background: transparent; color: var(--text-secondary); border-radius: 7px;
   display: flex; align-items: flex-start; gap: 7px; text-align: left;
   font: 12px/1.55 inherit; cursor: pointer; box-sizing: border-box;
@@ -2496,6 +2514,16 @@ body {
   padding: 20px; margin-top: 14px;
 }
 .today-review-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+.today-review-header-actions { display: flex; align-items: center; gap: 8px; }
+.today-review-toggle {
+  display: inline-flex; align-items: center; gap: 4px; padding: 4px 9px;
+  border: 1px solid var(--border); border-radius: 10px; background: transparent;
+  color: var(--text-secondary); font: 600 11px/1.2 inherit; cursor: pointer;
+}
+.today-review-toggle:hover { color: #8b5cf6; border-color: #8b5cf6; }
+.today-review-toggle .lucide-icon { width: 13px; height: 13px; transition: transform .2s; }
+.today-review-card.is-collapsed .today-review-toggle .lucide-icon { transform: rotate(180deg); }
+.today-review-card.is-collapsed .today-review-list .review-item:nth-child(n+4) { display: none; }
 .today-review-count {
   font-size: 13px; font-weight: 600; color: #8b5cf6;
   background: rgba(139,92,246,0.1); padding: 4px 12px; border-radius: 10px;
@@ -2720,6 +2748,10 @@ body {
 .picker-quick-chip.selected {
   border-color: var(--primary); background: rgba(79,110,247,0.12); color: var(--primary);
   font-weight: 600;
+}
+.picker-quick-chip-focus {
+  max-width: 100%; white-space: normal; overflow: visible; text-overflow: clip;
+  overflow-wrap: anywhere; text-align: left;
 }
 
 /* ── Checkin Quote Modal ── */

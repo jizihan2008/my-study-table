@@ -423,6 +423,26 @@ function updateTimerTick() {
 }
 
 // ═══════════ Timer controls ═══════════
+function startFocusTimer(todoId) {
+  if (!findTodo(todoId)) return;
+  // Clicking the currently running task only opens its timer; a paused session resumes.
+  if (timerLinkedTodoId === todoId && !timerLinkedGoalId && (timerRunning || timerElapsed > 0)) {
+    if (!timerRunning) timerStart();
+    switchTab('timer');
+    return;
+  }
+  // Save a session on another target before switching the timer to this todo.
+  if (timerRunning || timerElapsed > 0) timerStop();
+  else clearTimerState();
+  timerLinkedTodoId = todoId;
+  timerLinkedGoalId = null;
+  timerElapsed = 0;
+  timerSessions = [];
+  timerSessionName = '';
+  timerStart();
+  switchTab('timer');
+}
+
 function timerStart() {
   if (timerRunning) return;
   timerRunning = true;
@@ -672,8 +692,9 @@ function renderTimerPickerQuickSelect() {
     html += todayIds.map(id => {
       const t = findTodo(id);
       if (!t) return '';
-      const cls = selId === id ? 'picker-quick-chip selected' : 'picker-quick-chip';
-      return `<button class="${cls}" onclick="selectTimerTodo(${id})" title="${escapeHtml(t.text)}">${escapeHtml(t.text.length > 12 ? t.text.slice(0,12)+'…' : t.text)}</button>`;
+      const fullPath = [...getAncestorPath(id).map(parent => parent.text), t.text].join(' › ');
+      const cls = selId === id ? 'picker-quick-chip picker-quick-chip-focus selected' : 'picker-quick-chip picker-quick-chip-focus';
+      return `<button class="${cls}" onclick="selectTimerTodo(${id})" title="${escapeAttr(fullPath)}">${escapeHtml(fullPath)}</button>`;
     }).join('');
     html += '</div>';
   }

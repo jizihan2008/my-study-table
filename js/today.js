@@ -71,8 +71,25 @@ function getWeekDays() {
 }
 
 // ═══════════ Today: Focus ═══════════
-// Focus data: { _date, items: [{todoId, text, done, note?}] }
+// Focus data: { days: { 'YYYY-MM-DD': { items: [{todoId, text, done, note?}] } } }
 let focusNoteEditingId = null;
+let selectedFocusDate = getTodayStr();
+
+function getFocusDateByOffset(offset) {
+  const date = new Date();
+  date.setHours(12, 0, 0, 0);
+  date.setDate(date.getDate() + offset);
+  return date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+}
+
+function selectFocusDay(offset) {
+  const active = document.activeElement;
+  if (active && active.classList?.contains('today-focus-note-input')) active.blur();
+  selectedFocusDate = getFocusDateByOffset(offset);
+  focusNoteEditingId = null;
+  closeTodoPicker();
+  renderFocusList();
+}
 
 // Max focus count setting (2-5, default 3)
 function getMaxFocusCount() {
@@ -108,11 +125,22 @@ async function editMaxFocusCount() {
 }
 
 function loadFocusData() {
-  try { return JSON.parse(localStorage.getItem('study_today_focus') || '{}'); }
-  catch { return {}; }
+  try {
+    const data = JSON.parse(localStorage.getItem('study_today_focus') || '{}');
+    if (data.days && typeof data.days === 'object') return data;
+    // Keep the old day's list when upgrading from the single-day format.
+    return { days: Array.isArray(data.items)
+      ? { [data._date || getTodayStr()]: { items: data.items } }
+      : {} };
+  } catch { return { days: {} }; }
 }
 
 function saveFocusData(data) {
+  if (!data.days) {
+    const store = loadFocusData();
+    store.days[data._date || getTodayStr()] = { items: data.items || [] };
+    data = store;
+  }
   // 走 saveData → 触发 Sync.onLocalChange → 今日聚焦跨设备同步
   if (typeof saveData === 'function') {
     return saveData('study_today_focus', data) === true;
@@ -123,29 +151,42 @@ function saveFocusData(data) {
   }
 }
 
-function getTodayFocusItems() {
+function getFocusItemsForDate(dateStr) {
   const data = loadFocusData();
-  if (data.items) {
+  const day = data.days[dateStr] || { items: [] };
+  day._date = dateStr;
+  if (day.items) {
     // Remove focus items whose corresponding todo no longer exists
-    let cleaned = false;
-    data.items = data.items.filter(item => {
+    let changed = false;
+    day.items = day.items.filter(item => {
       const exists = todos.find(t => t.id === item.todoId);
-      if (!exists) { cleaned = true; return false; }
+      if (!exists) { changed = true; return false; }
       return true;
     });
     // Sync completion status from todos (two-way binding)
-    data.items.forEach(item => {
+    if (dateStr === getTodayStr()) day.items.forEach(item => {
       const todo = todos.find(t => t.id === item.todoId);
       if (todo && todo.done !== item.done) {
         item.done = todo.done;
+        changed = true;
       }
     });
-    // Persist cleaned data
-    if (cleaned) {
-      saveFocusData(data);
+    if (changed) {
+      saveFocusData(day);
     }
   }
-  return data;
+  return day;
+}
+
+function getTodayFocusItems() {
+  return getFocusItemsForDate(getTodayStr());
+}
+
+function getSelectedFocusItems() {
+  if (![getFocusDateByOffset(-1), getTodayStr(), getFocusDateByOffset(1)].includes(selectedFocusDate)) {
+    selectedFocusDate = getTodayStr();
+  }
+  return getFocusItemsForDate(selectedFocusDate);
 }
 
 // Get top-level todos (roots for tree), plus search matches
@@ -159,7 +200,7 @@ function getAllAvailableTodos() {
 }
 
 function getFocusTodoIds() {
-  const data = getTodayFocusItems();
+  const data = getSelectedFocusItems();
   return new Set((data.items || []).map(i => i.todoId));
 }
 
@@ -182,7 +223,7 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const indent = depth * 16;
   const displayPath = getFocusTodoDisplayPath(todo);
   const focusItem = isDirectFocus
-    ? (getTodayFocusItems().items || []).find(item => item.todoId === todoId)
+    ? (getSelectedFocusItems().items || []).find(item => item.todoId === todoId)
     : null;
   const note = focusItem && typeof focusItem.note === 'string' ? focusItem.note.trim() : '';
   const isEditingNote = isDirectFocus && focusNoteEditingId === todoId;
@@ -192,9 +233,10 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   return `
     <div>
       <div class="today-focus-item${isDirectFocus ? '' : ' child'}" style="padding-left:${14 + indent}px;">
+        <div class="today-focus-main">
         ${hasKids ? `<button class="focus-expand${isExpanded ? ' expanded' : ''}" onclick="toggleFocusExpand(${todoId}, event)" title="展开/折叠">▶</button>` : '<span class="focus-expand-spacer"></span>'}
-        <div class="focus-check${todo.done ? ' done' : ''}" onclick="event.stopPropagation(); toggleTodayFocusById(${todoId})" title="标记完成"></div>
-        <span class="focus-text${todo.done ? ' completed' : ''}" title="${escapeAttr(displayPath.full)}">
+        <div class="focus-check${(focusItem || todo).done ? ' done' : ''}${!isDirectFocus && selectedFocusDate !== getTodayStr() ? ' disabled' : ''}" onclick="event.stopPropagation(); toggleTodayFocusById(${todoId})" title="${isDirectFocus || selectedFocusDate === getTodayStr() ? '标记完成' : '子任务仅可在今天修改'}"></div>
+        <span class="focus-text${(focusItem || todo).done ? ' completed' : ''}" title="${escapeAttr(displayPath.full)}">
           ${displayPath.parents.length ? `<span class="focus-parent-path">${displayPath.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>')}</span>` : ''}
           <span class="focus-title">${escapeHtml(todo.text)}</span>
         </span>
@@ -202,11 +244,12 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
           去目录
         </button>
+        ${isDirectFocus ? `<button class="focus-timer-start" onclick="event.stopPropagation(); startFocusTimer(${todoId})" title="以此任务开始计时" aria-label="以此任务开始计时"><i data-lucide="play" class="lucide-icon"></i></button>` : ''}
         ${isDirectFocus ? `<button class="focus-note-edit" onclick="event.stopPropagation(); editTodayFocusNote(${todoId})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}">
           <i data-lucide="message-square-plus" class="lucide-icon"></i>
         </button>` : ''}
         ${isDirectFocus ? `<button class="focus-delete" onclick="event.stopPropagation(); deleteTodayFocusById(${todoId})" title="移除">✕</button>` : ''}
-      </div>
+        </div>
       ${isEditingNote ? `<div class="today-focus-note-row editing">
         <input class="today-focus-note-input" id="todayFocusNoteInput-${todoId}" type="text" maxlength="160"
           value="${escapeAttr(note)}" placeholder="写一句话提醒今天的自己…"
@@ -214,6 +257,7 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
       </div>` : (note ? `<button class="today-focus-note-row" onclick="editTodayFocusNote(${todoId})" title="点击编辑">
         <i data-lucide="message-square" class="lucide-icon"></i><span>${escapeHtml(note)}</span>
       </button>` : '')}
+      </div>
       ${(hasKids && renderedChildren) ? `<div class="focus-children${isExpanded ? '' : ' collapsed'}">${renderedChildren}</div>` : ''}
     </div>
   `;
@@ -225,18 +269,24 @@ function renderFocusList() {
   const addBtn = document.getElementById('todayFocusAddBtn');
   if (!list || !count) return;
 
-  const data = getTodayFocusItems();
+  const data = getSelectedFocusItems();
   const items = data.items || [];
   const doneCount = items.filter(i => i.done).length;
 
   const maxCount = getMaxFocusCount();
   if (count) count.textContent = doneCount + '/' + items.length;
+  document.querySelectorAll('[data-focus-day]').forEach((button, index) => {
+    button.dataset.focusDay = getFocusDateByOffset(index - 1);
+    const selected = button.dataset.focusDay === selectedFocusDate;
+    button.classList.toggle('active', selected);
+    button.setAttribute('aria-pressed', String(selected));
+  });
   const limitLabel = document.getElementById('todayFocusLimitLabel');
   if (limitLabel) limitLabel.textContent = '上限 ' + maxCount;
   if (addBtn) addBtn.style.display = items.length >= maxCount ? 'none' : 'flex';
 
   if (items.length === 0) {
-    list.innerHTML = '<div class="empty-state" style="padding:20px;"><p style="font-size:13px;">还没有今日目标，点击下方从待办中选择 📌</p></div>';
+    list.innerHTML = '<div class="empty-state" style="padding:20px;"><p style="font-size:13px;">这天还没有聚焦目标，点击下方从待办中选择 📌</p></div>';
     return;
   }
 
@@ -254,7 +304,7 @@ function editTodayFocusNote(todoId) {
 }
 
 function saveTodayFocusNote(todoId, value) {
-  const data = getTodayFocusItems();
+  const data = getSelectedFocusItems();
   const item = (data.items || []).find(entry => entry.todoId === todoId);
   if (!item) return;
   const note = String(value || '').trim().slice(0, 160);
@@ -288,13 +338,14 @@ function toggleFocusExpand(id, e) {
 }
 
 function toggleTodayFocusById(todoId) {
-  const data = getTodayFocusItems();
+  const data = getSelectedFocusItems();
   const idx = (data.items || []).findIndex(i => i.todoId === todoId);
   if (idx >= 0) {
     toggleTodayFocus(idx);
     return;
   }
   // Sub-task: directly toggle the todo
+  if (selectedFocusDate !== getTodayStr()) return;
   const todo = findTodo(todoId);
   if (todo) {
     todo.done = !todo.done;
@@ -305,7 +356,7 @@ function toggleTodayFocusById(todoId) {
 }
 
 function deleteTodayFocusById(todoId) {
-  const data = getTodayFocusItems();
+  const data = getSelectedFocusItems();
   const idx = (data.items || []).findIndex(i => i.todoId === todoId);
   if (idx < 0) return;
   deleteTodayFocus(idx);
@@ -313,7 +364,7 @@ function deleteTodayFocusById(todoId) {
 
 // ── Todo Picker ──
 function showTodoPicker() {
-  const data = getTodayFocusItems();
+  const data = getSelectedFocusItems();
   const maxCount = getMaxFocusCount();
   if ((data.items || []).length >= maxCount) return;
   const picker = document.getElementById('todayTodoPicker');
@@ -404,7 +455,7 @@ function renderTodoPickerList() {
 }
 
 function togglePickTodo(todoId) {
-  let data = getTodayFocusItems();
+  let data = getSelectedFocusItems();
   if (!data.items) data.items = [];
   const idx = data.items.findIndex(i => i.todoId === todoId);
   if (idx >= 0) {
@@ -414,7 +465,7 @@ function togglePickTodo(todoId) {
     if (data.items.length >= maxCount) return;
     const todo = todos.find(t => t.id === todoId);
     if (!todo) return;
-    data.items.push({ todoId: todo.id, text: todo.text, done: false });
+    data.items.push({ todoId: todo.id, text: todo.text, done: todo.done });
   }
   saveFocusData(data);
   renderTodoPickerList();
@@ -422,14 +473,14 @@ function togglePickTodo(todoId) {
 }
 
 function toggleTodayFocus(idx) {
-  let data = getTodayFocusItems();
+  let data = getSelectedFocusItems();
   if (!data.items || !data.items[idx]) return;
   const item = data.items[idx];
   const newDone = !item.done;
   item.done = newDone;
   // Sync back to todo: cascade to children when completing, leave children alone when unchecking
   const todo = todos.find(t => t.id === item.todoId);
-  if (todo) {
+  if (todo && selectedFocusDate === getTodayStr()) {
     todo.done = newDone;
     if (newDone) {
       const descendantIds = getAllDescendantIds(item.todoId).filter(did => did !== item.todoId);
@@ -446,7 +497,7 @@ function toggleTodayFocus(idx) {
 }
 
 function deleteTodayFocus(idx) {
-  let data = getTodayFocusItems();
+  let data = getSelectedFocusItems();
   if (!data.items || !data.items[idx]) return;
   data.items.splice(idx, 1);
   saveFocusData(data);
@@ -454,6 +505,25 @@ function deleteTodayFocus(idx) {
 }
 
 // ═══════════ Today: Review Card ═══════════
+let todayReviewCollapsed = localStorage.getItem('study_today_review_collapsed') === 'true';
+
+function syncTodayReviewCollapsed() {
+  const card = document.getElementById('todayReviewCard');
+  const toggle = document.getElementById('todayReviewToggle');
+  const label = document.getElementById('todayReviewToggleLabel');
+  if (!card || !toggle) return;
+  card.classList.toggle('is-collapsed', todayReviewCollapsed);
+  toggle.setAttribute('aria-expanded', String(!todayReviewCollapsed));
+  toggle.title = todayReviewCollapsed ? '展开待复习笔记列表' : '折叠待复习笔记列表';
+  if (label) label.textContent = todayReviewCollapsed ? '展开' : '折叠';
+}
+
+function toggleTodayReviewList() {
+  todayReviewCollapsed = !todayReviewCollapsed;
+  localStorage.setItem('study_today_review_collapsed', String(todayReviewCollapsed));
+  syncTodayReviewCollapsed();
+}
+
 function renderReviewCard() {
   const card = document.getElementById('todayReviewCard');
   const list = document.getElementById('todayReviewList');
@@ -461,10 +531,13 @@ function renderReviewCard() {
 
   // Always show the card
   card.style.display = '';
+  syncTodayReviewCollapsed();
 
   const summary = getReviewSummary();
   const count = document.getElementById('todayReviewCount');
   if (count) count.textContent = summary.totalDue + ' 篇';
+  const toggle = document.getElementById('todayReviewToggle');
+  if (toggle) toggle.style.display = summary.dueNotes.length > 3 ? '' : 'none';
 
   if (summary.totalDue === 0) {
     // Show empty state with a brief explanation

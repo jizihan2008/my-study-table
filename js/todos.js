@@ -1520,12 +1520,7 @@ function todoCtxAddFocus() {
   if (id == null) return;
   var todo = findTodo(id);
   if (!todo) return;
-  var todayStr = typeof getTodayStr === 'function' ? getTodayStr() : new Date().toISOString().slice(0, 10);
-  var data = loadFocusData();
-  if (!data._date || data._date !== todayStr) {
-    data._date = todayStr;
-    data.items = [];
-  }
+  var data = getTodayFocusItems();
   if (!data.items) data.items = [];
   var maxFocus = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;
   if (data.items.length >= maxFocus) {

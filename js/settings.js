@@ -3585,9 +3585,8 @@ function collectDailyReportData() {
   // Checkin data
   const checkinData = loadCheckinData();
 
-  // Focus data — when user checks in, the focus items are likely still from yesterday
-  const focusData = getTodayFocusItems();
-  const focusItems = focusData.items || [];
+  const focusItems = getFocusItemsForDate(yesterdayStr).items || [];
+  const todayFocusItems = getTodayFocusItems().items || [];
 
   // Todos: yesterday's completions vs today's due items vs overdue
   const yesterdayDone = todos.filter(t => t.completedAt === yesterdayStr);
@@ -3691,6 +3690,7 @@ function collectDailyReportData() {
     focusItems,
     focusDone: focusItems.filter(i => i.done).length,
     focusTotal: focusItems.length,
+    todayFocusItems,
     yesterdayDoneTodos: yesterdayDone.map(t => ({ text: t.text, id: t.id })),
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
     overdueTodos: overdue.map(t => ({ text: t.text, dueDate: t.dueDate, id: t.id })),
@@ -3812,6 +3812,9 @@ async function generateDailyReport(force, userInstruction) {
   const focusLines = data.focusItems.length > 0
     ? data.focusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
     : '  （昨日未设置聚焦任务）';
+  const todayFocusLines = data.todayFocusItems.length > 0
+    ? data.todayFocusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
+    : '  （今日未设置聚焦任务）';
 
   const doneTodoLines = data.yesterdayDoneTodos.length > 0
     ? data.yesterdayDoneTodos.map(t => `  - ✅ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
@@ -3855,6 +3858,8 @@ async function generateDailyReport(force, userInstruction) {
 【连续打卡】${data.streak} 天
 【昨日聚焦】${data.focusDone}/${data.focusTotal} 完成
 ${focusLines}
+【今日聚焦】${data.todayFocusItems.filter(i => i.done).length}/${data.todayFocusItems.length} 完成
+${todayFocusLines}
 【昨日完成待办】${data.yesterdayDoneTodos.length} 项
 ${doneTodoLines}
 【昨日计时】${data.ydayTimerStr}
@@ -3895,7 +3900,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 2. **✅ 昨日完成清单** — 列出昨天完成的待办（如有），给个简单的小总结
 3. **⚠️ 逾期提醒** — 有哪些任务逾期了？是否还在乎它们？建议优先处理还是重新规划？
 4. **📝 笔记回顾** — 昨天写的笔记有什么值得今天延续的思路？
-5. **🎯 今日方向** — 今天截止的任务有哪些？基于昨日状态，今天最值得优先做什么？
+5. **🎯 今日方向** — 结合已设置的今日聚焦、今天截止的任务和昨日状态，今天最值得优先做什么？
 6. **🧠 复习习惯** — 待复习笔记的状态如何？是否有逾期未复习的？复习频率和节奏是否健康？是否需要调整复习策略？
 7. **💡 日常习惯** — 昨天哪些习惯完成了？哪些习惯掉链子了？有没有连续坚持很棒的？是否注意到什么模式？
 8. **🗺️ 任务线推进** — 当前主线章节与激活任务进展如何？昨日完成了任务线里的哪些任务？今天建议优先推进哪个任务线目标（可生成对应待办）？
@@ -4017,9 +4022,8 @@ function collectEveningReportData() {
   const checkinData = loadCheckinData();
   const todayCheckinTime = checkinData.checkinTimes && checkinData.checkinTimes[todayStr] || null;
 
-  // Focus items
-  const focusData = getTodayFocusItems();
-  const focusItems = focusData.items || [];
+  const focusItems = getTodayFocusItems().items || [];
+  const tomorrowFocusItems = getFocusItemsForDate(tomorrowStr).items || [];
 
   // Todos: today's completions, today's due, overdue, tomorrow's due
   const todayDone = todos.filter(t => t.completedAt === todayStr);
@@ -4113,6 +4117,7 @@ function collectEveningReportData() {
     focusItems,
     focusDone: focusItems.filter(i => i.done).length,
     focusTotal: focusItems.length,
+    tomorrowFocusItems,
     todayDoneTodos: todayDoneList,
     todayArchived: todayArchived,
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
@@ -4185,6 +4190,9 @@ async function generateEveningReport() {
   const focusLines = data.focusItems.length > 0
     ? data.focusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
     : '  （今日未设置聚焦任务）';
+  const tomorrowFocusLines = data.tomorrowFocusItems.length > 0
+    ? data.tomorrowFocusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
+    : '  （明日未设置聚焦任务）';
 
   const doneTodoLines = data.todayDoneTodos.length > 0
     ? data.todayDoneTodos.map(t => `  - ✅ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
@@ -4232,6 +4240,8 @@ async function generateEveningReport() {
 【连续打卡】${data.streak} 天${data.todayCheckinTime ? '（今日打卡 ' + data.todayCheckinTime + '）' : ''}
 【今日聚焦】${data.focusDone}/${data.focusTotal} 完成
 ${focusLines}
+【明日聚焦】${data.tomorrowFocusItems.filter(i => i.done).length}/${data.tomorrowFocusItems.length} 完成
+${tomorrowFocusLines}
 【今日完成待办】${data.todayDoneTodos.length} 项
 ${doneTodoLines}
 ${archivedTodoLines ? `【今日归档】${data.todayArchived.length} 项
@@ -4279,7 +4289,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 6. **🧠 复习习惯** — 今天复习了吗？剩余待复习笔记的状态如何？
 7. **💡 日常习惯** — 今天的习惯打卡情况，有什么模式值得注意？
 8. **🗺️ 任务线推进** — 今天的任务线有哪些进展（完成任务/条件推进）？当前主线章节和激活任务的状态如何？
-9. **🔮 明天预告** — 结合明天截止、全局待办和任务线激活任务，明天最值得关注的 1-3 件事是什么？
+9. **🔮 明天预告** — 结合已设置的明日聚焦、明天截止、全局待办和任务线激活任务，明天最值得关注的 1-3 件事是什么？
 10. **💪 晚安寄语** — 一句温暖的结束语
 
 格式自由，语气自然、温暖、有沉淀感。用 Markdown 但不要太刻板。内容长度适中就好。`;
