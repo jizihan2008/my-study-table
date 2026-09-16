@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260915-r2">
+<link rel="stylesheet" href="css/style.css?v=20260915-r5">
 <link rel="stylesheet" href="css/workspace.css?v=20260915-r3">
 <link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -394,7 +394,12 @@
         <div class="today-focus-card" id="todayFocusCard">
           <div class="today-focus-header">
             <span class="today-section-title"><i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 今日聚焦</span>
-            <span class="today-focus-count" id="todayFocusCount">0/3</span>
+            <div class="today-focus-header-actions">
+              <span class="today-focus-count" id="todayFocusCount">0/0</span>
+              <button class="today-focus-limit-btn" onclick="editMaxFocusCount()" title="设置今日聚焦任务数量">
+                <i data-lucide="sliders-horizontal" class="lucide-icon"></i><span id="todayFocusLimitLabel">上限 3</span>
+              </button>
+            </div>
           </div>
           <div class="today-focus-list" id="todayFocusList"></div>
           <button class="today-focus-add-btn" id="todayFocusAddBtn" onclick="showTodoPicker()" title="从待办中选择今日目标">
@@ -1514,12 +1519,12 @@
 <script src="js/todos.js?v=20260823-r4"></script>
 <script src="js/notes.js?v=20260915-r4"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260905-r2"></script>
+<script src="js/today.js?v=20260915-r4"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260912-r1"></script>
-<script src="js/ai-attach.js?v=20260915-r3"></script>
+<script src="js/ai-attach.js?v=20260915-r5"></script>
 <script src="js/ai-render.js?v=20260915-r2"></script>
 <script src="js/ai-tools.js?v=20260914-r4"></script>
 <script src="js/ai-search.js"></script>
@@ -1575,9 +1580,9 @@
 <script src="js/store.js?v=20260913-r2"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260914-r14"></script>
+<script src="js/sync.js?v=20260916-r15"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260910-r6"></script>
+<script src="js/sync-logs.js?v=20260916-r7"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
 <script src="js/translation.js?v=20260914-r3"></script>
 

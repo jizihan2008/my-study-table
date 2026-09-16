@@ -13,6 +13,13 @@ test('shared schema avoids SECURITY DEFINER and lets authenticated users create 
   assert.match(sql, /create or replace function public\.is_friend[\s\S]*security invoker/i);
 });
 
+test('Alibaba schema enables realtime for both cross-device sync tables idempotently', () => {
+  const sql = fs.readFileSync(path.join(root, 'cloudbase', 'schema.sql'), 'utf8');
+  assert.match(sql, /alter publication supabase_realtime add table public\.user_data/i);
+  assert.match(sql, /alter publication supabase_realtime add table public\.user_sync_items/i);
+  assert.ok((sql.match(/exception when duplicate_object then null/gi) || []).length >= 2);
+});
+
 test('Alibaba free configuration uses the ordinary Supabase client surface', () => {
   const oldSupabase = global.supabase;
   const calls = [];

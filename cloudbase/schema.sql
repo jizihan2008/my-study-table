@@ -446,7 +446,7 @@ grant all on table public.weekly_focus_todos to authenticated, service_role;
 
 -- 注册资料不再通过 auth.users 触发器创建；客户端登录后写入 profiles_self_insert。
 
--- CloudBase for Supabase 暂不提供 Realtime；客户端已使用自适应轮询。
+-- 阿里云 Supabase 支持 Realtime；同步表的 publication 配置见各表定义之后。
 
 -- ═══════════════════════════════════════════════════════════════════
 -- 插件市场（v0.2.3）
@@ -704,7 +704,11 @@ $cb_policy$;
 revoke all on table public.user_data from anon;
 grant all on table public.user_data to authenticated, service_role;
 
--- 无 Realtime：客户端在前台按低频轮询同步。
+-- 启用 Realtime：其他设备写入后，客户端会收到变更通知并定向拉取。
+do $$ begin
+  alter publication supabase_realtime add table public.user_data;
+exception when duplicate_object then null;
+end $$;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- 日志类数据独立云存储（v0.6 增量同步）
@@ -769,7 +773,11 @@ $$;
 revoke all on function public.get_user_sync_usage() from public, anon;
 grant execute on function public.get_user_sync_usage() to authenticated, service_role;
 
--- 无 Realtime：客户端在前台按低频轮询同步。
+-- 日志类数据也开启 Realtime，供其他设备按 item 粒度合并。
+do $$ begin
+  alter publication supabase_realtime add table public.user_sync_items;
+exception when duplicate_object then null;
+end $$;
 
 -- ═══════════════════════════════════════════════════════════════════
 -- Storage 配置（本脚本已自动创建 bucket 和 RLS；以下仅供控制台核验）

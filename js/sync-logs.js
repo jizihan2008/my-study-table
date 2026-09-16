@@ -53,6 +53,7 @@
   const IDB_STORE = 'outbox';
   const UPLOAD_DEBOUNCE = 2000;
   const PULL_INTERVAL = 30 * 60 * 1000;
+  const REALTIME_RETRY_DELAY = 5000;
   const FULL_PULL_INTERVAL = 24 * 60 * 60 * 1000;
   const MAINTENANCE_INTERVAL = 24 * 60 * 60 * 1000;
   const USAGE_CACHE_MS = 5 * 60 * 1000;
@@ -67,6 +68,7 @@
   let applyingRemote = false;
   let uploadTimer = null;
   let realtimeChannel = null;
+  let realtimeRetryTimer = null;
   let pullDebounceTimer = null;
   let listeners = new Set();
   let progressListeners = new Set();
@@ -86,7 +88,10 @@
     if (pullLifecycleBound || typeof global.addEventListener !== 'function') return;
     pullLifecycleBound = true;
     global.addEventListener('online', function () {
-      if (_enabled() && _autoSyncOn() && loggedIn) void pullScheduler.start({ immediate: true });
+      if (_enabled() && _autoSyncOn() && loggedIn) {
+        void _subscribe();
+        void pullScheduler.start({ immediate: true });
+      }
     });
     global.addEventListener('offline', function () {
       pullScheduler.stop();
@@ -96,6 +101,7 @@
         if (global.document.visibilityState === 'hidden') {
           pullScheduler.stop();
         } else if (_enabled() && _autoSyncOn() && loggedIn && _canRunScheduledPull()) {
+          void _subscribe();
           void pullScheduler.start({ immediate: true });
         }
       });
@@ -1758,13 +1764,28 @@
   }
 
   // Realtime 订阅 user_sync_items（其他设备写入时实时合并）
+  function _scheduleRealtimeRetry() {
+    clearTimeout(realtimeRetryTimer);
+    if (!_enabled() || !_autoSyncOn() || !loggedIn) return;
+    if (global.navigator && global.navigator.onLine === false) return;
+    realtimeRetryTimer = setTimeout(() => {
+      realtimeRetryTimer = null;
+      void _subscribe();
+    }, REALTIME_RETRY_DELAY);
+  }
   async function _subscribe() {
     const c = _client();
     if (!c || typeof c.channel !== 'function' || !_autoSyncOn() || !loggedIn) return;
     try {
       const session = await _session();
       if (!session) return;
-      if (realtimeChannel) { try { await c.removeChannel(realtimeChannel); } catch (e) {} realtimeChannel = null; }
+      if (realtimeChannel) {
+        const oldChannel = realtimeChannel;
+        realtimeChannel = null;
+        try { await c.removeChannel(oldChannel); } catch (e) {}
+      }
+      clearTimeout(realtimeRetryTimer);
+      realtimeRetryTimer = null;
       const channel = c.channel('mst-user-sync-items')
         .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'user_sync_items', filter: 'user_id=eq.' + session.user.id },
@@ -1772,9 +1793,19 @@
         .on('postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'user_sync_items', filter: 'user_id=eq.' + session.user.id },
           payload => _debouncedPull(payload));
-      channel.subscribe();
       realtimeChannel = channel;
-    } catch (e) { /* 订阅失败不影响主流程 */ }
+      channel.subscribe(function (status) {
+        if (realtimeChannel !== channel) return;
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(realtimeRetryTimer);
+          realtimeRetryTimer = null;
+          // 补拉订阅建立前可能漏掉的日志变更。
+          void _enqueue(() => _flushLogs({ pullMode: 'incremental' }));
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          _scheduleRealtimeRetry();
+        }
+      });
+    } catch (e) { _scheduleRealtimeRetry(); }
   }
   const pendingRealtimeItems = new Map();
   function _debouncedPull(payload) {
@@ -1837,6 +1868,8 @@
           } else if (event === 'SIGNED_OUT') {
             loggedIn = false;
             pullScheduler.stop();
+            clearTimeout(realtimeRetryTimer);
+            realtimeRetryTimer = null;
             if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} realtimeChannel = null; }
             _emitStatus();
           }
@@ -1880,6 +1913,8 @@
     clearTimeout(uploadTimer);
     scheduled = false;
     clearTimeout(pullDebounceTimer);
+    clearTimeout(realtimeRetryTimer);
+    realtimeRetryTimer = null;
     if (realtimeChannel) {
       try {
         if (_client() && typeof _client().removeChannel === 'function') _client().removeChannel(realtimeChannel);

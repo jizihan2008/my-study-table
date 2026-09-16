@@ -98,7 +98,7 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260914-r14';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260916-r15';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const PENDING_CONFLICTS_KEY = 'study_sync_pending_conflicts_v1';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
@@ -107,6 +107,7 @@
   const OUTBOX_KEY = 'pending';              // 单条记录 key
   const UPLOAD_DEBOUNCE = 2000;              // 变更后等待上传的毫秒数
   const PULL_INTERVAL = 30 * 60 * 1000;      // 定时全量拉取间隔（30 分钟）
+  const REALTIME_RETRY_DELAY = 5000;          // Realtime 订阅异常后的重连延迟
   const FULL_RECONCILE_INTERVAL = 24 * 60 * 60 * 1000; // 每天做一次完整对账，其余走增量游标
 
   let client = null;                          // Supabase 客户端
@@ -116,6 +117,8 @@
   let dirtyKeys = new Set();                  // 待上传的 key
   let uploadTimer = null;
   let realtimeChannel = null;
+  let realtimeStatus = 'IDLE';
+  let realtimeRetryTimer = null;
   let syncInProgress = false;                 // 拉取/合并互斥锁
   let remoteApplyDepth = 0;                   // 仅抑制远端写回产生的本地变更通知
   let _lastPushAt = 0;                        // 上次主动上传完成时间（抑制自己变更的 realtime 回显）
@@ -657,6 +660,7 @@
     if (!c) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return false; }
 
     syncInProgress = true;
+    let appliedRemote = false;
     try {
       _hydrateDirtyKeys();
       const targeted = Array.isArray(targetKeys) && targetKeys.length > 0;
@@ -736,6 +740,7 @@
 
         if (action === 'pull') {
           await _applyRemoteValue(row.key, remoteRow.value, remoteRow.updated_at);
+          appliedRemote = true;
         } else if (action === 'upload') {
           _markLocalDirty(row.key);
           dirtyKeys.add(row.key);
@@ -771,7 +776,9 @@
     } finally {
       syncInProgress = false;
       try { await _flush(); } catch (e) { console.warn('[sync] 上传失败:', e); }
-      _refreshUI();
+      // Realtime 可能高频触发元数据检查；只有真正应用了远端值才重绘，
+      // 避免无变更时打断正在输入的用户。
+      if (appliedRemote) _refreshUI();
       _emitProgress({ active: false, phase: 'idle', current: 0, total: 0, key: '', label: '' });
     }
   }
@@ -871,6 +878,15 @@
 
   // ── Realtime 订阅远端变更 ───────────────────────────
   let _subscribing = false;   // 并发锁：防止 _subscribe 被重复触发导致 channel 冲突
+  function _scheduleRealtimeRetry() {
+    clearTimeout(realtimeRetryTimer);
+    if (!enabled || !autoSync || !loggedIn) return;
+    if (typeof global.navigator !== 'undefined' && global.navigator.onLine === false) return;
+    realtimeRetryTimer = setTimeout(() => {
+      realtimeRetryTimer = null;
+      void _subscribe();
+    }, REALTIME_RETRY_DELAY);
+  }
   async function _subscribe() {
     const c = _client();
     if (!c || typeof c.channel !== 'function' || !enabled || !autoSync || !loggedIn) return;
@@ -882,9 +898,13 @@
       // 彻底移除旧 channel（不能只 unsubscribe，否则 c.channel('mst-user-data') 会复用
       // 已 subscribe 的同名 channel，再次 .on('postgres_changes') 即报错）
       if (realtimeChannel) {
-        try { await c.removeChannel(realtimeChannel); } catch (e) {}
+        const oldChannel = realtimeChannel;
         realtimeChannel = null;
+        try { await c.removeChannel(oldChannel); } catch (e) {}
       }
+      clearTimeout(realtimeRetryTimer);
+      realtimeRetryTimer = null;
+      realtimeStatus = 'CONNECTING';
       const channel = c.channel('mst-user-data')
         .on('postgres_changes',
           { event: 'INSERT', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
@@ -892,10 +912,23 @@
         .on('postgres_changes',
           { event: 'UPDATE', schema: 'public', table: 'user_data', filter: 'user_id=eq.' + session.user.id },
           payload => _debouncedPull(payload));
-      channel.subscribe();
       realtimeChannel = channel;
+      channel.subscribe(function (status, error) {
+        if (realtimeChannel !== channel) return;
+        realtimeStatus = status || (error ? 'CHANNEL_ERROR' : 'UNKNOWN');
+        if (status === 'SUBSCRIBED') {
+          clearTimeout(realtimeRetryTimer);
+          realtimeRetryTimer = null;
+          // 补拉“启动拉取完成”到“订阅建立”之间的竞态窗口。
+          void _pullAll(true);
+        } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+          _scheduleRealtimeRetry();
+        }
+        void _emitStatus();
+      });
     } catch (e) {
-      // 订阅失败不影响主流程，仅日志
+      realtimeStatus = 'CHANNEL_ERROR';
+      _scheduleRealtimeRetry();
       if (typeof console !== 'undefined') console.error('[Sync] _subscribe error:', e);
     } finally {
       _subscribing = false;
@@ -1022,7 +1055,8 @@
       dirtyKeys: Object.keys(_getDirtyMap()),              // 待上传 dirty 标记列表（残留会挡住拉取）
       localTs: _getLocalTs(),                              // 本地时间戳（含旧版污染值，排查用）
       conflictCount: _getConflictHistory().length,
-      pendingConflictCount: getPendingConflicts().length
+      pendingConflictCount: getPendingConflicts().length,
+      realtimeStatus: realtimeStatus
     };
   }
 
@@ -1076,6 +1110,9 @@
     }
     clearTimeout(uploadTimer);
     pullScheduler.stop();
+    clearTimeout(realtimeRetryTimer);
+    realtimeRetryTimer = null;
+    realtimeStatus = 'IDLE';
     clearTimeout(pullDebounceTimer);
     pullDebounceTimer = null;
     // 持久化 dirty/outbox 必须保留，重新开启后继续补传。
@@ -1133,6 +1170,7 @@
     global.addEventListener('online', function () {
       if (!enabled || !autoSync || !loggedIn) return;
       _hydrateDirtyKeys();
+      void _subscribe();
       void pullScheduler.start({ immediate: true });
       if (global.SyncLogs && typeof global.SyncLogs.retryPending === 'function') {
         void global.SyncLogs.retryPending();
@@ -1146,6 +1184,7 @@
         if (global.document.visibilityState === 'hidden') {
           pullScheduler.stop();
         } else if (enabled && autoSync && loggedIn && _canRunScheduledPull()) {
+          void _subscribe();
           void pullScheduler.start({ immediate: true });
         }
       });
@@ -1190,6 +1229,9 @@
           } else if (event === 'SIGNED_OUT') {
             loggedIn = false;
             pullScheduler.stop();
+            clearTimeout(realtimeRetryTimer);
+            realtimeRetryTimer = null;
+            realtimeStatus = 'IDLE';
             if (realtimeChannel) { try { realtimeChannel.unsubscribe(); } catch (e) {} realtimeChannel = null; }
             _emitStatus();
           }

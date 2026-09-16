@@ -259,29 +259,31 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   for (const a of currentAttachments) {
     if (isAiStopRequested(conv.id)) break;
     try {
-      // Kimi 已有原生 file-extract；其他模型的 PDF 统一在本地转为文本或页面图片。
-      if (!isKimi && isPdfFile(a.file)) {
+      // Kimi 未指定范围时保留原生 file-extract；指定范围后也走本地选页，避免把整份 PDF 发出。
+      const hasPdfRange = isPdfFile(a.file) && (Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0);
+      if ((!isKimi || hasPdfRange) && isPdfFile(a.file)) {
+        const pdfRange = { startPage: a.pdfStartPage, endPage: a.pdfEndPage };
         if (a.pdfMode === 'image') {
           if (!isVision) {
             docTexts += `\n\n[附件：${a.name} — 当前模型不支持图片输入，请改用“提取文字”模式]`;
             continue;
           }
-          const rendered = await renderPdfAttachmentPages(a.file);
+          const rendered = await renderPdfAttachmentPages(a.file, pdfRange);
           a.pdfInfo = rendered;
           a.dataUrls = rendered.dataUrls;
           a.dataUrl = rendered.dataUrls[0] || '';
           rendered.dataUrls.forEach((dataUrl, index) => visionFiles.push({
             dataUrl,
-            name: `${a.name}（PDF 第 ${index + 1}/${rendered.pageCount} 页）`,
+            name: `${a.name}（PDF 第 ${rendered.pageNumbers[index]}/${rendered.pageCount} 页）`,
             type: 'image_url'
           }));
           if (rendered.truncated) {
-            docTexts += `\n\n[PDF：${a.name} — 共 ${rendered.pageCount} 页，页面图片模式本次仅发送前 ${rendered.renderedPages} 页]`;
+            docTexts += `\n\n[PDF：${a.name} — 已选择第 ${rendered.startPage}–${rendered.endPage} 页，受上限限制本次发送 ${rendered.renderedPages} 页]`;
           }
           const idx = displayAttachments.findIndex(d => d.name === a.name);
           if (idx >= 0) displayAttachments[idx].displayUrl = a.dataUrl;
         } else {
-          const extracted = await extractPdfAttachmentText(a.file);
+          const extracted = await extractPdfAttachmentText(a.file, pdfRange);
           a.pdfInfo = extracted;
           let content = extracted.text;
           if (!content) {
@@ -289,7 +291,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
           } else if (extracted.truncated) {
             content += '\n\n[PDF 文字内容过长，已截断]';
           }
-          docTexts += `\n\n[PDF附件（提取文字）：${a.name}，共 ${extracted.pageCount} 页]\n` + content;
+          docTexts += `\n\n[PDF附件（提取文字）：${a.name}，第 ${extracted.startPage}–${extracted.endPage} 页 / 共 ${extracted.pageCount} 页]\n` + content;
           const idx = displayAttachments.findIndex(d => d.name === a.name);
           if (idx >= 0) displayAttachments[idx].content = content;
         }

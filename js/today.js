@@ -71,7 +71,8 @@ function getWeekDays() {
 }
 
 // ═══════════ Today: Focus ═══════════
-// Focus data: { _date, items: [{todoId, text, done}] }
+// Focus data: { _date, items: [{todoId, text, done, note?}] }
+let focusNoteEditingId = null;
 
 // Max focus count setting (2-5, default 3)
 function getMaxFocusCount() {
@@ -88,6 +89,22 @@ function saveMaxFocusSetting() {
   if (val > 5) val = 5;
   input.value = val;
   localStorage.setItem('study_max_focus_count', val);
+  renderFocusList();
+}
+
+async function editMaxFocusCount() {
+  const current = getMaxFocusCount();
+  const raw = typeof showCustomPrompt === 'function'
+    ? await showCustomPrompt('每天最多选择几个今日聚焦任务？（2～5）', String(current))
+    : prompt('每天最多选择几个今日聚焦任务？（2～5）', String(current));
+  if (raw === null) return;
+  let value = parseInt(raw, 10);
+  if (isNaN(value)) value = current;
+  value = Math.max(2, Math.min(5, value));
+  localStorage.setItem('study_max_focus_count', String(value));
+  const settingsInput = document.getElementById('settingsMaxFocusCount');
+  if (settingsInput) settingsInput.value = value;
+  renderFocusList();
 }
 
 function loadFocusData() {
@@ -146,6 +163,15 @@ function getFocusTodoIds() {
   return new Set((data.items || []).map(i => i.todoId));
 }
 
+function getFocusTodoDisplayPath(todo) {
+  if (!todo) return { parents: [], full: '' };
+  const parents = typeof getAncestorPath === 'function'
+    ? getAncestorPath(todo.id).map(item => item.text).filter(Boolean)
+    : [];
+  const title = todo.text || '未命名待办';
+  return { parents, full: [...parents, title].join(' › ') };
+}
+
 // Render a focus todo node recursively, showing children if expanded
 function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const todo = todos.find(t => t.id === todoId);
@@ -154,6 +180,12 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const hasKids = children.length > 0;
   const isExpanded = focusExpandedIds.has(todoId);
   const indent = depth * 16;
+  const displayPath = getFocusTodoDisplayPath(todo);
+  const focusItem = isDirectFocus
+    ? (getTodayFocusItems().items || []).find(item => item.todoId === todoId)
+    : null;
+  const note = focusItem && typeof focusItem.note === 'string' ? focusItem.note.trim() : '';
+  const isEditingNote = isDirectFocus && focusNoteEditingId === todoId;
 
   const renderedChildren = children.map(c => renderFocusTodoNode(c.id, depth + 1, false)).join('');
 
@@ -162,13 +194,26 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
       <div class="today-focus-item${isDirectFocus ? '' : ' child'}" style="padding-left:${14 + indent}px;">
         ${hasKids ? `<button class="focus-expand${isExpanded ? ' expanded' : ''}" onclick="toggleFocusExpand(${todoId}, event)" title="展开/折叠">▶</button>` : '<span class="focus-expand-spacer"></span>'}
         <div class="focus-check${todo.done ? ' done' : ''}" onclick="event.stopPropagation(); toggleTodayFocusById(${todoId})" title="标记完成"></div>
-        <span class="focus-text${todo.done ? ' completed' : ''}">${escapeHtml(todo.text)}</span>
+        <span class="focus-text${todo.done ? ' completed' : ''}" title="${escapeAttr(displayPath.full)}">
+          ${displayPath.parents.length ? `<span class="focus-parent-path">${displayPath.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>')}</span>` : ''}
+          <span class="focus-title">${escapeHtml(todo.text)}</span>
+        </span>
         <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
           去目录
         </button>
+        ${isDirectFocus ? `<button class="focus-note-edit" onclick="event.stopPropagation(); editTodayFocusNote(${todoId})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}">
+          <i data-lucide="message-square-plus" class="lucide-icon"></i>
+        </button>` : ''}
         ${isDirectFocus ? `<button class="focus-delete" onclick="event.stopPropagation(); deleteTodayFocusById(${todoId})" title="移除">✕</button>` : ''}
       </div>
+      ${isEditingNote ? `<div class="today-focus-note-row editing">
+        <input class="today-focus-note-input" id="todayFocusNoteInput-${todoId}" type="text" maxlength="160"
+          value="${escapeAttr(note)}" placeholder="写一句话提醒今天的自己…"
+          onkeydown="handleTodayFocusNoteKeydown(event, ${todoId})" onblur="saveTodayFocusNote(${todoId}, this.value)">
+      </div>` : (note ? `<button class="today-focus-note-row" onclick="editTodayFocusNote(${todoId})" title="点击编辑">
+        <i data-lucide="message-square" class="lucide-icon"></i><span>${escapeHtml(note)}</span>
+      </button>` : '')}
       ${(hasKids && renderedChildren) ? `<div class="focus-children${isExpanded ? '' : ' collapsed'}">${renderedChildren}</div>` : ''}
     </div>
   `;
@@ -186,6 +231,8 @@ function renderFocusList() {
 
   const maxCount = getMaxFocusCount();
   if (count) count.textContent = doneCount + '/' + items.length;
+  const limitLabel = document.getElementById('todayFocusLimitLabel');
+  if (limitLabel) limitLabel.textContent = '上限 ' + maxCount;
   if (addBtn) addBtn.style.display = items.length >= maxCount ? 'none' : 'flex';
 
   if (items.length === 0) {
@@ -194,6 +241,40 @@ function renderFocusList() {
   }
 
   list.innerHTML = items.map(item => renderFocusTodoNode(item.todoId, 0, true)).join('');
+  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+}
+
+function editTodayFocusNote(todoId) {
+  focusNoteEditingId = todoId;
+  renderFocusList();
+  requestAnimationFrame(() => {
+    const input = document.getElementById('todayFocusNoteInput-' + todoId);
+    if (input) { input.focus(); input.select(); }
+  });
+}
+
+function saveTodayFocusNote(todoId, value) {
+  const data = getTodayFocusItems();
+  const item = (data.items || []).find(entry => entry.todoId === todoId);
+  if (!item) return;
+  const note = String(value || '').trim().slice(0, 160);
+  if (note) item.note = note;
+  else delete item.note;
+  focusNoteEditingId = null;
+  saveFocusData(data);
+  renderFocusList();
+}
+
+function handleTodayFocusNoteKeydown(event, todoId) {
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    event.currentTarget.blur();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    focusNoteEditingId = null;
+    event.currentTarget.onblur = null;
+    renderFocusList();
+  }
 }
 
 function toggleFocusExpand(id, e) {

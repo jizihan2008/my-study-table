@@ -244,8 +244,9 @@ function isPdfFile(file) {
   return String(file.type || '').toLowerCase() === 'application/pdf' || name.endsWith('.pdf');
 }
 
-// 附件大小上限：Kimi 文档 100MB；图片按“最宽松的一条路径”放行，
-// 真正发送时若走内联且超限会被 pruneOversizedImageAttachments 拦截并提示
+// PDF 可按页选择并在本地处理，不套用普通附件的 20MB 限制；
+// 其他 Kimi 文档上限 100MB，图片按“最宽松的一条路径”放行。
+// 真正发送时若图片走内联且超限，会被 pruneOversizedImageAttachments 拦截并提示。
 const ATTACH_MAX_BYTES = { kimi: 100 * 1024 * 1024, visionImage: 64 * 1024 * 1024, file: 20 * 1024 * 1024 };
 // DeepSeek Files API 单文件上限 64 MiB，且引用 file_id 的图片不受 32 MiB 内联限制
 const DS_FILES_MAX_BYTES = 64 * 1024 * 1024;
@@ -257,11 +258,12 @@ const AI_IMAGE_UPLOAD_KEY = 'study_ai_image_upload'; // auto | always | never
 
 // 返回 { max, label }，供大小校验与提示文案共用
 function getAttachSizeLimit(file, apiCfg = getEffectiveApiConfig()) {
+  if (isPdfFile(file)) return { max: Infinity, label: '无限制', unlimited: true };
   const isImage = !!file && (typeof isImageFile === 'function' ? isImageFile(file) : false);
   const max = isKimiModel(apiCfg)
     ? ATTACH_MAX_BYTES.kimi
     : (isImage ? ATTACH_MAX_BYTES.visionImage : ATTACH_MAX_BYTES.file);
-  return { max: max, label: formatFileSize(max) };
+  return { max: max, label: formatFileSize(max), unlimited: false };
 }
 
 // 将文件列表加入附件（供文件选择框、拖拽与粘贴共用）
@@ -271,7 +273,7 @@ function addAiAttachmentFiles(fileList) {
   const apiCfg = getEffectiveApiConfig();
   for (const file of files) {
     const limit = getAttachSizeLimit(file, apiCfg);
-    if (file.size > limit.max) {
+    if (!limit.unlimited && file.size > limit.max) {
       alert(`文件 "${file.name}" 超过 ${limit.label} 限制，已跳过`);
       continue;
     }
@@ -288,6 +290,10 @@ function addAiAttachmentFiles(fileList) {
       continue;
     }
     const attach = { name: file.name, file: file, size: file.size };
+    if (isPdf) {
+      attach.pdfStartPage = null;
+      attach.pdfEndPage = null;
+    }
     // Kimi 保留原生 file-extract；其余模型统一走本地 PDF 兼容层，由用户选择文字或页面图片。
     if (isPdf && !isKimiModel(apiCfg)) attach.pdfMode = 'text';
     // For Kimi image files, default to inline (base64), user can switch to OCR
@@ -596,6 +602,8 @@ function getAiAttachmentsSnapshot() {
     type: (a.file && a.file.type) || '',
     ocrMode: a.ocrMode,
     pdfMode: a.pdfMode,
+    pdfStartPage: a.pdfStartPage || null,
+    pdfEndPage: a.pdfEndPage || null,
     pdfInfo: a.pdfInfo || null,
     imageProcessing: a.imageProcessing === true,
     imageInfo: a.imageInfo || null,
@@ -633,6 +641,23 @@ function toggleAttachPdfMode(idx) {
   renderAttachPreview();
 }
 
+function updateAttachPdfRange(idx, field, rawValue) {
+  const a = aiAttachments[idx];
+  if (!a || !isPdfFile(a.file) || (field !== 'start' && field !== 'end')) return;
+  const parsed = parseInt(rawValue, 10);
+  const value = Number.isFinite(parsed) && parsed > 0 ? parsed : null;
+  if (field === 'start') a.pdfStartPage = value;
+  else a.pdfEndPage = value;
+  a.pdfInfo = null;
+  const start = a.pdfStartPage;
+  const end = a.pdfEndPage;
+  if (start && end && start > end) {
+    if (field === 'start') a.pdfEndPage = start;
+    else a.pdfStartPage = end;
+  }
+  renderAttachPreview();
+}
+
 function renderAttachPreview() {
   const wrap = document.getElementById('aiAttachPreview');
   const btn = document.getElementById('aiAttachBtn');
@@ -654,6 +679,19 @@ function renderAttachPreview() {
       ? `<img class="preview-thumb" src="${a.dataUrl}" alt="">`
       : `<span class="preview-icon">${isImage ? '🖼️' : (isPdf ? '📕' : '📝')}</span>`;
     let modeToggle = '';
+    let pdfRange = '';
+    if (isPdf) {
+      const total = a.pdfInfo && Number(a.pdfInfo.pageCount) > 0 ? Number(a.pdfInfo.pageCount) : '';
+      const rangeTitle = isKimiModel() ? '设置后仅发送所选页；留空则使用 Kimi 原生整文件解析' : '留空表示从第一页到最后一页';
+      pdfRange = `<span class="preview-pdf-range" title="${rangeTitle}">
+        <span>页</span>
+        <input type="number" min="1" ${total ? `max="${total}"` : ''} value="${a.pdfStartPage || ''}" placeholder="1"
+          aria-label="PDF 起始页" onchange="updateAttachPdfRange(${i}, 'start', this.value)">
+        <span>–</span>
+        <input type="number" min="1" ${total ? `max="${total}"` : ''} value="${a.pdfEndPage || ''}" placeholder="末页"
+          aria-label="PDF 结束页" onchange="updateAttachPdfRange(${i}, 'end', this.value)">
+      </span>`;
+    }
     if (isPdf && a.pdfMode !== undefined) {
       const imageMode = a.pdfMode === 'image';
       const modeLabel = imageMode ? '🖼️ 页面图片' : '📄 提取文字';
@@ -680,11 +718,12 @@ function renderAttachPreview() {
       const label = a.imageProcessing ? '⏳ 处理中' : (a.uploadError ? '🖼️ 内联(回退)' : '🖼️ 内联');
       modeToggle = `<span class="preview-mode-tag" title="${escapeHtml(tip)}">${label}</span>`;
     }
-    return `<span class="ai-attach-preview">
+    return `<span class="ai-attach-preview${isPdf ? ' pdf-attachment' : ''}">
       ${thumb}
       <span class="preview-name">${escapeHtml(a.name.length > 15 ? a.name.slice(0,15)+'…' : a.name)}</span>
       <span class="preview-size">${formatFileSize(a.size)}</span>
       ${modeToggle}
+      ${pdfRange}
       <button class="preview-remove" onclick="removeAttachment(${i})">✕</button>
     </span>`;
   }).join('');
@@ -712,15 +751,28 @@ async function openPdfAttachment(file) {
   return { pdfjsLib, pdf: await loadingTask.promise };
 }
 
+function resolvePdfAttachmentRange(pageCount, opts = {}) {
+  const total = Math.max(1, Math.floor(Number(pageCount) || 1));
+  let startPage = Math.floor(Number(opts.startPage));
+  let endPage = Math.floor(Number(opts.endPage));
+  if (!Number.isFinite(startPage) || startPage < 1) startPage = 1;
+  if (!Number.isFinite(endPage) || endPage < 1) endPage = total;
+  startPage = Math.min(startPage, total);
+  endPage = Math.min(endPage, total);
+  if (startPage > endPage) [startPage, endPage] = [endPage, startPage];
+  return { startPage, endPage, selectedPages: endPage - startPage + 1 };
+}
+
 async function extractPdfAttachmentText(file, opts = {}) {
   const maxChars = Number(opts.maxChars) > 0 ? Number(opts.maxChars) : PDF_TEXT_MAX_CHARS;
   const opened = await openPdfAttachment(file);
   const pdf = opened.pdf;
+  const range = resolvePdfAttachmentRange(pdf.numPages, opts);
   const pages = [];
   let charCount = 0;
   let truncated = false;
   try {
-    for (let pageNo = 1; pageNo <= pdf.numPages; pageNo++) {
+    for (let pageNo = range.startPage; pageNo <= range.endPage; pageNo++) {
       const page = await pdf.getPage(pageNo);
       const content = await page.getTextContent();
       const text = (content.items || [])
@@ -737,7 +789,7 @@ async function extractPdfAttachmentText(file, opts = {}) {
       charCount += marker.length + pageText.length;
       if (pageText.length < text.length) { truncated = true; break; }
     }
-    return { text: pages.join('\n\n'), pageCount: pdf.numPages, textPageCount: pages.length, truncated };
+    return { text: pages.join('\n\n'), pageCount: pdf.numPages, textPageCount: pages.length, truncated, ...range };
   } finally {
     try { await pdf.destroy(); } catch (e) {}
   }
@@ -749,9 +801,11 @@ async function renderPdfAttachmentPages(file, opts = {}) {
   const opened = await openPdfAttachment(file);
   const pdf = opened.pdf;
   const dataUrls = [];
-  const renderCount = Math.min(pdf.numPages, maxPages);
+  const range = resolvePdfAttachmentRange(pdf.numPages, opts);
+  const renderCount = Math.min(range.selectedPages, maxPages);
+  const pageNumbers = [];
   try {
-    for (let pageNo = 1; pageNo <= renderCount; pageNo++) {
+    for (let pageNo = range.startPage; pageNo < range.startPage + renderCount; pageNo++) {
       const page = await pdf.getPage(pageNo);
       const baseViewport = page.getViewport({ scale: 1 });
       const scale = Math.min(2, maxWidth / Math.max(1, baseViewport.width));
@@ -766,11 +820,12 @@ async function renderPdfAttachmentPages(file, opts = {}) {
       await page.render({ canvasContext: ctx, viewport }).promise;
       const blob = await canvasToBlob(canvas, 'image/jpeg', PDF_IMAGE_JPEG_QUALITY);
       dataUrls.push(await blobToDataUrl(blob));
+      pageNumbers.push(pageNo);
       // 及时释放画布后端，长文档逐页处理时避免占用过多显存。
       canvas.width = 1;
       canvas.height = 1;
     }
-    return { dataUrls, pageCount: pdf.numPages, renderedPages: renderCount, truncated: pdf.numPages > renderCount };
+    return { dataUrls, pageCount: pdf.numPages, renderedPages: renderCount, pageNumbers, truncated: range.selectedPages > renderCount, ...range };
   } finally {
     try { await pdf.destroy(); } catch (e) {}
   }

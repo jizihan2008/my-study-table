@@ -758,6 +758,14 @@ test('PDF attachments are accepted for every model and expose user-selectable lo
   let attach = ctx.getAiAttachments()[0];
   assert.equal(ctx.isPdfFile(pdf), true);
   assert.equal(attach.pdfMode, 'text');
+  assert.equal(attach.pdfStartPage, null);
+  assert.equal(attach.pdfEndPage, null);
+
+  ctx.updateAttachPdfRange(0, 'start', '3');
+  ctx.updateAttachPdfRange(0, 'end', '8');
+  attach = ctx.getAiAttachments()[0];
+  assert.equal(attach.pdfStartPage, 3);
+  assert.equal(attach.pdfEndPage, 8);
 
   // 非视觉模型仍可提取文字，但不能误选页面图片。
   ctx.toggleAttachPdfMode(0);
@@ -771,6 +779,12 @@ test('PDF attachments are accepted for every model and expose user-selectable lo
   assert.equal(attach.pdfMode, 'image');
   ctx.toggleAttachPdfMode(0);
   assert.equal(ctx.getAiAttachments()[0].pdfMode, 'text');
+
+  // PDF 不再沿用普通附件的 20MB 客户端限制，实际能力由本地内存或服务端决定。
+  ctx.setAiAttachments([]);
+  ctx.addAiAttachmentFiles([{ name: '大型讲义.pdf', type: 'application/pdf', size: 250 * 1024 * 1024 }]);
+  assert.equal(ctx.getAiAttachments().length, 1);
+  assert.equal(alerts.length, 1); // 仅保留前面非视觉模型切换页面图片时的提示
 });
 
 test('PDF text mode extracts page-labelled text and reports truncation', async () => {
@@ -796,6 +810,12 @@ test('PDF text mode extracts page-labelled text and reports truncation', async (
 
   const short = await ctx.extractPdfAttachmentText({}, { maxChars: 15 });
   assert.equal(short.truncated, true);
+
+  const selected = await ctx.extractPdfAttachmentText({}, { startPage: 2, endPage: 3, maxChars: 200 });
+  assert.doesNotMatch(selected.text, /第 1 页/);
+  assert.match(selected.text, /第 3 页/);
+  assert.equal(selected.startPage, 2);
+  assert.equal(selected.endPage, 3);
 });
 
 test('PDF image mode renders ordered JPEG pages and caps oversized documents', async () => {
@@ -828,6 +848,12 @@ test('PDF image mode renders ordered JPEG pages and caps oversized documents', a
   assert.equal(output.renderedPages, 2);
   assert.equal(output.truncated, true);
   assert.equal(destroyed, true);
+
+  rendered.length = 0;
+  const selected = await ctx.renderPdfAttachmentPages({}, { startPage: 2, endPage: 3, maxPages: 24, maxWidth: 1600 });
+  assert.deepEqual(rendered, [2, 3]);
+  assert.deepEqual(Array.from(selected.pageNumbers), [2, 3]);
+  assert.equal(selected.truncated, false);
 });
 
 test('deepseek-flash counts as an image-capable model while deepseek-v4-pro does not', () => {
