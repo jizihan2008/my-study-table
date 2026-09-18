@@ -17,7 +17,7 @@ function harness() {
   const stopped = new Set();
   const ctx = {
     window: { _aiResumeInited: true }, console, localStorage: storage(),
-    genId: () => ++id, document: { getElementById: () => null },
+    genId: () => ++id, document: { getElementById: () => null, addEventListener() {} },
     getEffectiveApiConfig: () => ({ apiKey: 'fake', name: 'original', model: 'test', contextLimit: 20 }),
     getActiveConvId: () => 'foreground', getActiveConv: () => ({ id: 'foreground', _webSearchMode: 'native' }),
     isAiLoading: id => loading.has(id), setAiLoading: (id, value) => value ? loading.add(id) : loading.delete(id),
@@ -29,11 +29,12 @@ function harness() {
     setTimeout, clearTimeout
   };
   vm.createContext(ctx);
-  for (const file of ['ai-tree', 'ai-attach', 'skills', 'ai-tools', 'ai-api', 'ai-send']) {
+  for (const file of ['ai-tree', 'ai-attach', 'skills', 'ai-tools', 'ai-api', 'ai-send', 'ai-render']) {
     // aiAttachments 在应用里由 js/settings.js 以 let 声明（全局词法绑定），测试里显式补上，
     // 否则对 ctx.aiAttachments 的赋值只会写到宿主对象上，源码里的 push/读改写都看不到
     vm.runInContext(file === 'ai-attach' ? 'let aiAttachments = [];\n' + source(file) : source(file), ctx);
   }
+  ctx.showAiToast = () => {};
   // 词法绑定无法从宿主直接读写 → 通过 VM 内代码操作
   ctx.setAiAttachments = list => vm.runInContext('aiAttachments = __list', Object.assign(ctx, { __list: list }));
   ctx.getAiAttachments = () => vm.runInContext('aiAttachments.slice()', ctx);
@@ -50,8 +51,11 @@ const result = (tools = [], text = 'final answer') => ({ toolCalls: tools, clean
 
 test('AI skill tools support create, list, read, edit and explicit deletion', async () => {
   const ctx = harness();
-  const selected = ctx.selectAiToolsForPrompt({ messages: [{ role: 'user', content: '帮我查看技能' }] }, false, false);
+  // 接口组由用户在对话设置里勾选，不再按消息关键词筛选
+  const groupConv = { id: 'g1', messages: [{ role: 'user', content: '随便聊聊' }], _toolGroups: ['skill'] };
+  const selected = ctx.selectAiToolsForConversation(groupConv, false, false);
   for (const name of ['create_skill','list_skills','get_skill','update_skill','delete_skill']) assert.equal(selected.has(name), true);
+  assert.equal(selected.has('add_todo'), false);
   assert.equal(ctx.validateAiToolCall('create_skill', { name: '核对事实', content: '先核对来源。' }).ok, true);
   assert.equal(ctx.validateAiToolCall('create_skill', { name: '核对事实', content: ' ' }).ok, false);
   assert.equal(ctx.validateAiToolCall('update_skill', { skillId: 'id' }).ok, false);
@@ -67,14 +71,186 @@ test('AI skill tools support create, list, read, edit and explicit deletion', as
   assert.equal((await ctx.executeToolCallStructured('update_skill', { skillId: skill.id, content: '核对两个来源。' })).ok, true);
   assert.equal(ctx.getAiSkill(skill.id).content, '核对两个来源。');
 
-  assert.equal(ctx.authorizeAiToolCall('delete_skill', { skillId: skill.id }, { messages: [{ role: 'user', content: '帮我整理这个技能' }] }).ok, false);
-  assert.equal(ctx.authorizeAiToolCall('delete_skill', { skillId: skill.id }, { messages: [{ role: 'user', content: '能不能删除技能？' }] }).ok, false);
-  assert.equal(ctx.authorizeAiToolCall('delete_skill', { skillId: skill.id }, { messages: [{ role: 'user', content: '删除这个技能' }] }).ok, true);
+  // 删除策略取代了过去的「删除意图关键词」判断
+  const confirmConv = { id: 'c1', messages: [{ role: 'user', content: '帮我整理这个技能' }], _deletePolicy: 'confirm' };
+  assert.equal(ctx.checkAiDeletePolicy('delete_skill', { skillId: skill.id }, confirmConv).ok, true);
+  assert.equal(ctx.checkAiDeletePolicy('delete_skill', { skillId: skill.id }, confirmConv).needsConfirm, true);
+  assert.equal(ctx.checkAiDeletePolicy('delete_skill', { skillId: skill.id }, { _deletePolicy: 'block' }).ok, false);
+  assert.equal(ctx.checkAiDeletePolicy('delete_skill', { skillId: skill.id }, { _deletePolicy: 'allow' }).needsConfirm, false);
+  assert.equal(ctx.checkAiDeletePolicy('list_skills', {}, { _deletePolicy: 'block' }).ok, true);
   const snapshot = ctx.beginAiToolTransaction('delete_skill');
   assert.equal((await ctx.executeToolCallStructured('delete_skill', { skillId: skill.id })).ok, true);
   assert.equal(ctx.loadAiSkills().length, 0);
   ctx.rollbackAiToolTransaction(snapshot);
   assert.equal(ctx.loadAiSkills().length, 1);
+});
+
+test('note tag tools: create with tags, edit tags, and batch tag by mode', async () => {
+  const ctx = harness();
+  // 笔记数组在应用里是 core.js 的顶层 let（词法绑定），测试里直接补一个 fixture
+  vm.runInContext(`let notes = [
+    { id: 101, type: 'note', title: '栈', content: '栈的内容', tags: ['数据结构'], parentId: null },
+    { id: 102, type: 'note', title: '并查集', content: '并查集的内容', tags: [], parentId: null },
+    { id: 103, type: 'folder', title: '图论', tags: [], parentId: null }
+  ];`, ctx);
+  const notesInVm = () => JSON.parse(vm.runInContext('JSON.stringify(notes)', ctx));
+  const saved = () => vm.runInContext('JSON.stringify(notes)', ctx);
+
+  // schema：新增的参数必须能被原生 function tools 反推出来，否则 AI 根本看不到
+  assert.equal(ctx.getAiToolJsonSchema('add_note').properties.tags.type, 'string');
+  assert.equal(ctx.getAiToolJsonSchema('update_note').properties.tags.type, 'string');
+  const batchSchema = ctx.getAiToolJsonSchema('batch_set_note_tags');
+  assert.equal(batchSchema.properties.ids.type, 'array');
+  assert.equal(batchSchema.properties.ids.items.type, 'number');
+  // 跨 VM realm 的数组原型不同，deepEqual(strict) 会因引用不等而失败，统一用 join 比较
+  assert.equal(batchSchema.properties.mode.enum.join(','), 'replace,add');
+
+  // 参数校验：非字符串 tags 直接拒绝，空字符串是合法的「清空」
+  assert.equal(ctx.validateAiToolCall('batch_set_note_tags', { ids: [101], tags: '数据结构' }).ok, true);
+  assert.equal(ctx.validateAiToolCall('batch_set_note_tags', { ids: [101] }).ok, false);
+  assert.equal(ctx.validateAiToolCall('batch_set_note_tags', { ids: [], tags: 'x' }).ok, true); // 空数组在执行层再拦
+  assert.equal(ctx.parseAiNoteTags(['数据结构']).ok, false);
+  assert.equal(ctx.parseAiNoteTags('数据结构, 图论，数据结构').tags.join(','), '数据结构,图论');
+  assert.equal(ctx.parseAiNoteTags('').tags.length, 0);
+  assert.equal(ctx.parseAiNoteTags('x'.repeat(25)).ok, false);
+
+  // 新建笔记直接带标签
+  const created = await ctx.executeToolCallStructured('add_note', { title: '最短路', content: 'Dijkstra', tags: '图论,最短路' });
+  assert.equal(created.ok, true);
+  const newNote = notesInVm().find(n => n.title === '最短路');
+  assert.deepEqual(newNote.tags, ['图论', '最短路']);
+
+  // 单篇改标签 / 清空
+  assert.equal((await ctx.executeToolCallStructured('update_note', { id: 102, tags: '数据结构' })).ok, true);
+  assert.deepEqual(notesInVm().find(n => n.id === 102).tags, ['数据结构']);
+  assert.match((await ctx.executeToolCallStructured('update_note', { id: 102, tags: '' })).text, /已清空/);
+  assert.deepEqual(notesInVm().find(n => n.id === 102).tags, []);
+
+  // 批量：replace 覆盖、add 追加、跳过文件夹与不存在的 ID
+  const replaced = await ctx.executeToolCallStructured('batch_set_note_tags', { ids: [101, 102], tags: '算法', mode: 'replace' });
+  assert.equal(replaced.ok, true);
+  assert.deepEqual(notesInVm().find(n => n.id === 101).tags, ['算法']);
+  assert.deepEqual(notesInVm().find(n => n.id === 102).tags, ['算法']);
+  assert.match(replaced.text, /已覆盖设置 2 篇笔记/);
+
+  const added = await ctx.executeToolCallStructured('batch_set_note_tags', { ids: [101, 999, 103], tags: '重点', mode: 'add' });
+  assert.equal(added.ok, true);
+  assert.deepEqual(notesInVm().find(n => n.id === 101).tags, ['算法', '重点']);
+  assert.match(added.text, /跳过了 1 个不存在的ID/);
+  assert.match(added.text, /跳过了 1 个文件夹/);
+
+  // 读回显：get_note_detail 与 list_notes 都要能看到标签，AI 才能自查
+  assert.match((await ctx.executeToolCallStructured('get_note_detail', { id: 101 })).text, /🏷️ 标签：算法、重点/);
+  assert.match((await ctx.executeToolCallStructured('list_notes', {})).text, /🏷️算法、重点/);
+
+  // get_note_tags：标签全集 + 每个标签挂几篇 + 未打标签的篇数
+  // 此时数据：栈[算法,重点]、并查集[算法]、最短路[图论,最短路] → 4 个标签，3 篇全有标签
+  const tagReport = await ctx.executeToolCallStructured('get_note_tags', {});
+  assert.equal(tagReport.ok, true);
+  assert.match(tagReport.text, /标签全集：共 4 个（3 篇笔记，3 篇已打标签，0 篇未打标签）/);
+  assert.match(tagReport.text, /- 【算法】2 篇：栈\[ID:101\]、并查集\[ID:102\]/);
+  assert.match(tagReport.text, /- 【重点】1 篇：栈\[ID:101\]/);
+  // 计数多的标签排前面，同一份数据输出稳定
+  assert.ok(tagReport.text.indexOf('【算法】') < tagReport.text.indexOf('【重点】'));
+  // search 命中标签名
+  const byTag = await ctx.executeToolCallStructured('get_note_tags', { search: '重点' });
+  assert.match(byTag.text, /匹配「重点」的有 1 个/);
+  assert.ok(byTag.text.indexOf('【算法】') === -1);
+  // search 也能命中标题；includeNotes=false 时只留标签+计数
+  const byTitle = await ctx.executeToolCallStructured('get_note_tags', { search: '栈' });
+  assert.match(byTitle.text, /【算法】/);
+  const countsOnly = await ctx.executeToolCallStructured('get_note_tags', { includeNotes: false });
+  assert.match(countsOnly.text, /- 【算法】2 篇\n/);
+  assert.ok(countsOnly.text.indexOf('[ID:101]') === -1, 'includeNotes=false 不应列出笔记');
+  // 它是只读接口：不参与写事务，也不受「完全拦截删除」影响
+  assert.equal(ctx.getAiToolMetadata('get_note_tags').effect, 'read');
+  assert.equal(ctx.checkAiDeletePolicy('get_note_tags', {}, { _deletePolicy: 'block' }).ok, true);
+
+  // 写入确实落到 study_notes_v2
+  assert.match(saved(), /"tags":\["算法","重点"\]/);
+});
+
+test('required params reject blank input except the parameters where blank means "clear"', () => {
+  const ctx = harness();
+  // 空字符串在绝大多数接口里是「没填」；只有 tags 这类参数用空串表达「清空」。
+  // 这条不变量靠 AI_TOOL_EMPTY_STRING_MEANS_CLEAR 维护，改必填校验时不能悄悄破坏。
+  const emptyMeansClear = Array.from(vm.runInContext('Array.from(AI_TOOL_EMPTY_STRING_MEANS_CLEAR)', ctx));
+  assert.deepEqual(emptyMeansClear, ['tags']);
+  assert.equal(ctx.validateAiToolCall('batch_set_note_tags', { ids: [1], tags: '' }).ok, true);
+  assert.equal(ctx.validateAiToolCall('update_note', { id: 1, tags: '' }).ok, true);
+  // 必填参数留空仍然被拦下
+  assert.equal(ctx.validateAiToolCall('add_note', { title: '   ' }).ok, true); // 标题只查是否为空串，空白由执行层兜底
+  assert.equal(ctx.validateAiToolCall('add_note', {}).ok, false);
+  assert.equal(ctx.validateAiToolCall('add_todo', { text: '' }).ok, false);
+  assert.equal(ctx.validateAiToolCall('search_notes', { query: '' }).ok, false);
+  assert.equal(ctx.validateAiToolCall('search_chat_messages', { query: '' }).ok, false);
+  assert.equal(ctx.validateAiToolCall('web_search', { query: '' }).ok, false);
+  // 非必填的 text 传空串仍然合法（等价于只改其他字段/空操作）
+  assert.equal(ctx.validateAiToolCall('update_todo', { id: 5, text: '' }).ok, true);
+});
+
+test('get_note_tags explains an empty tag vocabulary instead of returning nothing', async () => {
+  const ctx = harness();
+  vm.runInContext(`let notes = [
+    { id: 201, type: 'note', title: '未归类', content: 'x', tags: [], parentId: null }
+  ];`, ctx);
+  const empty = await ctx.executeToolCallStructured('get_note_tags', {});
+  assert.equal(empty.ok, true);
+  assert.match(empty.text, /暂无标签（共 1 篇笔记，全部未打标签）/);
+  assert.match(empty.text, /batch_set_note_tags/);
+});
+
+test('tool groups are chosen by the conversation and cover every tool', () => {
+  const ctx = harness();
+  const inVm = expr => Array.from(vm.runInContext(expr, ctx));
+  const groupKeys = inVm('AI_TOOL_GROUPS.map(g => g.key)');
+  const allTools = inVm('Object.keys(AI_TOOLS)');
+  const grouped = inVm('AI_TOOL_GROUPS.flatMap(g => g.tools)');
+  // 每个工具恰好属于一个组；接口组目录 = 全部工具
+  assert.deepEqual([...grouped].sort(), [...allTools].sort());
+  assert.equal(new Set(grouped).size, grouped.length);
+
+  // 未设置过 → 沿用记住的选择；再没有 → 全部开放
+  const fresh = { id: 'f1', messages: [] };
+  assert.deepEqual(inVm('getConversationToolGroups({ id: "f1", messages: [] })'), groupKeys);
+  vm.runInContext(`localStorage.setItem('study_ai_tool_prefs', JSON.stringify({ groups: ['note'] }))`, ctx);
+  assert.deepEqual(inVm('getConversationToolGroups({ id: "f1", messages: [] })'), ['note']);
+  const explicit = { id: 'f2', messages: [], _toolGroups: [] };
+  assert.deepEqual(Array.from(ctx.getConversationToolGroups(explicit)), []);
+  assert.equal(ctx.selectAiToolsForConversation(explicit, false, false).size, 0);
+  // 保存勾选会同时记住，供之后未配置的对话沿用
+  const target = { id: 'f3', messages: [] };
+  ctx.setConversationToolGroups(target, ['quest', 'web', '不存在的组']);
+  assert.deepEqual(Array.from(target._toolGroups), ['quest', 'web']);
+  assert.deepEqual(inVm('getConversationToolGroups({ id: "f1", messages: [] })'), ['quest', 'web']);
+});
+
+test('blocking deletes hides the delete-capable tools while confirm/allow keep them', () => {
+  const ctx = harness();
+  const all = vm.runInContext('AI_TOOL_GROUPS.map(g => g.key)', ctx);
+  const confirmTools = ctx.selectAiToolsForConversation({ _toolGroups: all, _deletePolicy: 'confirm' }, false, false);
+  for (const name of ['delete_todo','delete_note','delete_skill','delete_link','delete_automation','batch_update_todos']) {
+    assert.equal(confirmTools.has(name), true, name + ' 应在 confirm 策略下下发');
+  }
+  const blockedTools = ctx.selectAiToolsForConversation({ _toolGroups: all, _deletePolicy: 'block' }, false, false);
+  for (const name of ['delete_todo','delete_note','delete_skill','delete_link','delete_automation','batch_update_todos']) {
+    assert.equal(blockedTools.has(name), false, name + ' 应在 block 策略下隐藏');
+  }
+  assert.equal(blockedTools.has('list_todos'), true);
+  assert.equal(blockedTools.has('add_todo'), true);
+  // 原生模式与文本模式共用同一集合
+  const nativeBlocked = ctx.selectedNativeLocalTools({ _toolGroups: all, _deletePolicy: 'block' }, { baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-v4-flash' });
+  const nativeNames = nativeBlocked.map(item => item.function.name);
+  assert.equal(nativeNames.includes('delete_todo'), false);
+  assert.equal(nativeNames.includes('list_todos'), true);
+});
+
+test('toggle_todo is gone: neither defined nor executable', async () => {
+  const ctx = harness();
+  assert.equal(vm.runInContext('typeof AI_TOOLS.toggle_todo', ctx), 'undefined');
+  const result = await ctx.executeToolCallStructured('toggle_todo', { id: 1 });
+  assert.equal(result.ok, false);
+  assert.match(String(result.text || result.error || ''), /未知工具|未找到|不支持/);
 });
 
 test('tree normalization repairs stale message cache from the active path', () => {
@@ -142,6 +318,75 @@ test('editing a user message without changing its text does not create a branch'
   await ctx.sendEditedMessage(userId, '  question  ');
   assert.equal(conv.tree.root.children.length, 1);
   assert.equal(conv.tree[userId].children.length, 0);
+});
+
+test('candidate arrows follow sibling order and restore the full chosen branch', () => {
+  const ctx = harness();
+  const conv = { id: 'arrows' };
+  ctx.initTreeOnConv(conv);
+  const userId = ctx.appendMessage(conv, { role: 'user', content: 'question' });
+  const first = ctx.appendMessage(conv, { role: 'assistant', content: 'first' });
+  ctx.appendMessage(conv, { role: 'system', content: 'first tool result' });
+  const second = ctx.createBranch(conv, userId, { role: 'assistant', content: 'second' });
+  ctx.appendMessage(conv, { role: 'system', content: 'second tool result' });
+  const third = ctx.createBranch(conv, userId, { role: 'assistant', content: 'third' });
+  ctx.appendMessage(conv, { role: 'system', content: 'third tool result' });
+  ctx.getActiveConv = () => conv;
+
+  ctx.switchBranch(conv, second);
+  ctx.navigateCandidateBranch(second, 1);
+  assert.equal(conv.activePath.includes(third), true);
+  assert.equal(conv.messages.at(-1).content, 'third tool result');
+  ctx.navigateCandidateBranch(third, 1);
+  assert.equal(conv.activePath.includes(first), true);
+  assert.equal(conv.messages.at(-1).content, 'first tool result');
+});
+
+test('edited user version arrows keep the selected version reply and continuation', () => {
+  const ctx = harness();
+  const conv = { id: 'versions' };
+  ctx.initTreeOnConv(conv);
+  const first = ctx.appendMessage(conv, { role: 'user', content: 'first question' });
+  ctx.appendMessage(conv, { role: 'assistant', content: 'first answer' });
+  const second = ctx.createBranchFromEdit(conv, first, 'second question');
+  ctx.appendMessage(conv, { role: 'assistant', content: 'second answer' });
+  const third = ctx.createBranchFromEdit(conv, first, 'third question');
+  ctx.appendMessage(conv, { role: 'assistant', content: 'third answer' });
+  ctx.appendMessage(conv, { role: 'user', content: 'follow up' });
+  ctx.getActiveConv = () => conv;
+
+  ctx.switchUserVersion(second, 1);
+  assert.equal(conv.activePath.includes(third), true);
+  assert.equal(conv.messages.at(-1).content, 'follow up');
+});
+
+test('last save fallback retains every tree branch without the redundant message cache', () => {
+  const ctx = harness();
+  const conv = { id: 'fallback', title: 'branched', systemPrompt: '', _dailyReport: true };
+  ctx.initTreeOnConv(conv);
+  const userId = ctx.appendMessage(conv, { role: 'user', content: 'question' });
+  const first = ctx.appendMessage(conv, { role: 'assistant', content: 'first answer' });
+  const second = ctx.createBranch(conv, userId, { role: 'assistant', content: 'second answer' });
+  conv._rawLogs = { circular: conv };
+  vm.runInContext(source('ai-utils'), ctx);
+  ctx.aiConvs = [conv];
+  const saved = storage();
+  let attempts = 0;
+  ctx.localStorage = {
+    getItem: saved.getItem,
+    setItem(key, value) {
+      if (++attempts === 1) throw new Error('storage quota');
+      saved.setItem(key, value);
+    }
+  };
+
+  assert.equal(ctx.safeSaveAiConvs(), true);
+  const restored = JSON.parse(saved.getItem('study_ai_convs'))[0];
+  assert.equal(restored.messages, undefined);
+  assert.equal(restored._dailyReport, true);
+  assert.deepEqual(restored.tree[userId].children, [first, second]);
+  ctx.ensureTree(restored);
+  assert.equal(restored.messages.at(-1).content, 'second answer');
 });
 
 test('missing policy settings use 60 seconds, two retries and exponential backoff', async () => {
@@ -510,17 +755,47 @@ test('tool validation rejects unknown fields, invalid dates and quest dependency
   assert.equal(ctx.validateAiToolCall('quest_create', { lineId: 10, title: 'new', deps: [999] }).ok, false);
 });
 
-test('destructive tools require explicit deletion intent before execution', async () => {
-  const ctx = harness();
-  const conv = conversation(ctx);
-  let calls = 0;
-  let executions = 0;
-  ctx.callAiApi = async () => ++calls === 1 ? result([{ action: 'delete_todo', params: { id: 1 } }]) : result();
-  ctx.executeToolCall = async () => { executions++; return '✅ deleted'; };
-  const output = await ctx.runToolCallLoop({}, conv);
-  assert.equal(executions, 0);
-  assert.equal(output.outcomes[0].status, 'failed');
-  assert.match(output.outcomes[0].error, /删除意图/);
+test('delete policy (block / confirm / allow) decides whether destructive tools can run', async () => {
+  const okResult = { ok: true, status: 'success', text: '✅ deleted', durationMs: 0 };
+  async function runWithPolicy(policy, confirmAnswer) {
+    const ctx = harness();
+    const conv = conversation(ctx);
+    if (policy) conv._deletePolicy = policy;
+    let calls = 0;
+    let executions = 0;
+    let asked = 0;
+    ctx.callAiApi = async () => ++calls === 1 ? result([{ action: 'delete_todo', params: { id: 1 } }]) : result();
+    ctx.executeToolCallStructured = async () => { executions++; return okResult; };
+    ctx.showCustomConfirm = async () => { asked++; return confirmAnswer; };
+    const output = await ctx.runToolCallLoop({}, conv);
+    return { output, executions, asked };
+  }
+
+  // 完全拦截：不询问、不执行，直接失败
+  const blocked = await runWithPolicy('block', true);
+  assert.equal(blocked.executions, 0);
+  assert.equal(blocked.asked, 0);
+  assert.equal(blocked.output.outcomes[0].status, 'failed');
+  assert.match(blocked.output.outcomes[0].error, /完全拦截删除/);
+
+  // 询问后用户拒绝：不执行
+  const declined = await runWithPolicy('confirm', false);
+  assert.equal(declined.executions, 0);
+  assert.equal(declined.asked, 1);
+  assert.equal(declined.output.outcomes[0].status, 'failed');
+  assert.match(declined.output.outcomes[0].error, /用户拒绝/);
+
+  // 询问后用户同意：执行
+  const approved = await runWithPolicy('confirm', true);
+  assert.equal(approved.executions, 1);
+  assert.equal(approved.asked, 1);
+  assert.equal(approved.output.outcomes[0].status, 'success');
+
+  // 完全放开：不询问，直接执行
+  const allowed = await runWithPolicy('allow', true);
+  assert.equal(allowed.executions, 1);
+  assert.equal(allowed.asked, 0);
+  assert.equal(allowed.output.outcomes[0].status, 'success');
 });
 
 test('native function tools use strict schemas and native calls preserve call IDs', () => {
@@ -535,9 +810,19 @@ test('native function tools use strict schemas and native calls preserve call ID
   assert.ok(addTodo);
   assert.equal(addTodo.function.parameters.additionalProperties, false);
   assert.ok(addTodo.function.parameters.required.includes('text'));
-  assert.equal(built.body.tools.some(tool => tool.function?.name === 'delete_todo'), false);
+  // 默认（未配置）全组开放 + 默认删除策略 confirm：删除类接口照常下发
+  assert.equal(built.body.tools.some(tool => tool.function?.name === 'delete_todo'), true);
   assert.equal(built.body.tools.some(tool => tool.function?.name === 'toggle_todo'), false);
   assert.equal(built.body.tools.some(tool => tool.function?.name === 'set_todo_completed'), true);
+  // 「完全拦截删除」时删除类接口不下发（含批量删除入口）
+  const blockedConv = conversation(ctx);
+  blockedConv._deletePolicy = 'block';
+  const blockedBuilt = ctx.buildStreamingRequestBody([], {
+    model: 'gpt-5', baseUrl: 'https://api.openai.com/v1', temperature: 0.2
+  }, blockedConv);
+  assert.equal(blockedBuilt.body.tools.some(tool => tool.function?.name === 'delete_todo'), false);
+  assert.equal(blockedBuilt.body.tools.some(tool => tool.function?.name === 'batch_update_todos'), false);
+  assert.equal(blockedBuilt.body.tools.some(tool => tool.function?.name === 'list_todos'), true);
 
   const calls = ctx.parseNativeLocalToolCalls([{ id: 'call-123', function: { name: 'add_todo', arguments: '{"text":"read"}' } }]);
   assert.equal(calls[0].action, 'add_todo');
@@ -883,6 +1168,184 @@ test('PDF image mode renders ordered JPEG pages and caps oversized documents', a
   assert.deepEqual(rendered, [2, 3]);
   assert.deepEqual(Array.from(selected.pageNumbers), [2, 3]);
   assert.equal(selected.truncated, false);
+});
+
+// 逐页渲染是主线程重活：必须逐页回报进度，并且能在页间被取消，
+// 否则用户只会看到"点了发送界面卡住"。
+test('PDF image mode reports per-page progress and stops between pages when cancelled', async () => {
+  const ctx = harness();
+  const rendered = [];
+  const installCanvas = () => {
+    ctx.document.createElement = () => ({ width: 0, height: 0, getContext: () => ({ fillRect() {} }) });
+    ctx.canvasToBlob = async canvas => ({ width: canvas.width, height: canvas.height, size: 1000 });
+    ctx.blobToDataUrl = async () => 'data:image/jpeg;base64,page';
+  };
+  const pdfStub = pages => ({
+    pdf: {
+      numPages: pages,
+      async getPage(pageNo) {
+        return {
+          getViewport({ scale }) { return { width: 800 * scale, height: 1000 * scale }; },
+          render() { rendered.push(pageNo); return { promise: Promise.resolve() }; }
+        };
+      },
+      async destroy() {}
+    }
+  });
+
+  // 进度：每渲染完一页回调一次，顺序与页码一致，并回报最终体积与耗时。
+  installCanvas();
+  ctx.openPdfAttachment = async () => pdfStub(3);
+  const progress = [];
+  const done = await ctx.renderPdfAttachmentPages({}, {
+    maxPages: 3,
+    onPage: info => progress.push(`${info.done}/${info.total}@${info.pageNo}`)
+  });
+  assert.deepEqual(progress, ['1/3@1', '2/3@2', '3/3@3']);
+  assert.equal(done.aborted, false);
+  assert.equal(done.renderedPages, 3);
+  assert.equal(done.bytes, 3000);
+  assert.equal(typeof done.ms, 'number');
+
+  // 取消：在第 2 页完成之后中断，不产生第 3 页，并标记 aborted 以便调用方放弃该附件。
+  installCanvas();
+  rendered.length = 0;
+  let abortFlag = false;
+  ctx.openPdfAttachment = async () => pdfStub(3);
+  const stopped = await ctx.renderPdfAttachmentPages({}, {
+    maxPages: 3,
+    onPage: info => { if (info.done === 2) abortFlag = true; },
+    isAborted: () => abortFlag
+  });
+  assert.deepEqual(rendered, [1, 2]);
+  assert.equal(stopped.aborted, true);
+  assert.equal(stopped.renderedPages, 2);
+  assert.deepEqual(Array.from(stopped.pageNumbers), [1, 2]);
+});
+
+// 预览徽标是"为什么慢"的唯一可见线索，必须如实反映渲染中/已完成/已取消与体积。
+test('PDF attachment preview badge reports rendering progress, size and cancellation', () => {
+  const ctx = harness();
+  ctx.escapeHtml = value => String(value == null ? '' : value);
+  const badges = {
+    rendering: ctx.formatPdfAttachStatus({ _pdfRender: { rendering: true, done: 6, total: 12 } }, 2),
+    done: ctx.formatPdfAttachStatus({ _pdfRender: { rendering: false, done: 3, total: 3, bytes: 2 * 1024 * 1024, ms: 2400 } }, 0),
+    capped: ctx.formatPdfAttachStatus({ _pdfRender: { rendering: false, done: 12, total: 12, truncated: true, selectedPages: 40, bytes: 1024, ms: 900 } }, 1),
+    aborted: ctx.formatPdfAttachStatus({ _pdfRender: { rendering: false, aborted: true, done: 2, total: 12 } }, 1),
+    none: ctx.formatPdfAttachStatus({}, 0)
+  };
+  assert.match(badges.rendering, /渲染中 6\/12/);
+  assert.match(badges.rendering, /aiPdfRenderStatus2/);
+  assert.match(badges.rendering, /width:50%/);
+  assert.match(badges.done, /本次发 3 页/);
+  assert.match(badges.done, /2\.0MB/);
+  assert.match(badges.done, /2\.4s/);
+  assert.match(badges.capped, /所选 40 页超出单次上限/);
+  assert.match(badges.aborted, /已取消（2\/12 页）/);
+  // 无状态时返回一个隐藏的空容器：它是实时更新的挂载点，不能整个省掉。
+  assert.match(badges.none, /id="aiPdfRenderStatus0"/);
+  assert.match(badges.none, /preview-render-status idle/);
+  assert.equal(badges.none.replace(/<[^>]*>/g, '').trim(), '');
+
+  // 逐页进度写回附件对象，徽标随下一帧显示最新页数。
+  ctx.setAiAttachments([{ name: '讲义.pdf', _pdfRender: { rendering: true, done: 1, total: 4 } }]);
+  ctx.updatePdfRenderStatus(0, { rendering: true, done: 2, total: 4 });
+  assert.deepEqual(ctx.getAiAttachments()[0]._pdfRender, { rendering: true, done: 2, total: 4 });
+  ctx.updatePdfRenderStatus(0, { rendering: false, aborted: true });
+  assert.deepEqual(ctx.getAiAttachments()[0]._pdfRender, { rendering: false, done: 2, total: 4, aborted: true });
+  ctx.updatePdfRenderStatus(9, { rendering: true, done: 1, total: 4 }); // 越界索引不应抛错
+});
+
+// 发送路径必须把进度回调 / 取消判断真正接到渲染上，否则界面上什么都看不到。
+test('sending a PDF in page-image mode wires progress callbacks and drops a cancelled attachment', async () => {
+  const sendHarness = async ({ apiKeyId, pieces, stopAfter }) => {
+    const ctx = harness();
+    let renderCalls = 0;
+    let renderOpts = null;
+    let sawAbort = false;
+    const doc = {
+      getElementById: id => (id === 'aiInput' ? { value: '看看这几页', style: {} } : null),
+      addEventListener() {},
+      createElement: () => ({ getContext: () => ({ fillRect() {} }) })
+    };
+    ctx.document = doc;
+    ctx.getActiveConv = () => ctx.__conv;
+    ctx.getActiveConvId = () => ctx.__conv.id;
+    ctx.getAiAttachmentsSnapshot = () => ctx.getAiAttachments();
+    ctx.renderAiMessages = () => {};
+    ctx.clearAiDraft = () => {};
+    ctx.openSettingsModal = () => {};
+    ctx.updateAiSendButton = () => {};
+    ctx.runToolCallLoop = async () => ({ finalCleanText: '收到', finalRawReply: '收到', stopped: false, finishReason: 'stop' });
+    ctx.parseMemoryTags = () => {};
+    const conv = { id: 'conv-pdf', title: '已有标题', systemPrompt: '' };
+    ctx.initTreeOnConv(conv);
+    ctx.__conv = conv;
+
+    const file = { name: '讲义.pdf', type: 'application/pdf', size: 4096 };
+    const attach = { name: file.name, file, size: file.size, pdfMode: 'image', pdfStartPage: null, pdfEndPage: null };
+    ctx.setAiAttachments([attach]);
+
+    // 用桩替换逐页渲染，只验证发送路径是否把进度回调 / 取消判断接上，以及取消后附件是否被丢弃。
+    // 真实渲染函数的进度与取消行为由上面的 renderPdfAttachmentPages 单测覆盖。
+    ctx.renderPdfAttachmentPages = async (f, opts) => {
+      renderCalls++;
+      renderOpts = opts;
+      for (let pageNo = 1; pageNo <= pieces; pageNo++) {
+        if (typeof opts.isAborted === 'function' && opts.isAborted()) {
+          sawAbort = true;
+          return { dataUrls: [], pageCount: 40, renderedPages: pageNo - 1, pageNumbers: [], truncated: false, aborted: true, startPage: 1, endPage: 24, selectedPages: 24 };
+        }
+        if (typeof opts.onPage === 'function') opts.onPage({ done: pageNo, total: pieces, pageNo });
+      }
+      return { dataUrls: ['data:image/jpeg;base64,x'], pageCount: 40, renderedPages: pieces, pageNumbers: [1], truncated: true, aborted: false, startPage: 1, endPage: 24, selectedPages: 24 };
+    };
+
+    if (stopAfter) {
+      const baseStub = ctx.renderPdfAttachmentPages;
+      ctx.renderPdfAttachmentPages = async (f, opts) => {
+        const stopAt = stopAfter;
+        const wrapped = Object.assign({}, opts, {
+          onPage: info => {
+            if (typeof opts.onPage === 'function') opts.onPage(info);
+            if (info.done >= stopAt) ctx.setAiStopRequested(conv.id, true);
+          }
+        });
+        return baseStub(f, wrapped);
+      };
+    }
+    if (apiKeyId) ctx.getEffectiveApiConfig = () => ({ apiKey: 'fake', keyId: apiKeyId, name: '视觉', model: 'deepseek-flash' });
+
+    let sendError = null;
+    // 与界面一致：不带参数调用，正文与附件都取自编辑器状态
+    try { await ctx.sendAiMessage(); } catch (e) { sendError = String(e && e.stack || e); }
+    const userMsg = conv.messages.find(m => m.role === 'user' && m.content.includes('看看这几页'));
+    return {
+      userMsg,
+      renderCalls,
+      renderOpts,
+      sawAbort,
+      sendError,
+      msgRoles: conv.messages.map(m => m.role).join(',')
+    };
+  };
+
+  // 正常：渲染出的页面进入 visionFiles，并提示受上限截断。
+  const ok = await sendHarness({ apiKeyId: 'visual', pieces: 3 });
+  assert.equal(ok.sendError, null, 'sendAiMessage 抛错: ' + ok.sendError);
+  assert.equal(ok.renderCalls, 1, 'PDF 渲染未被调用');
+  // 渲染必须同时拿到进度回调与取消判断，否则界面既无进度也无法中断。
+  assert.equal(typeof ok.renderOpts.onPage, 'function');
+  assert.equal(typeof ok.renderOpts.isAborted, 'function');
+  assert.equal(ok.userMsg.visionFiles.length, 1);
+  assert.match(ok.userMsg.visionFiles[0].name, /PDF 第 1\/40 页/);
+  assert.match(ok.userMsg.content, /受上限限制本次发送 3 页/);
+
+  // 取消：不发送半份页面，只在正文里说明，附件图片不进入请求。
+  const cancelled = await sendHarness({ apiKeyId: 'visual', pieces: 12, stopAfter: 2 });
+  assert.equal(cancelled.sawAbort, true, '取消信号未传到渲染循环');
+  assert.equal(cancelled.userMsg.visionFiles, undefined);
+  assert.match(cancelled.userMsg.content, /页面渲染已取消，本次未发送/);
 });
 
 test('deepseek-flash counts as an image-capable model while deepseek-v4-pro does not', () => {

@@ -52,7 +52,7 @@ test('yesterday completion stays independent from the current todo', () => {
   assert.equal(context.getFocusItemsForDate(yesterday).items[0].done, true);
 });
 
-test('ordinary AI prompt includes yesterday, today and tomorrow focus while report chat keeps today only', () => {
+test('ordinary AI prompt includes yesterday, today and tomorrow focus, and the report chat is identical', () => {
   const { context, todos } = focusContext();
   const yesterday = context.getFocusDateByOffset(-1);
   const today = context.getTodayStr();
@@ -79,8 +79,10 @@ test('ordinary AI prompt includes yesterday, today and tomorrow focus while repo
   assert.equal(prompt.includes('昨日聚焦：未设置'), false);
   assert.equal(todos[0].done, false);
 
-  const report = context.buildConversationSystemPrompt({ ...ordinary, _dailyReport: true }, config);
-  assert.match(report, /今日聚焦/);
-  assert.equal(report.includes('昨日聚焦'), false);
-  assert.equal(report.includes('明日聚焦'), false);
+  // 「每日日报」对话与普通对话共用同一份系统提示词（逐字一致）
+  const reportChat = { ...ordinary, id: 2, _dailyReport: true, title: '📋 每日日报' };
+  const report = context.buildConversationSystemPrompt(reportChat, config);
+  assert.equal(report, prompt);
+  assert.match(report, new RegExp(`昨日聚焦（${yesterday}）`));
+  assert.match(report, new RegExp(`明日聚焦（${tomorrow}）`));
 });

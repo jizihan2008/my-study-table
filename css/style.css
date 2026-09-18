@@ -2536,6 +2536,8 @@ body {
   cursor: pointer;
 }
 .today-review-filter-row select:focus { outline: 2px solid #8b5cf6; outline-offset: 1px; }
+/* 无标签可筛时保留筛选行但置灰：功能可见 + 旁边提示说明为什么点不了 */
+.today-review-filter-row select:disabled { opacity: .55; cursor: not-allowed; }
 .today-review-list { display: flex; flex-direction: column; gap: 8px; }
 .review-item {
   display: flex; flex-direction: column; gap: 6px;
@@ -3594,6 +3596,26 @@ body.ai-message-immersive-open { overflow: hidden; }
   background: var(--input-bg); color: var(--text); font: 11px/1 inherit; text-align: center;
 }
 .ai-attach-preview .preview-pdf-range input:focus { border-color: var(--primary); box-shadow: 0 0 0 2px rgba(79,110,247,.1); }
+/* PDF「页面图片」模式：逐页渲染是主线程重活，预览里给出页数进度与最终体积 */
+.ai-attach-preview .preview-render-status {
+  display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+  font-size: 10px; padding: 2px 6px; border-radius: 4px;
+  border: 1px solid var(--border); color: var(--text-secondary);
+}
+.ai-attach-preview .preview-render-status.idle { display: none; }
+.ai-attach-preview .preview-render-status .preview-render-bar {
+  display: inline-block; width: 44px; height: 4px; border-radius: 2px;
+  background: rgba(79,110,247,0.15); overflow: hidden;
+}
+.ai-attach-preview .preview-render-status .preview-render-fill {
+  display: block; height: 100%; background: var(--primary); transition: width .15s linear;
+}
+.ai-attach-preview .preview-render-status.done {
+  color: #059669; border-color: rgba(16,185,129,0.35); background: rgba(16,185,129,0.08);
+}
+.ai-attach-preview .preview-render-status.aborted {
+  color: var(--text-secondary); background: var(--path-bg);
+}
 /* 图片附件：预览缩略图与内联标识 */
 .ai-attach-preview .preview-thumb {
   width: 26px; height: 26px; object-fit: cover; border-radius: 5px;
@@ -5260,6 +5282,7 @@ i[data-lucide] {
   align-items: center;
   gap: 8px;
   flex-shrink: 0;
+  flex-wrap: wrap;
 }
 .ai-pill-toggle {
   display: inline-flex;
@@ -5295,6 +5318,159 @@ i[data-lucide] {
 }
 .ai-pill-toggle.kimi-external.active {
   background: #f59e0b; border-color: #f59e0b; color: #fff;
+}
+/* 接口组全部关闭时给出弱化提示 */
+.ai-pill-toggle.ai-pill-toggle-off {
+  color: var(--text-secondary);
+  border-style: dashed;
+}
+/* 接口组 / 删除策略 独立窗口 */
+.ai-tool-settings-modal {
+  max-width: 640px;
+  width: min(640px, 94vw);
+}
+.ai-tool-settings-body {
+  max-height: 70vh;
+  overflow-y: auto;
+}
+.ai-tool-settings-body .settings-section-title {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 4px 0 8px;
+}
+/* 对话设置里的入口按钮 */
+.ai-tool-open-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  margin-top: 4px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 12px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ai-tool-open-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.ai-tool-open-btn-summary {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+/* 接口组勾选 */
+.ai-tool-groups {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 8px;
+  margin-top: 4px;
+}
+.ai-tool-group-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ai-tool-group-item:hover {
+  background: var(--hover-bg);
+}
+.ai-tool-group-item.on {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.ai-tool-group-item input {
+  margin: 0;
+  accent-color: var(--primary);
+}
+.ai-tool-group-label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.ai-tool-group-count {
+  font-size: 10px;
+  color: var(--text-secondary);
+  background: var(--path-bg, rgba(127,127,127,0.12));
+  border-radius: 999px;
+  padding: 1px 6px;
+}
+.ai-tool-groups-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+}
+.ai-tool-groups-btn {
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text);
+  font-size: 11px;
+  font-family: inherit;
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ai-tool-groups-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+/* 删除策略 */
+.ai-delete-policy {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin-top: 4px;
+}
+.ai-delete-policy-item {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-areas: 'radio label' 'radio hint';
+  align-items: center;
+  column-gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12px;
+  color: var(--text);
+  cursor: pointer;
+  transition: var(--transition);
+}
+.ai-delete-policy-item:hover {
+  background: var(--hover-bg);
+}
+.ai-delete-policy-item.on {
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+}
+.ai-delete-policy-item input {
+  grid-area: radio;
+  margin: 0;
+  accent-color: var(--primary);
+}
+.ai-delete-policy-label {
+  grid-area: label;
+  font-weight: 500;
+}
+.ai-delete-policy-hint {
+  grid-area: hint;
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
 }
 .ai-toolbar-quick {
   padding: 5px 10px;

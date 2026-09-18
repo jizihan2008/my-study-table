@@ -455,6 +455,10 @@
     const contentHashes = _getLocal(CONTENT_HASH_KEY, {});
     const pieceHashes = _getLocal(HASH_KEY, {});
     const packed = new Map();
+    const allLocalAiIds = new Set(
+      (Array.isArray(_getLocal('study_ai_convs', [])) ? _getLocal('study_ai_convs', []) : [])
+        .filter(conv => conv && conv.id != null).map(conv => String(conv.id))
+    );
 
     for (const kind of Object.values(LOG_KEYS)) {
       const scanKind = !!forceAll || !!dirty[kind + '/*'];
@@ -484,7 +488,13 @@
 
       for (const oldId of previousIds) {
         if (currentIds.has(oldId)) continue;
+        // 超出最近 20 条的会话仍在本地，不代表用户删除；交给云端保留策略清理。
         const key = _baseKey(kind, oldId);
+        if (kind === 'ai_conv' && allLocalAiIds.has(oldId)) {
+          delete tombstones[key];
+          delete dirty[key];
+          continue;
+        }
         tombstones[key] = tombstones[key] || { kind, itemId: oldId, deletedAt: new Date().toISOString() };
         dirty[key] = true;
       }
@@ -631,6 +641,12 @@
     return compared === null || compared > 0;
   }
 
+  function _hasForeignRemoteAdvance(kind, rows, baseTimestamp) {
+    return (rows || []).some(row =>
+      _hasRemoteAdvanced(row.updated_at, baseTimestamp) &&
+      _getTs(_baseKey(kind, row.item_id)) !== row.updated_at);
+  }
+
   async function _deleteRowsById(c, rows) {
     const ids = (rows || []).map(row => row && row.id).filter(Boolean);
     for (let i = 0; i < ids.length; i += 300) {
@@ -669,7 +685,7 @@
     const remoteUpdated = _latestTimestamp(remoteRows);
     const baseTimestamp = _deriveBaseTimestamp(item.kind, item.itemId, remoteRows);
     const dirty = _isItemDirty(item.kind, item.itemId);
-    if (!force && dirty && _hasRemoteAdvanced(remoteUpdated, baseTimestamp)) {
+    if (!force && dirty && _hasForeignRemoteAdvance(item.kind, remoteRows, baseTimestamp)) {
       _queueConflict(item.kind, item.itemId, {
         name: _itemName(item.kind, item),
         reason: baseTimestamp ? 'both-changed' : 'missing-sync-base',
@@ -683,11 +699,13 @@
     const currentIds = new Set();
     let latestUploaded = remoteUpdated;
     let latestWriteTimestamp = null;
+    let wroteAny = false;
     for (const piece of pieces) {
       piece.kind = item.kind;
       currentIds.add(_baseKey(item.kind, piece.itemId));
       const result = await _uploadPiece(session, piece, !!force, inventory.set);
       if (!result.ok) return result;
+      if (!result.skipped) wroteAny = true;
       if (result.updatedAt && (!latestUploaded || policy.compareTimestamps(result.updatedAt, latestUploaded) > 0)) {
         latestUploaded = result.updatedAt;
       }
@@ -695,7 +713,7 @@
         latestWriteTimestamp = result.updatedAt;
       }
     }
-    if (dirty && remoteUpdated && (!latestWriteTimestamp || policy.compareTimestamps(latestWriteTimestamp, remoteUpdated) <= 0)) {
+    if (dirty && wroteAny && remoteUpdated && (!latestWriteTimestamp || policy.compareTimestamps(latestWriteTimestamp, remoteUpdated) <= 0)) {
       return {
         ok: false,
         reason: '云端更新时间未推进，请在 Supabase 执行最新版 schema.sql 以安装 updated_at 触发器'
@@ -722,7 +740,7 @@
     const remoteRows = inventory.groups[key] || [];
     const remoteUpdated = _latestTimestamp(remoteRows);
     const baseTimestamp = _deriveBaseTimestamp(kind, itemId, remoteRows);
-    if (!force && remoteRows.length && _hasRemoteAdvanced(remoteUpdated, baseTimestamp)) {
+    if (!force && remoteRows.length && _hasForeignRemoteAdvance(kind, remoteRows, baseTimestamp)) {
       _queueConflict(kind, itemId, {
         name: (KIND_LABELS[kind] || kind) + ' ' + itemId.slice(-8),
         reason: 'delete-versus-remote-change',
@@ -732,7 +750,18 @@
       });
       return { ok: false, conflict: true };
     }
-    await _deleteRowsById(c, remoteRows);
+    if (kind === 'ai_conv') {
+      // 保留一条小型云端墓碑，供其他设备区分主动删除与 20 条保留策略清理。
+      const { data, error } = await c.from('user_sync_items').upsert({
+        user_id: session.user.id, kind, item_id: itemId,
+        data: { v: 2, deleted: true }, bytes: 0
+      }, { onConflict: 'user_id,kind,item_id' }).select('updated_at').single();
+      if (error || !data || !data.updated_at) throw new Error((error && error.message) || '上传删除标记失败');
+      _setTs(key, data.updated_at);
+      await _deleteRowsById(c, remoteRows.filter(row => row.item_id !== itemId));
+    } else {
+      await _deleteRowsById(c, remoteRows);
+    }
     await _removeOutboxForBase(kind, itemId);
     const tombstones = _getTombstones();
     delete tombstones[key];
@@ -901,6 +930,37 @@
     _clearConflict(kind, itemId);
   }
 
+  function _applyRemoteDeletion(kind, itemId) {
+    if (kind !== 'ai_conv' || typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') return false;
+    if (!Array.isArray(aiConvs)) aiConvs = [];
+    const previousConvs = aiConvs;
+    const previousActiveId = typeof activeConvId === 'undefined' ? null : activeConvId;
+    const previousLength = aiConvs.length;
+    aiConvs = aiConvs.filter(conv => conv && String(conv.id) !== String(itemId));
+    if (aiConvs.length === previousLength) return false;
+    if (!aiConvs.length) {
+      const replacement = { id: genId(), title: '默认对话', systemPrompt: '', messages: [] };
+      if (typeof initTreeOnConv === 'function') initTreeOnConv(replacement);
+      aiConvs.push(replacement);
+    }
+    if (typeof activeConvId !== 'undefined' && !aiConvs.some(conv => String(conv.id) === String(activeConvId))) {
+      activeConvId = aiConvs[0].id;
+      localStorage.setItem('study_active_conv', String(activeConvId));
+    }
+    if (!safeSaveAiConvs()) {
+      aiConvs = previousConvs;
+      if (typeof activeConvId !== 'undefined') activeConvId = previousActiveId;
+      if (previousActiveId != null) localStorage.setItem('study_active_conv', String(previousActiveId));
+      throw new Error('保存云端删除结果失败');
+    }
+    try {
+      const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
+      delete drafts[itemId];
+      localStorage.setItem('study_ai_drafts', JSON.stringify(drafts));
+    } catch (e) {}
+    return true;
+  }
+
   async function _fetchRemoteItemRows(session, c, targets) {
     const wanted = _normalizeTargets(targets);
     if (!wanted.length) {
@@ -971,6 +1031,8 @@
       const g = (grouped[key] = grouped[key] || { rows: [] });
       g.rows.push(row);
     }
+    let aiViewChanged = false;
+    let activeAiConvChanged = false;
     applyingRemote = true;
     try {
       for (const key of Object.keys(grouped)) {
@@ -986,13 +1048,31 @@
         // 按 item_id 字典序重组分片（二分分片 p0<p1 顺序正确）
         const built = await _rebuildPieces(pieces);
         if (!built) continue;
-        _applyToLocal(kind, baseId, built);
+        if (kind === 'ai_conv' && built.deleted) {
+          const previousActiveId = typeof activeConvId === 'undefined' ? null : activeConvId;
+          aiViewChanged = _applyRemoteDeletion(kind, baseId) || aiViewChanged;
+          if (typeof activeConvId !== 'undefined' && String(previousActiveId) !== String(activeConvId)) {
+            activeAiConvChanged = true;
+          }
+          const known = _getKnownItems();
+          known.ai_conv = (known.ai_conv || []).filter(id => String(id) !== baseId);
+          _setLocal(KNOWN_ITEMS_KEY, known);
+          const hashes = _getLocal(CONTENT_HASH_KEY, {});
+          delete hashes[key];
+          _setLocal(CONTENT_HASH_KEY, hashes);
+          _clearItemDirty(kind, baseId);
+          _clearConflict(kind, baseId);
+        } else {
+          _applyToLocal(kind, baseId, built);
+          if (kind === 'ai_conv') aiViewChanged = true;
+          _recordPulledContent(kind, baseId);
+        }
         _setTs(key, remoteUpdated);
-        _recordPulledContent(kind, baseId);
       }
     } finally {
       applyingRemote = false;
     }
+    if (aiViewChanged && typeof renderAiChat === 'function') renderAiChat({ skipDraftSave: activeAiConvChanged });
     let newest = cfg.pullCursor || null;
     for (const row of data) {
       if (!newest || policy.compareTimestamps(row.updated_at, newest) > 0) newest = row.updated_at;
@@ -1003,16 +1083,17 @@
   }
   async function _rebuildPieces(pieces) {
     const sorted = pieces.slice().sort((a, b) => a.item_id.localeCompare(b.item_id));
-    let meta = null, tree = null, activePath = null, items = [];
+    let meta = null, tree = null, activePath = null, items = [], deleted = false;
     for (const p of sorted) {
       const obj = await _decodePayload(p.data);
       if (!obj) return null;
+      if (obj.deleted === true) deleted = true;
       if (obj.meta) meta = obj.meta;
       if (obj.tree) tree = obj.tree;
       if (obj.activePath) activePath = obj.activePath;
       if (Array.isArray(obj.items)) items = items.concat(obj.items);
     }
-    return { meta, tree, activePath, items };
+    return { meta, tree, activePath, items, deleted };
   }
   // 写回本地对应 key（注意：不触发 SyncLogs.onLocalChange，靠 applyingRemote 防回环）
   function _applyToLocal(kind, itemId, built) {
@@ -1042,10 +1123,12 @@
         if (built.tree) patch.tree = built.tree;
         if (built.activePath) patch.activePath = built.activePath;
         let found = false;
+        let appliedConv = null;
         for (let i = 0; i < aiConvs.length; i++) {
           if (String(aiConvs[i].id) === String(id)) {
             // 仅覆盖远端可能有的字段，保留本地独有字段（_dailyReport 等标记）
             aiConvs[i] = Object.assign({}, aiConvs[i], patch);
+            appliedConv = aiConvs[i];
             found = true;
             break;
           }
@@ -1065,23 +1148,32 @@
               }
             }
             if (localDaily) {
+              appliedConv = localDaily;
               // 回填标记 + 统一标题（与 settings.getOrCreateDailyReportConv 保持一致）
               if (!localDaily._dailyReport) localDaily._dailyReport = true;
               if (localDaily.title === '☀️ 晨间日报') localDaily.title = '📋 每日日报';
-              // 合并远端消息：按 id 去重；无 id 按 role+content 去重
+              // messages 是树的缓存。先规范化本地树，再把远端新增消息写入树，
+              // 否则下次 ensureTree 会从 activePath 重建缓存并抹掉此次合并。
+              if (typeof ensureTree === 'function') ensureTree(localDaily);
               if (!Array.isArray(localDaily.messages)) localDaily.messages = [];
-              const keys = new Set(localDaily.messages.map(m =>
-                m && m.id ? 'id:' + m.id : 'c:' + (m.role || '') + ':' + (m.content || '')));
+              const messageKey = m => m && m._syncOriginKey
+                ? m._syncOriginKey
+                : m && m.id != null
+                ? 'id:' + m.id
+                : 'c:' + (m && m.role || '') + ':' + (m && m.content || '');
+              const keys = new Set(localDaily.messages.map(messageKey));
               const remoteMsgs = Array.isArray(built.items) ? built.items : [];
               for (const m of remoteMsgs) {
-                const key = m && m.id ? 'id:' + m.id : 'c:' + (m && m.role || '') + ':' + (m && m.content || '');
-                if (!keys.has(key)) { localDaily.messages.push(m); keys.add(key); }
+                if (!m || !m.role) continue;
+                const key = messageKey(m);
+                if (keys.has(key)) continue;
+                if (typeof appendMessage === 'function' && localDaily.tree && localDaily.activePath) {
+                  appendMessage(localDaily, Object.assign({}, m, { _syncOriginKey: key }));
+                } else {
+                  localDaily.messages.push(m);
+                }
+                keys.add(key);
               }
-              // 按时间排序，保证跨设备合并后顺序正确
-              localDaily.messages.sort((a, b) => (a && a.createdAt || 0) - (b && b.createdAt || 0));
-              // 树状分支：本地缺失时补远端（日报一般无分支树，防御性合并）
-              if (!localDaily.tree && built.tree) localDaily.tree = built.tree;
-              if (!localDaily.activePath && built.activePath) localDaily.activePath = built.activePath;
             } else {
               // 本地无日报会话 → 创建（带标记，标题统一）
               const newConv = Object.assign({ tree: built.tree || null, activePath: built.activePath || null }, patch);
@@ -1089,11 +1181,16 @@
               newConv.autoTitled = true;
               newConv.title = '📋 每日日报';
               aiConvs.push(newConv);
+              appliedConv = newConv;
             }
           } else {
             const newConv = Object.assign({ tree: built.tree || null, activePath: built.activePath || null }, patch);
             aiConvs.push(newConv);
+            appliedConv = newConv;
           }
+        }
+        if (appliedConv && built.tree && built.activePath && typeof ensureTree === 'function') {
+          ensureTree(appliedConv);
         }
         safeSaveAiConvs();
       }
@@ -1110,7 +1207,7 @@
     let data = Array.isArray(inventoryRows) ? inventoryRows : null;
     if (!data) {
       const result = await c.from('user_sync_items')
-        .select('id,kind,item_id,updated_at')
+        .select('id,kind,item_id,bytes,updated_at')
         .eq('user_id', session.user.id);
       if (result.error) return;
       data = result.data || [];
@@ -1130,7 +1227,8 @@
     }
 
     // AI 对话：按会话（基础 id）分组，只保留最近 AI_MAX_CONVS 个
-    const aiRows = data.filter(r => r.kind === 'ai_conv');
+    // 删除墓碑 bytes=0，必须长期保留，避免离线设备日后把旧会话复活。
+    const aiRows = data.filter(r => r.kind === 'ai_conv' && r.bytes !== 0);
     if (aiRows.length) {
       // 基础 id → 该会话所有行中最新 updated_at
       const byConv = new Map();
@@ -1959,6 +2057,9 @@
       refreshLocalState: _refreshLocalState,
       contentHash: _contentHash,
       flushLogs: _flushLogs,
+      pullItems: _pullItems,
+      uploadPreparedItem: _uploadPreparedItem,
+      processTombstone: _processTombstone,
       normalizeTargets: _normalizeTargets
     };
   }

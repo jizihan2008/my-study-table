@@ -20,10 +20,6 @@ const AI_TOOLS = {
     description: '删除一个待办事项及其所有子任务',
     params: { id: '待办ID（number）' }
   },
-  toggle_todo: {
-    description: '兼容旧对话：切换待办完成状态。新请求应使用 set_todo_completed 明确指定目标状态',
-    params: { id: '待办ID（number）' }
-  },
   set_todo_completed: {
     description: '把待办设为明确的完成或未完成状态（幂等，重复执行不会反转）',
     params: { id: '待办ID（number，必填）', completed: '目标完成状态（boolean，必填）' }
@@ -65,12 +61,16 @@ const AI_TOOLS = {
     params: { ids: '待办ID数组（number[]）', action: '操作类型：toggle_completed / set_tags / set_due_date / delete（string）', value: '操作值：toggle_completed时为true/false，set_tags时为标签字符串逗号分隔，set_due_date时为YYYY-MM-DD日期字符串，delete时不需要（string/boolean，可选）' }
   },
   add_note: {
-    description: '创建一条新笔记。支持 path 或 folderId 指定目标文件夹',
-    params: { title: '笔记标题（string）', content: '笔记内容（string，用真实换行分段，不要写 \\n）', folderId: '目标文件夹ID（number，可选，与path二选一）', path: '目标文件夹路径（不含自身），按顺序自动查找/创建（array of strings，可选，如["数学","微积分"]，与folderId二选一）' }
+    description: '创建一条新笔记。支持 path 或 folderId 指定目标文件夹，可直接带标签',
+    params: { title: '笔记标题（string）', content: '笔记内容（string，用真实换行分段，不要写 \\n）', folderId: '目标文件夹ID（number，可选，与path二选一）', path: '目标文件夹路径（不含自身），按顺序自动查找/创建（array of strings，可选，如["数学","微积分"]，与folderId二选一）', tags: '标签，逗号分隔（string，可选，如"数据结构,图论"）；建议优先复用笔记里已有的标签' }
   },
   update_note: {
-    description: '更新已有笔记的标题或内容。注意：content 请用真实换行分段，不要写字面的 \\n',
-    params: { id: '笔记ID（number）', title: '新标题（string，可选）', content: '新内容（string，可选，用真实换行分段，不要写 \\n）' }
+    description: '更新已有笔记的标题、正文或标签。注意：content 请用真实换行分段，不要写字面的 \\n；tags 传空字符串表示清空全部标签',
+    params: { id: '笔记ID（number）', title: '新标题（string，可选）', content: '新内容（string，可选，用真实换行分段，不要写 \\n）', tags: '新标签，逗号分隔（string，可选，如"数据结构,图论"；传空字符串则清空全部标签）' }
+  },
+  batch_set_note_tags: {
+    description: '批量给多篇笔记设置标签（先 list_notes 或 search_notes 拿 ID）。mode=replace 覆盖原有标签，mode=add 在原有标签上追加。适合按学科/主题给一批笔记归类',
+    params: { ids: '笔记ID数组（number[]，必填）', tags: '标签，逗号分隔（string，必填，如"数据结构,图论"；传空字符串表示清空全部标签）', mode: '写入方式：replace覆盖原有标签（默认）/ add追加到原有标签（string，可选）' }
   },
   move_note: {
     description: '将笔记移动到指定文件夹。支持 path 自动创建文件夹层级',
@@ -87,6 +87,10 @@ const AI_TOOLS = {
   search_notes: {
     description: '搜索笔记，在标题和正文中查找关键词，返回匹配的笔记列表（含内容摘要）',
     params: { query: '搜索关键词（string）', page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
+  },
+  get_note_tags: {
+    description: '查看全部笔记标签的全集：每个标签挂了几篇笔记（附笔记标题），以及还有哪些笔记尚未打标签。给笔记归类前先调用它，复用已有标签而不是每次造新标签',
+    params: { search: '按标签名或笔记标题筛选（string，可选）', includeNotes: '是否附上每个标签下的笔记标题与ID（boolean，可选，默认true；只想要标签清单+计数时传false更省 token）' }
   },
   get_note_detail: {
     description: '获取单条笔记的完整内容（包括标题、正文、创建/更新时间）',
@@ -222,36 +226,98 @@ const AI_TOOLS = {
   }
 };
 
-function selectAiToolsForPrompt(conv, webEnabled, kimiNative) {
-  const latest = [...(conv?.messages || [])].reverse().find(m => m.role === 'user');
-  const text = String(latest?.content || '').toLowerCase();
+// ═══════════ AI 接口组：由用户在「对话设置」里自由勾选 ═══════════
+// 不再按用户消息里的关键词猜测这一轮该给哪些工具。每个对话存一份勾选结果
+// （conv._toolGroups）；没设置过的对话沿用上次保存的选择，从未选过则全部开放。
+const AI_TOOL_GROUPS = [
+  { key: 'todo', label: '待办与聚焦', tools: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','list_todos','get_todo_detail','get_today_status','get_focus_tasks','set_focus_task','get_stats','get_todo_stats','batch_update_todos','get_review_status','get_habits_status'] },
+  { key: 'note', label: '笔记与复习', tools: ['add_note','update_note','batch_set_note_tags','move_note','delete_note','list_notes','search_notes','get_note_tags','get_note_detail','get_note_changes'] },
+  { key: 'skill', label: '技能库', tools: ['create_skill','list_skills','get_skill','update_skill','delete_skill'] },
+  { key: 'link', label: '快捷访问', tools: ['add_link','delete_link','list_links'] },
+  { key: 'automation', label: '定时提醒', tools: ['schedule_automation','list_automations','delete_automation'] },
+  { key: 'memory', label: 'AI 记忆', tools: ['list_memories','get_memory_detail'] },
+  { key: 'quest', label: '任务线', tools: ['quest_get','quest_create_line','quest_update_line','quest_create','quest_update','quest_link_todo','quest_link_note','quest_link_timer','quest_add_manual_cond','quest_complete','quest_skip','quest_review'] },
+  { key: 'chat', label: 'QQ 聊天记录', tools: ['list_chats','search_chat_messages'] },
+  { key: 'web', label: '联网（搜索 / 网页）', tools: ['web_search','read_webpage'] }
+];
+
+// 删除类工具的三档策略（删除意图不再靠关键词判断，由用户显式选择）
+const AI_DELETE_POLICIES = [
+  { key: 'block', label: '完全拦截删除', hint: '删除接口不下发给 AI，AI 尝试删除也会被直接拒绝' },
+  { key: 'confirm', label: 'AI 要删除时询问我', hint: '删除接口照常下发，但每次真正执行前都会弹出确认框' },
+  { key: 'allow', label: '完全放开删除', hint: 'AI 可以直接删除，不再询问（只在明确要求时才会调用）' }
+];
+const AI_DELETE_POLICY_KEYS = AI_DELETE_POLICIES.map(policy => policy.key);
+const AI_TOOL_PREFS_KEY = 'study_ai_tool_prefs'; // 记住上次的勾选，新对话沿用它
+
+function getAiToolGroupKeys() { return AI_TOOL_GROUPS.map(group => group.key); }
+
+function normalizeAiToolGroups(value) {
+  if (!Array.isArray(value)) return null;
+  const valid = new Set(getAiToolGroupKeys());
+  return value.filter(key => valid.has(key));
+}
+
+function loadAiToolPrefs() {
+  try {
+    const raw = JSON.parse(localStorage.getItem(AI_TOOL_PREFS_KEY) || '{}');
+    return raw && typeof raw === 'object' ? raw : {};
+  } catch (e) { return {}; }
+}
+
+function saveAiToolPrefs(patch) {
+  const prefs = { ...loadAiToolPrefs(), ...patch };
+  try { localStorage.setItem(AI_TOOL_PREFS_KEY, JSON.stringify(prefs)); } catch (e) { /* 存储不可用时忽略 */ }
+  return prefs;
+}
+
+function getAiDeletePolicy(conv) {
+  if (conv && AI_DELETE_POLICY_KEYS.includes(conv._deletePolicy)) return conv._deletePolicy;
+  const remembered = loadAiToolPrefs().deletePolicy;
+  return AI_DELETE_POLICY_KEYS.includes(remembered) ? remembered : 'confirm';
+}
+
+// 某个对话实际生效的接口组：显式勾选 > 上次保存的选择 > 全部
+function getConversationToolGroups(conv) {
+  const explicit = normalizeAiToolGroups(conv && conv._toolGroups);
+  if (explicit) return explicit;
+  const remembered = normalizeAiToolGroups(loadAiToolPrefs().groups);
+  return remembered || getAiToolGroupKeys();
+}
+
+// 写入勾选结果，并记住这次选择供之后未配置的对话沿用
+function setConversationToolGroups(conv, groups) {
+  const clean = normalizeAiToolGroups(groups) || [];
+  if (conv) conv._toolGroups = clean.slice();
+  saveAiToolPrefs({ groups: clean });
+  return clean;
+}
+
+function setConversationDeletePolicy(conv, policy) {
+  const clean = AI_DELETE_POLICY_KEYS.includes(policy) ? policy : 'confirm';
+  if (conv) conv._deletePolicy = clean;
+  saveAiToolPrefs({ deletePolicy: clean });
+  return clean;
+}
+
+function isAiDestructiveTool(action, params = {}) {
+  return typeof getAiToolMetadata === 'function' && getAiToolMetadata(action, params).risk === 'destructive';
+}
+
+// 该对话这一轮真正下发给 AI 的工具集合
+function selectAiToolsForConversation(conv, webEnabled, kimiNative) {
+  const enabled = new Set(getConversationToolGroups(conv));
   const selected = new Set();
-  const add = names => names.forEach(name => selected.add(name));
-  const groups = {
-    todo: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','list_todos','get_todo_detail','get_today_status','get_focus_tasks','set_focus_task','get_stats','get_todo_stats','batch_update_todos','get_review_status','get_habits_status'],
-    note: ['add_note','update_note','move_note','delete_note','list_notes','search_notes','get_note_detail','get_note_changes'],
-    skill: ['create_skill','list_skills','get_skill','update_skill','delete_skill'],
-    link: ['add_link','delete_link','list_links'],
-    automation: ['schedule_automation','list_automations','delete_automation'],
-    memory: ['list_memories','get_memory_detail'],
-    quest: ['quest_get','quest_create_line','quest_update_line','quest_create','quest_update','quest_link_todo','quest_link_note','quest_link_timer','quest_add_manual_cond','quest_complete','quest_skip','quest_review'],
-    chat: ['list_chats','search_chat_messages']
-  };
-  if (!text || /待办|任务|计划|今日|聚焦|统计|复习|习惯|todo/.test(text)) add(groups.todo);
-  if (/笔记|note|记录|知识/.test(text)) add(groups.note);
-  if (/技能|skill|行为准则|处理准则/.test(String(latest?.displayContent ?? text))) add(groups.skill);
-  if (/链接|网址|网站|快捷访问|link|url/.test(text)) add(groups.link);
-  if (/提醒|定时|自动化|每天|每日|闹钟/.test(text)) add(groups.automation);
-  if (/记忆|偏好|了解我|memory/.test(text)) add(groups.memory);
-  if (/任务线|主线|支线|章节|里程碑|徽章|quest/.test(text)) add(groups.quest);
-  if (/qq|聊天记录|群聊|消息|谁说/.test(text)) add(groups.chat);
-  if (/https?:\/\//i.test(text) || /网页|页面|文章/.test(text)) selected.add('read_webpage');
-  if (webEnabled && !kimiNative && /搜索|联网|最新|新闻|查一下|价格|天气/.test(text)) selected.add('web_search');
-  if (selected.size === 0) {
-    const recent = (conv?.messages || []).slice(-8).map(m => String(m.content || '')).join('\n');
-    for (const name of Object.keys(AI_TOOLS)) if (recent.includes(name)) selected.add(name);
+  for (const group of AI_TOOL_GROUPS) {
+    if (!enabled.has(group.key)) continue;
+    for (const name of group.tools) if (AI_TOOLS[name]) selected.add(name);
   }
-  if (selected.size === 0) add(groups.todo);
+  // web_search 仍受工具栏「智能搜索」开关控制；Kimi 原生搜索时由内置能力接管，不重复下发
+  if (!webEnabled || kimiNative) selected.delete('web_search');
+  // 「完全拦截删除」时删除类接口不下发（执行侧仍会兜底拒绝）
+  if (getAiDeletePolicy(conv) === 'block') {
+    for (const name of [...selected]) if (AI_TOOL_DELETE_CAPABLE.has(name)) selected.delete(name);
+  }
   return selected;
 }
 
@@ -263,6 +329,8 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   const _isKimiNative = _wsMode === 'native';
   const _isKimiExternal = _wsMode === 'external';
   const _nativeLocalTools = typeof supportsNativeLocalTools === 'function' && supportsNativeLocalTools(apiCfg);
+  // 这一轮真正下发给 AI 的工具集合（按用户在「对话设置」里勾选的接口组，见 AI_TOOL_GROUPS）
+  const _selectedTools = selectAiToolsForConversation(conv, _wsEnabled, _isKimiNative);
 
   let prompt = '你是「我的学习桌面」的内置 AI 助手，核心使命是<b>积极主动地帮助和提醒用户</b>，帮助用户管理学习任务、整理笔记、解答问题、提供学习建议。\n\n';
 
@@ -270,18 +338,17 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '1. 📋 待办管理：支持多层级任务、截止日期、进度状态、预计时长、正文备注、标签、搜索筛选\n';
   const maxFocusCount = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;
   prompt += '2. 🎯 每日聚焦：可分别设置昨日、今日、明日的聚焦任务，每天最多' + maxFocusCount + '个；各日期的完成状态独立保存\n';
-  prompt += '3. 📝 笔记管理：多篇笔记，支持文件夹多级分类，每篇有标题和正文，自动保存。add_note 和 move_note 支持 path 参数自动创建文件夹层级\n';
+  prompt += '3. 📝 笔记管理：多篇笔记，支持文件夹多级分类，每篇有标题、正文和标签，自动保存。add_note 和 move_note 支持 path 参数自动创建文件夹层级；笔记标签用 update_note 或 batch_set_note_tags 设置（逗号分隔，如"数据结构,图论"），「今天」页的待复习列表可按标签筛选，因此给笔记归类时优先复用已有标签\n';
   prompt += '4. ✨ 技能库：保存可复用的 AI 行为准则。用户要求管理技能时，可用 list_skills/get_skill 查看，用 create_skill/update_skill/delete_skill 修改。技能 ID 为字符串。\n';
   prompt += '5. 🔗 快捷访问：常用网站/应用链接，支持分类\n';
   prompt += '6. 🤖 AI 助手：多对话标签页，支持多种模型，可上传附件，可通过工具调用操作系统数据\n';
-  if (_wsEnabled) {
+  if (_wsEnabled && (_isKimiNative || _selectedTools.has('web_search'))) {
     if (_isKimiNative) {
       prompt += '7. 🌐 联网搜索（Kimi 原生）：已开启 $web_search 内置搜索，你的回复会自动调用 Kimi 原生搜索引擎获取最新信息\n';
-      prompt += '8. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
     } else {
       prompt += '7. 🌐 网络搜索（已开启）：你可以使用 web_search 工具搜索互联网获取最新信息。用户已开启了「网络搜索」开关，请在适当情况下主动使用 web_search 获取实时信息\n';
-      prompt += '8. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
     }
+    prompt += '8. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
   } else {
     prompt += '7. ⏰ 自动化：可在当前对话中创建定时任务，到达指定时间后自动触发 AI 执行\n\n';
   }
@@ -294,17 +361,17 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
     prompt += '<tool_call>{"action":"工具名","params":{参数对象}}</tool_call>\n';
     prompt += '注意：开始标签和结束标签必须一致，都使用 tool_call。不要写成 tool_action。\n\n';
   }
-  prompt += '可用工具列表：\n';
-  const selectedTools = selectAiToolsForPrompt(conv, _wsEnabled, _isKimiNative);
-  for (const [name, tool] of Object.entries(AI_TOOLS)) {
-    // Skip web_search if toggle is off, or when using Kimi native search
-    if (name === 'web_search') {
-      if (!_wsEnabled) continue;
-      if (_isKimiNative) continue;
+  // 原生 function tools 模式下，工具的名称/描述/参数 Schema 已由请求体的 tools 参数下发
+  // （见 ai-api.js selectedNativeLocalTools → buildNativeAiTools），此处再列一遍纯属重复。
+  if (!_nativeLocalTools) {
+    prompt += '可用工具列表：\n';
+    for (const name of Object.keys(AI_TOOLS)) {
+      if (!_selectedTools.has(name)) continue;
+      prompt += `- ${name}: ${AI_TOOLS[name].description}。参数：${JSON.stringify(AI_TOOLS[name].params)}\n`;
     }
-    if (!selectedTools.has(name) && name !== 'read_webpage') continue;
-    if (getAiToolMetadata(name).risk === 'destructive' && !authorizeAiToolCall(name, {}, conv).ok) continue;
-    prompt += `- ${name}: ${tool.description}。参数：${JSON.stringify(tool.params)}\n`;
+    if (_selectedTools.size === 0) {
+      prompt += '（当前对话没有开放任何工具接口；如需操作数据，请提示用户到「对话设置 → 给 AI 的接口组」里勾选）\n';
+    }
   }
   prompt += '\n规则：\n';
   prompt += _nativeLocalTools
@@ -315,10 +382,11 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '3. 注意：待办支持多层级（父子任务）。一个顶级任务下可能有子任务、孙任务、甚至更多层。list_todos 会以编号方式展示所有层级（如 [1] → [1.1] → [1.1.1]），请根据编号正确理解层级关系。优先使用 list_todos 获取完整层级，需要详细信息时才调用 get_todo_detail。\n';
   prompt += '4. 定时自动化触发时，你会收到一条以「[🤖 系统自动触发]」开头的消息，其中包含任务内容，请直接执行任务并在回复中向用户说明完成了什么。这条消息不是用户手动发送的，而是系统自动注入的\n';
   prompt += '5. 如果用户只是聊天/提问/问知识类问题，不需要调用工具，正常回答即可。\n';
+  prompt += '6. 给笔记打标签时：名字保持稳定、按学科/主题归一（如统一用「数据结构」而不是「数据结构」「DS」混用）；一批笔记要归类时用 batch_set_note_tags 一次写完，不要逐篇调用 update_note。标签会出现在「今天」页待复习列表的标签筛选里，所以别造只用一次的一次性标签。\n';
   if (_wsEnabled) {
     if (_isKimiNative) {
       prompt += '   注意：用户已开启「Kimi 原生搜索」，你拥有内置 $web_search 能力，当用户问实时信息、新闻、最新知识等需要联网的问题时，你会自动触发原生搜索并回答\n';
-    } else {
+    } else if (_selectedTools.has('web_search')) {
       prompt += '   注意：用户已开启「网络搜索」开关，当用户问实时信息、新闻、最新知识等需要外部资料的问题时，请主动使用 web_search 工具联网搜索后回答\n';
     }
   }
@@ -326,7 +394,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '7. 当用户要求「推荐今日聚焦任务」时，请基于现有待办推荐 1 个最重要的聚焦任务即可，不要推荐多个。如果用户明确要求 3 个，再推荐 3 个。\n';
   prompt += '8. 重要：当你返回一个 <tool_call> 后，系统会执行对应的工具，并将结果以「【工具执行结果】」开头的 system 消息注入到对话中。\n';
   prompt += '   你必须仔细阅读结果中的【结构化状态】：ok=true 表示成功，status=failed 表示失败，status=duplicate 表示系统已安全拦截重复写入。失败时请告知用户原因，不要假装成功。\n';
-  prompt += '   另外，add_note 和 update_note 的 content 参数中，请使用真实的换行（回车换行）来分段，不要使用字面上的 \n 字符（即不要在字符串中写反斜杠n），否则笔记内容中会显示成字面 \n 文本而不会换行。\n';
+  prompt += '   另外，add_note 和 update_note 的 content 参数中，请使用真实的换行（回车换行）来分段，不要使用字面上的 \\n 字符（即不要在字符串中写反斜杠n），否则笔记内容中会显示成字面 \\n 文本而不会换行。\n';
   prompt += '9. 你可以通过 <call_ai> 标签唤起另一个 AI 助手参与对话。格式：<call_ai>{"keyId":"目标 Key 名称","prompt":"要发送的消息"}</call_ai>\n';
   prompt += '   系统会在你回复后自动调用目标 AI，它的回复会以独立消息直接显示在对话中（标注 🔑 Key 名称）。你不需要重复或转发该回复。\n';
   prompt += '10. 提醒应与用户明确要求一致：只有用户要求设置提醒/定时任务时才创建，普通聊天或提到截止日期时可以建议，但不要自动创建。\n';
@@ -338,8 +406,15 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '    - batch_add_todos 返回 ✅ 批量创建成功（已列出所有创建的待办名称和数量）→ 直接回复用户，不要 delete_todo 删除后重新创建\n';
   prompt += '    - update_todo 返回 ✅ 更新成功 → 任务已经更新好了，不要再去 list_todos 验证\n';
   prompt += '    - 工具结果中已经包含了足够的信息（名称、ID、数量等），相信它。\n';
-  prompt += '12. 🌐 阅读网页：当用户消息中包含 http(s):// 链接、或明确要求「阅读/总结/分析某个网页」时，请主动调用 read_webpage 工具获取网页正文后再回答。此工具不依赖「网络搜索」开关，只要用户给出 URL 或表达阅读网页的意图即可使用。若 read_webpage 返回 ❌ 错误（如需登录、渲染超时），如实告知用户原因。\n';
-  prompt += '13. 🛡️ 删除和批量删除只能在用户本轮明确要求删除时调用；不要把「整理」「更新」或「完成」解释为删除。\n';
+  prompt += _selectedTools.has('read_webpage')
+    ? '12. 🌐 阅读网页：当用户消息中包含 http(s):// 链接、或明确要求「阅读/总结/分析某个网页」时，请主动调用 read_webpage 工具获取网页正文后再回答。此工具不依赖「网络搜索」开关，只要用户给出 URL 或表达阅读网页的意图即可使用。若 read_webpage 返回 ❌ 错误（如需登录、渲染超时），如实告知用户原因。\n'
+    : '12. 🌐 当前对话没有开放「联网」接口组，read_webpage / web_search 都不可用；用户给出链接时不要假装读过，请说明这段对话未开放联网接口（可在「对话设置 → 给 AI 的接口组」里打开）。\n';
+  const _deletePolicy = getAiDeletePolicy(conv);
+  prompt += _deletePolicy === 'block'
+    ? '13. 🛡️ 当前对话的删除策略是「完全拦截删除」：删除类接口没有开放，不要尝试删除数据；需要删除时请提示用户自行操作，或到「对话设置 → 删除策略」里调整。\n'
+    : _deletePolicy === 'confirm'
+      ? '13. 🛡️ 删除和批量删除只在用户明确要求时调用；每次删除都会先请求用户确认，用户拒绝后不要重复尝试，改为说明原因。不要把「整理」「更新」或「完成」解释为删除。\n'
+      : '13. 🛡️ 当前对话的删除策略是「完全放开删除」：删除会直接执行且不会询问，务必只在用户明确要求时调用，不要把「整理」「更新」或「完成」解释为删除。\n';
   prompt += '14. 写操作会先整轮预检；任一写入失败时，本轮已执行的写入会回滚。看到 status=rolled_back 时必须明确告知用户未保留该修改。\n';
 
   // ── 注入当前 AI 身份 ──
@@ -412,7 +487,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
     });
   }
 
-  prompt += buildAiFocusSnapshot(conv);
+  prompt += buildAiFocusSnapshot();
 
   // 打卡
   const checkinData = loadCheckinData();
@@ -490,6 +565,18 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   const noteFolders = notes.filter(n => n.type === 'folder');
   const noteItems = notes.filter(n => n.type === 'note');
   prompt += `📝 笔记：${noteItems.length} 篇，${noteFolders.length} 个文件夹 | 🔗 快捷访问：${links.length} 个\n`;
+  // 标签词表（高频在前）：让 AI 直接看到已有标签，避免每次归类都造新标签。
+  // 只在 note 接口组开放时输出；把标签体系暴露给一个连笔记都读不到的对话没有意义。
+  if (_selectedTools.has('get_note_tags')) {
+    const snapshotTagUsage = listAiNoteTagUsage();
+    if (snapshotTagUsage.length > 0) {
+      const topTags = snapshotTagUsage.slice(0, 6).join('、');
+      prompt += `   🏷️ 笔记标签：共 ${snapshotTagUsage.length} 个`
+        + `（${topTags}${snapshotTagUsage.length > 6 ? ' 等' : ''}）`
+        + ` | ${noteItems.filter(n => !Array.isArray(n.tags) || n.tags.length === 0).length} 篇未打标签`
+        + '，完整标签+计数见 get_note_tags\n';
+    }
+  }
   // Numbered hierarchy tree: [1] → [1.1] → [1.1.1], interleaving folders and notes
   if (noteItems.length > 0 || noteFolders.length > 0) {
     const folderMap = {}; noteFolders.forEach(f => { folderMap[f.id] = f; });
@@ -545,9 +632,11 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   return prompt;
 }
 
-function buildAiFocusSnapshot(conv) {
-  // 日报由 settings.js 单独生成提示词；在日报对话里保留原有的今日聚焦快照。
-  const days = conv?._dailyReport ? [[0, '今日']] : [[-1, '昨日'], [0, '今日'], [1, '明日']];
+// 所有对话（含「每日日报」对话）共用同一份聚焦快照：昨日 / 今日 / 明日，
+// 保证日报对话里手动聊天时的系统提示词与普通对话逐字一致。
+// 自动生成的晨间/晚间日报提示词由 settings.js 单独构建，不经过这里。
+function buildAiFocusSnapshot() {
+  const days = [[-1, '昨日'], [0, '今日'], [1, '明日']];
   return days.map(([offset, label]) => {
     const date = getFocusDateByOffset(offset);
     const items = getFocusItemsForDate(date).items || [];
@@ -658,8 +747,8 @@ async function executeCallAiAndPush(params, conv) {
 // keep returning display strings; the orchestration layer always receives a
 // predictable object and no mutation starts until validation has passed.
 const AI_TOOL_REQUIRED_PARAMS = {
-  add_todo:['text'], batch_add_todos:['todos'], update_todo:['id'], delete_todo:['id'], toggle_todo:['id'], set_todo_completed:['id','completed'], move_todo:['id'], get_todo_detail:['id'],
-  batch_update_todos:['ids','action'], add_note:['title'], update_note:['id'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'],
+  add_todo:['text'], batch_add_todos:['todos'], update_todo:['id'], delete_todo:['id'], set_todo_completed:['id','completed'], move_todo:['id'], get_todo_detail:['id'],
+  batch_update_todos:['ids','action'], batch_set_note_tags:['ids','tags'], add_note:['title'], update_note:['id'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'],
   create_skill:['name','content'], get_skill:['skillId'], update_skill:['skillId'], delete_skill:['skillId'],
   add_link:['name','url'], delete_link:['id'], schedule_automation:['at','prompt'], delete_automation:['id'], get_memory_detail:['id'], web_search:['query'], read_webpage:['url'],
   quest_create_line:['name'], quest_update_line:['id'], quest_create:['lineId','title'], quest_update:['id'], quest_link_todo:['questId','todoId'],
@@ -669,15 +758,19 @@ const AI_TOOL_REQUIRED_PARAMS = {
 
 const AI_TOOL_READ_ONLY = new Set([
   'list_todos','get_todo_detail','get_today_status','get_focus_tasks','get_stats','get_todo_stats',
-  'list_notes','search_notes','get_note_detail','get_note_changes','list_skills','get_skill','list_links','list_automations',
+  'list_notes','search_notes','get_note_tags','get_note_detail','get_note_changes','list_skills','get_skill','list_links','list_automations',
   'list_memories','get_memory_detail','web_search','read_webpage','quest_get','quest_review',
   'get_habits_status','get_review_status','list_chats','search_chat_messages'
 ]);
 const AI_TOOL_DESTRUCTIVE = new Set(['delete_todo','delete_note','delete_skill','delete_link','delete_automation']);
+// 「完全拦截删除」时要隐藏的接口：删除类 + 能通过 action=delete 删数据的批量接口
+const AI_TOOL_DELETE_CAPABLE = new Set([...AI_TOOL_DESTRUCTIVE, 'batch_update_todos']);
 const AI_TOOL_ENUMS = {
   repeat: ['', 'once', 'daily', 'weekly', 'monthly'],
-  targetType: ['todo', 'goal'], period: ['today', 'yesterday']
+  targetType: ['todo', 'goal'], period: ['today', 'yesterday'], mode: ['replace', 'add']
 };
+// 这些参数的空字符串是「清空」的合法取值，不能被必填校验当成「没传」（见 validateAiToolCall）
+const AI_TOOL_EMPTY_STRING_MEANS_CLEAR = new Set(['tags']);
 
 function getAiToolMetadata(action, params = {}) {
   const destructive = AI_TOOL_DESTRUCTIVE.has(action) || (action === 'batch_update_todos' && params.action === 'delete');
@@ -689,6 +782,44 @@ function paginateAiToolItems(items, params = {}, defaultSize = 20) {
   const pageCount = Math.max(1, Math.ceil(items.length / pageSize));
   const page = Math.min(pageCount, Math.max(1, Number(params.page) || 1));
   return { items: items.slice((page - 1) * pageSize, page * pageSize), page, pageSize, pageCount, total: items.length };
+}
+
+// ═══════════ 笔记标签：AI 接口共用的解析与校验 ═══════════
+// 与待办的 tags 一样是「逗号分隔字符串 → 数组」；空字符串是合法输入（表示清空标签），
+// 非字符串（数组/对象）直接拒绝，避免把脏数据写进笔记。
+const AI_NOTE_TAG_MAX_COUNT = 12;
+const AI_NOTE_TAG_MAX_LENGTH = 24;
+
+function parseAiNoteTags(raw) {
+  if (raw === undefined) return { ok: true, tags: null }; // 未提供 → 不改动
+  if (typeof raw !== 'string') return { ok: false, error: 'tags 必须是逗号分隔的字符串，如 "数据结构,图论"；清空标签请传空字符串' };
+  const tags = [];
+  for (const part of raw.split(/[,，]/)) {
+    const tag = part.trim();
+    if (!tag || tags.includes(tag)) continue;
+    if (tag.length > AI_NOTE_TAG_MAX_LENGTH) return { ok: false, error: `标签「${tag.slice(0, AI_NOTE_TAG_MAX_LENGTH)}…」超过 ${AI_NOTE_TAG_MAX_LENGTH} 字，请改短一些` };
+    tags.push(tag);
+    if (tags.length > AI_NOTE_TAG_MAX_COUNT) return { ok: false, error: `一次最多设置 ${AI_NOTE_TAG_MAX_COUNT} 个标签，请精简后再试` };
+  }
+  return { ok: true, tags };
+}
+
+// 笔记正文里出现的标签（按出现次数倒序），让 AI 优先复用已有标签而不是每次造新的
+function listAiNoteTagUsage() {
+  const usage = new Map();
+  for (const note of notes) {
+    if (note.type !== 'note' || !Array.isArray(note.tags)) continue;
+    for (const tag of note.tags) {
+      if (typeof tag !== 'string' || !tag.trim()) continue;
+      usage.set(tag, (usage.get(tag) || 0) + 1);
+    }
+  }
+  return [...usage.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], 'zh-CN')).map(([tag]) => tag);
+}
+
+function formatAiNoteTags(note) {
+  const tags = Array.isArray(note && note.tags) ? note.tags.filter(tag => typeof tag === 'string' && tag.trim()) : [];
+  return tags.length > 0 ? `🏷️ 标签：${tags.join('、')}\n` : '';
 }
 
 function inferAiToolPropertySchema(action, name, description) {
@@ -760,7 +891,9 @@ function validateAiToolCall(action, params) {
   }
   for (const name of AI_TOOL_REQUIRED_PARAMS[action] || []) {
     const value = name === 'text' ? (params.text ?? params.content) : params[name];
-    if (value === undefined || value === null || value === '') return { ok: false, error: `缺少必填参数 ${name}` };
+    // AI_TOOL_EMPTY_STRING_MEANS_CLEAR 里的参数用空字符串表达「清空」，空串是合法取值，不算缺失
+    const emptyAllowed = AI_TOOL_EMPTY_STRING_MEANS_CLEAR.has(name) && typeof value === 'string';
+    if (value === undefined || value === null || (value === '' && !emptyAllowed)) return { ok: false, error: `缺少必填参数 ${name}` };
   }
   if (['create_skill','update_skill'].includes(action)) {
     if (action === 'update_skill' && params.name === undefined && params.content === undefined) return { ok: false, error: '至少提供 name 或 content' };
@@ -880,15 +1013,15 @@ function validateAiQuestDependencies(action, params) {
   return '';
 }
 
-function authorizeAiToolCall(action, params, conv) {
-  if (getAiToolMetadata(action, params).risk !== 'destructive') return { ok: true };
-  const latestUser = [...(conv?.messages || [])].reverse().find(message => message.role === 'user');
-  const text = String(latestUser?.content || '');
-  const deleteWord = /(?:删除|删掉|移除|清空|丢弃|delete|remove)/i;
-  const negated = /(?:不要|别|不许|不许|禁止|do\s+not|don't).{0,12}(?:删除|删掉|移除|清空|丢弃|delete|remove)/i.test(text);
-  const questionOnly = /(?:为什么|怎么会|是否|能否|能不能|可不可以|可以吗).{0,12}(?:删除|删掉|移除|清空|丢弃)/i.test(text);
-  if (deleteWord.test(text) && !negated && !questionOnly) return { ok: true };
-  return { ok: false, error: '本轮用户没有明确表达删除意图，已拦截高风险操作' };
+// 删除类操作的执行门禁不再看用户消息关键词，而是读对话的删除策略
+// （block/confirm/allow，见 AI_DELETE_POLICIES）；confirm 的弹窗在 ai-api.js 的工具循环里。
+function checkAiDeletePolicy(action, params, conv) {
+  if (!isAiDestructiveTool(action, params)) return { ok: true };
+  const policy = getAiDeletePolicy(conv);
+  if (policy === 'block') {
+    return { ok: false, error: '当前对话的删除策略为「完全拦截删除」，已拒绝执行 ' + action };
+  }
+  return { ok: true, needsConfirm: policy === 'confirm' };
 }
 
 function normalizeAiToolResult(action, value, durationMs = 0) {
@@ -1065,23 +1198,6 @@ async function executeToolCall(action, params, context = {}) {
         if (saveData('study_todos_v2', todos) !== true) return '❌ 待办删除结果保存失败';
       }
       return `✅ 已删除待办：${text}`;
-    }
-    case 'toggle_todo': {
-      const id = params.id;
-      if (!id) return '错误：缺少待办ID';
-      const t = findTodo(id);
-      if (!t) return `错误：未找到ID为 ${id} 的待办`;
-      t.done = !t.done;
-      if (t.done) {
-        t.completedAt = getTodayStr();
-        const descendantIds = getAllDescendantIds(id).filter(did => did !== id);
-        for (const did of descendantIds) { const d = findTodo(did); if (d) { d.done = true; if (!d.completedAt) d.completedAt = getTodayStr(); } }
-      } else {
-        delete t.completedAt;
-      }
-      if (saveData('study_todos_v2', todos) !== true) return '❌ 待办状态保存失败';
-      if (typeof tlOnTodosChanged === 'function') tlOnTodosChanged();
-      return `✅ 已将待办"${t.text}"标记为${t.done ? '已完成' : '未完成'}`;
     }
     case 'set_todo_completed': {
       const id = Number(params.id);
@@ -1692,27 +1808,85 @@ async function executeToolCall(action, params, context = {}) {
           folderId = resolveNoteFolderPath(effectivePath);
         }
       }
+      const parsedNewTags = parseAiNoteTags(params.tags);
+      if (!parsedNewTags.ok) return `错误：${parsedNewTags.error}`;
       const newNote = {
         id: genId(), type: 'note', title, content,
         parentId: folderId,
         summary: '',
         _summaryFresh: false,
+        tags: parsedNewTags.tags || [],
+        keywords: [],
+        _reviewHistory: [],
+        _skipReview: false,
         createdAt: new Date().toISOString(), updatedAt: new Date().toISOString()
       };
       notes.push(newNote);
       if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记保存失败';
-      return `✅ 已创建笔记：${title} [ID:${newNote.id}]`;
+      if (typeof renderNotes === 'function') renderNotes();
+      const tagSuffix = newNote.tags.length > 0 ? `（标签：${newNote.tags.join('、')}）` : '';
+      return `✅ 已创建笔记：${title} [ID:${newNote.id}]${tagSuffix}`;
     }
     case 'update_note': {
       const id = Number(params.id);
       if (!id) return '错误：缺少笔记ID';
       const note = notes.find(n => n.id === id);
       if (!note) return `错误：未找到ID为 ${params.id} 的笔记`;
-      if (params.title !== undefined) note.title = params.title;
-      if (params.content !== undefined) note.content = params.content.replace(/\\n/g, '\n');
+      const parsedTags = parseAiNoteTags(params.tags);
+      if (!parsedTags.ok) return `错误：${parsedTags.error}`;
+      const changed = [];
+      if (params.title !== undefined && params.title !== note.title) { note.title = params.title; changed.push('标题'); }
+      if (params.content !== undefined) { note.content = params.content.replace(/\\n/g, '\n'); changed.push('正文'); }
+      if (parsedTags.tags !== null) {
+        note.tags = parsedTags.tags;
+        changed.push(parsedTags.tags.length > 0 ? `标签（${parsedTags.tags.join('、')}）` : '标签（已清空）');
+        // 标签徽章显示在笔记列表上，必须重绘，否则要等下次切换页面才更新
+        if (typeof renderNotes === 'function') renderNotes();
+      }
+      if (changed.length === 0) return `ℹ️ 没有需要修改的内容：${note.title}`;
       note.updatedAt = new Date().toISOString();
       if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记保存失败';
-      return `✅ 已更新笔记：${note.title}`;
+      return `✅ 已更新笔记「${note.title}」：${changed.join('、')}`;
+    }
+    case 'batch_set_note_tags': {
+      if (!Array.isArray(params.ids) || params.ids.length === 0) return '错误：缺少笔记ID数组 ids';
+      const mode = params.mode === undefined || params.mode === '' ? 'replace' : params.mode;
+      if (mode !== 'replace' && mode !== 'add') return `错误：mode 只能是 replace 或 add，收到 "${params.mode}"`;
+      const parsedBatchTags = parseAiNoteTags(params.tags);
+      if (!parsedBatchTags.ok) return `错误：${parsedBatchTags.error}`;
+      const batchTags = parsedBatchTags.tags || [];
+      const toSet = new Set();
+      const missing = [];
+      const notNote = [];
+      for (const rawId of params.ids) {
+        const noteId = Number(rawId);
+        const note = notes.find(n => n.id === noteId);
+        if (!note) { missing.push(rawId); continue; }
+        if (note.type !== 'note') { notNote.push(note.title || noteId); continue; }
+        toSet.add(note);
+      }
+      if (toSet.size === 0) {
+        return `错误：没有可写入的笔记（未找到 ${missing.length} 个ID${notNote.length ? `，另有 ${notNote.length} 个ID是文件夹` : ''}）`;
+      }
+      for (const note of toSet) {
+        if (!Array.isArray(note.tags)) note.tags = [];
+        if (mode === 'replace') {
+          note.tags = [...batchTags];
+        } else {
+          for (const tag of batchTags) if (!note.tags.includes(tag)) note.tags.push(tag);
+        }
+        note.updatedAt = new Date().toISOString();
+      }
+      if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记标签保存失败';
+      if (typeof renderNotes === 'function') renderNotes();
+      let batchResult = `✅ 已${mode === 'replace' ? '覆盖' : '追加'}设置 ${toSet.size} 篇笔记的标签：`
+        + (batchTags.length > 0 ? batchTags.join('、') : '（已清空标签）') + '\n';
+      batchResult += `   涉及：${[...toSet].slice(0, 8).map(n => n.title || '未命名').join('、')}`
+        + (toSet.size > 8 ? ` 等 ${toSet.size} 篇` : '') + '\n';
+      if (missing.length > 0) batchResult += `⚠️ 跳过了 ${missing.length} 个不存在的ID：${missing.join('、')}\n`;
+      if (notNote.length > 0) batchResult += `⚠️ 跳过了 ${notNote.length} 个文件夹：${notNote.join('、')}\n`;
+      batchResult += `   现有标签全集：${listAiNoteTagUsage().join('、') || '(无)'}`;
+      return batchResult;
     }
     case 'move_note': {
       const noteId = Number(params.id);
@@ -1830,7 +2004,10 @@ async function executeToolCall(action, params, context = {}) {
         for (const n of childNotes) {
           const num = prefix ? prefix + '.' + localIdx : String(localIdx);
           const summary = n.summary || '';
-          result += `[${num}] 📄 [ID:${n.id}] ${n.title || '未命名'}` + (summary ? ' — 摘要：' + summary : '') + '\n';
+          const noteTags = Array.isArray(n.tags) ? n.tags.filter(tag => typeof tag === 'string' && tag.trim()) : [];
+          result += `[${num}] 📄 [ID:${n.id}] ${n.title || '未命名'}`
+            + (noteTags.length > 0 ? ` 🏷️${noteTags.join('、')}` : '')
+            + (summary ? ' — 摘要：' + summary : '') + '\n';
           localIdx++;
         }
       }
@@ -1875,6 +2052,57 @@ async function executeToolCall(action, params, context = {}) {
       result += '\n💡 使用 get_note_detail 查看笔记完整内容。';
       return result;
     }
+    case 'get_note_tags': {
+      const search = String(params.search || '').trim().toLowerCase();
+      const includeNotes = params.includeNotes !== false;
+      const tagMap = new Map();
+      let untagged = 0;
+      let noteTotal = 0;
+      let taggedTotal = 0;
+      for (const note of notes) {
+        if (note.type !== 'note') continue;
+        noteTotal++;
+        const noteTags = Array.isArray(note.tags) ? note.tags.filter(tag => typeof tag === 'string' && tag.trim()) : [];
+        const title = note.title || '未命名';
+        if (noteTags.length === 0) { untagged++; continue; }
+        taggedTotal++;
+        for (const tag of noteTags) {
+          if (!tagMap.has(tag)) tagMap.set(tag, []);
+          tagMap.get(tag).push({ id: note.id, title });
+        }
+      }
+      let tagList = [...tagMap.entries()].map(([tag, items]) => ({ tag, count: items.length, items }));
+      const totalTags = tagList.length;
+      if (search) {
+        tagList = tagList.filter(entry =>
+          entry.tag.toLowerCase().includes(search)
+          || entry.items.some(item => item.title.toLowerCase().includes(search)));
+      }
+      // 计数多的在前；同数量按拼音/字典序，保证同一份数据每次输出稳定
+      tagList.sort((a, b) => b.count - a.count || a.tag.localeCompare(b.tag, 'zh-CN'));
+      if (totalTags === 0) {
+        return `🏷️ 标签全集：暂无标签（共 ${noteTotal} 篇笔记，全部未打标签）。\n`
+          + '💡 需要归类时用 batch_set_note_tags 一次给一批笔记打标签，标签会出现在「今天」页待复习列表的标签筛选里。';
+      }
+      if (tagList.length === 0) return `🏷️ 没有匹配「${params.search}」的标签（现有 ${totalTags} 个标签）。`;
+      const header = search
+        ? `🏷️ 标签全集：共 ${totalTags} 个，匹配「${params.search}」的有 ${tagList.length} 个`
+        : `🏷️ 标签全集：共 ${totalTags} 个`;
+      let result = `${header}（${noteTotal} 篇笔记，${taggedTotal} 篇已打标签，${untagged} 篇未打标签）\n\n`;
+      for (const entry of tagList) {
+        result += `- 【${entry.tag}】${entry.count} 篇`;
+        if (includeNotes) {
+          const shown = entry.items.slice(0, 5).map(item => `${item.title}[ID:${item.id}]`).join('、');
+          result += `：${shown}${entry.items.length > 5 ? ` …等 ${entry.count} 篇` : ''}`;
+        }
+        result += '\n';
+      }
+      result += `\n💡 打标签：update_note（单篇，tags 逗号分隔）或 batch_set_note_tags（一批，mode=replace/add）。给新笔记归类时优先复用上面的标签名。`;
+      if (untagged > 0) {
+        result += `\n⚠️ 还有 ${untagged} 篇笔记没有标签；需要时用 list_notes 查看全部笔记，或 search_notes 定位后再批量打标签。`;
+      }
+      return result;
+    }
     case 'get_note_detail': {
       const id = params.id;
       if (!id) return '错误：缺少笔记ID';
@@ -1882,6 +2110,7 @@ async function executeToolCall(action, params, context = {}) {
       if (!n) return `错误：未找到ID为 ${id} 的笔记`;
       let result = `📝 笔记详情 [ID:${n.id}]\n`;
       result += `📌 标题：${n.title || '未命名'}\n`;
+      result += formatAiNoteTags(n);
       result += `🕐 创建时间：${n.createdAt ? new Date(n.createdAt).toLocaleString('zh-CN') : '未知'}\n`;
       result += `🕑 最后编辑：${n.updatedAt ? new Date(n.updatedAt).toLocaleString('zh-CN') : '未知'}\n`;
       result += `\n📄 正文：\n${n.content || '(空)'}\n`;

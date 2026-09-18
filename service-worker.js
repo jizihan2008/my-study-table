@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v154';
+const VERSION = 'mst-v157';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,13 +14,13 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260916-r1',
+  './css/style.css?v=20260917-r1',
   './css/workspace.css?v=20260915-r3',
   './css/appearance.css?v=20260913-r6',
   './js/theme-model.js?v=20260913-r4',
   './js/liquid-glass.js?v=20260906-r2',
   './js/appearance.js?v=20260913-r5',
-  './js/today.js?v=20260915-r4',
+  './js/today.js?v=20260917-r1',
   './lib/lucide/lucide.min.js',
   './lib/katex/katex.min.css',
   './lib/katex/katex.min.js',
@@ -36,7 +36,7 @@ const PRECACHE_URLS = [
   './js/ai-tree.js?v=20260912-r3',
   './js/ai-attach.js?v=20260916-r1',
   './js/ai-render.js?v=20260916-r2',
-  './js/ai-tools.js?v=20260916-r2',
+  './js/ai-tools.js?v=20260917-r2',
   './js/notes.js?v=20260915-r4',
   './js/stats.js?v=20260914-r3',
   './js/platform.js?v=20260826-r2',

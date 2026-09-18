@@ -293,7 +293,7 @@ My Study Table 是一款面向学习者的多功能桌面管理工具，集成�
 ### 工具调用系统
 AI 可通过 `<tool_call>` 标签直接操作应用数据：
 
-**待办管理**: add_todo、batch_add_todos、update_todo、delete_todo、toggle_todo、move_todo、list_todos、get_todo_detail、batch_update_todos、get_todo_stats  
+**待办管理**: add_todo、batch_add_todos、update_todo、delete_todo、set_todo_completed、move_todo、list_todos、get_todo_detail、batch_update_todos、get_todo_stats
 **聚焦与状态**: get_today_status、get_focus_tasks、set_focus_task、get_stats  
 **笔记管理**: add_note、update_note、move_note、delete_note、list_notes、search_notes、get_note_detail、get_note_changes  
 **快捷访问**: add_link、delete_link、list_links  

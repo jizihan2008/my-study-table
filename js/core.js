@@ -47,13 +47,15 @@ function saveData(key, data) {
     console.error('[saveData] 序列化失败 (' + key + '):', e.message);
     // Fallback: try removing problematic _rawLogs and _ prefixed fields before retry
     // 注意：必须保留 _dailyReport/_hasUnread/_hasUnreadAuto 等关键标记字段，否则日报对话标记会丢失导致重复新建
+    // 同理保留对话级 AI 设置 _toolGroups（接口组勾选）/_deletePolicy（删除策略）
     if (key === 'study_ai_convs' && Array.isArray(data)) {
       try {
+        const KEEP_UNDERSCORE = new Set(['_dailyReport', '_hasUnread', '_hasUnreadAuto', '_toolGroups', '_deletePolicy']);
         const cleaned = data.map(c => {
           if (c && typeof c === 'object') {
             const copy = {};
             for (const [k, v] of Object.entries(c)) {
-              if (!k.startsWith('_') || k === '_dailyReport' || k === '_hasUnread' || k === '_hasUnreadAuto') {
+              if (!k.startsWith('_') || KEEP_UNDERSCORE.has(k)) {
                 copy[k] = v;
               }
             }

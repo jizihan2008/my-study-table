@@ -8,6 +8,7 @@ const vm = require('node:vm');
 const policy = require('../js/sync-policy');
 
 function loadSyncLogs(seed = {}, options = {}) {
+  let nextId = 999;
   const values = new Map(Object.entries(seed).map(([key, value]) => [key, typeof value === 'string' ? value : JSON.stringify(value)]));
   const localStorage = {
     getItem: key => values.has(key) ? values.get(key) : null,
@@ -19,10 +20,19 @@ function loadSyncLogs(seed = {}, options = {}) {
     SyncPolicy: policy,
     Sync: { enabled: true, autoSync: false }
   };
-  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'sync-logs.js'), 'utf8');
-  vm.runInNewContext(code, {
+  const state = { renders: 0, renderOptions: [] };
+  const context = {
     window,
     localStorage,
+    aiConvs: options.aiConvs,
+    activeConvId: options.activeConvId,
+    genId: () => ++nextId,
+    safeSaveAiConvs() {
+      localStorage.setItem('study_ai_convs', JSON.stringify(context.aiConvs));
+      return true;
+    },
+    renderAiChat(options) { state.renders++; state.renderOptions.push(options); },
+    SyncPolicy: policy,
     getSupabaseClient: options.client ? () => options.client : undefined,
     setTimeout() { return 1; },
     clearTimeout() {},
@@ -36,8 +46,11 @@ function loadSyncLogs(seed = {}, options = {}) {
     TextDecoder,
     document: { getElementById() { return null; } },
     console: { log() {}, warn() {}, error() {} }
-  });
-  return { SyncLogs: window.SyncLogs, values };
+  };
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'ai-tree.js'), 'utf8'), context);
+  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'sync-logs.js'), 'utf8');
+  vm.runInNewContext(code, context);
+  return { SyncLogs: window.SyncLogs, values, context, state };
 }
 
 test('conversation changes remain dirty while automatic cloud storage is off', () => {
@@ -177,4 +190,195 @@ test('a local conversation edit uses the fast path without downloading all paylo
   assert.equal(calls.payload, 0);
   assert.equal(calls.usageRpc, 1);
   assert.equal((await SyncLogs.getStatus()).pendingCount, 0);
+});
+
+test('a conversation outside the recent 20 is not treated as a user deletion', async () => {
+  const conversations = Array.from({ length: 21 }, (_, i) => ({ id: i + 1, messages: [] }));
+  const { SyncLogs, values } = loadSyncLogs({
+    study_ai_convs: conversations,
+    study_sync_logs_known_items_v2: { ai_conv: ['1'] }
+  });
+  await SyncLogs.__test.refreshLocalState(true);
+  assert.equal(JSON.parse(values.get('study_sync_logs_tombstones_v2'))['ai_conv/1'], undefined);
+});
+
+test('a partial upload retries its own successful shard without a false conflict', async () => {
+  let calls = 0;
+  const client = {
+    from() {
+      return {
+        upsert() { return this; },
+        select() { return this; },
+        single() {
+          calls++;
+          return Promise.resolve(calls === 2
+            ? { data: null, error: { message: 'offline' } }
+            : { data: { updated_at: calls === 1 ? '2026-08-25T08:01:00Z' : '2026-08-25T08:02:00Z' }, error: null });
+        }
+      };
+    }
+  };
+  const { SyncLogs, values } = loadSyncLogs({
+    study_sync_logs_dirty_v2: { 'ai_conv/7': true },
+    study_sync_logs_ts: { 'ai_conv/7': '2026-08-25T08:00:00Z' }
+  }, { client });
+  const item = { kind: 'ai_conv', itemId: '7', meta: { id: 7 }, items: [] };
+  const pieces = [
+    { itemId: '7_p0', wrap: { d: 'first' }, bytes: 5 },
+    { itemId: '7_p1', wrap: { d: 'second' }, bytes: 6 }
+  ];
+  const session = { user: { id: 'u1' } };
+  const first = await SyncLogs.__test.uploadPreparedItem(session, client, item, pieces,
+    { groups: { 'ai_conv/7': [] }, set: new Set() }, false);
+  assert.equal(first.ok, false);
+  const row = { item_id: '7_p0', updated_at: '2026-08-25T08:01:00Z' };
+  const retried = await SyncLogs.__test.uploadPreparedItem(session, client, item, pieces,
+    { groups: { 'ai_conv/7': [row] }, set: new Set(['ai_conv/7_p0']) }, false);
+  assert.equal(retried.ok, true);
+  assert.equal(calls, 3);
+  assert.equal(JSON.parse(values.get('study_sync_logs_ts'))['ai_conv/7'], '2026-08-25T08:02:00Z');
+  assert.equal(SyncLogs.getPendingConflicts().length, 0);
+});
+
+test('a remote tombstone removes the local conversation and refreshes the chat', async () => {
+  const row = {
+    kind: 'ai_conv', item_id: '7', updated_at: '2026-08-25T08:02:00Z',
+    data: { v: 2, deleted: true }
+  };
+  const client = {
+    from() {
+      return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        then(resolve, reject) { return Promise.resolve({ data: [row], error: null }).then(resolve, reject); }
+      };
+    }
+  };
+  const convs = [{ id: 7, title: '旧对话', messages: [] }, { id: 8, title: '保留', messages: [] }];
+  const { SyncLogs, values, state } = loadSyncLogs({
+    study_ai_convs: convs,
+    study_sync_logs_ts: { 'ai_conv/7': '2026-08-25T08:00:00Z' },
+    study_sync_logs_known_items_v2: { ai_conv: ['7', '8'] }
+  }, { client, aiConvs: convs, activeConvId: 7 });
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.deepEqual(JSON.parse(values.get('study_ai_convs')).map(conv => conv.id), [8]);
+  assert.equal(values.get('study_active_conv'), '8');
+  assert.equal(state.renders, 1);
+  assert.equal(state.renderOptions[0].skipDraftSave, true);
+});
+
+test('deleting a conversation leaves a durable cloud tombstone', async () => {
+  let written = null;
+  const client = {
+    from() {
+      return {
+        upsert(row) { written = row; return this; },
+        select() { return this; },
+        single() { return Promise.resolve({ data: { updated_at: '2026-08-25T08:02:00Z' }, error: null }); }
+      };
+    }
+  };
+  const { SyncLogs, values } = loadSyncLogs({
+    study_sync_logs_tombstones_v2: { 'ai_conv/7': { kind: 'ai_conv', itemId: '7' } },
+    study_sync_logs_dirty_v2: { 'ai_conv/7': true },
+    study_sync_logs_ts: { 'ai_conv/7': '2026-08-25T08:00:00Z' }
+  }, { client });
+  const result = await SyncLogs.__test.processTombstone(
+    { user: { id: 'u1' } }, client, { kind: 'ai_conv', itemId: '7' },
+    { groups: { 'ai_conv/7': [] } }, false
+  );
+  assert.equal(result.ok, true);
+  assert.deepEqual(JSON.parse(JSON.stringify(written.data)), { v: 2, deleted: true });
+  assert.equal(written.bytes, 0);
+  assert.equal(JSON.parse(values.get('study_sync_logs_tombstones_v2'))['ai_conv/7'], undefined);
+});
+
+test('a pulled conversation refreshes the visible chat', async () => {
+  const row = {
+    kind: 'ai_conv', item_id: '7', updated_at: '2026-08-25T08:02:00Z',
+    data: { meta: { id: 7, title: '云端版本' }, items: [{ role: 'assistant', content: '新消息' }] }
+  };
+  const client = {
+    from() {
+      return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        then(resolve, reject) { return Promise.resolve({ data: [row], error: null }).then(resolve, reject); }
+      };
+    }
+  };
+  const convs = [{ id: 7, title: '旧版本', messages: [] }];
+  const { SyncLogs, values, state } = loadSyncLogs({
+    study_ai_convs: convs,
+    study_sync_logs_ts: { 'ai_conv/7': '2026-08-25T08:00:00Z' }
+  }, { client, aiConvs: convs, activeConvId: 7 });
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.equal(JSON.parse(values.get('study_ai_convs'))[0].title, '云端版本');
+  assert.equal(state.renders, 1);
+});
+
+test('cross-device daily report merge persists new messages in the tree without duplicates', async () => {
+  const row = {
+    kind: 'ai_conv', item_id: '20', updated_at: '2026-08-25T08:02:00Z',
+    data: {
+      meta: { id: 20, title: '📋 每日日报', daily: true },
+      items: [
+        { id: 101, role: 'user', content: '远端日报请求' },
+        { id: 102, role: 'assistant', content: '远端日报内容' },
+        { role: 'system', content: '远端无 ID 的补充' }
+      ]
+    }
+  };
+  const client = {
+    from() {
+      return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        then(resolve, reject) { return Promise.resolve({ data: [row], error: null }).then(resolve, reject); }
+      };
+    }
+  };
+  const local = { id: 10, title: '📋 每日日报', _dailyReport: true, messages: [] };
+  const { SyncLogs, context, values } = loadSyncLogs({
+    study_ai_convs: [local],
+    study_sync_logs_ts: { 'ai_conv/20': '2026-08-25T08:00:00Z' }
+  }, { client, aiConvs: [local], activeConvId: 10 });
+  context.initTreeOnConv(local);
+  context.appendMessage(local, { role: 'user', content: '本地日报请求' });
+  context.appendMessage(local, { role: 'assistant', content: '本地日报内容' });
+  context.safeSaveAiConvs();
+
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '20' }]);
+  const restored = JSON.parse(values.get('study_ai_convs'))[0];
+  context.ensureTree(restored);
+  assert.deepEqual(restored.messages.map(m => m.content), [
+    '本地日报请求', '本地日报内容', '远端日报请求', '远端日报内容', '远端无 ID 的补充'
+  ]);
+  assert.equal(Object.keys(restored.tree).length, 6);
+
+  row.updated_at = '2026-08-25T08:03:00Z';
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '20' }]);
+  context.ensureTree(local);
+  assert.equal(local.messages.length, 5);
+});
+
+test('a tree-only fallback payload rebuilds the message cache after cloud pull', async () => {
+  const row = {
+    kind: 'ai_conv', item_id: '30', updated_at: '2026-08-25T08:02:00Z', data: null
+  };
+  const client = {
+    from() {
+      return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        then(resolve, reject) { return Promise.resolve({ data: [row], error: null }).then(resolve, reject); }
+      };
+    }
+  };
+  const { SyncLogs, context, values } = loadSyncLogs({}, { client, aiConvs: [], activeConvId: 30 });
+  const remote = {};
+  context.initTreeOnConv(remote);
+  context.appendMessage(remote, { role: 'user', content: 'question' });
+  context.appendMessage(remote, { role: 'assistant', content: 'answer' });
+  row.data = { meta: { id: 30, title: 'tree only' }, tree: remote.tree, activePath: remote.activePath, items: [] };
+
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '30' }]);
+  const restored = JSON.parse(values.get('study_ai_convs'))[0];
+  assert.deepEqual(restored.messages.map(m => m.content), ['question', 'answer']);
 });

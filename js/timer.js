@@ -311,6 +311,15 @@ function animateTimerHistoryExpand() {
   });
 }
 
+// 计时记录里的待办统一显示「父级 › … › 自身」完整路径，避免同名子任务难以区分
+function getTimerTodoFullPath(todo) {
+  if (!todo) return '';
+  const ancestors = typeof getAncestorPath === 'function'
+    ? getAncestorPath(todo.id).map(item => item.text).filter(Boolean)
+    : [];
+  return [...ancestors, todo.text || ''].filter(Boolean).join(' › ');
+}
+
 function renderTimerHistory(records) {
   const todayStr = formatDate(new Date());
   const dateMap = {};
@@ -328,23 +337,23 @@ function renderTimerHistory(records) {
     let dayTotal = 0;
     const itemHtml = [];
     for (const rec of items) {
-      let targetName = '自由计时';
-      if (rec.targetType === 'goal' || rec.targetId) {
-        const targetId = rec.targetId || rec.todoId;
-        const targetType = rec.targetType || 'todo';
+      let targetName = '';
+      const targetId = rec.targetId ?? rec.todoId;
+      const targetType = rec.targetType || 'todo';
+      if (targetId !== null && targetId !== undefined) {
         if (targetType === 'goal') {
           const goal = loadGoals().find(g => g.id === targetId);
           targetName = goal ? '🎯 ' + goal.text : '(已删除的目标)';
         } else {
           const todo = findTodo(targetId);
-          targetName = todo ? todo.text : '(已删除)';
+          targetName = todo ? getTimerTodoFullPath(todo) : '(已删除)';
         }
-      } else if (rec.todoId) {
-        const todo = findTodo(rec.todoId);
-        targetName = todo ? todo.text : '(已删除)';
       }
       const sessionName = typeof rec.name === 'string' ? rec.name.trim() : '';
-      const name = sessionName ? `⏱ ${sessionName} · ${targetName}` : (targetName === '自由计时' ? '⏱ 自由计时' : targetName);
+      // 已命名的计时记录：即使未关联待办也只显示名称，不再补「自由计时」
+      const name = sessionName
+        ? (targetName ? `⏱ ${sessionName} · ${targetName}` : `⏱ ${sessionName}`)
+        : (targetName || '⏱ 自由计时');
       dayTotal += rec.totalMs;
       if (rec.totalMs >= 1000) {
         let sessionDetail = '';

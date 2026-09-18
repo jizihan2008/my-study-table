@@ -104,7 +104,7 @@ function clearAiStreamingDraft(convId, shouldRender = true) {
 }
 
 // ═══════════ AI Chat: Rendering ═══════════
-function renderAiChat() {
+function renderAiChat(options) {
   const layout = document.getElementById('aiChatLayout');
   if (!layout) return;
   // 切换/重建对话视图：强制滚动到底部展示最新消息
@@ -113,7 +113,9 @@ function renderAiChat() {
   // 异步完成后调用本函数）把用户正在输入的内容与焦点一并替换，导致"无法输入文字"。
   const _prevInput = document.getElementById('aiInput');
   const _hadInputFocus = !!(_prevInput && document.activeElement === _prevInput);
-  if (typeof saveAiDraft === 'function') { try { saveAiDraft(); } catch (e) {} }
+  if (!options || !options.skipDraftSave) {
+    if (typeof saveAiDraft === 'function') { try { saveAiDraft(); } catch (e) {} }
+  }
   const hasApiKey = !!(loadApiKeys().length > 0);
 
   // 无 API Key 时也正常渲染界面（可查看历史聊天记录），仅禁用发送并在顶部提示。
@@ -181,6 +183,10 @@ function renderAiChat() {
           <button type="button" class="ai-pill-toggle" id="aiToolbarWebSearchBtn" onclick="toggleAiWebSearch()" title="联网搜索">
             <i data-lucide="globe" class="lucide-icon" style="width:16px;height:16px;"></i>
             <span>智能搜索</span>
+          </button>
+          <button type="button" class="ai-pill-toggle" id="aiToolbarToolGroupsBtn" onclick="openAiToolSettingsModal()" title="给 AI 的接口组">
+            <i data-lucide="puzzle" class="lucide-icon" style="width:16px;height:16px;"></i>
+            <span>接口组</span>
           </button>
           <button type="button" class="ai-pill-toggle" id="aiToolbarImageUploadBtn" onclick="cycleAiImageUploadMode()" title="图片上传方式">
             <i data-lucide="image-plus" class="lucide-icon" style="width:16px;height:16px;"></i>
@@ -603,7 +609,6 @@ function renderAiMessages() {
         'add_todo': '➕ 创建待办',
         'update_todo': '✏️ 更新待办',
         'delete_todo': '🗑️ 删除待办',
-        'toggle_todo': '✅ 切换待办状态',
         'batch_update_todos': '📋 批量操作待办',
         'batch_add_todos': '📋 批量创建待办',
         'set_focus_task': '🎯 设置聚焦任务',
@@ -1087,29 +1092,10 @@ function switchToTreeBranch(nodeId) {
 function switchUserVersion(userNodeId, delta) {
   const conv = getActiveConv();
   if (!conv || isAiLoading(conv.id) || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
-  // 同父下的 user 兄弟（编辑产生的其他版本）
-  const siblings = siblingNodeIds(conv, userNodeId)
-    .filter(sid => conv.tree[sid] && conv.tree[sid].role === 'user');
-  if (siblings.length === 0) return;
-  const n = siblings.length + 1; // 含自己
+  const siblings = siblingBranchIds(conv, userNodeId);
+  if (siblings.length < 2) return;
   const curIdx = siblings.indexOf(userNodeId);
-  const newIdx = (curIdx + delta + n) % n;
-  const targetId = newIdx === curIdx ? userNodeId : siblings[newIdx];
-  // 下钻到回复链终点：若目标 user 有 assistant 回复（children），沿 first-child 走到末尾
-  let target = targetId;
-  const tNode = conv.tree[targetId];
-  if (tNode && tNode.children && tNode.children.length > 0) {
-    let cur = tNode.children[0];
-    let guard = 0;
-    while (cur && conv.tree[cur] && guard++ < 300) {
-      const cn = conv.tree[cur];
-      if (cn.role === 'user') break; // 嵌套交换起点，停在回复链终点
-      const kids = cn.children || [];
-      if (kids.length === 0) break;
-      cur = kids[0];
-    }
-    target = cur;
-  }
+  const target = branchTipNodeId(conv, siblings[(curIdx + delta + siblings.length) % siblings.length]);
   if (switchBranch(conv, target)) {
     safeSaveAiConvs();
     renderAiMessages();
@@ -1195,6 +1181,8 @@ function looksLikeMindmap(code) {
   if (/[├└]/.test(s)) return true; // 树形字符格式
   const nonEmpty = s.split('\n').filter(l => l.trim());
   if (nonEmpty.length < 2) return false;
+  // 缩进的纯数字/符号行通常是矩阵，不应作为节点树渲染。
+  if (nonEmpty.every(l => /^[\s\[\]()|+\-−.,&\d]+$/.test(l))) return false;
   // 排除 ASCII 树/图（如二叉树图、目录树）：
   // 存在以连接符（\ / |）开头的行（如 "/"、"/ \"、"|-- main.js"、"|\"）→ 是结构图，
   // 不是"每行一个纯文本节点名"的思维导图缩进树

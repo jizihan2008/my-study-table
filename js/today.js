@@ -563,13 +563,25 @@ function renderReviewCard() {
   }
   const filterRow = document.querySelector('.today-review-filter-row');
   const filterSelect = document.getElementById('todayReviewTagFilter');
-  if (filterRow) filterRow.style.display = tags.length ? 'flex' : 'none';
+  const filterHint = document.getElementById('todayReviewFilterHint');
+  // 筛选行常显：有到期笔记就出现；一个标签都还没有时置灰 + 旁注提示，
+  // 而不是整行 display:none——否则用户根本看不到这个功能存在。
+  // 「无标签」只在同时还有别的标签时才是一个有意义的筛选项，单独存在时没有区分度。
+  const filterEnabled = tags.length > 0;
+  if (filterRow) filterRow.style.display = summary.totalDue > 0 ? 'flex' : 'none';
   if (filterSelect) {
-    filterSelect.innerHTML = '<option value="all">全部标签</option>'
-      + (hasUntagged ? '<option value="untagged">无标签</option>' : '')
-      + tags.map(tag => `<option value="${escapeAttr('tag:' + tag)}">${escapeHtml(tag)}</option>`).join('');
-    filterSelect.value = todayReviewTagFilter;
+    filterSelect.innerHTML = filterEnabled
+      ? '<option value="all">全部标签</option>'
+        + (hasUntagged ? '<option value="untagged">无标签</option>' : '')
+        + tags.map(tag => `<option value="${escapeAttr('tag:' + tag)}">${escapeHtml(tag)}</option>`).join('')
+      : '<option value="all">暂无标签</option>';
+    filterSelect.value = filterEnabled ? todayReviewTagFilter : 'all';
+    filterSelect.disabled = !filterEnabled;
+    filterSelect.title = filterEnabled
+      ? '按标签筛选待复习笔记'
+      : '待复习笔记都还没有标签——在笔记里加标签后即可筛选';
   }
+  if (filterHint) filterHint.style.display = summary.totalDue > 0 && !filterEnabled ? '' : 'none';
   const visibleNotes = getFilteredTodayReviewNotes(summary.dueNotes);
   const count = document.getElementById('todayReviewCount');
   if (count) count.textContent = todayReviewTagFilter === 'all'

@@ -254,6 +254,9 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
     }
   }
   if (isDebugMode()) console.log('[DEBUG sendAiMessage] isKimi:', isKimi, 'isVision:', isVision, 'attachments:', currentAttachments.length);
+  // 预览进度要按"附件在编辑器列表里的下标"更新徽标。
+  // 注意不能用 getAiAttachmentsSnapshot()：那是只读投影，不含 file 引用，无法与本次快照配对。
+  const previewList = typeof getAiAttachments === 'function' ? getAiAttachments() : currentAttachments;
   // Collect vision file references (base64 data URLs) for multimodal content
   let visionFiles = [];
   for (const a of currentAttachments) {
@@ -263,13 +266,32 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
       const hasPdfRange = isPdfFile(a.file) && (Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0);
       if ((!isKimi || hasPdfRange) && isPdfFile(a.file)) {
         const pdfRange = { startPage: a.pdfStartPage, endPage: a.pdfEndPage };
+        // 进度/取消只在"页面图片"模式下有意义：逐页渲染是主线程重活（密集教材实测约 0.3–0.6 秒/页）。
+        const previewIdx = previewList.findIndex(item => item.file === a.file);
+        const pdfRenderOpts = {
+          onPage: info => {
+            if (a && typeof a === 'object') {
+              a._pdfRender = { rendering: true, done: info.done, total: info.total };
+            }
+            if (previewIdx >= 0 && typeof updatePdfRenderStatus === 'function') updatePdfRenderStatus(previewIdx, info);
+          },
+          isAborted: () => isAiStopRequested(conv.id)
+        };
         if (a.pdfMode === 'image') {
           if (!isVision) {
             docTexts += `\n\n[附件：${a.name} — 当前模型不支持图片输入，请改用“提取文字”模式]`;
             continue;
           }
-          const rendered = await renderPdfAttachmentPages(a.file, pdfRange);
+          const rendered = await renderPdfAttachmentPages(a.file, Object.assign({}, pdfRange, pdfRenderOpts));
           a.pdfInfo = rendered;
+          if (previewIdx >= 0 && typeof updatePdfRenderStatus === 'function') {
+            updatePdfRenderStatus(previewIdx, { rendering: false, aborted: !!rendered.aborted });
+          }
+          if (rendered.aborted) {
+            // 用户中途取消：半份页面发过去只会让模型看到残缺内容，直接不带这个附件。
+            docTexts += `\n\n[附件：${a.name} — 页面渲染已取消，本次未发送]`;
+            continue;
+          }
           a.dataUrls = rendered.dataUrls;
           a.dataUrl = rendered.dataUrls[0] || '';
           rendered.dataUrls.forEach((dataUrl, index) => visionFiles.push({
@@ -591,13 +613,11 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
 function navigateCandidateBranch(userNodeId, delta) {
   const conv = getActiveConv();
   if (!conv || isAiLoading(conv.id) || !isTreeConv(conv) || !conv.tree[userNodeId]) return;
-  const siblings = siblingNodeIds(conv, userNodeId);
-  if (siblings.length === 0) return;
-  const n = siblings.length + 1; // 含自己
+  const siblings = siblingBranchIds(conv, userNodeId);
+  if (siblings.length < 2) return;
   const curIdx = siblings.indexOf(userNodeId);
-  const newIdx = (curIdx + delta + n) % n;
-  const targetId = newIdx === curIdx ? userNodeId : siblings[newIdx];
-  switchBranch(conv, targetId);
+  const targetId = siblings[(curIdx + delta + siblings.length) % siblings.length];
+  switchBranch(conv, branchTipNodeId(conv, targetId));
   safeSaveAiConvs();
   renderAiMessages();
 }
@@ -766,6 +786,9 @@ function initAiToolbar() {
   if (keys.length === 0) {
     select.innerHTML = '<option value="">未配置 Key</option>';
   }
+
+  // 接口组胶囊：显示当前对话开放的组数（每个对话一份设置）
+  if (typeof updateAiToolGroupsBtn === 'function') updateAiToolGroupsBtn();
 
   // Restore deep think toggle state
   const dtBtn = document.getElementById('aiToolbarDeepThinkBtn');

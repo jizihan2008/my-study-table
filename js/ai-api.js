@@ -127,11 +127,12 @@ function selectedNativeLocalTools(conv, apiCfg) {
   const settings = apiCfg?.conversationSettings || conv || {};
   const webMode = settings._webSearchMode || null;
   const webEnabled = settings._webSearchEnabled === true || !!webMode;
-  const names = typeof selectAiToolsForPrompt === 'function'
-    ? selectAiToolsForPrompt(conv, webEnabled, webMode === 'native')
+  // 接口组由用户在「对话设置」里勾选（ai-tools.js selectAiToolsForConversation）：
+  // 原生 function tools 与文本协议两种模式下发的工具集合完全一致。
+  const names = typeof selectAiToolsForConversation === 'function'
+    ? selectAiToolsForConversation(conv, webEnabled, webMode === 'native')
     : new Set(Object.keys(typeof AI_TOOLS === 'object' ? AI_TOOLS : {}));
-  const allowed = [...names].filter(name => typeof authorizeAiToolCall !== 'function' || authorizeAiToolCall(name, {}, conv).ok);
-  return buildNativeAiTools(allowed);
+  return buildNativeAiTools([...names]);
 }
 
 function parseNativeLocalToolCalls(nativeCalls) {
@@ -567,9 +568,10 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
 // 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
 // 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
 function buildConversationSystemPrompt(conv, apiCfg = getEffectiveApiConfig()) {
-  // Keep the actual conversation's messages and report marker while applying
-  // request-specific settings such as the web-search toggle.
-  const promptConv = conv ? { ...conv, ...(apiCfg.conversationSettings || {}), _dailyReport: conv._dailyReport === true }
+  // Keep the actual conversation's messages while applying request-specific
+  // settings such as the web-search toggle.  The base prompt itself is now
+  // identical for every conversation, including the 「每日日报」 one.
+  const promptConv = conv ? { ...conv, ...(apiCfg.conversationSettings || {}) }
     : apiCfg.conversationSettings;
   const basePrompt = buildToolsSystemPrompt(promptConv, apiCfg);
   if (conv && conv.systemPromptMode === 'full') return String(conv.systemPrompt || '');
@@ -712,6 +714,26 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
     }
   }
   return msgs;
+}
+
+// 删除策略「AI 要删除时询问我」：把一轮里的删除类调用合并成一个确认框。
+// 用户拒绝 → 这些调用都不执行（返回失败结果给模型，让它向用户解释）。
+async function confirmAiDestructiveCalls(calls) {
+  if (typeof showCustomConfirm !== 'function') {
+    return { ok: false, error: '无法弹出删除确认框，已按安全策略拒绝删除' };
+  }
+  const lines = calls.map(({ tc }) => {
+    const params = tc.params || {};
+    const target = params.id ?? params.todoId ?? params.noteId ?? params.skillId ?? params.linkId ?? params.ids ?? '';
+    const label = Array.isArray(target) ? target.join('、') : String(target ?? '');
+    return `• ${tc.action}${label ? '（目标 ' + label + '）' : ''}`;
+  });
+  const message = `⚠️ AI 想要执行 ${calls.length} 个删除操作：\n${lines.join('\n')}\n\n允许执行吗？\n（可在「对话设置 → 删除策略」里把这段对话改成一概拦截或完全放开）`;
+  try {
+    return (await showCustomConfirm(message)) ? { ok: true } : { ok: false, error: '用户拒绝了删除操作' };
+  } catch (e) {
+    return { ok: false, error: '删除确认失败，已拒绝：' + ((e && e.message) || e) };
+  }
 }
 
 // ═══════════ Tool call loop: keep calling AI until no more tool_calls ═══════════
@@ -864,13 +886,22 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     // Every write is a barrier, so later calls still observe earlier mutations.
     const toolResults = new Array(toolCalls.length);
     const roundOutcomes = new Array(toolCalls.length);
+    // 删除策略（对话级设置）：block 直接拒绝、confirm 先问用户、allow 直接执行。
+    // 不再根据用户消息里的关键词猜测删除意图。
+    const destructiveOf = tc => typeof isAiDestructiveTool === 'function' && isAiDestructiveTool(tc.action, tc.params || {});
+    const deletePolicy = typeof getAiDeletePolicy === 'function' ? getAiDeletePolicy(conv) : 'confirm';
+    const destructiveCalls = deletePolicy === 'allow' ? [] : toolCalls.map((tc, index) => ({ tc, index })).filter(({ tc }) => destructiveOf(tc));
+    let deleteDecision = { ok: true };
+    if (destructiveCalls.length > 0) {
+      deleteDecision = deletePolicy === 'block'
+        ? { ok: false, error: '当前对话的删除策略为「完全拦截删除」，已拒绝执行删除类操作' }
+        : await confirmAiDestructiveCalls(destructiveCalls);
+    }
     const preflight = toolCalls.map(tc => {
       const checked = typeof validateAiToolCall === 'function' ? validateAiToolCall(tc.action, tc.params || {}) : { ok: true };
       if (!checked.ok) return { ok: false, error: '参数校验失败：' + checked.error };
-      const authorized = typeof authorizeAiToolCall === 'function'
-        ? authorizeAiToolCall(tc.action, tc.params || {}, conv)
-        : { ok: true };
-      return authorized.ok ? { ok: true } : { ok: false, error: authorized.error };
+      if (!deleteDecision.ok && destructiveOf(tc)) return { ok: false, error: deleteDecision.error };
+      return { ok: true };
     });
     const blockedWriteBatch = toolCalls.some((tc, index) => !isAiReadOnlyTool(tc.action) && !preflight[index].ok);
     const roundTransaction = !blockedWriteBatch && toolCalls.some(tc => !isAiReadOnlyTool(tc.action)) && typeof beginAiToolTransaction === 'function'

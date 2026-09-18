@@ -341,3 +341,24 @@ test('prompt studio visually edits the active conversation system prompt', async
   await page.getByRole('button', { name: /返回当前对话/ }).click();
   await expect(page.locator('#section-ai')).toHaveClass(/active/);
 });
+
+test('check-in report prompt releases the app input after submission', async () => {
+  await page.setViewportSize({ width: 1280, height: 820 });
+  await page.evaluate(() => {
+    localStorage.removeItem('study_checkin');
+    localStorage.setItem('study_morning_cfg', JSON.stringify({ enabled: true }));
+    switchTab('todo');
+    doDailyCheckin();
+  });
+
+  await expect(page.locator('#checkinQuoteOverlay')).toHaveClass(/open/);
+  await expect(page.locator('#checkinReportOverlay')).not.toHaveClass(/open/);
+  await page.locator('.checkin-quote-close').click();
+  await expect(page.locator('#checkinQuoteOverlay')).not.toHaveClass(/open/);
+  await expect(page.locator('#checkinReportOverlay')).toHaveClass(/open/);
+  await page.locator('#checkinReportInput').fill('今天先复习');
+  await page.locator('.checkin-report-submit').click();
+  await expect(page.locator('#checkinReportOverlay')).not.toHaveClass(/open/);
+  await page.locator('#todoSearch').fill('可正常输入');
+  await expect(page.locator('#todoSearch')).toHaveValue('可正常输入');
+});

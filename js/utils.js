@@ -49,7 +49,9 @@ function renderChangelogModal() {
 // ═══════════ Keyboard shortcuts ═══════════
 document.addEventListener('keydown', function(e) {
   if (e.key === 'Escape') {
-    if (convSettingsModalOpen) {
+    if (aiToolSettingsModalOpen) {
+      closeAiToolSettingsModal();
+    } else if (convSettingsModalOpen) {
       closeConvSettingsModal();
     } else if (settingsModalOpen) {
       closeSettingsModal();

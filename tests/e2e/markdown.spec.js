@@ -113,6 +113,32 @@ test('mindmap extension and syntax highlighting remain available', async () => {
   expect(result.code).toContain('hljs-keyword');
 });
 
+test('matrix rendering does not collide with mindmap detection', async () => {
+  const result = await page.evaluate(() => {
+    const render = source => {
+      const host = document.createElement('div');
+      host.innerHTML = window.formatMarkdownBase(source);
+      return {
+        math: host.querySelectorAll('.katex').length,
+        mindmap: host.querySelectorAll('.bk-mindmap-wrap').length,
+        code: host.querySelectorAll('pre code').length
+      };
+    };
+    return {
+      latex: render(String.raw`$$\begin{bmatrix}1 & 2 \\ 3 & 4\end{bmatrix}$$`),
+      numericFence: render('```\n1  0\n  0  1\n```'),
+      mindmap: render('```mindmap\n根节点\n  子节点\n```'),
+      combined: render(String.raw`$$\begin{matrix}1 & 0 \\ 0 & 1\end{matrix}$$` + '\n\n```mindmap\n根节点\n  子节点\n```')
+    };
+  });
+  expect(result).toEqual({
+    latex: { math: 1, mindmap: 0, code: 0 },
+    numericFence: { math: 0, mindmap: 0, code: 1 },
+    mindmap: { math: 0, mindmap: 1, code: 0 },
+    combined: { math: 1, mindmap: 1, code: 0 }
+  });
+});
+
 test('every advanced note toolbar action inserts renderable markdown', async () => {
   const result = await page.evaluate(() => {
     window.switchTab('notes');

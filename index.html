@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260916-r1">
+<link rel="stylesheet" href="css/style.css?v=20260917-r1">
 <link rel="stylesheet" href="css/workspace.css?v=20260915-r3">
 <link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -439,6 +439,7 @@
             <select id="todayReviewTagFilter" onchange="setTodayReviewTagFilter(this.value)" aria-label="按标签筛选待复习笔记">
               <option value="all">全部标签</option>
             </select>
+            <span class="today-review-filter-hint" id="todayReviewFilterHint" style="display:none;font-size:11px;color:var(--text-secondary);">待复习笔记都还没有标签，给笔记加上标签后即可按标签筛选</span>
           </div>
           <div class="today-review-list" id="todayReviewList"></div>
         </div>
@@ -1425,6 +1426,15 @@
         <span class="hint">提示词会在这段对话每次请求时作为 system message 发送</span>
         <button type="button" class="prompt-open-studio-btn" onclick="closeConvSettingsModal();switchTab('prompts')"><i data-lucide="wand-sparkles"></i> 在提示词工作台中可视化编辑</button>
       </div>
+      <div class="settings-field">
+        <label>给 AI 的接口</label>
+        <button type="button" class="ai-tool-open-btn" onclick="closeConvSettingsModal();openAiToolSettingsModal()">
+          <i data-lucide="puzzle" class="lucide-icon" style="width:14px;height:14px;"></i>
+          <span>接口组与删除策略</span>
+          <span class="ai-tool-open-btn-summary" id="convToolSummary"></span>
+        </button>
+        <span class="hint">在独立窗口里勾选这段对话开放哪些接口组、删除类操作如何执行。</span>
+      </div>
       <div style="margin:12px 0;border-top:1px solid var(--border);"></div>
       <div class="settings-section-title"><i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 导出对话日志</div>
       <p class="hint" style="margin-bottom:10px;">导出当前对话的完整日志文件，包含所有 API 调用记录和上下文数据。</p>
@@ -1432,6 +1442,30 @@
       <div class="settings-section-title" style="margin-top:12px;"><i data-lucide="info" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 调试信息</div>
       <p class="hint" id="convDebugInfo">加载中…</p>
       <div class="settings-status" id="convSettingsStatus"></div>
+    </div>
+  </div>
+</div>
+
+<!-- AI 接口组 / 删除策略窗口 -->
+<div class="modal-overlay" id="aiToolSettingsModal" onclick="closeAiToolSettingsModal(event)">
+  <div class="modal ai-tool-settings-modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title"><i data-lucide="puzzle" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 接口组与删除策略</span>
+      <button class="modal-close" onclick="closeAiToolSettingsModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
+    </div>
+    <div class="modal-body ai-tool-settings-body">
+      <p class="hint" id="aiToolSettingsConvName"></p>
+      <div class="settings-section-title"><i data-lucide="blocks" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 给 AI 的接口组</div>
+      <div class="ai-tool-groups" id="aiToolSettingsGroups"></div>
+      <div class="ai-tool-groups-actions">
+        <button type="button" class="ai-tool-groups-btn" onclick="setAllConvToolGroups(true)">全部开放</button>
+        <button type="button" class="ai-tool-groups-btn" onclick="setAllConvToolGroups(false)">全部关闭</button>
+      </div>
+      <p class="hint">勾选这段对话里 AI 可以调用的接口组，右侧数字是该组包含的接口数量。没设置过的对话会沿用上次的选择；全部关闭时 AI 只能聊天，不会读写你的数据。</p>
+      <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+      <div class="settings-section-title"><i data-lucide="shield-alert" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除策略</div>
+      <div class="ai-delete-policy" id="aiToolSettingsPolicy"></div>
+      <div class="settings-status" id="aiToolSettingsStatus"></div>
     </div>
   </div>
 </div>
@@ -1541,14 +1575,14 @@
 <script src="js/todos.js?v=20260823-r4"></script>
 <script src="js/notes.js?v=20260915-r4"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260915-r4"></script>
+<script src="js/today.js?v=20260917-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260912-r1"></script>
 <script src="js/ai-attach.js?v=20260916-r1"></script>
-<script src="js/ai-render.js?v=20260916-r2"></script>
-<script src="js/ai-tools.js?v=20260916-r2"></script>
+<script src="js/ai-render.js?v=20260917-r1"></script>
+<script src="js/ai-tools.js?v=20260917-r2"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
@@ -1605,7 +1639,7 @@
 <script src="js/sync-policy.js?v=20260825-r1"></script>
 <script src="js/sync.js?v=20260916-r16"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260916-r7"></script>
+<script src="js/sync-logs.js?v=20260917-r1"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
 <script src="js/translation.js?v=20260914-r3"></script>
 

@@ -602,6 +602,12 @@ function initAiDropZone() {
 initAiDropZone();
 initAiPasteZone();
 
+// 待发附件列表（浅拷贝）。与只读投影 getAiAttachmentsSnapshot() 的区别：
+// 这里保留 file 引用，发送路径要靠它把本次快照与预览下标配对，才能就地刷新渲染进度。
+function getAiAttachments() {
+  return aiAttachments.slice();
+}
+
 // 只读快照（供测试/诊断查看待发附件；aiAttachments 是 settings.js 的 let 绑定，不在 window 上）
 function getAiAttachmentsSnapshot() {
   return aiAttachments.map(a => ({
@@ -688,9 +694,17 @@ function renderAttachPreview() {
       : `<span class="preview-icon">${isImage ? '🖼️' : (isPdf ? '📕' : '📝')}</span>`;
     let modeToggle = '';
     let pdfRange = '';
+    let pdfRender = '';
     if (isPdf) {
       const total = a.pdfInfo && Number(a.pdfInfo.pageCount) > 0 ? Number(a.pdfInfo.pageCount) : '';
-      const rangeTitle = isKimiModel() ? '设置后仅发送所选页；留空则使用 Kimi 原生整文件解析' : '留空表示从第一页到最后一页';
+      // 留空 = 从第 1 页开始。文字模式会在 PDF_TEXT_MAX_CHARS 处截断，
+      // 图片模式最多渲染 PDF_IMAGE_MAX_PAGES 页——把上限写进提示，
+      // 用户才能明白"留空"为什么会渲染这么多页、填页码又为什么更快。
+      const rangeTitle = isKimiModel()
+        ? '设置后仅发送所选页；留空则使用 Kimi 原生整文件解析'
+        : (a.pdfMode === 'image'
+          ? `留空表示从第一页开始（最多渲染 ${PDF_IMAGE_MAX_PAGES} 页，超出部分不发送；只发几页时请填页码，会快很多）`
+          : `留空表示从第一页开始（提取到约 ${PDF_TEXT_MAX_CHARS} 字为止）`);
       pdfRange = `<span class="preview-pdf-range" title="${rangeTitle}">
         <span>页</span>
         <input type="number" min="1" ${total ? `max="${total}"` : ''} value="${a.pdfStartPage || ''}" placeholder="1"
@@ -699,13 +713,14 @@ function renderAttachPreview() {
         <input type="number" min="1" ${total ? `max="${total}"` : ''} value="${a.pdfEndPage || ''}" placeholder="末页"
           aria-label="PDF 结束页" onchange="updateAttachPdfRange(${i}, 'end', this.value)">
       </span>`;
+      pdfRender = formatPdfAttachStatus(a, i);
     }
     if (isPdf && a.pdfMode !== undefined) {
       const imageMode = a.pdfMode === 'image';
       const modeLabel = imageMode ? '🖼️ 页面图片' : '📄 提取文字';
       const title = imageMode
         ? '切换到提取 PDF 文本层（所有模型可用）'
-        : (multimodal ? '切换到逐页渲染图片（最多 24 页）' : '当前模型不支持图片；切换视觉模型后可用页面图片');
+        : (multimodal ? `切换到逐页渲染图片（每次最多 ${PDF_IMAGE_MAX_PAGES} 页）` : '当前模型不支持图片；切换视觉模型后可用页面图片');
       modeToggle = `<button class="preview-mode-btn" onclick="toggleAttachPdfMode(${i})" title="${title}">${modeLabel}</button>`;
     } else if (isImage && a.ocrMode !== undefined) {
       const modeLabel = a.ocrMode ? '📄 OCR' : '🖼️ 内联';
@@ -731,6 +746,7 @@ function renderAttachPreview() {
       <span class="preview-name">${escapeHtml(a.name.length > 15 ? a.name.slice(0,15)+'…' : a.name)}</span>
       <span class="preview-size">${formatFileSize(a.size)}</span>
       ${modeToggle}
+      ${pdfRender}
       ${pdfRange}
       <button class="preview-remove" onclick="removeAttachment(${i})">✕</button>
     </span>`;
@@ -739,6 +755,9 @@ function renderAttachPreview() {
 
 // ═══════════ 通用 PDF 兼容层：文本提取 / 页面图片 ═══════════
 const PDF_TEXT_MAX_CHARS = 80000;
+// 页面图片模式每次最多渲染多少页（只约束"没填范围时从第 1 页开始渲染几页"）。
+// 逐页渲染是主线程重活，实测密集教材约 0.35–0.55 秒/页，24 页 ≈ 8–13 秒；
+// 用户显式填了页码范围就按所选页数渲染，不受这个上限"补足"。
 const PDF_IMAGE_MAX_PAGES = 24;
 const PDF_IMAGE_MAX_WIDTH = 1600;
 const PDF_IMAGE_JPEG_QUALITY = 0.86;
@@ -769,6 +788,58 @@ function resolvePdfAttachmentRange(pageCount, opts = {}) {
   endPage = Math.min(endPage, total);
   if (startPage > endPage) [startPage, endPage] = [endPage, startPage];
   return { startPage, endPage, selectedPages: endPage - startPage + 1 };
+}
+
+// 附件预览里的 PDF 状态徽标：渲染进度 / 本次实际发出的页数。
+// 逐页渲染是主线程上的重活（实测密集教材约 0.35–0.55 秒/页，上限 24 页可达十几秒），
+// 没有这个反馈时用户只能看到"点了发送就没反应"。
+// 始终返回一个带固定 id 的空容器：渲染开始前它也在 DOM 里，
+// updatePdfRenderStatus 才有稳定的挂载点可替换。
+function formatPdfAttachStatus(a, index) {
+  const idx = Number.isInteger(index) ? index : 0;
+  const r = a && a._pdfRender;
+  let inner = '';
+  if (r && r.total) {
+    if (r.rendering) {
+      const pct = Math.max(0, Math.min(100, Math.round((r.done / r.total) * 100)));
+      inner = `<span class="preview-render-label">🖼️ 渲染中 ${r.done}/${r.total}</span>
+      <span class="preview-render-bar"><span class="preview-render-fill" style="width:${pct}%"></span></span>`;
+    } else if (r.aborted) {
+      inner = `⏹️ 已取消（${r.done}/${r.total} 页）`;
+    } else {
+      const parts = [`本次发 ${r.done} 页`];
+      if (r.bytes) parts.push(formatFileSize(r.bytes));
+      if (r.ms) parts.push(`${(r.ms / 1000).toFixed(1)}s`);
+      inner = `✅ ${parts.join(' · ')}`;
+    }
+  }
+  const state = !r || !r.total ? 'idle' : (r.rendering ? 'rendering' : (r.aborted ? 'aborted' : 'done'));
+  const title = state === 'rendering'
+    ? '正在把 PDF 页面渲染成图片，请稍候（可点停止取消）'
+    : (state === 'aborted'
+      ? '已取消本次页面渲染'
+      : (r && r.truncated
+        ? `已完成页面渲染；所选 ${r.selectedPages} 页超出单次上限，其余未发送`
+        : '渲染成图片后随消息一起发送'));
+  return `<span class="preview-render-status ${state}" id="aiPdfRenderStatus${idx}" title="${escapeHtml(title)}">${inner}</span>`;
+}
+
+// 渲染过程中就地更新徽标：重建整个预览列表会打断用户的输入焦点。
+// 附件上还没有渲染状态时自动建一份，避免调用方漏建导致进度悄无声息。
+function updatePdfRenderStatus(index, state) {
+  const a = aiAttachments[index];
+  if (!a || typeof a !== 'object') return;
+  if (!a._pdfRender) a._pdfRender = { rendering: true, done: 0, total: Math.max(0, Number(state && state.total) || 0) };
+  if (state.rendering) {
+    a._pdfRender.rendering = true;
+    a._pdfRender.done = state.done;
+    a._pdfRender.total = state.total;
+  } else {
+    a._pdfRender.rendering = false;
+    if (state.aborted) a._pdfRender.aborted = true;
+  }
+  const el = typeof document !== 'undefined' && document.getElementById ? document.getElementById('aiPdfRenderStatus' + index) : null;
+  if (el) el.outerHTML = formatPdfAttachStatus(a, index);
 }
 
 async function extractPdfAttachmentText(file, opts = {}) {
@@ -806,19 +877,31 @@ async function extractPdfAttachmentText(file, opts = {}) {
 async function renderPdfAttachmentPages(file, opts = {}) {
   const maxPages = Number(opts.maxPages) > 0 ? Math.floor(Number(opts.maxPages)) : PDF_IMAGE_MAX_PAGES;
   const maxWidth = Number(opts.maxWidth) > 0 ? Number(opts.maxWidth) : PDF_IMAGE_MAX_WIDTH;
+  const onPage = typeof opts.onPage === 'function' ? opts.onPage : null;
+  const isAborted = typeof opts.isAborted === 'function' ? opts.isAborted : null;
   const opened = await openPdfAttachment(file);
   const pdf = opened.pdf;
   const dataUrls = [];
   const range = resolvePdfAttachmentRange(pdf.numPages, opts);
+  // 逐页渲染：上限只约束"没填范围时从第 1 页开始能渲染多少页"，
+  // 用户显式选定的页码范围始终优先，不被上限补足或改写。
   const renderCount = Math.min(range.selectedPages, maxPages);
   const pageNumbers = [];
+  let aborted = false;
+  let reusedCanvas = null;
+  let totalBytes = 0;
+  const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   try {
     for (let pageNo = range.startPage; pageNo < range.startPage + renderCount; pageNo++) {
+      if (isAborted && isAborted()) { aborted = true; break; }
       const page = await pdf.getPage(pageNo);
       const baseViewport = page.getViewport({ scale: 1 });
       const scale = Math.min(2, maxWidth / Math.max(1, baseViewport.width));
       const viewport = page.getViewport({ scale });
-      const canvas = document.createElement('canvas');
+      // 复用同一块画布：每页新建 canvas 会让上一块的后端显存迟迟不释放，
+      // 长文档逐页渲染时会把主线程和显存一起拖住。
+      if (!reusedCanvas) reusedCanvas = document.createElement('canvas');
+      const canvas = reusedCanvas;
       canvas.width = Math.ceil(viewport.width);
       canvas.height = Math.ceil(viewport.height);
       const ctx = canvas.getContext('2d');
@@ -827,15 +910,32 @@ async function renderPdfAttachmentPages(file, opts = {}) {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport }).promise;
       const blob = await canvasToBlob(canvas, 'image/jpeg', PDF_IMAGE_JPEG_QUALITY);
+      totalBytes += Number(blob && blob.size) || 0;
       dataUrls.push(await blobToDataUrl(blob));
       pageNumbers.push(pageNo);
-      // 及时释放画布后端，长文档逐页处理时避免占用过多显存。
-      canvas.width = 1;
-      canvas.height = 1;
+      // 每页之后让出一次事件循环：否则连续渲染会把主线程完全堵死，
+      // 进度无法重绘、取消也点不动，用户看到的就是"点了发送整个界面卡住"。
+      if (onPage) { try { onPage({ done: pageNumbers.length, total: renderCount, pageNo }); } catch (e) {} }
+      // 让出一次事件循环，进度才有机会重绘、停止按钮才点得动。
+      // 这里刻意用 setTimeout 而不是 requestAnimationFrame：窗口被遮挡/最小化时
+      // rAF 会被节流到约 1fps，等于给每页硬加 1 秒（隐藏窗口实测 3 页从 1.3s 掉到 17s）。
+      await new Promise(resolve => setTimeout(resolve, 0));
     }
-    return { dataUrls, pageCount: pdf.numPages, renderedPages: renderCount, pageNumbers, truncated: range.selectedPages > renderCount, ...range };
+    const endedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
+    return {
+      dataUrls, pageCount: pdf.numPages, renderedPages: pageNumbers.length, pageNumbers,
+      truncated: range.selectedPages > renderCount, aborted,
+      bytes: totalBytes, ms: Math.round(endedAt - startedAt), ...range
+    };
   } finally {
-    try { await pdf.destroy(); } catch (e) {}
+    // 先放掉画布后端再销毁文档，避免几十 MB 的显存在长文档上滞留。
+    if (reusedCanvas) { reusedCanvas.width = 1; reusedCanvas.height = 1; }
+    if (aborted) {
+      // 主动取消时不必等 pdf.js 逐页清理，destroy 可能耗时数百毫秒。
+      try { pdf.destroy(); } catch (e) {}
+    } else {
+      try { await pdf.destroy(); } catch (e) {}
+    }
   }
 }
 

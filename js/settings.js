@@ -207,8 +207,8 @@ function renderHelpModal() {
         <div>
           <h4 style="margin:0 0 8px 0;font-size:14px;color:var(--text);">🔧 可用工具接口</h4>
           <div style="background:var(--path-bg);border-radius:8px;padding:10px 14px;font-size:12px;color:var(--text-secondary);line-height:1.7;">
-            <p style="margin:0 0 4px 0;">AI 可通过 <code style="background:var(--border);padding:1px 4px;border-radius:3px;">&lt;tool_call&gt;</code> JSON 格式调用以下工具（单次回复支持多个工具调用）：</p>
-            <p style="margin:0 0 2px 0;"><b>📋 待办：</b>add_todo（创建，支持 path 级联路径）、batch_add_todos（批量创建）、update_todo（更新）、delete_todo（删除）、toggle_todo（切换完成）、move_todo（移动）、list_todos（搜索/筛选）、get_todo_detail（详情）、batch_update_todos（批量操作）、get_todo_stats（统计趋势）</p>
+            <p style="margin:0 0 4px 0;">AI 可通过 <code style="background:var(--border);padding:1px 4px;border-radius:3px;">&lt;tool_call&gt;</code> JSON 格式调用以下工具（单次回复支持多个工具调用）。每个对话可以单独决定开放哪些接口组和删除策略：在 AI 页点「接口组」胶囊或对话设置（⚙️）里勾选。</p>
+            <p style="margin:0 0 2px 0;"><b>📋 待办：</b>add_todo（创建，支持 path 级联路径）、batch_add_todos（批量创建）、update_todo（更新）、delete_todo（删除）、set_todo_completed（设为完成/未完成，幂等）、move_todo（移动）、list_todos（搜索/筛选）、get_todo_detail（详情）、batch_update_todos（批量操作）、get_todo_stats（统计趋势）</p>
             <p style="margin:0 0 2px 0;"><b>🎯 聚焦 & 打卡：</b>get_today_status（今日状态）、get_focus_tasks（查看聚焦）、set_focus_task（设置/移除聚焦）、get_stats（全局统计）</p>
             <p style="margin:0 0 2px 0;"><b>📝 笔记：</b>add_note（创建，支持 path 自动创建文件夹）、update_note（更新）、move_note（移动）、delete_note（删除）、list_notes（列出）、search_notes（搜索）、get_note_detail（详情）、get_note_changes（今日/昨日修改）</p>
             <p style="margin:0 0 2px 0;"><b>🔗 快捷访问：</b>add_link（添加，支持分类/链接/应用类型）、delete_link（删除）、list_links（列出所有）</p>
@@ -3411,6 +3411,7 @@ async function debugTriggerReport() {
 }
 
 
+let _pendingCheckinReportPrompt = false;
 function doDailyCheckin() {
   const today = getTodayStr();
   const data = loadCheckinData();
@@ -3442,11 +3443,9 @@ function doDailyCheckin() {
 
   renderToday();
 
-  // Ask for optional context before auto-generating the morning report.
+  // Show the report prompt after the quote is dismissed, so only one modal blocks the app.
   const morningCfg = JSON.parse(localStorage.getItem('study_morning_cfg') || '{"enabled":true}');
-  if (morningCfg.enabled !== false) {
-    openCheckinReportPrompt();
-  }
+  _pendingCheckinReportPrompt = morningCfg.enabled !== false;
 }
 
 function openCheckinReportPrompt() {
@@ -3571,7 +3570,8 @@ function formatDailyReportTimerLabel(record) {
       const todo = (typeof todos !== 'undefined' && Array.isArray(todos))
         ? todos.find(t => t.id === targetId)
         : null;
-      if (todo && todo.text) parts.push('📋 ' + todo.text);
+      // 关联待办给出完整父级路径，日报里同名子任务才能区分
+      if (todo && todo.text) parts.push('📋 ' + formatDailyReportTodoPath(todo));
     }
   }
 
@@ -4348,6 +4348,10 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 function closeCheckinQuote(e) {
   if (e && e.target !== document.getElementById('checkinQuoteOverlay')) return;
   document.getElementById('checkinQuoteOverlay').classList.remove('open');
+  if (_pendingCheckinReportPrompt) {
+    _pendingCheckinReportPrompt = false;
+    openCheckinReportPrompt();
+  }
 }
 
 function goToTodoFromFocus(todoId) {

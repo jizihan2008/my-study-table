@@ -607,8 +607,14 @@ aiConvs = [{
 📋 待办：add_todo / batch_add_todos / update_todo / delete_todo / set_todo_completed / move_todo /
         list_todos / get_todo_detail / batch_update_todos / get_todo_stats
 🎯 聚焦：get_today_status / get_focus_tasks / set_focus_task / get_stats
-📝 笔记：add_note / update_note / move_note / delete_note / list_notes /
-        search_notes / get_note_detail / get_note_changes
+📝 笔记：add_note / update_note / batch_set_note_tags / move_note / delete_note / list_notes /
+        search_notes / get_note_tags / get_note_detail / get_note_changes
+        （标签：三个写接口的 tags 都是「逗号分隔字符串」，空字符串=清空；批量用 mode=replace/add。
+          解析与校验统一走 parseAiNoteTags，长度/数量上限在函数里；get_note_tags 返回标签全集+
+          每个标签挂几篇，系统提示词的笔记段会在 note 接口组开放时附上高频标签，避免 AI 造新标签。
+          「今天」页待复习列表按标签筛选，因此 get_note_detail / list_notes 必须回显标签，否则
+          AI 打完标签无法自查。空字符串作为「清空」的合法取值登记在
+          AI_TOOL_EMPTY_STRING_MEANS_CLEAR，否则会被必填校验拦掉）
 🔗 链接：add_link / delete_link / list_links
 ⏰ 自动化：schedule_automation / list_automations / delete_automation
 🧠 记忆：list_memories / get_memory_detail
@@ -623,9 +629,17 @@ aiConvs = [{
 
 **执行层** (`executeToolCallStructured` / `executeToolCall`)：
 - 根据 action 名称分发到对应的处理逻辑
-- JSON Schema 参数预检、删除意图门禁、结构化结果、持久化成功检查
+- JSON Schema 参数预检、删除策略门禁（见下）、结构化结果、持久化成功检查
 - 同一轮写操作作为事务处理；失败时回滚已执行写入，不自动重试
 - 持久化调用 ID/结果账本防止刷新后重复写入
+
+**接口组与删除策略（按对话，由用户决定）**：
+- `AI_TOOL_GROUPS`（ai-tools.js）把全部工具分成 9 个接口组（待办与聚焦 / 笔记与复习 / 技能库 / 快捷访问 / 定时提醒 / AI 记忆 / 任务线 / QQ 聊天记录 / 联网）
+- 每个对话用 `conv._toolGroups` 存用户勾选结果；没配置过的对话沿用上次保存的选择（`study_ai_tool_prefs`），从未选过则全部开放
+- `selectAiToolsForConversation(conv, webEnabled, kimiNative)` 是唯一的工具集合入口，文本协议模式（写进 system 提示词的「可用工具列表」）与原生 function tools 模式（请求体 `tools`）共用它；**不再按用户消息关键词猜工具组**
+- `web_search` 仍受工具栏「智能搜索」开关控制；Kimi 原生搜索时由内置能力接管
+- 删除类操作由 `conv._deletePolicy` 三档决定：`block` 完全拦截（隐藏接口 + 执行侧拒绝）、`confirm` 每次执行前弹确认框（`confirmAiDestructiveCalls`，同一轮的删除合并成一个确认框）、`allow` 直接执行。默认 `confirm`
+- `toggle_todo` 已废弃移除，统一使用 `set_todo_completed`（幂等，显式指定目标状态）
 
 **多工具调度**：连续只读工具最多 3 个并行，写操作作为顺序屏障。单结果和整轮结果都有字符预算，列表类工具支持分页。
 

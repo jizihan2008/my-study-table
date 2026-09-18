@@ -399,6 +399,30 @@ function siblingNodeIds(conv, nodeId) {
   return conv.tree[p].children.filter(id => id !== nodeId);
 }
 
+// 按父节点中的原始顺序取得同角色分支，包含当前节点。
+function siblingBranchIds(conv, nodeId) {
+  if (!isTreeConv(conv) || !conv.tree[nodeId]) return [];
+  const node = conv.tree[nodeId];
+  const parent = conv.tree[node.parentId];
+  return parent && Array.isArray(parent.children)
+    ? parent.children.filter(id => conv.tree[id] && conv.tree[id].role === node.role)
+    : [];
+}
+
+// 切换分支时展示该分支已有的完整对话，而非只显示首条回复。
+function branchTipNodeId(conv, nodeId) {
+  if (!isTreeConv(conv) || !conv.tree[nodeId]) return nodeId;
+  let current = nodeId;
+  const seen = new Set();
+  while (conv.tree[current] && !seen.has(current)) {
+    seen.add(current);
+    const next = (conv.tree[current].children || []).find(id => conv.tree[id] && !seen.has(id));
+    if (next == null) break;
+    current = next;
+  }
+  return current;
+}
+
 // ── 判断某 user 节点是否已分叉（有多个 assistant 候选）──
 // 返回 { count, activeBranchStartId } 或 null
 function branchInfoAt(conv, nodeId) {

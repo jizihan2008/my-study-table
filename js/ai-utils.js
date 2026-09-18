@@ -47,6 +47,9 @@ function safeSaveAiConvs() {
           if (c._dailyReport !== undefined) copy._dailyReport = c._dailyReport;
           if (c._hasUnread !== undefined) copy._hasUnread = c._hasUnread;
           if (c._hasUnreadAuto !== undefined) copy._hasUnreadAuto = c._hasUnreadAuto;
+          // 对话级 AI 设置（接口组 / 删除策略）也必须保留
+          if (c._toolGroups !== undefined) copy._toolGroups = c._toolGroups;
+          if (c._deletePolicy !== undefined) copy._deletePolicy = c._deletePolicy;
           return copy;
         }
         return c;
@@ -58,9 +61,20 @@ function safeSaveAiConvs() {
       }
       console.warn('[safeSaveAiConvs] 清理后保存成功');
     } catch (e2) {
-      // Last resort: save minimal data
+      // 最后回退只去掉可重建的 messages 缓存，完整树和活跃路径必须保留。
       console.error('[safeSaveAiConvs] 彻底失败:', e2.message);
-      const minimal = aiConvs.map(c => ({ id: c.id, title: c.title, systemPrompt: '', messages: c.messages || [], autoTitled: c.autoTitled }));
+      const minimal = aiConvs.map(c => ({
+        id: c.id, title: c.title, systemPrompt: '', autoTitled: c.autoTitled,
+        createdAt: c.createdAt,
+        ...(c.tree && c.activePath
+          ? { tree: c.tree, activePath: c.activePath }
+          : { messages: c.messages || [] }),
+        ...(c._dailyReport ? { _dailyReport: true } : {}),
+        ...(c._hasUnread ? { _hasUnread: true } : {}),
+        ...(c._hasUnreadAuto ? { _hasUnreadAuto: true } : {}),
+        ...(Array.isArray(c._toolGroups) ? { _toolGroups: c._toolGroups } : {}),
+        ...(c._deletePolicy ? { _deletePolicy: c._deletePolicy } : {})
+      }));
       try {
         const minimalJson = JSON.stringify(minimal);
         if (localStorage.getItem('study_ai_convs') !== minimalJson) {

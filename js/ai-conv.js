@@ -2,6 +2,8 @@
 //  AI 对话管理：设置弹窗、创建/切换/删除/清空对话、导出日志、标签页拖拽、输入草稿
 // ═══════════════════════════════════════════════
 
+let aiToolSettingsModalOpen = false; // 「接口组与删除策略」窗口
+
 // ═══════════ Conversation Settings Modal ═══════════
 function openConvSettingsModal() {
   convSettingsModalOpen = true;
@@ -11,6 +13,7 @@ function openConvSettingsModal() {
   document.getElementById('convSystemPrompt').value = conv ? (conv.systemPrompt || '') : '';
   document.getElementById('convSettingsStatus').className = 'settings-status';
   document.getElementById('convSettingsStatus').textContent = '';
+  renderConvAiToolSettings(conv);
   // Show debug info (only in debug mode)
   const debugEl = document.getElementById('convDebugInfo');
   if (debugEl && conv) {
@@ -43,6 +46,118 @@ function saveConvSettings() {
   conv.systemPrompt = document.getElementById('convSystemPrompt').value.trim();
   safeSaveAiConvs();
   renderAiChat();
+}
+
+// ═══════════ 对话级 AI 设置：接口组 + 删除策略（独立窗口） ═══════════
+// 由用户显式勾选要给 AI 哪些接口组（取代过去按关键词猜测的做法）；删除策略三选一。
+function openAiToolSettingsModal() {
+  aiToolSettingsModalOpen = true;
+  const modal = document.getElementById('aiToolSettingsModal');
+  if (!modal) return;
+  renderConvAiToolSettings(getActiveConv());
+  modal.classList.add('open');
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
+function closeAiToolSettingsModal(e) {
+  if (e && e.target !== document.getElementById('aiToolSettingsModal')) return;
+  aiToolSettingsModalOpen = false;
+  const modal = document.getElementById('aiToolSettingsModal');
+  if (modal) modal.classList.remove('open');
+}
+
+function renderConvAiToolSettings(conv) {
+  // 对话设置里的入口摘要
+  const summary = document.getElementById('convToolSummary');
+  if (summary && typeof AI_TOOL_GROUPS !== 'undefined') {
+    const count = getConversationToolGroups(conv).length;
+    const total = AI_TOOL_GROUPS.length;
+    const policy = AI_DELETE_POLICIES.find(item => item.key === getAiDeletePolicy(conv));
+    summary.textContent = `已开放 ${count}/${total} 组 · ${policy ? policy.label : ''}`;
+  }
+
+  // 独立窗口里的勾选与策略
+  const nameEl = document.getElementById('aiToolSettingsConvName');
+  if (nameEl) nameEl.textContent = conv ? `当前对话：${conv.title || '未命名对话'}` : '当前没有活跃对话';
+
+  const box = document.getElementById('aiToolSettingsGroups');
+  if (box && typeof AI_TOOL_GROUPS !== 'undefined') {
+    const selected = new Set(getConversationToolGroups(conv));
+    box.innerHTML = AI_TOOL_GROUPS.map(group => `
+      <label class="ai-tool-group-item${selected.has(group.key) ? ' on' : ''}" title="${escapeAttr(group.tools.join('、'))}">
+        <input type="checkbox" ${selected.has(group.key) ? 'checked' : ''} onchange="toggleConvToolGroup('${group.key}', this.checked)">
+        <span class="ai-tool-group-label">${escapeHtml(group.label)}</span>
+        <span class="ai-tool-group-count">${group.tools.length}</span>
+      </label>`).join('');
+  }
+
+  const policyBox = document.getElementById('aiToolSettingsPolicy');
+  if (policyBox && typeof AI_DELETE_POLICIES !== 'undefined') {
+    const current = getAiDeletePolicy(conv);
+    policyBox.innerHTML = AI_DELETE_POLICIES.map(policy => `
+      <label class="ai-delete-policy-item${current === policy.key ? ' on' : ''}" title="${escapeAttr(policy.hint)}">
+        <input type="radio" name="aiDeletePolicy" ${current === policy.key ? 'checked' : ''} onchange="setConvDeletePolicy('${policy.key}')">
+        <span class="ai-delete-policy-label">${escapeHtml(policy.label)}</span>
+        <span class="ai-delete-policy-hint">${escapeHtml(policy.hint)}</span>
+      </label>`).join('');
+  }
+}
+
+function setConvAiToolStatus(text) {
+  const el = document.getElementById('aiToolSettingsStatus');
+  if (el) { el.className = 'settings-status'; el.textContent = text; }
+}
+
+function persistConvAiToolSettings() {
+  if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
+  updateAiToolGroupsBtn();
+}
+
+function toggleConvToolGroup(key, checked) {
+  const conv = getActiveConv();
+  if (!conv) return;
+  const current = new Set(getConversationToolGroups(conv));
+  if (checked) current.add(key); else current.delete(key);
+  const saved = setConversationToolGroups(conv, getAiToolGroupKeys().filter(k => current.has(k)));
+  persistConvAiToolSettings();
+  renderConvAiToolSettings(conv);
+  setConvAiToolStatus(`已更新接口组：开放 ${saved.length}/${getAiToolGroupKeys().length} 组`);
+}
+
+function setAllConvToolGroups(on) {
+  const conv = getActiveConv();
+  if (!conv) return;
+  const saved = setConversationToolGroups(conv, on ? getAiToolGroupKeys() : []);
+  persistConvAiToolSettings();
+  renderConvAiToolSettings(conv);
+  setConvAiToolStatus(on
+    ? `已开放全部 ${saved.length} 个接口组`
+    : '已关闭全部接口组：这段对话的 AI 只能聊天，不能读写数据');
+}
+
+function setConvDeletePolicy(policy) {
+  const conv = getActiveConv();
+  if (!conv) return;
+  const saved = setConversationDeletePolicy(conv, policy);
+  persistConvAiToolSettings();
+  renderConvAiToolSettings(conv);
+  const meta = AI_DELETE_POLICIES.find(item => item.key === saved);
+  setConvAiToolStatus('删除策略：' + (meta ? meta.label : saved));
+}
+
+// 工具栏「接口组」胶囊：显示当前对话开放了几组，点击打开接口组窗口
+function updateAiToolGroupsBtn() {
+  const btn = document.getElementById('aiToolbarToolGroupsBtn');
+  if (!btn || typeof AI_TOOL_GROUPS === 'undefined') return;
+  const conv = getActiveConv();
+  const total = AI_TOOL_GROUPS.length;
+  const count = getConversationToolGroups(conv).length;
+  const span = btn.querySelector('span');
+  if (span) span.textContent = `接口组 ${count}/${total}`;
+  btn.classList.toggle('ai-pill-toggle-off', count === 0);
+  btn.title = count === 0
+    ? '这段对话没有开放任何接口组，AI 只能聊天（点击设置）'
+    : `这段对话开放 ${count}/${total} 个接口组（点击设置）`;
 }
 
 // ═══════════ AI Chat: Conversation Management ═══════════
