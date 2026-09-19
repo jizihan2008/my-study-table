@@ -351,7 +351,10 @@ test('deepseek files api uploads a photo once and later turns reference the same
     window.__MST_FILE_API_TEST_HOSTS__ = ['files-test.invalid'];
     window.getEffectiveApiConfig = () => ({
       apiKey: 'fake', keyId: 'key-files', model: 'deepseek-flash', name: '文件服务测试',
-      baseUrl: 'https://files-test.invalid/v1', contextLimit: 20, contextBudget: 32768
+      // Earlier E2E cases intentionally populate the live data snapshot. Give this
+      // transport/reuse test enough room to retain the prior multimodal turn instead
+      // of accidentally testing context eviction.
+      baseUrl: 'https://files-test.invalid/v1', contextLimit: 20, contextBudget: 131072
     });
     window.isAutoTitleEnabled = () => false;
     try {
