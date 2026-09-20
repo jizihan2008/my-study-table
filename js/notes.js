@@ -536,17 +536,19 @@ function renderNoteList() {
       if (tagFilterMatchIds && !tagFilterMatchIds.has(item.id)) return '';
       if (notesSearchQuery && !includeAll && !notePassesActiveFilters(item)) return '';
 
-      // Review status badge
+      // Review status badge（全局关闭复习时不显示任何复习徽章）
       let reviewBadge = '';
-      if (item._skipReview) {
-        reviewBadge = '<span class="ns-review-badge skipped" title="已跳过复习">跳过</span>';
-      } else if (item.content && item.content.trim()) {
-        const nextDate = calcNextReviewDate(item);
-        const dueDays = daysBetweenDateStr(getTodayStr(), toLocalDateStr(nextDate));
-        if (dueDays <= 0) {
-          reviewBadge = '<span class="ns-review-badge due" title="待复习">复习</span>';
-        } else if (dueDays <= 2) {
-          reviewBadge = '<span class="ns-review-badge soon" title="即将需要复习">' + dueDays + '天</span>';
+      if (!isReviewDisabled()) {
+        if (item._skipReview) {
+          reviewBadge = '<span class="ns-review-badge skipped" title="已跳过复习">跳过</span>';
+        } else if (item.content && item.content.trim()) {
+          const nextDate = calcNextReviewDate(item);
+          const dueDays = daysBetweenDateStr(getTodayStr(), toLocalDateStr(nextDate));
+          if (dueDays <= 0) {
+            reviewBadge = '<span class="ns-review-badge due" title="待复习">复习</span>';
+          } else if (dueDays <= 2) {
+            reviewBadge = '<span class="ns-review-badge soon" title="即将需要复习">' + dueDays + '天</span>';
+          }
         }
       }
       // Tags
@@ -942,14 +944,20 @@ function showNotesContextMenu(x,y,folderId,noteId){
   // Update skip review menu text based on current note state
   if(noteId){
     const note=findNoteItem(noteId);
+    // 全局关闭复习时，三个复习相关菜单项一并隐藏（否则点了也没有任何效果）
+    const reviewOff=isReviewDisabled();
+    const toggleEl=document.getElementById('ctxToggleReview');
+    const resetEl=document.getElementById('ctxResetReview');
+    if(toggleEl)toggleEl.style.display=reviewOff?'none':'';
+    if(resetEl)resetEl.style.display=reviewOff?'none':'';
     const txt=document.getElementById('ctxToggleReviewText');
-    const icon=document.getElementById('ctxToggleReview')?.querySelector('[data-lucide]');
+    const icon=toggleEl?.querySelector('[data-lucide]');
     if(txt)txt.textContent=note&&note._skipReview?'恢复复习':'跳过复习';
     if(icon)icon.setAttribute('data-lucide',note&&note._skipReview?'eye':'eye-off');
     // 「完成复习」仅对今天到期/逾期的笔记显示（跳过复习或尚未到期的笔记不显示）
     const mkEl=document.getElementById('ctxMarkReviewed');
     if(mkEl){
-      const isDue=!!(note && note.type==='note' && !note._skipReview && note.content && note.content.trim()
+      const isDue=!!(!reviewOff && note && note.type==='note' && !note._skipReview && note.content && note.content.trim()
         && toLocalDateStr(calcNextReviewDate(note)) <= getTodayStr());
       mkEl.style.display=isDue?'':'none';
     }
@@ -2465,6 +2473,12 @@ const REVIEW_PRESETS = {
   relaxed:   [2, 4, 8, 15, 30, 60, 120, 240]
 };
 
+// 全局复习开关：设置 → 笔记 → 笔记复习间隔 选择「不进行复习」时，
+// 整条间隔复习链路停用（今天页推送 / 日历复习安排 / 笔记列表徽章 / 右键菜单）。
+function isReviewDisabled() {
+  return localStorage.getItem('study_review_mode') === 'off';
+}
+
 // Get current review intervals based on user settings
 function getReviewIntervals() {
   const mode = localStorage.getItem('study_review_mode') || 'standard';
@@ -2543,6 +2557,7 @@ function calcNextReviewDate(note) {
 
 // Get all notes that are due for review today
 function getNotesDueForReview() {
+  if (isReviewDisabled()) return [];
   const todayStr = getTodayStr();
   const dueNotes = [];
   for (const note of notes) {
@@ -2598,6 +2613,7 @@ function getReviewSummary() {
 // Returns [{date: 'YYYY-MM-DD', round: number, isNext: boolean}]
 function getAllFutureReviewDates(note) {
   const result = [];
+  if (isReviewDisabled()) return result;
   if (!note.content || !note.content.trim()) return result;
   if (note._skipReview) return result;
 

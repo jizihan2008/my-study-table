@@ -48,6 +48,24 @@ function saveCheckinData(data) {
   }
 }
 
+// 打卡连续天数的 AI 可读表述：明确「连续 N 天」＝已连续打卡的天数，并标注统计截止日。
+// 避免 AI 把「今日未打卡 + 连续 12 天」读成「连续 12 天没打卡」。
+function formatCheckinStreakText(checkinData) {
+  const data = checkinData || loadCheckinData();
+  const dates = Array.isArray(data.dates) ? data.dates : [];
+  const todayStr = getTodayStr();
+  const yesterday = new Date();
+  yesterday.setDate(yesterday.getDate() - 1);
+  const model = (typeof window !== 'undefined') ? window.HabitStatusText : null;
+  if (!model) return `连续打卡 ${data.streak || 0} 天`;
+  return model.checkinText({
+    streak: data.streak || 0,
+    lastDate: data.lastDate || (dates.length ? dates[dates.length - 1] : ''),
+    todayChecked: dates.includes(todayStr),
+    yesterdayStr: yesterday.getFullYear() + '-' + String(yesterday.getMonth() + 1).padStart(2, '0') + '-' + String(yesterday.getDate()).padStart(2, '0')
+  });
+}
+
 function getWeekDays() {
   const days = [];
   const today = new Date();
@@ -548,6 +566,24 @@ function renderReviewCard() {
 
   // Always show the card
   card.style.display = '';
+
+  // 全局关闭复习时：卡片保留 + 显示关闭态，避免用户以为复习数据丢了
+  if (typeof isReviewDisabled === 'function' && isReviewDisabled()) {
+    const offFilterRow = document.querySelector('.today-review-filter-row');
+    if (offFilterRow) offFilterRow.style.display = 'none';
+    const offToggle = document.getElementById('todayReviewToggle');
+    if (offToggle) offToggle.style.display = 'none';
+    const offCount = document.getElementById('todayReviewCount');
+    if (offCount) offCount.textContent = '已关闭';
+    list.innerHTML = `<div class="review-empty">
+      <i data-lucide="pause-circle" class="lucide-icon" style="width:28px;height:28px;color:var(--text-secondary);display:block;margin:0 auto 6px;"></i>
+      <span>间隔复习已关闭</span>
+      <span class="review-empty-hint">在「设置 → 笔记 → 笔记复习间隔」中选择其他模式即可重新开启</span>
+    </div>`;
+    if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+    return;
+  }
+
   syncTodayReviewCollapsed();
 
   const summary = getReviewSummary();

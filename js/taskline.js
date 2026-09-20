@@ -321,6 +321,13 @@ function tlRefreshAll() {
   const autoComplete = store.toggle.autoComplete !== false;
   for (const q of store.quests) {
     if (q.status !== 'active') continue;
+    // 用户刚取消完成、但绑定条件仍然满足时，保持进行中，避免一次重绘就再次完成。
+    // 条件曾变回未满足后解除抑制；之后再次达成时仍可正常自动完成。
+    if (q.autoCompleteSuppressed) {
+      if (q.conditions && q.conditions.length > 0 && tlQuestCondMet(q)) continue;
+      delete q.autoCompleteSuppressed;
+      changed = true;
+    }
     if (q.conditions && q.conditions.length > 0 && tlQuestCondMet(q)) {
       q.status = 'done';
       q.completedAt = today;
@@ -348,6 +355,7 @@ function tlCompleteQuest(id, source = 'manual') {
   q.status = 'done';
   q.completedAt = getTodayStr();
   q.autoCompleted = false;
+  delete q.autoCompleteSuppressed;
   if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   // 解锁下游任务 + 自动徽章 + 即时反馈
   tlRefreshAll();
@@ -359,6 +367,30 @@ function tlCompleteQuest(id, source = 'manual') {
   }
   if (typeof renderTaskLine === 'function') renderTaskLine();
   return { ok: true, badge, msg: `✅ 已完成任务「${q.title}」` };
+}
+function tlUncompleteQuest(id) {
+  const store = loadTaskLineStore();
+  const q = store.quests.find(x => x.id === id);
+  if (!q) return { ok: false, msg: '未找到任务' };
+  if (q.status !== 'done') return { ok: false, msg: '该任务尚未完成' };
+
+  const line = store.lines.find(l => l.id === q.lineId);
+  const depsMet = (!line || tlMainLineUnlocked(store, line)) && (q.deps || []).every(did => {
+    const dep = store.quests.find(x => x.id === did);
+    return dep && (dep.status === 'done' || dep.status === 'skipped');
+  });
+  q.status = depsMet ? 'active' : 'locked';
+  delete q.completedAt;
+  delete q.autoCompleted;
+  // 若自动条件仍满足，尊重本次人工取消；条件失效一次后恢复自动完成能力。
+  if (q.conditions && q.conditions.length > 0 && tlQuestCondMet(q)) q.autoCompleteSuppressed = true;
+  else delete q.autoCompleteSuppressed;
+
+  if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
+  // 重新计算下游任务与后续主线章节的锁定状态。
+  tlRefreshAll();
+  if (typeof renderTaskLine === 'function') renderTaskLine();
+  return { ok: true, msg: `已取消完成任务「${q.title}」` };
 }
 function tlSkipQuest(id) {
   const store = loadTaskLineStore();
@@ -1101,16 +1133,8 @@ function tlShowGraphContextMenu(ev, lineId) {
   const menu = document.getElementById('tlTaskContextMenu');
   if (!menu) return;
   tlGraphCtxLineId = lineId;
-  // 记录鼠标在画布 inner 内的位置（相对 inner 左上角，含平移偏移后的实际画布坐标）
-  const wrap = ev.currentTarget.closest('.tl-graph-wrap');
-  const inner = wrap ? wrap.querySelector('.tl-graph-inner') : null;
-  if (inner) {
-    const iRect = inner.getBoundingClientRect();
-    // 除以当前缩放：iRect 是 transform 后的视觉尺寸，需换算回画布绝对坐标
-    tlGraphCtxPos = { x: (ev.clientX - iRect.left) / tlGraphView.scale, y: (ev.clientY - iRect.top) / tlGraphView.scale };
-  } else {
-    tlGraphCtxPos = null;
-  }
+  // 记录鼠标位置（画布坐标，已扣掉 nodesShift）：右键「添加任务」据此落点
+  tlGraphCtxPos = tlScreenToCanvasPos(ev.clientX, ev.clientY);
   // 同步当前拖拽模式状态
   const dragItem = menu.querySelector('#tlCtxDragMode');
   if (dragItem) {
@@ -1139,7 +1163,7 @@ function tlCloseGraphContextMenu() {
   tlGraphCtxLineId = null;
 }
 
-// ── 任务级右键菜单（跳过 / 确认 / 完成 / 编辑 / 删除）──
+// ── 任务级右键菜单（跳过 / 确认 / 完成或取消完成 / 编辑 / 删除）──
 let tlQuestCtxId = null;
 function tlShowQuestContextMenu(ev, questId) {
   ev.preventDefault();
@@ -1150,12 +1174,14 @@ function tlShowQuestContextMenu(ev, questId) {
   tlQuestCtxId = questId;
   const q = tlGetQuest(questId);
   if (!q) return;
-  // 同步「确认任务 / 完成任务」按钮的显示状态
+  // 同步「确认任务 / 完成任务 / 取消完成」按钮的显示状态
   const confirmItem = document.getElementById('tlQCtxConfirm');
   const doneItem = document.getElementById('tlQCtxDone');
+  const uncompleteItem = document.getElementById('tlQCtxUncomplete');
   const skipItem = document.getElementById('tlQCtxSkip');
   if (confirmItem) confirmItem.style.display = q.status === 'draft' ? '' : 'none';
   if (doneItem) doneItem.style.display = q.status === 'active' ? '' : 'none';
+  if (uncompleteItem) uncompleteItem.style.display = q.status === 'done' ? '' : 'none';
   if (skipItem) skipItem.style.display = q.status === 'done' ? 'none' : '';
   // 已完成的额外禁用删除？不，删除始终可用
   menu.style.left = ev.clientX + 'px';
@@ -1188,6 +1214,11 @@ function tlQCtxDone() {
   tlCloseQuestContextMenu();
   if (id != null) tlCompleteQuest(id);
 }
+function tlQCtxUncomplete() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlUncompleteQuest(id);
+}
 function tlQCtxEdit() {
   const id = tlQuestCtxId;
   tlCloseQuestContextMenu();
@@ -1219,6 +1250,34 @@ function tlCtxDeleteLine() {
   tlCloseGraphContextMenu();
   if (id != null) tlDeleteLineAsk(id);
 }
+// ── 画布坐标换算（唯一入口）──
+// 节点 style.left/top 与 q.pos 的关系是：屏幕位置 = inner 平移 + (TL_PAD + pos + nodesShift) × scale。
+// nodesShift 是渲染时为容纳负坐标/最小坐标给 .tl-graph-nodes 加的偏移（见 tlRenderGraph 的
+// shiftX/shiftY = -layout.minX/-layout.minY）。这里用真实 DOM 的 rect 反推，既自动带上平移与缩放，
+// 也自动带上 nodesShift，避免各处各写一遍公式而漏掉其中一项。
+// 返回 null 表示画布还没渲染出来。
+function tlScreenToCanvasPos(clientX, clientY) {
+  const wrap = document.getElementById('tlGraphWrap');
+  const inner = wrap ? wrap.querySelector('.tl-graph-inner') : null;
+  if (!inner) return null;
+  const iRect = inner.getBoundingClientRect(); // 已含 inner 的 left/top 平移
+  const nodesEl = inner.querySelector('.tl-graph-nodes');
+  const shiftX = nodesEl ? (parseFloat(nodesEl.style.left) || 0) : 0;
+  const shiftY = nodesEl ? (parseFloat(nodesEl.style.top) || 0) : 0;
+  const scale = tlGraphView.scale || 1;
+  return {
+    x: (clientX - iRect.left) / scale - shiftX,
+    y: (clientY - iRect.top) / scale - shiftY
+  };
+}
+// 把节点当前的实际布局位置换算成 q.pos（拖拽落点用，语义与 tlScreenToCanvasPos 一致）
+function tlNodeClientToQuestPos(nodeEl, pad = TL_PAD) {
+  return {
+    x: Math.round(nodeEl.offsetLeft - pad),
+    y: Math.round(nodeEl.offsetTop - pad)
+  };
+}
+
 // ── 画布平移（手型工具）──
 // 视口固定为主卡片区域（overflow hidden），拖动空白处平移 .tl-graph-inner 位置
 let tlGraphPan = null; // { startX, startY, origLeft, origTop }
@@ -1488,9 +1547,8 @@ function tlNodeDragStart(ev, questId) {
     // 允许负坐标：节点可拖到画布左/上边界外（渲染时 nodes/SVG 平移使负区域可见）。
     const q = tlGetQuest(questId);
     if (q) {
-      const newX = Math.round(el.offsetLeft - TL_PAD);
-      const newY = Math.round(el.offsetTop - TL_PAD);
-      tlUpdateQuest(questId, { pos: { x: newX, y: newY } });
+      const pos = tlNodeClientToQuestPos(el);
+      tlUpdateQuest(questId, { pos: pos });
     }
     renderTaskLine(); // 重绘，重新计算连线
     // 重绘后 inner 尺寸已包含新落点（tlLayoutGraphManual 按 min/max 计算）；
@@ -1545,9 +1603,8 @@ function tlNodeDragTouchStart(ev, questId) {
     // 允许负坐标：节点可拖到画布左/上边界外
     const q = tlGetQuest(questId);
     if (q) {
-      const newX = Math.round(el.offsetLeft - TL_PAD);
-      const newY = Math.round(el.offsetTop - TL_PAD);
-      tlUpdateQuest(questId, { pos: { x: newX, y: newY } });
+      const pos = tlNodeClientToQuestPos(el);
+      tlUpdateQuest(questId, { pos: pos });
     }
     renderTaskLine();
     // 重绘后 inner 尺寸已包含新落点；若落点仍超出视口，自动平移视图让节点可见
@@ -1742,6 +1799,7 @@ function tlOpenQuestDetail(id) {
       <div class="tl-detail-actions">
         ${q.status === 'draft' ? `<button class="btn-add" onclick="tlActivateQuest(${q.id})"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;"></i>确认任务</button>` : ''}
         ${q.status === 'active' ? `<button class="btn-add" onclick="tlCompleteQuest(${q.id})"><i data-lucide="check-check" class="lucide-icon" style="width:14px;height:14px;"></i>完成任务</button>` : ''}
+        ${q.status === 'done' ? `<button class="notes-undo-btn" onclick="tlUncompleteQuest(${q.id})"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;"></i>取消完成</button>` : ''}
         ${q.status !== 'done' ? `<button class="notes-undo-btn" onclick="tlSkipQuest(${q.id})"><i data-lucide="skip-forward" class="lucide-icon" style="width:14px;height:14px;"></i>跳过</button>` : ''}
         <button class="notes-undo-btn" onclick="tlEditQuestForm(${q.id})"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;"></i>编辑</button>
         <button class="notes-undo-btn" onclick="tlDeleteQuestAsk(${q.id})" style="color:var(--danger);"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i>删除</button>

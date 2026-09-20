@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v157';
+const VERSION = 'mst-v163';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,13 +14,13 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260917-r1',
+  './css/style.css?v=20260917-r3',
   './css/workspace.css?v=20260915-r3',
   './css/appearance.css?v=20260913-r6',
-  './js/theme-model.js?v=20260913-r4',
+  './js/theme-model.js?v=20260914-r5',
   './js/liquid-glass.js?v=20260906-r2',
-  './js/appearance.js?v=20260913-r5',
-  './js/today.js?v=20260917-r1',
+  './js/appearance.js?v=20260914-r6',
+  './js/today.js?v=20260920-r1',
   './lib/lucide/lucide.min.js',
   './lib/katex/katex.min.css',
   './lib/katex/katex.min.js',
@@ -34,10 +34,10 @@ const PRECACHE_URLS = [
   './js/markdown.js?v=20260915-r1',
   './js/note-rich-editor.js?v=20260915-r4',
   './js/ai-tree.js?v=20260912-r3',
-  './js/ai-attach.js?v=20260916-r1',
-  './js/ai-render.js?v=20260916-r2',
-  './js/ai-tools.js?v=20260917-r2',
-  './js/notes.js?v=20260915-r4',
+  './js/ai-attach.js?v=20260920-r1',
+  './js/ai-render.js?v=20260920-r1',
+  './js/ai-tools.js?v=20260921-r1',
+  './js/notes.js?v=20260920-r1',
   './js/stats.js?v=20260914-r3',
   './js/platform.js?v=20260826-r2',
   './js/secrets.js?v=20260827-r2',
@@ -55,16 +55,16 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20260916-r1',
+  './js/settings.js?v=20260920-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20260825-r1',
   './js/sync.js?v=20260916-r16',
-  './js/sync-logs.js?v=20260916-r7',
+  './js/sync-logs.js?v=20260917-r1',
   './js/ai-utils.js?v=20260826-r2',
   './js/bg-media-idb.js?v=20260906-r2',
   './js/qq-chats.js?v=20260827-r2',
   './js/taskline.js?v=20260914-r14',
-  './js/calendar.js?v=20260825-r8',
+  './js/calendar.js?v=20260825-r10',
   './js/bootstrap.js?v=20260911-r1',
   './js/translation.js?v=20260914-r3',
   './icons/icon-192.png',

@@ -922,7 +922,9 @@ async function runDailyMemoryIntegration() {
       const checkinData = loadCheckinData();
       const focusData = getTodayFocusItems();
       context += `【近期状态】\n`;
-      context += `打卡连续：${checkinData.streak || 0}天\n`;
+      context += (typeof formatCheckinStreakText === 'function')
+        ? formatCheckinStreakText(checkinData) + '\n'
+        : `连续打卡 ${checkinData.streak || 0} 天\n`;
       if (focusData.items && focusData.items.length > 0) {
         context += `今日聚焦：${focusData.items.filter(i => i.done).length}/${focusData.items.length}完成\n`;
       }

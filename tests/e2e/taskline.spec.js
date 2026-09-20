@@ -59,6 +59,56 @@ test('manual task in a locked chapter stays locked after refresh', async () => {
   expect(result).toBe('locked');
 });
 
+test('completed quests can be reopened and downstream quests are locked again', async () => {
+  const result = await page.evaluate(() => {
+    const line = tlAddLine({ name: '取消完成回归', type: 'quality' });
+    const first = tlAddQuest({ lineId: line.id, title: '已完成的前置任务', status: 'active' });
+    const next = tlAddQuest({ lineId: line.id, title: '依赖前置的任务', status: 'active', deps: [first.id] });
+    tlCompleteQuest(first.id);
+    const unlockedStatus = tlGetQuest(next.id).status;
+    const response = tlUncompleteQuest(first.id);
+    const reopened = tlGetQuest(first.id);
+    tlOpenQuestDetail(first.id);
+    const detail = document.getElementById('editModalBody').textContent;
+    closeEditModal();
+    return {
+      ok: response.ok,
+      unlockedStatus,
+      reopenedStatus: reopened.status,
+      completedAt: reopened.completedAt,
+      downstreamStatus: tlGetQuest(next.id).status,
+      detail
+    };
+  });
+  expect(result).toMatchObject({
+    ok: true,
+    unlockedStatus: 'active',
+    reopenedStatus: 'active',
+    downstreamStatus: 'locked'
+  });
+  expect(result.completedAt).toBeUndefined();
+  expect(result.detail).toContain('完成任务');
+});
+
+test('reopened quest with satisfied conditions does not immediately auto-complete', async () => {
+  const result = await page.evaluate(() => {
+    const line = tlAddLine({ name: '自动完成取消回归', type: 'quality' });
+    const quest = tlAddQuest({
+      lineId: line.id,
+      title: '条件仍满足的任务',
+      status: 'active',
+      conditions: [{ type: 'manual', label: '已达成', done: true }]
+    });
+    tlRefreshAll();
+    const completedStatus = tlGetQuest(quest.id).status;
+    tlUncompleteQuest(quest.id);
+    renderTaskLine();
+    const reopened = tlGetQuest(quest.id);
+    return { completedStatus, reopenedStatus: reopened.status, suppressed: reopened.autoCompleteSuppressed };
+  });
+  expect(result).toEqual({ completedStatus: 'done', reopenedStatus: 'active', suppressed: true });
+});
+
 test('all states have distinct labeled icons and readable cards in both themes', async ({}, testInfo) => {
   await page.evaluate(() => {
     const line = tlGetLines()[0];
@@ -97,4 +147,66 @@ test('all states have distinct labeled icons and readable cards in both themes',
     expect(Math.max(...kinds.map(item => item.width))).toBeLessThanOrEqual(196);
     await page.screenshot({ path: testInfo.outputPath('taskline-' + theme + '.png') });
   }
+});
+
+// 回归：「右键 → 添加任务」新建的任务必须落在鼠标位置。
+// 曾经的 bug：双击/右键位置只按 inner 的 rect 换算，漏掉了渲染时为容纳负坐标/最小坐标
+// 给 .tl-graph-nodes 加的 shift，导致落点整体偏移 layout.minX/minY（常见 100px）。
+test('a quest created from the canvas lands exactly under the mouse at any zoom and pan', async () => {
+  const result = await page.evaluate(() => {
+    const withNegativeCoords = tlAddLine({ name: '落点回归-负坐标', type: 'quality' });
+    tlAddQuest({ lineId: withNegativeCoords.id, title: '负坐标锚点', status: 'active', pos: { x: -120, y: -60 } });
+    tlAddQuest({ lineId: withNegativeCoords.id, title: '正坐标锚点', status: 'active', pos: { x: 300, y: 160 } });
+    tlRefreshAll();
+    tlSwitchLine(withNegativeCoords.id);
+    const wrap = document.getElementById('tlGraphWrap');
+    const canvas = wrap.querySelector('.tl-graph-canvas');
+    const cRect = canvas.getBoundingClientRect();
+    const wantX = cRect.left + cRect.width * 0.55;
+    const wantY = cRect.top + cRect.height * 0.45;
+    // 走生产代码的换算入口（右键菜单用的就是它）
+    const ctxPos = tlScreenToCanvasPos(wantX, wantY);
+    tlOpenQuestForm(withNegativeCoords.id, ctxPos);
+    document.getElementById('tlQuestTitle').value = '落点回归任务';
+    tlSubmitQuestForm(withNegativeCoords.id);
+    const quest = tlGetQuests().find(q => q.title === '落点回归任务');
+    const node = document.querySelector('.tl-node[data-qid="' + quest.id + '"]');
+    const nRect = node.getBoundingClientRect();
+    // 不变量：节点在画布中的布局位置 = TL_PAD + 落点坐标（两种换算入口语义必须一致）
+    const nodePosInCanvas = tlNodeClientToQuestPos(node, 0);
+    return {
+      deltaX: Math.abs(nRect.left - wantX),
+      deltaY: Math.abs(nRect.top - wantY),
+      posMatchesCanvas: nodePosInCanvas.x === Math.round(ctxPos.x) && nodePosInCanvas.y === Math.round(ctxPos.y),
+      // 参考：该场景 layout.minX/minY = -120/-60，没有 nodesShift 时落点恰好会差 120/60
+      ctxPos: { x: Math.round(ctxPos.x), y: Math.round(ctxPos.y) },
+      questPos: quest.pos
+    };
+  });
+  expect(result.deltaX).toBeLessThanOrEqual(1.5);
+  expect(result.deltaY).toBeLessThanOrEqual(1.5);
+  expect(result.posMatchesCanvas).toBe(true);
+
+  // 缩放 + 平移下同样成立
+  const zoomedDelta = await page.evaluate(() => {
+    const line = tlGetLines().find(l => l.name === '落点回归-负坐标');
+    tlSwitchLine(line.id);
+    tlGraphView.scale = 1.5;
+    tlGraphView.left = -60;
+    tlGraphView.top = -40;
+    tlApplyGraphView();
+    const canvas = document.querySelector('#tlGraphWrap .tl-graph-canvas');
+    const cRect = canvas.getBoundingClientRect();
+    const wantX = cRect.left + cRect.width * 0.6;
+    const wantY = cRect.top + cRect.height * 0.4;
+    const ctxPos = tlScreenToCanvasPos(wantX, wantY);
+    tlOpenQuestForm(line.id, ctxPos);
+    document.getElementById('tlQuestTitle').value = '落点回归任务-缩放';
+    tlSubmitQuestForm(line.id);
+    const quest = tlGetQuests().find(q => q.title === '落点回归任务-缩放');
+    const nRect = document.querySelector('.tl-node[data-qid="' + quest.id + '"]').getBoundingClientRect();
+    return { deltaX: Math.abs(nRect.left - wantX), deltaY: Math.abs(nRect.top - wantY) };
+  });
+  expect(zoomedDelta.deltaX).toBeLessThanOrEqual(1.5);
+  expect(zoomedDelta.deltaY).toBeLessThanOrEqual(1.5);
 });

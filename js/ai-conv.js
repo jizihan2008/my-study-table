@@ -245,7 +245,10 @@ function deleteConv(id, e) {
     if (linkedAutos.length > 0) {
       automations = automations.filter(a => a.convId !== id);
       saveData('study_automations', automations);
-      if (automations.length === 0 || automations.every(a => a.enabled === false)) stopAutomationTimer();
+      if (automations.length === 0 || automations.every(a => a.enabled === false)) {
+        if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
+        else stopAutomationTimer();
+      }
     }
 
     // 云同步删除墓碑必须在本地数组移除前写入，防止其他设备/下次拉取将对话复活。

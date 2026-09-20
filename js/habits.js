@@ -85,7 +85,18 @@ function calcStreak(habit) {
     if (currentRun > bestStreak) bestStreak = currentRun;
   }
 
-  return { streak, bestStreak, todayCount, todayMet, target };
+  return {
+    streak,
+    bestStreak,
+    todayCount,
+    todayMet,
+    target,
+    // 明确口径，避免提示词把「连续 N 天」误读为「连续 N 天没完成」：
+    // streakThroughYesterday = 截至昨日（含）连续达标天数（今日未达标时即当前 streak）
+    // streakThroughToday = 截至今日（含）连续达标天数（今日未达标为 0）
+    streakThroughYesterday: todayMet ? Math.max(0, streak - 1) : streak,
+    streakThroughToday: todayMet ? streak : 0
+  };
 }
 
 // ═══════════ Weekly Progress ═══════════

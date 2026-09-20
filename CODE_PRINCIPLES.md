@@ -54,6 +54,7 @@ My Study Table 是一个**单页面桌面应用（SPA）**，使用 Electron 框
 │  css/style.css    ←──  全局样式（主题、布局、动画）       │
 ├─────────────────────────────────────────────────────┤
 │  js/core.js       ←──  数据加载、主题、导航、标签切换     │
+│  js/nav-shortcuts.js ←── 侧边栏 Ctrl+按键 快捷键纯函数模型 │
 │  js/todos.js      ←──  待办树、搜索、编辑弹窗            │
 │  js/notes.js      ←──  笔记编辑、Markdown、撤销重做      │
 │  js/links.js      ←──  快捷访问分类管理                 │
@@ -61,6 +62,7 @@ My Study Table 是一个**单页面桌面应用（SPA）**，使用 Electron 框
 │  js/calendar.js   ←──  日历月视图、事件、完成记录         │
 │  js/timer.js      ←──  专注计时器、手动记录             │
 │  js/habits.js     ←──  习惯追踪打卡                    │
+│  js/habit-status-text.js ←── 习惯/打卡状态给 AI 的文案口径 │
 │  js/stats.js      ←──  统计页、AI 分析                 │
 │  js/music.js      ←──  音乐播放器                      │
 │  js/trash.js      ←──  回收站/归档恢复                 │
@@ -79,7 +81,7 @@ My Study Table 是一个**单页面桌面应用（SPA）**，使用 Electron 框
 **关键设计原则**：
 - 所有 JS 文件共享全局作用域，函数和变量可直接跨文件调用
 - 文件加载顺序至关重要（见 `index.html` 底部 `<script>` 标签）：
-  `liquid-glass.js → core.js → trash.js → todos.js → notes.js → links.js → today.js → ai-utils.js → ai-conv.js → ai-attach.js → ai-render.js → ai-tools.js → ai-search.js → ai-api.js → ai-send.js → music.js → memory.js → settings.js → utils.js → calendar.js → timer.js → habits.js → stats.js → updater.js`
+  `nav-shortcuts.js → habit-status-text.js → liquid-glass.js → core.js → trash.js → todos.js → notes.js → links.js → today.js → ai-utils.js → ai-conv.js → ai-attach.js → ai-render.js → ai-tools.js → ai-search.js → ai-api.js → ai-send.js → music.js → memory.js → settings.js → utils.js → calendar.js → timer.js → habits.js → stats.js → updater.js`
 - `utils.js` 接近最后加载，因为它的 `init` 部分需要调用其他模块的函数
 - `updater.js` 最后加载（自启动 IIFE，无需手动初始化）
 
@@ -140,7 +142,7 @@ body
 │   ├── Logo
 │   └── 导航容器 (#sidebarNav) — 由 core.js 动态渲染 12 个栏目
 │       （待办/笔记/快捷访问/今天/日历/计时器/习惯/音乐/统计/AI助手/回收站/归档）
-│       — 支持拖拽排序、隐藏/显示、Ctrl+1~9 快捷切换
+│       — 支持拖拽排序、隐藏/显示、Ctrl+按键（默认 Ctrl+1~9，可自定义）快捷切换
 ├── 主区域 (.app)
 │   ├── 头部 (.header) — 标题 + 按钮组
 │   ├── #section-todo    — 待办
@@ -298,10 +300,13 @@ function applyTheme(theme) {
 
 ### 6.6 导航系统
 
-- `ALL_NAV_ITEMS` 定义 12 个内置栏目（含图标名与标签）
-- `loadNavConfig()` / `saveNavConfig()`：从 `study_nav_config` 读取/写入排序与隐藏配置
-- `renderSidebarNav()`：动态渲染侧边栏，支持 Ctrl+1~9 快捷键
-- `openNavSettings()`：编辑界面栏弹窗（拖拽排序、隐藏开关、启动首页）
+- `ALL_NAV_ITEMS` 定义内置栏目（含图标名与标签）
+- `loadNavConfig()` / `saveNavConfig()`：从 `study_nav_config` 读取/写入排序、隐藏与快捷键配置
+- `renderSidebarNav()`：动态渲染侧边栏，支持 Ctrl+按键（默认 Ctrl+1~9）快捷键
+- `openNavSettings()`：编辑界面栏弹窗（拖拽排序、隐藏开关、启动首页、快捷键录制）
+- `js/nav-shortcuts.js`（`window.NavShortcuts`）：纯函数快捷键模型（`normalize` / `fromEvent` / `defaults` / `resolve` / `assign` / `clear` / `match`），
+  快捷键只存基础按键（字母 / 数字 / F1~F12 / 符号），统一以 Ctrl 触发；`shortcutsCustom=false` 时按可见顺序自动分配 Ctrl+1~9（旧版行为），
+  自定义后写入 `study_nav_config.shortcuts` 并保留隐藏栏目的绑定
 
 ---
 
@@ -516,6 +521,22 @@ Markdown-backed 富文本编辑与阅读预览之间切换。两栏笔记 ID 必
 **连续天数计算原理**：
 - 打卡时判断 `lastDate` 是否为昨天 → 是则 `streak + 1`，否则重置为 1
 - 撤销打卡时通过 `recalcStreak()` 从 `dates` 数组重新计算
+- `recalcStreak()` 统计的是**最后一段**连续打卡区间，可能止于很多天以前，
+  因此给 AI 的文案必须标注统计截止日（见 10.1.1）
+
+### 10.1.1 给 AI 的「连续天数」文案口径（habit-status-text.js）
+
+`js/habit-status-text.js`（`window.HabitStatusText`）是纯文本格式化模块，统一输出习惯/打卡状态，
+避免提示词里的「未完成，连续 12 天」被 AI 读成「连续 12 天没完成」：
+
+- `STREAK_MEANING`：口径说明（「连续达标 N 天」＝连续 N 天完成该习惯，不是未完成天数），随数据一起注入提示词
+- `morningLine()` / `eveningLine()`：早间（回顾昨天）/ 晚间（回顾今天）日报的习惯行；
+  今日未达标时写成「今日未完成(x/y)；截至昨日已连续达标 N 天（今日达标则延续为 N+1 天）」，中断时用「连续达标记录已中断（历史最佳 B 天）」
+- `checkinText()` / `today.js` 的 `formatCheckinStreakText()`：学习打卡连续天数，标注「含今日」或「截至昨日/具体日期」
+- `habitStatusBlock()`：`get_habits_status` 工具的三行输出（今日 / 连续达标 / 本周达标）
+
+`calcStreak()` 额外返回 `streakThroughYesterday` / `streakThroughToday`，把「截至哪一天」变成显式字段，
+供上述格式化函数使用；单元测试见 `tests/habit-status-text.test.js`，端到端见 `tests/e2e/habit-report.spec.js`。
 
 **周历视图**：`getWeekDays()` 计算本周一至周日，已打卡日期绿色渐变，今天蓝色边框高亮。
 
@@ -553,7 +574,7 @@ Markdown-backed 富文本编辑与阅读预览之间切换。两栏笔记 ID 必
 ```
 ai-utils.js   — 工具函数：JSON 序列化、数据保存、确认弹窗、计时格式化
 ai-conv.js    — 对话管理：设置弹窗、创建/切换/删除/清空对话、导出日志、标签页拖拽、输入草稿
-ai-attach.js  — 附件处理：文件上传、预览、Kimi 文件处理、视觉文件识别、拖拽添加附件
+ai-attach.js  — 附件处理：文件上传、预览、Kimi 文件处理、视觉文件识别、拖拽与 Ctrl+V 粘贴添加附件
 ai-render.js  — UI渲染：聊天界面、消息列表、Markdown/LaTeX 格式化、选中文字保存笔记
 ai-tools.js   — 工具系统：工具定义、系统提示词构建、工具执行、调用解析
 ai-search.js  — 网络搜索 & 通知：多引擎搜索、Windows 通知、侧边栏徽章
@@ -619,6 +640,11 @@ aiConvs = [{
 ⏰ 自动化：schedule_automation / list_automations / delete_automation
 🧠 记忆：list_memories / get_memory_detail
 📚 复习与习惯：get_review_status / get_habits_status
+📅 日历：list_calendar_events / create_calendar_event / update_calendar_event /
+        delete_calendar_event / restore_calendar_event_date
+        （重复事件用 weekdays 数组表达「每周哪几天」（0=周日…6=周六），date 是开始日期且
+          所在那一周整周算起点；delete_calendar_event 带 date 时只删那一天（写 skippedDates），
+          不带 date 才删整个系列，属于 destructive 会走删除策略与确认框）
 🔎 搜索：web_search（支持 5 种引擎）
 ```
 
@@ -634,7 +660,7 @@ aiConvs = [{
 - 持久化调用 ID/结果账本防止刷新后重复写入
 
 **接口组与删除策略（按对话，由用户决定）**：
-- `AI_TOOL_GROUPS`（ai-tools.js）把全部工具分成 9 个接口组（待办与聚焦 / 笔记与复习 / 技能库 / 快捷访问 / 定时提醒 / AI 记忆 / 任务线 / QQ 聊天记录 / 联网）
+- `AI_TOOL_GROUPS`（ai-tools.js）把全部工具分成 10 个接口组（待办与聚焦 / 笔记与复习 / 技能库 / 快捷访问 / 定时提醒 / AI 记忆 / 任务线 / QQ 聊天记录 / 日历日程 / 联网）
 - 每个对话用 `conv._toolGroups` 存用户勾选结果；没配置过的对话沿用上次保存的选择（`study_ai_tool_prefs`），从未选过则全部开放
 - `selectAiToolsForConversation(conv, webEnabled, kimiNative)` 是唯一的工具集合入口，文本协议模式（写进 system 提示词的「可用工具列表」）与原生 function tools 模式（请求体 `tools`）共用它；**不再按用户消息关键词猜工具组**
 - `web_search` 仍受工具栏「智能搜索」开关控制；Kimi 原生搜索时由内置能力接管
@@ -671,7 +697,14 @@ aiConvs = [{
 - 支持 `.txt`、PDF、Word、Excel、图片等附件（20MB 限制）
 - PDF 对未原生接入文档解析的模型走本地兼容层：用户可选“提取文字”（所有模型可用）或“页面图片”
   （仅视觉模型可用，JPEG 分页内联，单次最多 24 页）；无文本层的扫描 PDF 会提示切换页面图片模式
-- 支持从文件管理器**拖拽文件**到对话区域添加附件，也支持 **Ctrl+V 粘贴剪贴板图片**
+- 支持从文件管理器**拖拽文件**到对话区域添加附件，也支持 **Ctrl+V 粘贴**添加附件：
+  剪贴板里的文件（截图、从文件管理器复制的 PDF/文本/图片…）与文件选择框、拖拽共用 `addAiAttachmentFiles()`
+  一条校验路径（大小限制、模型能力判定、图片预处理完全一致）；无文件名的截图按 MIME 补扩展名
+  （**不能一律补 `.png`**：`readFileAsDataURL()` 会按扩展名改写 data URL 的 MIME，扩展名与真实字节不符会被服务端判为不支持）；
+  剪贴板同时带文本时（网页 / Office 复制）文本按原生粘贴补进输入框，不丢文字；纯文本粘贴完全不拦截。
+  粘贴监听挂在 `document` 上（输入框会被 `renderAiChat` 重建），是否接管由 `isAiPasteZone()` 判定：
+  目标在聊天区内一律接管，焦点落在 body 时仅当 AI 栏目激活才接管（避免抢走其他栏目与弹窗的粘贴）；
+  未配置 API Key 时界面只读，粘贴主动让行
 - Kimi 视觉模型可分析图片/视频
 - 图片附件走 OpenAI 兼容的 `image_url` base64 内联，能力判定统一在 `modelSupportsVision()`：
   `deepseek-flash`（DeepSeek-V4.1-Flash，官方支持图像理解）/ 旧名 `deepseek-v4-flash`、
@@ -820,7 +853,7 @@ document.addEventListener('keydown', function(e) {
   // Esc: 按优先级关闭弹窗
   // Ctrl+Z: 笔记编辑器撤销（输入框中交还原生撤销）
   // Ctrl+Y: 笔记编辑器重做
-  // Ctrl+1~9: 切换侧边栏栏目
+  // Ctrl+数字/自定义按键: 切换侧边栏栏目（可在「编辑界面栏」改为任意 Ctrl+按键）
   // Ctrl+R / F5: 刷新页面
 });
 ```
@@ -868,7 +901,7 @@ safeInit(renderTodos, ...);       // 5~12. 每个模块独立初始化（单个�
 | `study_automations` | 自动化任务 | JSON Array |
 | `study_developer_mode` | 开发者模式 | "true"/"false" |
 | `study_debug_mode` | 调试模式 | "true"/"false" |
-| `study_nav_config` | 导航排序/隐藏配置 | JSON Object |
+| `study_nav_config` | 导航排序/隐藏/自定义快捷键配置 | JSON Object |
 | `study_timer_records` | 计时记录 | JSON Array |
 | `study_habits` | 习惯数据 | JSON Object |
 | `study_calendar_events` | 日历事件 | JSON Array |
@@ -894,6 +927,20 @@ safeInit(renderTodos, ...);       // 5~12. 每个模块独立初始化（单个�
 - `loadData` 包含 try-catch，解析失败返回空数组
 - 所有读取操作都有防御性默认值
 - AI 调试日志设上限，防止 localStorage 膨胀
+
+### 14.5 任务线画布坐标约定（taskline.js）
+
+任务线是唯一以「画布坐标」持久化的模块，坐标只有一套语义，任何新增的交互都必须走同一入口：
+
+```
+屏幕坐标 ⇄ 画布坐标：inner 平移 + (TL_PAD + q.pos + nodesShift) × scale
+                     nodesShift = -layout.minX/-layout.minY（渲染时为容纳负坐标给 .tl-graph-nodes 加的偏移）
+```
+
+- **不要各写一份换算公式**：`tlScreenToCanvasPos(clientX, clientY)`（屏幕→画布，右键落点用）与
+  `tlNodeClientToQuestPos(nodeEl)`（节点实际落点→q.pos，拖拽用）是唯一入口。曾经右键落点漏算
+  `nodesShift`，导致新建任务整体偏移 `layout.minX/minY`（常见 100px），看起来就是"没落在鼠标位置"。
+- 有 `pos` 的章节整章切为手动布局；空章节没有画布（空状态），此时只能落到自动布局位置。
 
 ---
 

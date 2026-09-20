@@ -345,7 +345,7 @@ async function generateStatsAnalysis() {
 - 总专注: ${Math.round(totalMin)}分(${(totalMin/60).toFixed(1)}h)，日均 ${Math.round(totalMin/days)}分
 - 专注次数: ${ov.totalSessions}次
 - 习惯完成率: ${Math.round(avgRate)}%
-- 连续打卡: ${ov.streak}天 | 笔记: ${ov.totalNotes}篇
+- ${(typeof formatCheckinStreakText === 'function') ? formatCheckinStreakText(loadCheckinData()) : ('连续打卡: ' + ov.streak + '天')} | 笔记: ${ov.totalNotes}篇
 - 活跃天数: ${ov.activeDays}
 
 ### 每日明细

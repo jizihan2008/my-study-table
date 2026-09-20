@@ -273,6 +273,97 @@ test('images attach to deepseek-flash and reach the API as base64 image_url bloc
   expect(requestBody.model).toBe('deepseek-flash');
 });
 
+test('pasting files into the chat area attaches them, while plain text paste stays native', async () => {
+  const output = await page.evaluate(async () => {
+    const originalConfig = window.getEffectiveApiConfig;
+    const previousKeys = window.loadApiKeys();
+    // 未配置 API Key 时输入框整体只读（粘贴入口主动让行）→ 这里先补一个 Key 再重渲染，结束后还原
+    window.saveApiKeys([{ id: 'e2e-paste', name: '粘贴测试', apiKey: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-flash' }]);
+    window.switchTab('ai');
+    window.createNewConv();
+    while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
+    window.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'deepseek-flash', name: '粘贴测试', baseUrl: 'https://paste-test.invalid/v1' });
+    window.renderAiChat();
+    const input = document.getElementById('aiInput');
+
+    const firePaste = (target, dataTransfer) => {
+      const event = new ClipboardEvent('paste', { clipboardData: dataTransfer, bubbles: true, cancelable: true });
+      target.dispatchEvent(event);
+      return event.defaultPrevented;
+    };
+    const filesTransfer = files => {
+      const dt = new DataTransfer();
+      files.forEach(file => dt.items.add(file));
+      return dt;
+    };
+
+    const out = { inputEnabled: !input.disabled };
+    try {
+      // ① 从文件管理器复制的普通文件（非图片）→ 与文件选择框同一条附件路径
+      out.textPrevented = firePaste(input, filesTransfer([new File(['粘贴的文本附件'], 'pasted-note.txt', { type: 'text/plain' })]));
+      out.textNames = window.getAiAttachmentsSnapshot().map(a => a.name);
+      out.previewHasName = document.getElementById('aiAttachPreview').textContent.includes('pasted-note.txt');
+
+      // ② 截图（无文件名）→ 按 MIME 补出扩展名正确的名字，不能一律补 .png
+      out.imagePrevented = firePaste(input, filesTransfer([new File([new Uint8Array([1, 2, 3, 4])], '', { type: 'image/jpeg' })]));
+      const names = window.getAiAttachmentsSnapshot().map(a => a.name);
+      out.pastedImageName = names[names.length - 1];
+
+      // ③ 纯文本粘贴（无文件）→ 完全走原生，不接管、不加附件
+      const textOnly = new DataTransfer();
+      textOnly.setData('text/plain', '纯文本粘贴');
+      out.textOnlyPrevented = firePaste(input, textOnly);
+      out.countAfterTextOnly = window.getAiAttachmentsSnapshot().length;
+
+      // ④ 文件 + 文本同时存在（网页 / Office 复制）→ 文件进附件，文字照常进输入框
+      const combo = filesTransfer([new File(['x'], 'combo.txt', { type: 'text/plain' })]);
+      combo.setData('text/plain', '同时粘贴的文字');
+      out.comboPrevented = firePaste(input, combo);
+      out.comboInputValue = input.value;
+      out.comboNames = window.getAiAttachmentsSnapshot().map(a => a.name);
+
+      // ⑤ 焦点不在输入框（body 拿到焦点）但 AI 栏目激活 → 仍然接管
+      const beforeBodyPaste = window.getAiAttachmentsSnapshot().length;
+      out.bodyPrevented = firePaste(document.body, filesTransfer([new File(['y'], 'body-paste.txt', { type: 'text/plain' })]));
+      out.bodyAdded = window.getAiAttachmentsSnapshot().length - beforeBodyPaste;
+
+      // ⑥ 切到别的栏目后，body 上的粘贴不该被 AI 抢走
+      window.switchTab('todo');
+      const beforeOutside = window.getAiAttachmentsSnapshot().length;
+      out.outsidePrevented = firePaste(document.body, filesTransfer([new File(['z'], 'outside.txt', { type: 'text/plain' })]));
+      out.outsideAdded = window.getAiAttachmentsSnapshot().length - beforeOutside;
+      return out;
+    } finally {
+      window.switchTab('ai');
+      window.getEffectiveApiConfig = originalConfig;
+      window.saveApiKeys(previousKeys);
+      window.renderAiChat();
+      while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
+    }
+  });
+
+  expect(output.inputEnabled).toBe(true);
+  // 文件粘贴：接管（阻止默认的二进制/文件名插入）并进入附件列表
+  expect(output.textPrevented).toBe(true);
+  expect(output.textNames).toEqual(['pasted-note.txt']);
+  expect(output.previewHasName).toBe(true);
+  // 截图：JPEG 补 .jpg（补成 .png 会让 data URL 的 MIME 与实际字节不符）
+  expect(output.imagePrevented).toBe(true);
+  expect(output.pastedImageName).toMatch(/^粘贴图片-\d+\.jpg$/);
+  // 纯文本 / 其他栏目：不接管
+  expect(output.textOnlyPrevented).toBe(false);
+  expect(output.countAfterTextOnly).toBe(2);
+  expect(output.outsidePrevented).toBe(false);
+  expect(output.outsideAdded).toBe(0);
+  // 文件 + 文本：附件与文字都不丢
+  expect(output.comboPrevented).toBe(true);
+  expect(output.comboInputValue).toContain('同时粘贴的文字');
+  expect(output.comboNames).toEqual(['pasted-note.txt', output.pastedImageName, 'combo.txt']);
+  // AI 栏目激活时，即使焦点不在输入框也能粘贴成附件
+  expect(output.bodyPrevented).toBe(true);
+  expect(output.bodyAdded).toBe(1);
+});
+
 test('PDF compatibility lets the user choose extracted text or rendered page images', async () => {
   const pdfBase64 = buildTestPdf(3).toString('base64');
   const output = await page.evaluate(async ({ pdfBase64 }) => {

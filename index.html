@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260917-r1">
+<link rel="stylesheet" href="css/style.css?v=20260917-r3">
 <link rel="stylesheet" href="css/workspace.css?v=20260915-r3">
 <link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -663,7 +663,47 @@
     <div class="modal-body">
       <div class="cal-event-date-label">日期：<span id="calEventDateLabel"></span></div>
       <input type="text" id="calEventTitle" class="cal-event-input" placeholder="事件标题" maxlength="100" onkeydown="if(event.key==='Enter')submitCalEvent()">
-      <input type="time" id="calEventTime" class="cal-event-input" style="width:140px" placeholder="时间（可选）">
+      <div class="cal-event-time-row">
+        <label class="cal-event-time-field">
+          <span>开始时间</span>
+          <input type="time" id="calEventStartTime" class="cal-event-input">
+        </label>
+        <label class="cal-event-time-field">
+          <span>结束时间</span>
+          <input type="time" id="calEventEndTime" class="cal-event-input" oninput="syncCalEventAutoTimerEnabled()">
+        </label>
+      </div>
+      <div class="cal-event-repeat-row">
+        <label class="cal-event-repeat-field">
+          <span>重复</span>
+          <select id="calEventRepeat" class="cal-event-input" onchange="syncCalEventRepeatFields()">
+            <option value="none">不重复</option>
+            <option value="weekly">每周重复</option>
+          </select>
+        </label>
+      </div>
+      <div class="cal-event-weekday-row" id="calEventWeekdayRow" style="display:none;">
+        <span class="cal-event-weekday-label">星期</span>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="1" onchange="toggleCalEventWeekday(event, 1)"><span>一</span></label>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="2" onchange="toggleCalEventWeekday(event, 2)"><span>二</span></label>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="3" onchange="toggleCalEventWeekday(event, 3)"><span>三</span></label>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="4" onchange="toggleCalEventWeekday(event, 4)"><span>四</span></label>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="5" onchange="toggleCalEventWeekday(event, 5)"><span>五</span></label>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="6" onchange="toggleCalEventWeekday(event, 6)"><span>六</span></label>
+        <label class="cal-event-weekday"><input type="checkbox" data-weekday="0" onchange="toggleCalEventWeekday(event, 0)"><span>日</span></label>
+      </div>
+      <div class="cal-event-hint" id="calEventRepeatHint" style="display:none;">每周所选星期几重复</div>
+      <div class="cal-event-check-row">
+        <label class="cal-event-check-label" title="事件时段结束后，自动补一条计时记录，计入当天的计时累计与日历角标">
+          <input type="checkbox" id="calEventAutoRecord" onchange="syncCalEventAutoTimerEnabled()">
+          <span>自动计入当天计时记录</span>
+        </label>
+        <label class="cal-event-check-label" id="calEventAutoTimerLabel" title="计时记录计入专注时间统计（关闭后该记录不计入专注时间）">
+          <input type="checkbox" id="calEventAutoTimer" checked>
+          <span>计入计时器专注时间</span>
+        </label>
+      </div>
+      <div class="cal-event-hint" id="calEventAutoHint">事件时段结束后自动补记一条计时记录（需要填写结束时间）</div>
       <div class="cal-event-color-row">
         <span class="cal-event-color-label">颜色：</span>
         <div id="calEventColorPicker"></div>
@@ -1082,8 +1122,9 @@
             <option value="standard">标准 — 1, 2, 4, 7, 15, 30, 60, 120 天</option>
             <option value="relaxed">宽松 — 2, 4, 8, 15, 30, 60, 120, 240 天</option>
             <option value="custom">自定义</option>
+            <option value="off">不进行复习 — 关闭间隔复习推送</option>
           </select>
-          <span class="hint">控制每次复习后的下次复习间隔。标准模式适合高频复习，宽松模式间隔翻倍。</span>
+          <span class="hint">控制每次复习后的下次复习间隔。标准模式适合高频复习，宽松模式间隔翻倍；选择「不进行复习」后不再产生任何复习推送，笔记列表也不再显示复习徽章。</span>
         </div>
         <div class="settings-field" id="reviewCustomField" style="display:none;">
           <label>自定义间隔（天）</label>
@@ -1570,19 +1611,21 @@
 <script src="js/env.js?v=20260911-r2"></script>
 <script src="js/theme-model.js?v=20260914-r5"></script>
 <script src="js/liquid-glass.js?v=20260906-r2"></script>
+<script src="js/nav-shortcuts.js?v=20260920-r1"></script>
 <script src="js/core.js?v=20260916-r1"></script>
 <script src="js/trash.js?v=20260804-r4"></script>
 <script src="js/todos.js?v=20260823-r4"></script>
-<script src="js/notes.js?v=20260915-r4"></script>
+<script src="js/notes.js?v=20260920-r1"></script>
+<script src="js/file-library.js?v=20260920-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260917-r1"></script>
+<script src="js/today.js?v=20260920-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260912-r1"></script>
-<script src="js/ai-attach.js?v=20260916-r1"></script>
-<script src="js/ai-render.js?v=20260917-r1"></script>
-<script src="js/ai-tools.js?v=20260917-r2"></script>
+<script src="js/ai-attach.js?v=20260920-r1"></script>
+<script src="js/ai-render.js?v=20260920-r1"></script>
+<script src="js/ai-tools.js?v=20260921-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
@@ -1595,7 +1638,8 @@
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
 <script src="js/appearance.js?v=20260914-r6"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
-<script src="js/settings.js?v=20260916-r1"></script>
+<script src="js/habit-status-text.js?v=20260920-r1"></script>
+<script src="js/settings.js?v=20260920-r1"></script>
 <script src="js/utils.js?v=20260914-r2"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
@@ -1614,9 +1658,9 @@
 <script src="js/books-annot.js?v=20260914-r5"></script>
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
-<script src="js/calendar.js?v=20260825-r8"></script>
+<script src="js/calendar.js?v=20260825-r10"></script>
 <script src="js/taskline.js?v=20260914-r14"></script>
-<script src="js/timer.js?v=20260914-r3"></script>
+<script src="js/timer.js?v=20260914-r6"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
 <script src="js/stats.js?v=20260914-r3"></script>
 <script src="js/updater.js?v=20260802-r1"></script>
@@ -1661,7 +1705,7 @@
     <div class="context-menu-item" onclick="contextOpenNoteFloat()"><i data-lucide="external-link" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 浮窗查看</div>
     <div class="context-menu-item" id="ctxToggleReview" onclick="contextToggleSkipReview()"><i data-lucide="eye-off" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="ctxToggleReviewText">跳过复习</span></div>
     <div class="context-menu-item" id="ctxMarkReviewed" onclick="contextMarkReviewed()"><i data-lucide="check-circle" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 完成复习</div>
-    <div class="context-menu-item" onclick="contextResetReview()"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重置复习周期</div>
+    <div class="context-menu-item" id="ctxResetReview" onclick="contextResetReview()"><i data-lucide="rotate-ccw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重置复习周期</div>
     <div class="context-menu-item" onclick="contextArchiveNote()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档笔记</div>
     <div class="context-menu-item danger" onclick="contextDeleteNote()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除笔记</div>
   </div>
@@ -1733,6 +1777,7 @@
   <div class="context-menu-item" id="tlQCtxSkip" onclick="tlQCtxSkip()"><i data-lucide="skip-forward" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 跳过任务</div>
   <div class="context-menu-item" id="tlQCtxConfirm" onclick="tlQCtxConfirm()"><i data-lucide="play" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 确认任务</div>
   <div class="context-menu-item" id="tlQCtxDone" onclick="tlQCtxDone()"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 完成任务</div>
+  <div class="context-menu-item" id="tlQCtxUncomplete" onclick="tlQCtxUncomplete()"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 取消完成</div>
   <div class="context-menu-item" onclick="tlQCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑任务</div>
   <div class="context-menu-sep"></div>
   <div class="context-menu-item danger" onclick="tlQCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除任务</div>
@@ -1754,6 +1799,13 @@
   <div class="context-menu-item" onclick="linkCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
   <div class="context-menu-item" onclick="linkCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
   <div class="context-menu-item danger" onclick="linkCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
+</div>
+
+<!-- Right-click context menu for calendar events -->
+<div class="context-menu" id="calEventContextMenu">
+  <div class="context-menu-item" onclick="calCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑事件</div>
+  <div class="context-menu-item danger" id="calCtxDeleteOne" onclick="calCtxDeleteOneDay()" style="display:none;">仅删除这一天</div>
+  <div class="context-menu-item danger" onclick="calCtxDeleteSeries()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="calCtxDeleteSeriesLabel">删除事件</span></div>
 </div>
 
 <!-- Right-click context menu for AI chat: save selected text as a note -->

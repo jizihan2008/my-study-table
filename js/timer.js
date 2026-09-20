@@ -59,19 +59,33 @@ let timerLinkedGoalId = null;
 let timerPickerMode = 'todo'; // 'todo' or 'goal'
 let timerPickerTarget = 'timer'; // 'timer' | 'manualTodo' — who opened the picker
 let timerInterval = null;
-let timerStateRestored = false; // flag: timer was restored from saved state
+let timerStartedThisSession = false; // 本次运行中用户是否亲自点过开始
+let timerResumedFromRestart = false; // 本次运行中是否自动恢复了上次未结束的计时
+let timerStaleNotice = null;         // 太久以前残留的计时：只恢复时长，不自动继续跑
+
+// 应用被关掉超过这个时长后，残留的「运行中」状态不再自动续跑。
+// 否则很久以前忘了停的计时器会在每次打开时「自己跑起来」，看起来像凭空冒出来的计时。
+const TIMER_STALE_RESUME_MS = 24 * 60 * 60 * 1000;
 
 // ═══════════ Timer state persistence (survive refresh/close) ═══════════
+// 存档语义：elapsed 只累计「已经封口的时段」，displayMs 是当前界面上显示的累计时长
+// （elapsed + 正在跑的这一段）。重启后一律以 displayMs 为准，只砍掉应用没运行的那段空白。
 function saveTimerState() {
+  const now = Date.now();
+  const displayMs = timerElapsed + (timerRunning ? Math.max(0, now - timerSessionStart) : 0);
   const state = {
     running: timerRunning,
     elapsed: timerElapsed,
+    displayMs,
     sessionStart: timerSessionStart,
     sessions: timerSessions,
     name: timerSessionName,
     linkedTodoId: timerLinkedTodoId,
     linkedGoalId: timerLinkedGoalId,
-    savedAt: Date.now()
+    savedAt: now,
+    // 最后一次「应用在运行」的时刻：重启后用它把关机/关窗期间的空白切掉，
+    // 否则重进时 Date.now() - sessionStart 会把整段离线时间算成计时
+    lastActiveAt: now
   };
   localStorage.setItem('study_timer_state', JSON.stringify(state));
 }
@@ -94,22 +108,48 @@ function loadAndRestoreTimerState() {
   timerElapsed = state.elapsed || 0;
   timerSessions = state.sessions || [];
   timerSessionName = typeof state.name === 'string' ? state.name.slice(0, 80) : '';
-  timerStateRestored = true;
 
   if (state.running) {
-    // Timer was running when last saved — resume with gap accumulated
-    timerRunning = true;
     const now = Date.now();
-    const origSessionStart = state.sessionStart || state.savedAt || now;
-    // Continue the same segment seamlessly (keep original sessionStart)
-    timerSessionStart = origSessionStart;
-    timerInterval = setInterval(function() {
-      updateTimerTick();
-      saveTimerState(); // persist on every tick
-    }, 500);
-    // 恢复运行中的计时器 → 显示右下角浮窗
-    timerFloatVisible = true;
-    updateTimerFloat();
+    // 上次真正还在跑的最后一刻（旧版本没有这个字段时退回 savedAt）
+    const lastActiveAt = Math.min(state.lastActiveAt || state.savedAt || now, now);
+    // 把上一段封口在「最后一刻仍在跑」的时间点，并作为独立时段保留
+    const prevStart = state.sessionStart || lastActiveAt;
+    const prevEnd = Math.max(prevStart, lastActiveAt);
+    if (prevEnd - prevStart >= 500) timerSessions.push({ start: prevStart, end: prevEnd });
+    // 以存档里「当时显示的总时长」为准，时长不会因为刷新而变少
+    if (Number.isFinite(state.displayMs) && state.displayMs >= 0) {
+      timerElapsed = state.displayMs;
+    } else {
+      // 旧存档只存了已封口的 elapsed：把正在跑的这一段补上
+      timerElapsed += Math.max(0, lastActiveAt - (state.sessionStart || lastActiveAt));
+    }
+
+    // 只有「刚刚关掉应用」的残留状态才自动续跑并接着计时；
+    // 太久以前（超过 24 小时）忘了停的计时器只恢复时长，不再自己跑起来——
+    // 否则每次打开应用都会看到一个凭空出现的、还在走的计时器。
+    if (now - lastActiveAt <= TIMER_STALE_RESUME_MS) {
+      timerRunning = true;
+      timerResumedFromRestart = true;
+      // 新的一段从重启这一刻开始（关掉期间的空白不计入，避免虚增时长）
+      timerSessionStart = now;
+      timerInterval = setInterval(function() {
+        updateTimerTick();
+        saveTimerState(); // persist on every tick
+      }, 500);
+      // 恢复运行中的计时器 → 显示右下角浮窗
+      timerFloatVisible = true;
+      updateTimerFloat();
+      if (typeof showToast === 'function') {
+        showToast(`已恢复上次未结束的计时（已计时 ${formatTimerTime(timerElapsed)}）`);
+      }
+    } else {
+      // 陈旧残留：时长留着（可点「保存」记下来，或点「开始」接着计），但不自动跑
+      timerRunning = false;
+      timerSessionStart = 0;
+      timerFloatVisible = false;
+      timerStaleNotice = `已找回上次未结束的计时（${formatTimerTime(timerElapsed)}，结束于 ${_formatTimerStaleMoment(lastActiveAt)}）。点「开始」可继续计时，点「保存」把它记入记录。`;
+    }
     clearTimerState(); // consumed
   } else {
     // Timer was paused/stopped — just restore state
@@ -117,6 +157,12 @@ function loadAndRestoreTimerState() {
     clearTimerState(); // consumed
     // Do NOT auto-render; wait for user to open timer tab
   }
+}
+
+function _formatTimerStaleMoment(ts) {
+  const d = new Date(ts);
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
 // Save state on every tick + on visibility/page unload
@@ -129,6 +175,15 @@ document.addEventListener('visibilitychange', function() {
     saveTimerState();
   }
 });
+
+// 主进程真正退出（托盘 → 退出 / Cmd+Q）时窗口不一定触发 beforeunload，
+// 这里补一次落盘：退出瞬间的时长会被记下来，下次打开恢复的进度才是准的。
+// （窗口「关闭」只是隐藏到托盘，进程仍然活着，计时继续，本来就不该落盘成"已结束"。）
+if (typeof window !== 'undefined' && window.electronAPI && typeof window.electronAPI.onAppQuit === 'function') {
+  window.electronAPI.onAppQuit(function() {
+    saveTimerState();
+  });
+}
 
 // Manual record state
 let timerManualFormOpen = false;
@@ -215,9 +270,18 @@ function renderTimer() {
     sessionsHtml += '</div>';
   }
 
+  // 上次未结束的计时：刚关掉就重开 → 自动接着计（提前说明一下）；太久以前 → 只提示找回
+  let resumeNoticeHtml = '';
+  if (timerStaleNotice) {
+    resumeNoticeHtml = `<div class="timer-resume-notice">${escapeHtml(timerStaleNotice)}</div>`;
+  } else if (timerResumedFromRestart && !timerStartedThisSession) {
+    resumeNoticeHtml = `<div class="timer-resume-notice">已恢复上次未结束的计时，可继续计时或「停止并保存」。</div>`;
+  }
+
   container.innerHTML = `
     <div class="timer-panel">
       ${pickerHtml}
+      ${resumeNoticeHtml}
       <div class="timer-display" id="timerDisplay">${display}</div>
       <div class="timer-today">今日累计：${formatTimerTime(todayMs)}</div>
       ${sessionsHtml}
@@ -369,6 +433,7 @@ function renderTimerHistory(records) {
             ${escapeHtml(name)}
             ${(!rec.affectsFocus) ? '<span class="timer-no-focus-badge" title="不计入专注时间">⚡</span>' : ''}
             ${rec.manual ? '<span class="timer-manual-badge" title="手动添加">✍</span>' : ''}
+            ${rec.auto ? '<span class="timer-auto-badge" title="由日历事件自动计入（删除日历事件不会删除此记录）">📅</span>' : ''}
           </span>
           <span class="timer-history-time">
             <span class="timer-history-actions">
@@ -456,6 +521,8 @@ function timerStart() {
   if (timerRunning) return;
   timerRunning = true;
   timerSessionStart = Date.now();
+  timerStartedThisSession = true;
+  timerStaleNotice = null;
   timerHistoryExpanded = false;
   // 专注开始：空闲计时器归零（空闲提醒逻辑）
   if (typeof resetIdleTimerOnFocus === 'function') { try { resetIdleTimerOnFocus(); } catch (e) {} }
@@ -482,6 +549,24 @@ function timerPause() {
   renderTimer();
 }
 
+// 保存计时记录前的兜底：时段跨度之和不应超过实际计时时长。
+// 旧版本把「关掉应用的那段时间」也算进了 sessionStart→end，这里把多余的尾巴剪掉，
+// 保证记录里的时间轴与 totalMs 一致（历史/日历里的时长不会虚高）。
+function normalizeTimerSessionsForRecord(sessions, totalMs) {
+  const list = (Array.isArray(sessions) ? sessions : []).filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start);
+  if (list.length === 0) return [];
+  const sum = list.reduce((acc, s) => acc + (s.end - s.start), 0);
+  if (sum <= totalMs + 1000 || sum <= 0) return list;
+  const ratio = totalMs <= 0 ? 0 : totalMs / sum;
+  let distributed = 0;
+  return list.map((s, i) => {
+    const span = s.end - s.start;
+    const duration = (i === list.length - 1) ? Math.max(0, totalMs - distributed) : Math.round(span * ratio);
+    distributed += duration;
+    return { start: s.start, end: s.start + duration };
+  });
+}
+
 function timerStop() {
   const now = Date.now();
   if (timerRunning) {
@@ -494,7 +579,8 @@ function timerStop() {
   if (timerElapsed >= 1000) {
     const records = loadTimerRecords();
     const todayStr = formatDate(new Date());
-    const sessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
+    const rawSessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
+    const sessions = normalizeTimerSessionsForRecord(rawSessions, timerElapsed);
     const baseRecord = { id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
     // Save for todo if linked
     if (timerLinkedTodoId) {
@@ -513,6 +599,7 @@ function timerStop() {
   timerElapsed = 0;
   timerSessions = [];
   timerSessionName = '';
+  timerStaleNotice = null;
   clearTimerState();
   if (!timerHistoryExpanded) { timerHistoryExpanded = true; animateTimerHistoryExpand(); }
   else renderTimer();
@@ -524,7 +611,8 @@ function timerSave() {
   const now = Date.now();
   const records = loadTimerRecords();
   const todayStr = formatDate(new Date());
-  const sessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
+  const rawSessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
+  const sessions = normalizeTimerSessionsForRecord(rawSessions, timerElapsed);
   const baseRecord = { id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
   if (timerLinkedTodoId) {
     records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedTodoId, targetType: 'todo' });
@@ -539,6 +627,7 @@ function timerSave() {
   timerElapsed = 0;
   timerSessions = [];
   timerSessionName = '';
+  timerStaleNotice = null;
   clearTimerState();
   if (!timerHistoryExpanded) { timerHistoryExpanded = true; animateTimerHistoryExpand(); }
   else renderTimer();
@@ -553,6 +642,7 @@ function timerReset() {
   timerElapsed = 0;
   timerSessions = [];
   timerSessionName = '';
+  timerStaleNotice = null;
   clearTimerState();
   renderTimer();
 }

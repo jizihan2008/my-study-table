@@ -215,7 +215,7 @@ function renderHelpModal() {
             <p style="margin:0 0 2px 0;"><b>⏰ 自动化：</b>schedule_automation（创建定时任务，at=HH:MM，prompt=触发指令，repeat=daily/once）、list_automations（查看所有自动化任务）、delete_automation（删除指定自动化）</p>
             <p style="margin:0 0 2px 0;"><b>🧠 记忆：</b>list_memories（列出记忆条目）、get_memory_detail（查看记忆详情）；AI 也可在回复中嵌入 <code>&lt;memory&gt;{"type":"类型","text":"简略信息","detail":"详细内容"}&lt;/memory&gt;</code> 来提交记忆</p>
             <p style="margin:0 0 2px 0;"><b>🌐 网络搜索：</b>web_search（联网搜索，支持 Brave / Tavily / Exa / SearchAPI / DuckDuckGo 五种引擎）</p>
-            <p style="margin:0 0 2px 0;"><b>🗺️ 任务线：</b>quest_get（查看任务线）、quest_create_line（创建章节：main主线/quality素质线）、quest_update_line（更新章节）、quest_create（创建任务：kind 分 main主线/side支线，desc 一段文字描述含目标/意义/产出 + 依赖）、quest_update（更新任务）、quest_link_todo / quest_link_note / quest_link_timer（绑定完成条件）、quest_add_manual_cond（手动打卡条件）、quest_complete（完成任务，解锁下游）、quest_skip（跳过）、quest_review（复盘卡点）</p>
+            <p style="margin:0 0 2px 0;"><b>🗺️ 任务线：</b>quest_get（查看任务线）、quest_create_line（创建章节：main主线/quality素质线）、quest_update_line（更新章节）、quest_create（创建任务：kind 分 main主线/side支线，desc 一段文字描述含目标/意义/产出 + 依赖）、quest_update（更新任务）、quest_edit_condition（统一新增/修改/删除待办、笔记、计时、手动四类完成条件）、quest_complete（完成任务，解锁下游）、quest_skip（跳过）、quest_review（复盘卡点）</p>
             <p style="margin:0;"><b>🤖 多 AI 协作：</b>AI 在回复中嵌入 <code>&lt;call_ai&gt;{"keyId":"目标 Key","prompt":"消息"}&lt;/call_ai&gt;</code> 来唤起其他 AI</p>
           </div>
         </div>
@@ -238,7 +238,7 @@ function renderHelpModal() {
     <div class="settings-tab-panel" id="helpPanelShortcuts">
       <div style="font-size:13px;line-height:1.8;color:var(--text);">
         <ul style="margin:0;padding-left:18px;color:var(--text-secondary);">
-          <li><b>Ctrl + 1~9</b> — 切换到对应栏目（按侧边栏排序顺序）</li>
+          <li><b>Ctrl + 1~9</b> — 切换到对应栏目（按侧边栏排序顺序）；可在侧边栏「编辑界面栏」中把任意栏目改为自定义 <b>Ctrl + 按键</b>（字母 / 数字 / F1~F12 / 符号）</li>
           <li><b>Esc</b> — 关闭当前弹窗</li>
           <li><b>Ctrl + Z / Ctrl + Y</b> — 笔记编辑器中撤销/重做；待办页面中撤销/重做操作</li>
           <li><b>Ctrl + Shift + Z</b> — 待办重做（替代方案）</li>
@@ -1635,8 +1635,7 @@ function saveReminderSettings() {
   }
 
   // Restart automation timer to apply reminder changes
-  stopAutomationTimer();
-  if (shouldTimerRun()) startAutomationTimer();
+  ensureAutomationTimer();
 }
 // ═══════════ End Reminder System ═══════════
 
@@ -1738,6 +1737,14 @@ function onReviewModeChange() {
   const mode = modeSelect ? modeSelect.value : 'standard';
   const customField = document.getElementById('reviewCustomField');
   if (customField) customField.style.display = mode === 'custom' ? '' : 'none';
+  refreshReviewUiAfterModeChange();
+}
+
+// 复习模式变化后同步刷新受影响的界面：今天页复习卡片、笔记列表徽章、日历复习标记
+function refreshReviewUiAfterModeChange() {
+  if (typeof renderReviewCard === 'function') renderReviewCard();
+  if (typeof renderNoteList === 'function') renderNoteList();
+  if (typeof renderCalendar === 'function' && document.getElementById('calendarGrid')) renderCalendar();
 }
 
 function updateReviewPreview() {
@@ -1746,6 +1753,10 @@ function updateReviewPreview() {
   const mode = document.getElementById('settingsReviewMode');
   if (!mode) return;
   const modeVal = mode.value;
+  if (modeVal === 'off') {
+    preview.textContent = '已关闭复习：不再推送到期笔记，日历也不再显示复习安排';
+    return;
+  }
   let intervals;
   if (modeVal === 'custom') {
     const input = document.getElementById('settingsReviewCustomIntervals');
@@ -2221,8 +2232,7 @@ function toggleAutomationEnabled(id, enabled) {
   a.enabled = enabled;
   saveData('study_automations', automations);
   // Restart timer to apply changes
-  stopAutomationTimer();
-  if (shouldTimerRun()) startAutomationTimer();
+  ensureAutomationTimer();
   renderAutomationList();
 }
 
@@ -2294,8 +2304,7 @@ function submitAutomationForm() {
     else delete a.date;
     a.reason = reasonVal.slice(0, 500);
     saveData('study_automations', automations);
-    stopAutomationTimer();
-    if (shouldTimerRun()) startAutomationTimer();
+    ensureAutomationTimer();
     renderAutomationList();
     showAutomationStatus('✅ 已更新自动化任务');
   } else {
@@ -2319,8 +2328,7 @@ function submitAutomationForm() {
     };
     automations.push(newAuto);
     saveData('study_automations', automations);
-    stopAutomationTimer();
-    startAutomationTimer();
+    ensureAutomationTimer();
     renderAutomationList();
     showAutomationStatus('✅ 已创建自动化任务：' + (repeat === 'once' ? '一次性 ' : '每天 ') + at);
   }
@@ -2373,7 +2381,17 @@ function startAutomationTimer() {
     checkAutomations();
     checkEveningReport();
     checkReminders();
+    // 日历事件时段结束 → 自动补写计时记录（此前不会触发任何校验）
+    if (typeof runCalendarAutoRecords === 'function') {
+      try { runCalendarAutoRecords(Date.now()); } catch (e) { console.warn('[Calendar] 自动计时记录失败:', e); }
+    }
   }, 30000); // check every 30 seconds
+}
+
+// 重新评估是否需要自动巡检（增删日历事件 / 自动化任务后调用）
+function ensureAutomationTimer() {
+  stopAutomationTimer();
+  if (shouldTimerRun()) startAutomationTimer();
 }
 
 function shouldTimerRun() {
@@ -2382,7 +2400,10 @@ function shouldTimerRun() {
   const hasReminder = localStorage.getItem('study_reminder_checkin_enabled') === 'true'
     || localStorage.getItem('study_reminder_focus_enabled') === 'true'
     || localStorage.getItem('study_reminder_idle_enabled') === 'true';
-  return hasAuto || hasEvening || hasReminder;
+  const hasCalAutoRecord = typeof hasPendingCalendarAutoRecords === 'function'
+    ? hasPendingCalendarAutoRecords()
+    : false;
+  return hasAuto || hasEvening || hasReminder || hasCalAutoRecord;
 }
 
 function stopAutomationTimer() {
@@ -2662,8 +2683,7 @@ function saveEveningReportSettings() {
   };
   saveEveningReportCfg(cfg);
   // Start or stop timer based on new state
-  stopAutomationTimer();
-  if (shouldTimerRun()) startAutomationTimer();
+  ensureAutomationTimer();
 }
 
 async function debugTriggerEveningReport() {
@@ -3515,6 +3535,29 @@ function getPastDateStr(daysAgo) {
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
 }
 
+// ── Helper: 打卡连续天数的 AI 可读表述（明确「连续 N 天」＝已连续打卡天数，并标注统计截止日）──
+function reportCheckinStreakText(data) {
+  const model = (typeof window !== 'undefined') ? window.HabitStatusText : null;
+  const checked = data.isCheckedInToday !== undefined ? data.isCheckedInToday : data.isCheckedIn;
+  if (!model) return `连续打卡 ${data.streak || 0} 天`;
+  return model.checkinText({
+    streak: data.streak || 0,
+    lastDate: data.checkinLastDate,
+    todayChecked: !!checked,
+    yesterdayStr: data.yesterdayStr
+  });
+}
+
+// ── Helper: 习惯行的 AI 可读表述（早间＝回顾昨天，晚间＝回顾今天）──
+// 首行给出「连续达标 N 天」的口径说明，避免 AI 读成「连续 N 天没完成」
+function reportHabitLines(habitsOverview, mode) {
+  const model = (typeof window !== 'undefined') ? window.HabitStatusText : null;
+  if (!habitsOverview || habitsOverview.length === 0) return '  （暂无习惯）';
+  if (!model) return '  （习惯状态文本模块未加载）';
+  const line = mode === 'morning' ? model.morningLine : model.eveningLine;
+  return `  （口径：${model.STREAK_MEANING}）\n` + habitsOverview.map(h => line(h)).join('\n');
+}
+
 // ── Helper: collect yesterday's data for the daily report ──
 function formatDailyReportFocusPath(focusItem) {
   const todo = (typeof todos !== 'undefined' && Array.isArray(todos))
@@ -3686,6 +3729,7 @@ function collectDailyReportData() {
     todayStr,
     yesterdayStr,
     streak: checkinData.streak || 0,
+    checkinLastDate: checkinData.lastDate || (checkinData.dates && checkinData.dates.length ? checkinData.dates[checkinData.dates.length - 1] : ''),
     todayCheckinTime: checkinData.checkinTimes && checkinData.checkinTimes[todayStr] || null,
     focusItems,
     focusDone: focusItems.filter(i => i.done).length,
@@ -3704,6 +3748,8 @@ function collectDailyReportData() {
     prevReport,
     isCheckedInToday: checkinData.dates.includes(todayStr),
     // Review data（getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象，须解包 .note）
+    // reviewDisabled：设置中选择「不进行复习」时为 true，日报里要说明「不是没复习，而是已关闭」
+    reviewDisabled: typeof isReviewDisabled === 'function' ? isReviewDisabled() : false,
     reviewDueCount: typeof getNotesDueForReview === 'function' ? getNotesDueForReview().length : 0,
     reviewDueNotes: typeof getNotesDueForReview === 'function'
       ? getNotesDueForReview().map(d => {
@@ -3745,15 +3791,18 @@ function collectDailyReportData() {
         return h.map(habit => {
           const dayCount = (habit.checkins && habit.checkins[yesterdayStr]) ? habit.checkins[yesterdayStr] : 0;
           const dayMet = dayCount >= (habit.dailyTarget || 1);
-          // calcStreak 返回 { streak, bestStreak, todayCount, todayMet, target }
-          const streak = (typeof calcStreak === 'function') ? (calcStreak(habit).streak || 0) : 0;
+          // calcStreak 返回 { streak, bestStreak, todayCount, todayMet, target, streakThroughYesterday, streakThroughToday }
+          const st = (typeof calcStreak === 'function') ? calcStreak(habit) : {};
           return {
             name: habit.name,
             emoji: habit.emoji || '',
             dayCount,
             dailyTarget: habit.dailyTarget || 1,
             dayMet,
-            streak
+            todayMet: !!st.todayMet,
+            streak: st.streak || 0,
+            bestStreak: st.bestStreak || 0,
+            streakThroughYesterday: st.streakThroughYesterday || 0
           };
         });
       } catch { return []; }
@@ -3855,7 +3904,7 @@ async function generateDailyReport(force, userInstruction) {
 
 📊 **数据一览**
 
-【连续打卡】${data.streak} 天
+【连续打卡】${reportCheckinStreakText(data)}
 【昨日聚焦】${data.focusDone}/${data.focusTotal} 完成
 ${focusLines}
 【今日聚焦】${data.todayFocusItems.filter(i => i.done).length}/${data.todayFocusItems.length} 完成
@@ -3871,23 +3920,19 @@ ${todayDueLines}
 【全局待办】${data.totalDone}/${data.totalTodos} 已完成
 【昨日笔记】${data.ydayNotes.length} 篇
 ${noteLines}
-【复习状态】${data.notesWithReviewHistory}/${data.totalNotes} 篇笔记参与间隔复习
-${data.reviewDueNotes.length > 0
-  ? data.reviewDueNotes.map(n => {
-      const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
-      const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
-      return `  - 📖 ${formatDailyReportNotePath(n.id, n.title)}（${stage}${overdue}）`;
-    }).join('\n')
-  : '  （暂无待复习笔记）'}
-${data.overdueReviewCount > 0 ? `⚠️ 其中 ${data.overdueReviewCount} 篇已逾期` : ''}
+【复习状态】${data.reviewDisabled ? '间隔复习已在设置中关闭（不是没复习，是用户主动关掉了推送）' : `${data.notesWithReviewHistory}/${data.totalNotes} 篇笔记参与间隔复习`}
+${data.reviewDisabled
+  ? '  （复习已关闭，无需提醒复习）'
+  : (data.reviewDueNotes.length > 0
+    ? data.reviewDueNotes.map(n => {
+        const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
+        const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
+        return `  - 📖 ${formatDailyReportNotePath(n.id, n.title)}（${stage}${overdue}）`;
+      }).join('\n')
+    : '  （暂无待复习笔记）')}
+${!data.reviewDisabled && data.overdueReviewCount > 0 ? `⚠️ 其中 ${data.overdueReviewCount} 篇已逾期` : ''}
 【昨日习惯】（昨日完成情况）${data.habitsDoneYesterday}/${data.habitsCount} 已完成
-${data.habitsOverview.length > 0
-  ? data.habitsOverview.map(h => {
-      const status = h.dayMet ? '✓' : '○';
-      const detail = h.dayMet ? `昨日已完成(${h.dayCount}/${h.dailyTarget})` : `昨日未完成(${h.dayCount}/${h.dailyTarget})`;
-      return `  - ${status} ${h.emoji} ${h.name} — ${detail}，连续 ${h.streak} 天`;
-    }).join('\n')
-  : '  （暂无习惯）'}
+${reportHabitLines(data.habitsOverview, 'morning')}
 ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务｜主线「${data.taskline.currentMain || '未创建'}」${data.taskline.mainProgress !== null ? '进度 ' + data.taskline.mainProgress + '%' : '（暂无任务）'}
   - 激活任务 ${data.taskline.activeCount} 个${data.taskline.activeNames.length > 0 ? '：' + data.taskline.activeNames.join('、') : ''}
   ${data.taskline.ydayDone.length > 0 ? '- 昨日完成任务：' + data.taskline.ydayDone.join('、') : ''}` : ''}${prevReportBlock}
@@ -4111,7 +4156,9 @@ function collectEveningReportData() {
   return {
     todayStr,
     tomorrowStr,
+    yesterdayStr: getPastDateStr(1),
     streak: checkinData.streak || 0,
+    checkinLastDate: checkinData.lastDate || (checkinData.dates && checkinData.dates.length ? checkinData.dates[checkinData.dates.length - 1] : ''),
     isCheckedIn: checkinData.dates.includes(todayStr),
     todayCheckinTime,
     focusItems,
@@ -4131,6 +4178,7 @@ function collectEveningReportData() {
     todayTimerSessions,
     prevReport,
     // Review data（getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象，须解包 .note）
+    reviewDisabled: typeof isReviewDisabled === 'function' ? isReviewDisabled() : false,
     reviewDueCount: typeof getNotesDueForReview === 'function' ? getNotesDueForReview().length : 0,
     reviewDueNotes: typeof getNotesDueForReview === 'function'
       ? getNotesDueForReview().map(d => {
@@ -4159,8 +4207,17 @@ function collectEveningReportData() {
         return h.map(habit => {
           const todayCount = (habit.checkins && habit.checkins[todayStr]) ? habit.checkins[todayStr] : 0;
           const todayMet = todayCount >= (habit.dailyTarget || 1);
-          const streak = (typeof calcStreak === 'function') ? (calcStreak(habit).streak || 0) : 0;
-          return { name: habit.name, emoji: habit.emoji || '', todayCount, dailyTarget: habit.dailyTarget || 1, todayMet, streak };
+          const st = (typeof calcStreak === 'function') ? calcStreak(habit) : {};
+          return {
+            name: habit.name,
+            emoji: habit.emoji || '',
+            todayCount,
+            dailyTarget: habit.dailyTarget || 1,
+            todayMet,
+            streak: st.streak || 0,
+            bestStreak: st.bestStreak || 0,
+            streakThroughYesterday: st.streakThroughYesterday || 0
+          };
         });
       } catch { return []; }
     })() : [],
@@ -4237,7 +4294,7 @@ async function generateEveningReport() {
 
 📊 **今日数据一览**
 
-【连续打卡】${data.streak} 天${data.todayCheckinTime ? '（今日打卡 ' + data.todayCheckinTime + '）' : ''}
+【连续打卡】${reportCheckinStreakText(data)}
 【今日聚焦】${data.focusDone}/${data.focusTotal} 完成
 ${focusLines}
 【明日聚焦】${data.tomorrowFocusItems.filter(i => i.done).length}/${data.tomorrowFocusItems.length} 完成
@@ -4257,8 +4314,8 @@ ${tomorrowLines}
 【全局待办】${data.totalDone}/${data.totalTodos} 已完成，剩余 ${data.undoneTodos.length} 项
 【今日笔记】${data.todayNotes.length} 篇
 ${noteLines}
-【复习状态】${data.reviewDueNotes.length > 0 ? '有 ' + data.reviewDueNotes.length + ' 篇待复习' : '无待复习笔记'}
-${data.reviewDueNotes.length > 0
+【复习状态】${data.reviewDisabled ? '间隔复习已在设置中关闭' : (data.reviewDueNotes.length > 0 ? '有 ' + data.reviewDueNotes.length + ' 篇待复习' : '无待复习笔记')}
+${!data.reviewDisabled && data.reviewDueNotes.length > 0
   ? data.reviewDueNotes.map(n => {
       const stage = n.reviewCount === 0 ? '📌 首次待复习' : `第${n.reviewCount + 1}轮`;
       const overdue = n.overdueDays > 0 ? ` ⚠️逾期${n.overdueDays}天` : '';
@@ -4266,13 +4323,7 @@ ${data.reviewDueNotes.length > 0
     }).join('\n')
   : ''}
 【今日习惯】${data.habitsDoneToday}/${data.habitsCount} 已完成
-${data.habitsOverview.length > 0
-  ? data.habitsOverview.map(h => {
-      const status = h.todayMet ? '✓' : '○';
-      const detail = h.todayMet ? `已完成(${h.todayCount}/${h.dailyTarget})` : `未完成(${h.todayCount}/${h.dailyTarget})`;
-      return `  - ${status} ${h.emoji} ${h.name} — ${detail}，连续 ${h.streak} 天`;
-    }).join('\n')
-  : '  （暂无习惯）'}
+${reportHabitLines(data.habitsOverview, 'evening')}
 ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务｜主线「${data.taskline.currentMain || '未创建'}」${data.taskline.mainProgress !== null ? '进度 ' + data.taskline.mainProgress + '%' : '（暂无任务）'}
   - 激活任务 ${data.taskline.activeCount} 个${data.taskline.activeNames.length > 0 ? '：' + data.taskline.activeNames.join('、') : ''}
   ${data.taskline.ydayDone.length > 0 ? '- 今日完成任务：' + data.taskline.ydayDone.join('、') : ''}` : ''}${prevReportBlock}

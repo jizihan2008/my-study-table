@@ -9,6 +9,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
   openExternal: (url) => ipcRenderer.invoke('open-external', url),
   quitApp: () => ipcRenderer.invoke('quit-app'),
+  // 主进程真正退出前通知渲染进程落盘一次（计时器状态等）
+  onAppQuit: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on('app:before-quit', listener);
+    return () => ipcRenderer.removeListener('app:before-quit', listener);
+  },
   focusWindow: () => ipcRenderer.invoke('focus-window'),
   openAudioDialog: () => ipcRenderer.invoke('open-audio-dialog'),
   readAudioFile: (filePath) => ipcRenderer.invoke('read-audio-file', filePath),
@@ -51,6 +57,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
   extTrashEmpty: () => ipcRenderer.invoke('ext:trash-empty'),
   extImport: (payload) => ipcRenderer.invoke('ext:import', payload),
   getPathForFile: (file) => webUtils.getPathForFile(file),
+  filesImport: () => ipcRenderer.invoke('files:import'),
+  filesImportData: (files) => ipcRenderer.invoke('files:import-data', files),
+  filesList: () => ipcRenderer.invoke('files:list'),
+  filesRead: (id) => ipcRenderer.invoke('files:read', id),
+  filesOpen: (id) => ipcRenderer.invoke('files:open', id),
+  filesShowDir: () => ipcRenderer.invoke('files:show-dir'),
+  filesDelete: (id) => ipcRenderer.invoke('files:delete', id),
   // ── Textbook Learning IPC ──
   pickPdfFile: () => ipcRenderer.invoke('pdf:pick'),
   readPdfFile: (filePath) => ipcRenderer.invoke('pdf:read', filePath),

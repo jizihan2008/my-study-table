@@ -377,6 +377,7 @@ function switchTab(tab) {
   if (tab === 'todo' && typeof refreshRepeatTodos === 'function') refreshRepeatTodos();
   if (tab === 'taskline' && typeof renderTaskLine === 'function') renderTaskLine();
   if (tab === 'notes') renderNotes();
+  if (tab === 'files' && typeof renderFileLibrary === 'function') renderFileLibrary();
   if (tab === 'books') { if (typeof renderBooks === 'function') renderBooks(); }
   if (tab === 'keywords') { if (typeof renderKeywords === 'function') renderKeywords(); }
   if (tab === 'translation') { if (typeof window.GlobalTranslation?.renderPage === 'function') window.GlobalTranslation.renderPage(); }
@@ -384,7 +385,7 @@ function switchTab(tab) {
   if (tab === 'prompts' && typeof renderPromptStudio === 'function') renderPromptStudio();
   if (tab === 'skills' && typeof renderSkillsStudio === 'function') renderSkillsStudio();
   if (tab === 'today') renderToday();
-  if (tab === 'calendar') renderCalendar();
+  if (tab === 'calendar') { if (!calendarSelectedDate) calendarSelectedDate = formatDate(new Date()); renderCalendar(); }
   if (tab === 'timer') renderTimer();
   if (tab === 'habits') renderHabits();
   if (tab === 'inbox') { if (typeof window.Inbox !== 'undefined' && window.Inbox.render) window.Inbox.render(); }
@@ -572,6 +573,7 @@ function updateWorkspaceHeading(tab) {
     prompts: ['提示词工作台', '把想法拆成结构，清楚地告诉 AI 如何协助你。'],
     skills: ['技能', '保存常用的处理准则，在对话中按需使用。'],
     inbox: ['收件箱', '把消息归于一处，让注意力回到学习。'],
+    files: ['文件库', '集中保存学习资料，随时打开或交给 AI 阅读。'],
     friends: ['学习伙伴', '分享进步，也分享沿途的风景。']
   };
   const info = ALL_NAV_ITEMS.find(item => item.id === tab);
@@ -588,6 +590,7 @@ const ALL_NAV_ITEMS = [
   { id: 'todo',      icon: 'check-square',  label: '待办' },
   { id: 'taskline',  icon: 'swords',        label: '任务线' },
   { id: 'notes',     icon: 'file-text',     label: '笔记' },
+  { id: 'files',     icon: 'folder-open',   label: '文件库' },
   { id: 'books',     icon: 'library',       label: '教材' },
   { id: 'keywords',  icon: 'key-round',     label: '关键词' },
   { id: 'translation', icon: 'languages',   label: '划词翻译' },
@@ -627,12 +630,53 @@ function loadNavConfig() {
   if (!Array.isArray(cfg.bottomTabs)) cfg.bottomTabs = ['today', 'todo', 'notes', 'calendar'];
   // 过滤掉已隐藏或移动端不显示、或不在导航里的底部 Tab
   cfg.bottomTabs = cfg.bottomTabs.filter(id => id !== 'more' && allIds.includes(id));
+  // 自定义快捷键（Ctrl+按键）：未自定义时按可见顺序自动分配 Ctrl+1~9
+  if (!cfg.shortcuts || typeof cfg.shortcuts !== 'object') cfg.shortcuts = {};
+  if (typeof cfg.shortcutsCustom !== 'boolean') cfg.shortcutsCustom = false;
+  cfg.shortcuts = resolveNavShortcuts(cfg);
   return cfg;
 }
 
 function saveNavConfig(cfg) {
   localStorage.setItem('study_nav_config', JSON.stringify(cfg));
 }
+
+// ── 侧边栏快捷键：Ctrl+按键（默认 Ctrl+1~9，可自定义）──
+function navShortcutModel() {
+  return (typeof window !== 'undefined' && window.NavShortcuts) ? window.NavShortcuts : null;
+}
+
+// 可见栏目（隐藏项不参与快捷键触发，但仍保留绑定）
+function getVisibleNavIds(cfg) {
+  return cfg.order.filter(id => !cfg.hidden.includes(id));
+}
+
+// 计算生效的栏目快捷键映射
+function resolveNavShortcuts(cfg) {
+  const model = navShortcutModel();
+  const visibleIds = getVisibleNavIds(cfg);
+  if (!model) return {};
+  // 全部栏目（含隐藏项）按顺序去重；未自定义时按可见顺序分配默认数字键
+  if (!cfg.shortcutsCustom) return model.defaults(visibleIds);
+  return model.resolve(cfg.shortcuts, cfg.order);
+}
+
+function navShortcutLabel(key) {
+  const model = navShortcutModel();
+  return model ? model.label(key) : '';
+}
+
+function navItemLabel(tabId) {
+  const item = getNavDisplayItems().find(n => n.id === tabId);
+  return item ? item.label : tabId;
+}
+
+function navShortcutToast(msg, type) {
+  if (typeof showMiniToast === 'function') showMiniToast(msg, type);
+}
+
+// 正在录制快捷键的栏目 id（null = 未录制）
+let _navShortcutCaptureId = null;
 
 function renderSidebarNav() {
   const nav = document.getElementById('sidebarNav');
@@ -646,8 +690,7 @@ function renderSidebarNav() {
   const mergedOrder = [];
   cfg.order.forEach(id => mergedOrder.push(id));
   dynamicIds.forEach(d => { if (!mergedOrder.includes(d.id)) mergedOrder.push(d.id); });
-  let visibleIdx = 0;
-  nav.innerHTML = mergedOrder.map((tabId, i) => {
+  nav.innerHTML = mergedOrder.map((tabId) => {
     const info = ALL_NAV_ITEMS.find(n => n.id === tabId);
     const dyn = dynamicIds.find(d => d.id === tabId);
     if (!info && !dyn) return '';
@@ -656,8 +699,8 @@ function renderSidebarNav() {
     const badge = (info && info.badge) || (dyn && dyn.badge) || '';
     const isHidden = cfg.hidden.includes(tabId) || isMobileHiddenNav(tabId);
     if (isHidden) return '';
-    const keyHint = visibleIdx < 9 ? `<span class="nav-key-hint">Ctrl+${visibleIdx + 1}</span>` : '';
-    visibleIdx++;
+    const keyLabel = navShortcutLabel((cfg.shortcuts || {})[tabId]);
+    const keyHint = keyLabel ? `<span class="nav-key-hint">${keyLabel}</span>` : '';
     return `<button class="sidebar-nav-item" onclick="switchTab('${tabId}')" id="nav-${tabId}">
       <i data-lucide="${icon}" class="lucide-icon"></i>${label}${badge ? `<span class="nav-badge">${badge}</span>` : ''}${keyHint}
     </button>`;
@@ -690,12 +733,16 @@ function openNavSettings() {
     `<option value="${n.id}" ${cfg.homeTab === n.id ? 'selected' : ''}>${n.label}</option>`
   ).join('');
   body.innerHTML = `
-    <p class="hint" style="margin-bottom:10px;">拖拽排序，勾选控制显示/隐藏。Ctrl+数字键快速跳转。</p>
+    <p class="hint" style="margin-bottom:10px;">拖拽排序，勾选控制显示/隐藏。点击右侧按键框可自定义 <b>Ctrl+按键</b> 快捷键。</p>
     <div class="modal-field" style="margin-bottom:10px;">
       <label>🏠 启动时默认进入</label>
       <select id="navHomeSelect" onchange="onNavHomeChange()">${homeOptions}</select>
     </div>
     <div id="navSortList" style="display:flex;flex-direction:column;gap:4px;"></div>
+    <div class="nav-shortcut-bar">
+      <span class="hint" id="navShortcutHint">点击按键框后按下想用的键（字母 / 数字 / F1~F12 / 符号）；Backspace 清除，Esc 取消。</span>
+      <button type="button" class="nav-shortcut-reset" onclick="resetNavShortcuts()">↺ 恢复默认（Ctrl+1~9）</button>
+    </div>
     <div class="nav-bottom-title">📱 底部导航栏（手机端固定，最多 4 个）</div>
     <div class="hint" style="margin-bottom:8px;">下方已固定模块可<b>拖拽排序</b>或点击 ✕ 移除；勾选下方模块可添加到手机底部（「更多」始终在最右，其余从「更多」抽屉进入）。</div>
     <div id="navBottomTabs" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;"></div>
@@ -718,20 +765,29 @@ function renderNavSortList(cfg) {
   const list = document.getElementById('navSortList');
   if (!list) return;
   const displayItems = getNavDisplayItems();
-  let visibleIdx = 0;
-  list.innerHTML = cfg.order.map((tabId, i) => {
+  list.innerHTML = cfg.order.map((tabId) => {
     const info = displayItems.find(n => n.id === tabId);
     if (!info) return '';
     const isHidden = cfg.hidden.includes(tabId);
-    const shortcut = !isHidden && visibleIdx < 9 ? `<span class="nav-sort-shortcut">Ctrl+${visibleIdx + 1}</span>` : '';
-    if (!isHidden) visibleIdx++;
+    const key = (cfg.shortcuts || {})[tabId] || '';
+    const capturing = _navShortcutCaptureId === tabId;
+    const chipText = capturing ? '按下按键…' : (navShortcutLabel(key) || '未设置');
+    const chipClass = 'nav-sort-key'
+      + (key ? '' : ' is-empty')
+      + (capturing ? ' is-capturing' : '')
+      + (key && navShortcutModel() && navShortcutModel().isReserved(key) ? ' is-reserved' : '');
+    const chipTitle = capturing
+      ? '按下想绑定的按键；Backspace 清除绑定，Esc 取消'
+      : (key && navShortcutModel() && navShortcutModel().isReserved(key)
+        ? '与应用快捷键存在冲突，可能同时触发'
+        : '点击后按下要绑定的按键（Ctrl+按键）');
     return `<div class="nav-sort-item" data-id="${tabId}" draggable="true">
       <span class="nav-sort-grip" draggable="true">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><circle cx="9" cy="5" r="1.5"/><circle cx="15" cy="5" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="19" r="1.5"/><circle cx="15" cy="19" r="1.5"/></svg>
       </span>
       <i data-lucide="${info.icon}" class="lucide-icon" style="width:16px;height:16px;"></i>
       <span class="nav-sort-label">${info.label}</span>
-      ${shortcut}
+      <button type="button" class="${chipClass}" data-shortcut-for="${tabId}" onclick="startNavShortcutCapture('${tabId}')" title="${chipTitle}">${chipText}</button>
       <span class="nav-sort-move" style="display:inline-flex;gap:4px;align-items:center;margin-left:auto;">
         <button class="nav-sort-arrow" onclick="moveNavItem('${tabId}',-1)" title="上移"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="m18 15-6-6-6 6"/></svg></button>
         <button class="nav-sort-arrow" onclick="moveNavItem('${tabId}',1)" title="下移"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="m6 9 6 6 6-6"/></svg></button>
@@ -1052,18 +1108,112 @@ function initNavSortTouch(list) {
   });
 }
 
-// ═══════════ Keyboard shortcuts: Ctrl+number → switch tab ═══════════
-document.addEventListener('keydown', function(e) {
-  if (!e.ctrlKey && !e.metaKey) return;
-  const num = parseInt(e.key);
-  if (num < 1 || num > 9) return;
-  // Don't interfere with text editing
-  if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+// ═══════════ 侧边栏快捷键：Ctrl+按键（默认 Ctrl+1~9，可自定义）═══════════
+function isEditableKeyTarget(el) {
+  if (!el) return false;
+  return el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || el.isContentEditable === true;
+}
+
+// 点击按键框 → 录制下一次按键
+function startNavShortcutCapture(tabId) {
+  if (_navShortcutCaptureId === tabId) { cancelNavShortcutCapture(); return; }
+  _navShortcutCaptureId = tabId;
+  renderNavSortList(loadNavConfig());
+  const chip = document.querySelector(`.nav-sort-key[data-shortcut-for="${tabId}"]`);
+  if (chip) chip.focus();
+}
+
+function cancelNavShortcutCapture() {
+  if (!_navShortcutCaptureId) return;
+  _navShortcutCaptureId = null;
+  renderNavSortList(loadNavConfig());
+}
+
+// 当前正在录制的栏目 id；录制框已随弹窗关闭时自动作废
+function navShortcutCaptureTarget() {
+  if (!_navShortcutCaptureId) return '';
+  const modal = document.getElementById('editModal');
+  if (!modal || !modal.classList.contains('open')) { _navShortcutCaptureId = null; return ''; }
+  return _navShortcutCaptureId;
+}
+
+function setNavShortcut(tabId, key) {
+  const model = navShortcutModel();
+  if (!model) return;
   const cfg = loadNavConfig();
-  const visibleItems = cfg.order.filter(id => !cfg.hidden.includes(id));
-  const idx = num - 1;
-  if (idx < visibleItems.length) {
-    e.preventDefault();
-    switchTab(visibleItems[idx]);
+  const res = model.assign(cfg.shortcuts, tabId, key, cfg.order);
+  cfg.shortcuts = res.map;
+  cfg.shortcutsCustom = true;
+  saveNavConfig(cfg);
+  renderNavSortList(loadNavConfig());
+  renderSidebarNav();
+  let msg = `「${navItemLabel(tabId)}」快捷键已设为 ${model.label(key)}`;
+  if (res.displaced.length) msg += `（已从 ${res.displaced.map(navItemLabel).join('、')} 移除）`;
+  if (model.isReserved(key)) msg += ' · ⚠️ 与应用快捷键冲突';
+  navShortcutToast(msg, model.isReserved(key) ? 'error' : undefined);
+}
+
+function clearNavShortcut(tabId) {
+  const model = navShortcutModel();
+  if (!model) return;
+  const cfg = loadNavConfig();
+  cfg.shortcuts = model.clear(cfg.shortcuts, tabId);
+  cfg.shortcutsCustom = true;
+  saveNavConfig(cfg);
+  renderNavSortList(loadNavConfig());
+  renderSidebarNav();
+  navShortcutToast(`「${navItemLabel(tabId)}」快捷键已清除`);
+}
+
+function resetNavShortcuts() {
+  const cfg = loadNavConfig();
+  cfg.shortcutsCustom = false;
+  cfg.shortcuts = {};
+  saveNavConfig(cfg);
+  renderNavSortList(loadNavConfig());
+  renderSidebarNav();
+  navShortcutToast('已恢复默认快捷键 Ctrl+1~9');
+}
+
+// 录制按键（捕获阶段：优先于栏目切换及其它全局快捷键）
+document.addEventListener('keydown', function(e) {
+  const tabId = navShortcutCaptureTarget();
+  if (!tabId) return;
+  const model = navShortcutModel();
+  if (!model) return;
+  if (e.key === 'Escape' || e.key === 'Tab') {
+    e.preventDefault(); e.stopImmediatePropagation();
+    cancelNavShortcutCapture();
+    return;
   }
+  if (e.key === 'Backspace' || e.key === 'Delete') {
+    e.preventDefault(); e.stopImmediatePropagation();
+    _navShortcutCaptureId = null;
+    clearNavShortcut(tabId);
+    return;
+  }
+  // 只按下修饰键时继续等待基础按键
+  if (['Control', 'Shift', 'Alt', 'Meta', 'CapsLock'].indexOf(e.key) >= 0) { e.preventDefault(); return; }
+  const key = model.fromEvent(e, { requireCtrl: false });
+  e.preventDefault(); e.stopImmediatePropagation();
+  if (!key) { navShortcutToast('该按键不支持：请用字母 / 数字 / F1~F12 / 符号', 'error'); return; }
+  _navShortcutCaptureId = null;
+  setNavShortcut(tabId, key);
+}, true);
+
+// 触发栏目切换（Ctrl+自定义按键）
+document.addEventListener('keydown', function(e) {
+  if (navShortcutCaptureTarget()) return;
+  if (!e.ctrlKey && !e.metaKey) return;
+  const model = navShortcutModel();
+  if (!model) return;
+  const key = model.fromEvent(e, { requireCtrl: true });
+  if (!key) return;
+  // 输入框 / 可编辑区域内不抢占（保留原生编辑快捷键）
+  if (isEditableKeyTarget(e.target)) return;
+  const cfg = loadNavConfig();
+  const tabId = model.match(cfg.shortcuts, key, getVisibleNavIds(cfg));
+  if (!tabId) return;
+  e.preventDefault();
+  switchTab(tabId);
 });

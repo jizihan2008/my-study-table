@@ -170,6 +170,50 @@ test('note tag tools: create with tags, edit tags, and batch tag by mode', async
   assert.match(saved(), /"tags":\["算法","重点"\]/);
 });
 
+test('set_note_review explicitly and idempotently controls review for multiple notes', async () => {
+  const ctx = harness();
+  vm.runInContext(`let notes = [
+    { id: 301, type: 'note', title: '线性代数', content: '矩阵', _skipReview: false, parentId: null },
+    { id: 303, type: 'note', title: '概率论', content: '条件概率', _skipReview: false, parentId: null },
+    { id: 302, type: 'folder', title: '数学', parentId: null }
+  ];`, ctx);
+  const readNotes = () => JSON.parse(vm.runInContext('JSON.stringify(notes)', ctx));
+
+  const schema = ctx.getAiToolJsonSchema('set_note_review');
+  assert.equal(schema.properties.ids.type, 'array');
+  assert.equal(schema.properties.ids.items.type, 'number');
+  assert.equal(schema.properties.needsReview.type, 'boolean');
+  assert.equal(schema.required.join(','), 'ids,needsReview');
+  assert.equal(ctx.validateAiToolCall('set_note_review', { ids: [301, 303], needsReview: false }).ok, true);
+  assert.equal(ctx.validateAiToolCall('set_note_review', { ids: [301] }).ok, false);
+  assert.equal(ctx.validateAiToolCall('set_note_review', { ids: [301], needsReview: 'false' }).ok, false);
+
+  const disabled = await ctx.executeToolCallStructured('set_note_review', { ids: [301, 303, 999, 302], needsReview: false });
+  assert.equal(disabled.ok, true);
+  assert.equal(readNotes().find(n => n.id === 301)._skipReview, true);
+  assert.equal(readNotes().find(n => n.id === 303)._skipReview, true);
+  assert.match(disabled.text, /2 篇笔记设为跳过复习/);
+  assert.match(disabled.text, /跳过了 1 个不存在的ID/);
+  assert.match(disabled.text, /跳过了 1 个文件夹/);
+
+  const unchanged = await ctx.executeToolCallStructured('set_note_review', { ids: [301, 303], needsReview: false });
+  assert.equal(unchanged.ok, true);
+  assert.match(unchanged.text, /0 篇发生变更，2 篇原本已是该状态/);
+
+  const enabled = await ctx.executeToolCallStructured('set_note_review', { ids: [301], needsReview: true });
+  assert.equal(enabled.ok, true);
+  assert.equal(readNotes().find(n => n.id === 301)._skipReview, false);
+  assert.match((await ctx.executeToolCallStructured('get_note_detail', { id: 301 })).text, /复习状态：需要复习/);
+  assert.match((await ctx.executeToolCallStructured('list_notes', {})).text, /需要复习/);
+
+  const folder = await ctx.executeToolCallStructured('set_note_review', { ids: [302], needsReview: false });
+  assert.equal(folder.ok, false);
+  assert.match(folder.text, /文件夹/);
+
+  const selected = ctx.selectAiToolsForConversation({ id: 'notes', messages: [], _toolGroups: ['note'] }, false, false);
+  assert.equal(selected.has('set_note_review'), true);
+});
+
 test('required params reject blank input except the parameters where blank means "clear"', () => {
   const ctx = harness();
   // 空字符串在绝大多数接口里是「没填」；只有 tags 这类参数用空串表达「清空」。
@@ -471,7 +515,7 @@ test('background stop prevents its API call', async () => {
   assert.equal((await ctx.runToolCallLoop({}, conv)).stopped, true);
 });
 
-test('quest condition tools persist changes to the same task-line store they mutate', async () => {
+test('unified quest condition tool creates, updates and deletes every condition type', async () => {
   const ctx = harness();
   const clone = value => JSON.parse(JSON.stringify(value));
   let persisted = { quests: [{ id: 101, title: 'chapter', conditions: [] }] };
@@ -488,15 +532,37 @@ test('quest condition tools persist changes to the same task-line store they mut
   ctx.tlRefreshQuestStatus = () => {};
   ctx.renderTaskLine = () => {};
 
-  assert.match(await ctx.executeToolCall('quest_link_todo', { questId: 101, todoId: 201 }), /^\u2705/);
-  assert.match(await ctx.executeToolCall('quest_link_note', { questId: 101, noteId: 301 }), /^\u2705/);
-  assert.match(await ctx.executeToolCall('quest_link_timer', { questId: 101, targetId: 201, minutes: 30 }), /^\u2705/);
-  assert.match(await ctx.executeToolCall('quest_add_manual_cond', { questId: 101, label: 'manual check' }), /^\u2705/);
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'create', questId: 101, type: 'todo', todoId: 201 }), /^\u2705/);
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'create', questId: 101, type: 'note', noteId: 301 }), /^\u2705/);
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'create', questId: 101, type: 'timer', targetId: 201, minutes: 30 }), /^\u2705/);
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'create', questId: 101, type: 'manual', label: 'manual check' }), /^\u2705/);
 
   assert.deepEqual(persisted.quests[0].conditions.map(c => c.type), ['todo', 'note', 'timer', 'manual']);
   assert.deepEqual(ctx.loadTaskLineStore().quests[0].conditions.map(c => c.label), [
     'finish exercises', 'chapter notes', 'focus 30 min', 'manual check'
   ]);
+
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'update', questId: 101, conditionIndex: 4, label: 'updated check', done: true }), /^\u2705/);
+  assert.equal(persisted.quests[0].conditions[3].label, 'updated check');
+  assert.equal(persisted.quests[0].conditions[3].done, true);
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'update', questId: 101, conditionIndex: 3, minutes: 45 }), /^\u2705/);
+  assert.equal(persisted.quests[0].conditions[2].minutes, 45);
+  assert.match(await ctx.executeToolCall('quest_edit_condition', { action: 'delete', questId: 101, conditionIndex: 2 }), /^\u2705/);
+  assert.deepEqual(persisted.quests[0].conditions.map(c => c.type), ['todo', 'timer', 'manual']);
+
+  const schema = ctx.getAiToolJsonSchema('quest_edit_condition');
+  assert.equal(schema.properties.action.enum.join(','), 'create,update,delete');
+  assert.equal(schema.properties.type.enum.join(','), 'todo,note,timer,manual');
+  for (const removed of ['quest_link_todo','quest_link_note','quest_link_timer','quest_add_manual_cond']) {
+    assert.equal(vm.runInContext(`typeof AI_TOOLS.${removed}`, ctx), 'undefined');
+  }
+  assert.equal(ctx.validateAiToolCall('quest_edit_condition', { action: 'create', questId: 101, type: 'timer', targetId: 201, minutes: 0 }).ok, false);
+  assert.equal(ctx.validateAiToolCall('quest_edit_condition', { action: 'update', questId: 101, conditionIndex: 99, label: 'x' }).ok, false);
+  assert.equal(ctx.getAiToolMetadata('quest_edit_condition', { action: 'create' }).risk, 'write');
+  assert.equal(ctx.getAiToolMetadata('quest_edit_condition', { action: 'delete' }).risk, 'write');
+  assert.equal(ctx.checkAiDeletePolicy('quest_edit_condition', { action: 'delete', questId: 101, conditionIndex: 1 }, { _deletePolicy: 'block' }).ok, true);
+  const blockedSelection = ctx.selectAiToolsForConversation({ id: 'blocked-quest', messages: [], _toolGroups: ['quest'], _deletePolicy: 'block' }, false, false);
+  assert.equal(blockedSelection.has('quest_edit_condition'), true);
 });
 
 test('quest condition tools do not report success when persistence fails', async () => {
@@ -506,7 +572,7 @@ test('quest condition tools do not report success when persistence fails', async
   ctx.renderTaskLine = () => { throw Error('must not render an unsaved condition'); };
 
   assert.equal(
-    await ctx.executeToolCall('quest_add_manual_cond', { questId: 101, label: 'manual check' }),
+    await ctx.executeToolCall('quest_edit_condition', { action: 'create', questId: 101, type: 'manual', label: 'manual check' }),
     '❌ 完成条件保存失败'
   );
 });
@@ -766,7 +832,12 @@ test('delete policy (block / confirm / allow) decides whether destructive tools 
     let asked = 0;
     ctx.callAiApi = async () => ++calls === 1 ? result([{ action: 'delete_todo', params: { id: 1 } }]) : result();
     ctx.executeToolCallStructured = async () => { executions++; return okResult; };
-    ctx.showCustomConfirm = async () => { asked++; return confirmAnswer; };
+    ctx.sendNotification = (title, body, tag, target) => {
+      asked++;
+      assert.match(title, /删除操作待确认/);
+      assert.equal(target.convId, conv.id);
+      setTimeout(() => ctx.resolveAiDeleteConfirmation(conv.id, confirmAnswer), 0);
+    };
     const output = await ctx.runToolCallLoop({}, conv);
     return { output, executions, asked };
   }
@@ -790,6 +861,17 @@ test('delete policy (block / confirm / allow) decides whether destructive tools 
   assert.equal(approved.executions, 1);
   assert.equal(approved.asked, 1);
   assert.equal(approved.output.outcomes[0].status, 'success');
+
+  const bannerCtx = harness();
+  const pending = bannerCtx.confirmAiDestructiveCalls(
+    [{ tc: { action: 'delete_todo', params: { id: 9 } }, index: 0 }],
+    { id: 'banner-conv', title: '测试对话' }
+  );
+  const bannerHtml = bannerCtx.getAiDeleteConfirmationHtml('banner-conv');
+  assert.match(bannerHtml, /AI 请求删除权限/);
+  assert.match(bannerHtml, /delete_todo/);
+  bannerCtx.resolveAiDeleteConfirmation('banner-conv', false);
+  assert.equal((await pending).ok, false);
 
   // 完全放开：不询问，直接执行
   const allowed = await runWithPolicy('allow', true);

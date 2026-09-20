@@ -299,7 +299,36 @@ body {
 }
 .nav-sort-grip:active { cursor: grabbing; }
 .nav-sort-label { flex: 1; font-size: 13px; font-weight: 500; color: var(--text); }
-.nav-sort-shortcut { font-size: 11px; color: var(--text-secondary); opacity: 0.6; }
+/* 自定义快捷键按键框（点击后按下 Ctrl+按键） */
+.nav-sort-key {
+  flex-shrink: 0; min-width: 62px; padding: 3px 8px;
+  border: 1px solid var(--border); border-radius: 6px;
+  background: var(--input-bg); color: var(--text-secondary);
+  font-family: inherit; font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+  cursor: pointer; text-align: center; transition: var(--transition);
+}
+.nav-sort-key:hover { border-color: var(--primary); color: var(--primary); }
+.nav-sort-key.is-empty { font-weight: 400; opacity: 0.6; border-style: dashed; }
+.nav-sort-key.is-capturing {
+  border-color: var(--primary); background: var(--primary); color: #fff;
+  animation: navKeyPulse 1s ease-in-out infinite;
+}
+.nav-sort-key.is-reserved { border-color: var(--danger); color: var(--danger); }
+.nav-sort-key.is-capturing.is-reserved { color: #fff; }
+@keyframes navKeyPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+.nav-shortcut-bar {
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  margin-top: 8px; padding: 8px 10px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg);
+}
+.nav-shortcut-bar .hint { flex: 1; min-width: 170px; margin: 0; font-size: 11.5px; line-height: 1.55; }
+.nav-shortcut-reset {
+  flex-shrink: 0; padding: 5px 10px; border-radius: 6px;
+  border: 1px solid var(--border); background: transparent;
+  color: var(--text-secondary); font-family: inherit; font-size: 12px;
+  cursor: pointer; transition: var(--transition);
+}
+.nav-shortcut-reset:hover { border-color: var(--primary); color: var(--primary); }
 .nav-sort-toggle { position: relative; display: inline-flex; align-items: center; cursor: pointer; flex-shrink: 0; }
 .nav-sort-toggle input { position: absolute; opacity: 0; width: 0; height: 0; }
 .nav-sort-toggle-slider {
@@ -3548,6 +3577,23 @@ body.ai-message-immersive-open { overflow: hidden; }
   background: var(--card);
 }
 .ai-chat-header-title { font-size: 14px; font-weight: 600; color: var(--text); }
+.ai-delete-confirm {
+  display: flex; align-items: center; gap: 10px; margin: 10px 16px 0; padding: 10px 12px;
+  border: 1px solid rgba(245,158,11,.48); border-radius: 10px;
+  background: rgba(245,158,11,.11); color: var(--text); box-shadow: 0 4px 16px rgba(15,23,42,.08);
+}
+.ai-delete-confirm-icon { font-size: 20px; flex: 0 0 auto; }
+.ai-delete-confirm-copy { display: flex; flex-direction: column; gap: 3px; min-width: 0; flex: 1; }
+.ai-delete-confirm-copy strong { font-size: 13px; }
+.ai-delete-confirm-copy span { font-size: 11px; line-height: 1.45; color: var(--text-secondary); }
+.ai-delete-confirm-actions { display: flex; gap: 7px; flex: 0 0 auto; }
+.ai-delete-confirm-actions button { padding: 6px 10px; border: 1px solid var(--border); border-radius: 7px; background: var(--card); color: var(--text); cursor: pointer; font-size: 12px; }
+.ai-delete-confirm-actions button.allow { border-color: var(--danger); background: var(--danger); color: #fff; }
+.ai-delete-confirm-actions button:hover { filter: brightness(.96); }
+@media (max-width: 640px) {
+  .ai-delete-confirm { align-items: flex-start; flex-wrap: wrap; }
+  .ai-delete-confirm-actions { width: 100%; justify-content: flex-end; }
+}
 
 /* ── AI Attachment ── */
 .ai-attach-btn {
@@ -4522,6 +4568,17 @@ body.ai-message-immersive-open { overflow: hidden; }
   color: var(--primary);
   background: rgba(79,110,247,0.05);
 }
+.timer-resume-notice {
+  max-width: 420px;
+  padding: 7px 12px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--primary);
+  background: rgba(79,110,247,0.08);
+  border: 1px solid rgba(79,110,247,0.25);
+  border-radius: 8px;
+  text-align: center;
+}
 .timer-display {
   font-size: 56px;
   font-weight: 700;
@@ -4757,6 +4814,11 @@ body.ai-message-immersive-open { overflow: hidden; }
   opacity: 0.8;
 }
 .timer-manual-badge {
+  margin-left: 3px;
+  font-size: 10px;
+  opacity: 0.7;
+}
+.timer-auto-badge {
   margin-left: 3px;
   font-size: 10px;
   opacity: 0.7;
@@ -6102,6 +6164,24 @@ i[data-lucide] {
   background: rgba(79,110,247,0.1); padding: 2px 6px; border-radius: 4px;
   margin-right: 6px; flex-shrink: 0;
 }
+.cal-event-auto {
+  font-size: 11px; margin-left: 5px; opacity: 0.75; flex-shrink: 0;
+}
+.cal-event-repeat {
+  font-size: 10px; margin-left: 5px; opacity: 0.75; flex-shrink: 0;
+}
+.cal-event-skipped {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  margin: 4px 0; padding: 6px 10px;
+  font-size: 12px; color: var(--text-secondary);
+  border: 1px dashed var(--border); border-radius: 8px;
+}
+.cal-event-restore {
+  border: 1px solid var(--border); background: transparent; color: var(--primary);
+  border-radius: 6px; padding: 2px 8px; font-size: 12px; cursor: pointer;
+  transition: var(--transition); flex-shrink: 0;
+}
+.cal-event-restore:hover { border-color: var(--primary); background: rgba(79,110,247,0.06); }
 .cal-event-btn {
   width: 24px; height: 24px; border: none; background: transparent;
   color: var(--text-secondary); border-radius: 6px; cursor: pointer;
@@ -6138,6 +6218,67 @@ i[data-lucide] {
 }
 .cal-event-input:focus { border-color: var(--primary); }
 #calEventNote { resize: vertical; min-height: 48px; }
+.cal-event-time-row {
+  display: flex; gap: 10px; align-items: center; padding: 4px 0;
+}
+.cal-event-time-field {
+  display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0;
+}
+.cal-event-time-field > span {
+  font-size: 12px; color: var(--text-secondary);
+}
+.cal-event-time-field .cal-event-input { padding: 8px 10px; }
+.cal-event-repeat-row {
+  display: flex; gap: 10px; align-items: center; padding: 4px 0;
+}
+.cal-event-repeat-field {
+  display: flex; flex-direction: column; gap: 4px; flex: 1; min-width: 0;
+}
+.cal-event-repeat-field > span {
+  font-size: 12px; color: var(--text-secondary);
+}
+.cal-event-repeat-field .cal-event-input { padding: 8px 10px; }
+.cal-event-weekday-row {
+  display: flex; align-items: center; gap: 6px; padding: 2px 0 4px; flex-wrap: wrap;
+}
+.cal-event-weekday-label {
+  font-size: 12px; color: var(--text-secondary); margin-right: 2px;
+}
+.cal-event-weekday {
+  cursor: pointer; user-select: none;
+}
+.cal-event-weekday input { display: none; }
+.cal-event-weekday > span {
+  display: flex; align-items: center; justify-content: center;
+  width: 30px; height: 30px; border-radius: 50%;
+  border: 1px solid var(--border); background: var(--input-bg);
+  color: var(--text-secondary); font-size: 13px;
+  transition: var(--transition);
+}
+.cal-event-weekday:hover > span { border-color: var(--primary); color: var(--primary); }
+.cal-event-weekday input:checked + span {
+  background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600;
+}
+.cal-event-hint-warn { color: var(--danger); animation: calHintPulse 0.6s ease; }
+@keyframes calHintPulse {
+  0% { opacity: 0.3; }
+  50% { opacity: 1; }
+  100% { opacity: 0.85; }
+}
+.cal-event-check-row {
+  display: flex; flex-direction: column; gap: 6px; padding: 6px 0 2px;
+}
+.cal-event-check-label {
+  display: flex; align-items: center; gap: 8px;
+  font-size: 13px; color: var(--text); cursor: pointer;
+}
+.cal-event-check-label input[type="checkbox"] { cursor: pointer; }
+.cal-event-check-label.disabled {
+  opacity: 0.45; cursor: not-allowed;
+}
+.cal-event-hint {
+  font-size: 12px; color: var(--text-secondary); opacity: 0.85; padding: 2px 0 4px;
+}
 .cal-event-color-row {
   display: flex; align-items: center; gap: 10px; padding: 4px 0;
 }
@@ -11639,6 +11780,11 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
   .prompt-editor-actions { gap: 4px; }
   .prompt-editor-actions .prompt-icon-btn.danger { display: none; }
 }
+.file-drop-active .file-library-card{position:relative;outline:2px dashed var(--primary);outline-offset:-8px}.file-drop-active .file-library-card::after{content:'松开即可导入文件';position:absolute;inset:12px;z-index:20;display:grid;place-items:center;border-radius:12px;background:color-mix(in srgb,var(--card) 88%,transparent);color:var(--primary);font-size:18px;font-weight:700;pointer-events:none;backdrop-filter:blur(8px)}
+
+/* AI 技能库 */
+.file-library-card{height:100%;padding:0;overflow:hidden;display:flex;flex-direction:column}.file-library-head{display:flex;align-items:center;justify-content:space-between;gap:18px;padding:22px 24px;border-bottom:1px solid var(--border)}.file-library-head h2{display:flex;align-items:center;gap:9px;margin:0 0 5px;font-size:20px}.file-library-head h2 svg{width:21px}.file-library-head p{margin:0;color:var(--text-secondary);font-size:12px}.file-library-head-actions{display:flex;gap:8px}.file-library-primary,.file-library-secondary{display:inline-flex;align-items:center;gap:7px;padding:9px 13px;border-radius:9px;cursor:pointer;font:inherit;font-size:13px}.file-library-primary{background:var(--primary);border:1px solid var(--primary);color:#fff}.file-library-secondary{background:var(--input-bg);border:1px solid var(--border);color:var(--text)}.file-library-primary svg,.file-library-secondary svg{width:15px}.file-library-toolbar{display:flex;align-items:center;gap:8px;margin:16px 24px 8px;padding:0 11px;border:1px solid var(--border);border-radius:9px;background:var(--input-bg)}.file-library-toolbar svg{width:15px;color:var(--text-secondary)}.file-library-toolbar input{width:100%;padding:10px 0;border:0;outline:0;background:transparent;color:var(--text);font:inherit}.file-library-list{padding:8px 24px 24px;overflow:auto;flex:1}.file-library-item{display:flex;align-items:center;gap:13px;padding:13px 10px;border-bottom:1px solid var(--border)}.file-library-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:10px;background:color-mix(in srgb,var(--primary) 11%,transparent);color:var(--primary);flex:none}.file-library-icon svg{width:19px}.file-library-meta{display:flex;flex-direction:column;gap:4px;min-width:0;flex:1}.file-library-meta strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:14px}.file-library-meta span{font-size:11px;color:var(--text-secondary)}.file-library-actions{display:flex;gap:6px}.file-library-actions button{display:flex;align-items:center;gap:5px;border:1px solid var(--border);background:var(--input-bg);color:var(--text);border-radius:8px;padding:7px 9px;cursor:pointer;font:inherit;font-size:12px}.file-library-actions svg{width:14px}.file-library-actions .danger{color:var(--danger)}.file-library-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:8px;min-height:250px;color:var(--text-secondary);text-align:center}.file-library-empty>svg{width:42px;height:42px;opacity:.5}.file-library-empty strong{color:var(--text);font-size:15px}.file-library-picker{width:min(520px,calc(100vw - 28px))}.file-library-picker-list{max-height:55vh;overflow:auto;padding:7px}.file-library-picker-list>button{display:flex;align-items:center;gap:11px;width:100%;padding:11px;border:0;border-radius:8px;background:transparent;color:var(--text);text-align:left;cursor:pointer}.file-library-picker-list>button:hover{background:var(--hover-bg,var(--input-bg))}.file-library-picker-list>button>svg{width:19px;flex:none}.file-library-picker-list span{display:flex;flex-direction:column;min-width:0}.file-library-picker-list strong{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.file-library-picker-list small{color:var(--text-secondary);margin-top:3px}@media(max-width:650px){.file-library-head{align-items:flex-start;padding:16px;flex-direction:column}.file-library-head-actions{width:100%}.file-library-head-actions button{flex:1;justify-content:center}.file-library-head-actions .file-library-secondary{display:none}.file-library-toolbar{margin:12px 16px 6px}.file-library-list{padding:6px 12px 90px}.file-library-actions button span{display:none}.file-library-item{padding:12px 4px}}
+
 /* AI 技能库 */
 .skills-studio{display:grid;grid-template-columns:minmax(220px,290px) minmax(0,1fr);gap:16px;min-height:560px;height:calc(100% - 4px);color:var(--text)}
 .skills-list-panel,.skills-editor-panel{background:var(--card);border:1px solid var(--border);border-radius:var(--radius);min-width:0;overflow:hidden}

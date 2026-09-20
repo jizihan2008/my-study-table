@@ -168,6 +168,7 @@ function renderAiChat(options) {
       <span class="ai-chat-header-title" style="font-size:12px;color:var(--text-secondary);">💡 提示词：${escapeHtml(conv.systemPrompt.length > 60 ? conv.systemPrompt.slice(0,60)+'…' : conv.systemPrompt)}</span>
     </div>` : ''}
     ${noKeyBanner}
+    ${typeof getAiDeleteConfirmationHtml === 'function' ? getAiDeleteConfirmationHtml(conv.id) : '<div id="aiDeleteConfirmHost"></div>'}
     <div class="ai-chat-messages" id="aiMessages"></div>
     <div class="ai-attach-preview-wrap" id="aiAttachPreview" style="display:none;"></div>
     <div class="ai-attach-preview-wrap" id="aiContextPreview" style="display:none;"></div>
@@ -224,7 +225,10 @@ function renderAiChat(options) {
       <button class="ai-attach-btn" id="aiInsertSkillBtn" ${noKey ? 'disabled' : ''} onclick="openAiSkillPicker()" title="插入技能（可多选）" aria-label="插入技能">
         <i data-lucide="sparkles" class="lucide-icon" style="width:18px;height:18px;"></i>
       </button>
-      <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件">
+      <button class="ai-attach-btn" id="aiInsertLibraryFileBtn" ${noKey ? 'disabled' : ''} onclick="openFileLibraryPicker()" title="从文件库插入附件" aria-label="从文件库插入附件">
+        <i data-lucide="folder-open" class="lucide-icon" style="width:18px;height:18px;"></i>
+      </button>
+      <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件（也可拖拽文件到对话区，或 Ctrl+V 粘贴）">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
       </button>
       <button class="ai-chat-send-btn" id="aiSendBtn" ${noKey ? 'disabled' : ''} onclick="handleAiSendOrStop()" title="发送">
@@ -236,7 +240,7 @@ function renderAiChat(options) {
   renderAttachPreview(); // Restore attachment preview after DOM rebuild
   if (typeof renderAiContextPreview === 'function') renderAiContextPreview();
   updateAiFileInput(); // Update file input based on current model
-  initAiPasteZone(); // 输入框已重建 → 重新绑定剪贴板粘贴图片
+  initAiPasteZone(); // 输入框已重建；粘贴监听挂在 document 上，这里是幂等调用（真正生效点是脚本加载时）
   // Restore loading state after DOM rebuild: toggle send/stop button
   updateAiSendButton();
   // 恢复发送队列指示器
@@ -255,6 +259,8 @@ function renderAiChat(options) {
     if (_todo) _todo.disabled = true;
     const _skill = document.getElementById('aiInsertSkillBtn');
     if (_skill) _skill.disabled = true;
+    const _library = document.getElementById('aiInsertLibraryFileBtn');
+    if (_library) _library.disabled = true;
   }
   setTimeout(() => {
     const msgs = document.getElementById('aiMessages');
@@ -614,6 +620,8 @@ function renderAiMessages() {
         'set_focus_task': '🎯 设置聚焦任务',
         'add_note': '➕ 创建笔记',
         'update_note': '✏️ 更新笔记',
+        'set_note_review': '🔁 批量设置笔记复习',
+        'quest_edit_condition': '📋 编辑任务完成条件',
         'move_note': '📂 移动笔记',
         'delete_note': '🗑️ 删除笔记',
         'add_link': '➕ 添加链接',

@@ -3,6 +3,10 @@ const path = require('path');
 const fs = require('fs');
 const http = require('http');
 const { spawn } = require('child_process');
+const APP_ICON_PNG_PATH = path.join(__dirname, 'icons', 'icon-512-v2.png');
+const APP_ICON_PATH = process.platform === 'win32'
+  ? path.join(__dirname, 'icons', 'icon-v2.ico')
+  : APP_ICON_PNG_PATH;
 const {
   isPathInside,
   normalizeExtensionId,
@@ -28,6 +32,7 @@ const userDataPath = process.env.MST_E2E === '1' && process.env.MST_USER_DATA_PA
   ? path.resolve(process.env.MST_USER_DATA_PATH)
   : path.join(app.getPath('home'), '.my-study-table');
 app.setPath('userData', userDataPath);
+if (process.platform === 'win32') app.setAppUserModelId('com.mystudytable.app');
 
 let mainWindow;
 registerBackupIpc({ ipcMain, shell, userDataPath });
@@ -136,11 +141,10 @@ function startConfirmServer() {
 }
 
 function createTray() {
-  // 使用原生图标创建一个 16x16 的托盘图标
-  const iconPath = path.join(__dirname, 'tray-icon.png');
+  // 从应用图标生成托盘图标，保持桌面端品牌一致。
   let trayIcon;
   try {
-    trayIcon = nativeImage.createFromPath(iconPath);
+    trayIcon = nativeImage.createFromPath(APP_ICON_PNG_PATH);
     // 如果图片加载失败，创建一个简单的纯色图标
     if (trayIcon.isEmpty()) {
       trayIcon = nativeImage.createEmpty();
@@ -196,6 +200,7 @@ function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1200,
     height: 800,
+    icon: APP_ICON_PATH,
     // BrowserWindow 尺寸包含 Windows 窗口边框；840 可保证渲染器内容区
     // 仍大于 800px 的移动端断点，避免桌面侧边栏被手机样式隐藏。
     minWidth: 840,
@@ -228,6 +233,9 @@ function createWindow() {
   mainWindow.webContents.on('render-process-gone', (_event, details) => diagnostics.write('render-process-gone', details));
 
   mainWindow.once('ready-to-show', () => {
+    // Windows 有时会在创建窗口时使用 Electron 默认类图标；
+    // 显示前再设置一次多尺寸 ICO，确保任务栏收到 WM_SETICON。
+    mainWindow.setIcon(APP_ICON_PATH);
     mainWindow.show();
   });
 
@@ -282,6 +290,12 @@ app.on('activate', () => {
 // 确保真正退出时清理托盘与本地确认服务器
 app.on('before-quit', () => {
   isQuitting = true;
+  // 真正退出前通知渲染进程落盘一次（计时器状态等）：
+  // 窗口「关闭」只是隐藏到托盘、页面没有卸载，退出时又可能不触发 beforeunload，
+  // 不补这一下的话下次打开恢复的是最后一次心跳（最长 30 秒前的）状态。
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('app:before-quit');
+  } catch (e) { /* 忽略 */ }
   qqChatAutoSyncService.close();
   qqChatExporterIntegration.close();
   if (confirmServer) {

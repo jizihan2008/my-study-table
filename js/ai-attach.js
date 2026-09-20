@@ -4,6 +4,7 @@
 //  · PDF 附件：非 Kimi 模型可由用户选择提取文字，或逐页渲染为图片
 //  · 图片附件：走 OpenAI 兼容的 image_url base64 内联（deepseek-flash / Kimi / *vision* 模型）
 //  · 本地预处理：超大图缩放、BMP 等不支持格式转 PNG/JPEG、按扩展名补齐 MIME
+//  · 附件入口：文件选择框、拖拽到对话区、Ctrl+V 粘贴（三者共用 addAiAttachmentFiles 校验）
 // ═══════════════════════════════════════════════
 
 // ═══════════ AI Chat: Attachments ═══════════
@@ -275,9 +276,11 @@ function getAttachSizeLimit(file, apiCfg = getEffectiveApiConfig()) {
 }
 
 // 将文件列表加入附件（供文件选择框、拖拽与粘贴共用）
+// 返回本次真正加入的附件名数组：被拒绝/超限的文件已在这里提示过，调用方只需据返回值给成功反馈。
 function addAiAttachmentFiles(fileList) {
   const files = Array.from(fileList || []);
-  if (files.length === 0) return;
+  if (files.length === 0) return [];
+  const added = [];
   const apiCfg = getEffectiveApiConfig();
   for (const file of files) {
     const limit = getAttachSizeLimit(file, apiCfg);
@@ -309,11 +312,13 @@ function addAiAttachmentFiles(fileList) {
       attach.ocrMode = false; // false = base64 inline, true = OCR via file-extract
     }
     aiAttachments.push(attach);
+    added.push(attach.name);
     // 所有视觉模型都先在本地规范化。Kimi 的内联分支过去会绕过这里，导致真实格式正确、
     // 但单边极长的 PNG 被服务端笼统报成 "unsupported image"。
     if (isImage) preprocessAiImageAttachment(attach);
   }
   renderAttachPreview();
+  return added;
 }
 
 // 内联图片体积：base64 约等于原始字节 ×1.37（预处理结果存在时按其实际长度精确计算）
@@ -978,17 +983,19 @@ function updateAiFileInput() {
   const input = document.getElementById('aiFileInput');
   const placeholder = document.getElementById('aiInput');
   if (!input || !placeholder) return;
+  // 拖拽与 Ctrl+V 粘贴共用同一条附件路径，输入框提示里一并说明
+  const pasteHint = '（可直接拖拽或粘贴文件）';
   if (isKimiModel()) {
     input.accept = '';
-    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF / Word / Excel / 图片 / 视频等文件)';
+    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF / Word / Excel / 图片 / 视频等文件)' + pasteHint;
   } else if (isVisionModel()) {
     // 视觉模型：PDF 可选提取文字或逐页转图片，普通图片继续内联分析。
     input.accept = '';
-    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF 文字/页面图片、图片分析、文本附件等)';
+    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF 文字/页面图片、图片分析、文本附件等)' + pasteHint;
   } else {
     // 非视觉模型也可通过本地文本提取使用 PDF；页面图片模式只在视觉模型下开放。
     input.accept = ['.pdf', 'application/pdf'].concat(TEXT_FILE_EXTS).join(',');
-    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF 提取文字 / .txt / .md / .json / 代码文件等)';
+    placeholder.placeholder = '输入你的问题，回车发送... (支持 PDF 提取文字 / .txt / .md / .json / 代码文件等)' + pasteHint;
   }
 }
 
@@ -1367,32 +1374,113 @@ function describeImageSupport(file, apiCfg = getEffectiveApiConfig()) {
   };
 }
 
-// 粘贴图片（剪贴板）→ 加入附件：截图直接 Ctrl+V 即可分析
-function handleAiPaste(event) {
-  const dt = event.clipboardData;
-  if (!dt || !dt.items || dt.items.length === 0) return;
-  const files = [];
-  for (const item of Array.from(dt.items)) {
-    if (item.kind !== 'file') continue;
-    const file = item.getAsFile && item.getAsFile();
-    if (!file) continue;
-    if (isImageFile(file) || (file.type || '').startsWith('image/')) {
-      // 剪贴板图片常无文件名 → 补一个便于识别与回显
-      const named = file.name ? file : new File([file], '粘贴图片-' + Date.now() + '.png', { type: file.type || 'image/png' });
-      files.push(named);
-    }
-  }
-  if (files.length === 0) return;
-  event.preventDefault(); // 有图片时不再把二进制当文本粘进输入框
-  addAiAttachmentFiles(files);
+// ═══════════ AI Chat: 粘贴（Ctrl+V）添加附件 ═══════════
+// 剪贴板里的文件可能是：截图（无文件名）、从文件管理器复制的任意文件（PDF / 文本 / 图片…），
+// 或从网页 / Office 复制的「文件 + 文本」组合。文件统一交给 addAiAttachmentFiles 校验——
+// 与文件选择框、拖拽共用同一条路径（大小限制、模型能力判定、图片预处理都一致）。
+
+// 剪贴板文件（截图 / 部分应用复制）常常没有文件名，这里按 MIME 补一个扩展名正确的名字。
+// 不能随手补 .png：readFileAsDataURL() 会按扩展名改写 data URL 的 MIME，
+// 一旦扩展名与真实格式不符（JPEG 字节存成 .png），服务端会直接判为不支持的图片。
+const PASTE_FILE_MIME_EXT = {
+  'image/png': '.png', 'image/jpeg': '.jpg', 'image/jpg': '.jpg', 'image/gif': '.gif',
+  'image/webp': '.webp', 'image/bmp': '.bmp', 'application/pdf': '.pdf',
+  'text/plain': '.txt', 'text/markdown': '.md', 'application/json': '.json'
+};
+
+function buildClipboardFileName(file, index) {
+  const type = String((file && file.type) || '').toLowerCase();
+  const isImage = type.startsWith('image/');
+  const ext = PASTE_FILE_MIME_EXT[type] || (isImage ? '.png' : '');
+  const seq = index > 0 ? '-' + (index + 1) : '';
+  return (isImage ? '粘贴图片-' : '粘贴文件-') + Date.now() + seq + ext;
 }
 
-// 绑定剪贴板粘贴（DOM 重建后输入框会被替换，故暴露为可重复调用）
-function initAiPasteZone() {
+// 取出剪贴板里的文件项（部分来源只填 clipboardData.files 不填 items），并补齐缺失的文件名
+function getClipboardFiles(clipboardData) {
+  const dt = clipboardData;
+  const out = [];
+  const items = dt && dt.items ? Array.from(dt.items) : [];
+  for (const item of items) {
+    if (item.kind !== 'file') continue;
+    const file = item.getAsFile && item.getAsFile();
+    if (file) out.push(file);
+  }
+  if (out.length === 0 && dt && dt.files) out.push(...Array.from(dt.files));
+  return out.map((file, index) => (file.name
+    ? file
+    : new File([file], buildClipboardFileName(file, index), { type: file.type || 'image/png' })));
+}
+
+// 剪贴板同时带文本时（网页 / Office 复制常见），文本按原生粘贴补进输入框，
+// 避免只贴到附件而丢掉文字。从文件管理器复制文件时 text/plain 可能是纯文件路径，不插入。
+function getClipboardPlainText(clipboardData) {
+  if (!clipboardData || typeof clipboardData.getData !== 'function') return '';
+  const text = clipboardData.getData('text/plain') || '';
+  if (!text.trim()) return '';
+  const single = text.trim();
+  if (!text.includes('\n') && /^[a-zA-Z]:\\|^\\\\|^\//.test(single)) return '';
+  return text;
+}
+
+// 把文本插到输入框光标处（尽量用 execCommand 以保留原生撤销栈与 input 事件）
+function insertPastedInputText(text) {
   const input = document.getElementById('aiInput');
-  if (!input || input._pasteAttached) return;
-  input._pasteAttached = true;
-  input.addEventListener('paste', handleAiPaste);
+  if (!input || input.disabled || !text) return;
+  input.focus();
+  let inserted = false;
+  if (typeof document.execCommand === 'function') {
+    try { inserted = document.execCommand('insertText', false, text); } catch (e) { inserted = false; }
+  }
+  if (!inserted) {
+    const start = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
+    const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : start;
+    input.value = input.value.slice(0, start) + text + input.value.slice(end);
+    const caret = start + text.length;
+    try { input.setSelectionRange(caret, caret); } catch (e) { /* 忽略：光标恢复失败不影响已插入的文本 */ }
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  }
+  if (typeof autoResizeAiInput === 'function') autoResizeAiInput();
+}
+
+// 这次粘贴是否由本模块接管：
+//   · 目标在聊天区内（输入框、消息区、附件预览…）→ 接管
+//   · 焦点不在聊天区（例如刚点过消息区 / body 拿到焦点）→ 仅当 AI 栏目处于激活状态才接管，
+//     避免抢走其他栏目与弹窗里的粘贴
+function isAiPasteZone(event) {
+  const layout = document.getElementById('aiChatLayout');
+  const target = event.target;
+  if (layout && target && layout.contains(target)) return true;
+  if (target !== document.body && target !== document.documentElement) return false;
+  const section = document.getElementById('section-ai');
+  return !!(section && section.classList.contains('active'));
+}
+
+// 粘贴文件 → 加入附件；纯文本粘贴仍走浏览器原生行为（不做任何拦截）
+function handleAiPaste(event) {
+  const dt = event.clipboardData;
+  if (!dt) return;
+  const input = document.getElementById('aiInput');
+  if (input && input.disabled) return; // 未配置 Key 时界面只读，保持原生粘贴
+  if (!isAiPasteZone(event)) return;
+  const files = getClipboardFiles(dt);
+  if (files.length === 0) return;
+  event.preventDefault(); // 有文件时不要把二进制/文件名当文本贴进输入框
+  const added = addAiAttachmentFiles(files);
+  if (added.length === 0) return;
+  const text = getClipboardPlainText(dt);
+  if (text) insertPastedInputText(text);
+  if (typeof showAiToast === 'function') {
+    showAiToast(added.length === 1 ? `📎 已粘贴附件：${added[0]}` : `📎 已粘贴 ${added.length} 个附件`);
+  }
+}
+
+// 绑定剪贴板粘贴。事件挂在 document 上——输入框会被 renderAiChat 重建，挂在输入框上每次重建都要重绑；
+// 是否接管由 isAiPasteZone() 判定。保留为可重复调用的形式，兼容既有调用点。
+function initAiPasteZone() {
+  if (document._aiPasteAttached) return;
+  document._aiPasteAttached = true;
+  document.addEventListener('paste', handleAiPaste);
 }
 
 // Check if a file is an image (for Kimi vision inline base64 analysis)

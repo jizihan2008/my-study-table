@@ -716,24 +716,70 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
   return msgs;
 }
 
-// 删除策略「AI 要删除时询问我」：把一轮里的删除类调用合并成一个确认框。
-// 用户拒绝 → 这些调用都不执行（返回失败结果给模型，让它向用户解释）。
-async function confirmAiDestructiveCalls(calls) {
-  if (typeof showCustomConfirm !== 'function') {
-    return { ok: false, error: '无法弹出删除确认框，已按安全策略拒绝删除' };
+// 删除策略「AI 要删除时询问我」：把一轮里的删除类调用合并到对话顶部的
+// 非阻塞确认条。不要使用全局模态框，以免用户在其它页面操作时被打断。
+const _aiDeleteConfirmations = new Map();
+
+function getAiDeleteConfirmationHtml(convId) {
+  const pending = _aiDeleteConfirmations.get(String(convId));
+  if (!pending) return '<div id="aiDeleteConfirmHost"></div>';
+  const safeMessage = typeof escapeHtml === 'function' ? escapeHtml(pending.message) : pending.message;
+  return `<div id="aiDeleteConfirmHost"><section class="ai-delete-confirm" role="alert" aria-live="assertive">
+    <div class="ai-delete-confirm-icon">⚠️</div>
+    <div class="ai-delete-confirm-copy"><strong>AI 请求删除权限</strong><span>${safeMessage.replace(/\n/g, '<br>')}</span></div>
+    <div class="ai-delete-confirm-actions">
+      <button type="button" class="allow" onclick="resolveAiDeleteConfirmation('${String(convId).replace(/'/g, "\\'")}', true)">允许删除</button>
+      <button type="button" onclick="resolveAiDeleteConfirmation('${String(convId).replace(/'/g, "\\'")}', false)">拒绝</button>
+    </div>
+  </section></div>`;
+}
+
+function paintAiDeleteConfirmation(convId) {
+  if (String(typeof getActiveConvId === 'function' ? getActiveConvId() : '') !== String(convId)) return;
+  const host = document.getElementById('aiDeleteConfirmHost');
+  if (!host) {
+    if (typeof renderAiChat === 'function') renderAiChat({ skipDraftSave: true });
+    return;
   }
+  const wrap = document.createElement('div');
+  wrap.innerHTML = getAiDeleteConfirmationHtml(convId);
+  host.replaceWith(wrap.firstElementChild);
+}
+
+function resolveAiDeleteConfirmation(convId, allowed) {
+  const key = String(convId);
+  const pending = _aiDeleteConfirmations.get(key);
+  if (!pending) return;
+  _aiDeleteConfirmations.delete(key);
+  paintAiDeleteConfirmation(key);
+  pending.resolve(allowed
+    ? { ok: true }
+    : { ok: false, error: '用户拒绝了删除操作' });
+}
+
+async function confirmAiDestructiveCalls(calls, conv) {
   const lines = calls.map(({ tc }) => {
     const params = tc.params || {};
     const target = params.id ?? params.todoId ?? params.noteId ?? params.skillId ?? params.linkId ?? params.ids ?? '';
     const label = Array.isArray(target) ? target.join('、') : String(target ?? '');
     return `• ${tc.action}${label ? '（目标 ' + label + '）' : ''}`;
   });
-  const message = `⚠️ AI 想要执行 ${calls.length} 个删除操作：\n${lines.join('\n')}\n\n允许执行吗？\n（可在「对话设置 → 删除策略」里把这段对话改成一概拦截或完全放开）`;
-  try {
-    return (await showCustomConfirm(message)) ? { ok: true } : { ok: false, error: '用户拒绝了删除操作' };
-  } catch (e) {
-    return { ok: false, error: '删除确认失败，已拒绝：' + ((e && e.message) || e) };
+  const message = `AI 想要执行 ${calls.length} 个删除操作：\n${lines.join('\n')}\n请在此处允许或拒绝。`;
+  const convId = String(conv && conv.id != null ? conv.id : '');
+  if (!convId) return { ok: false, error: '无法定位请求删除权限的对话，已拒绝删除' };
+  const previous = _aiDeleteConfirmations.get(convId);
+  if (previous) previous.resolve({ ok: false, error: '新的删除请求已替代上一次确认' });
+  const decision = new Promise(resolve => _aiDeleteConfirmations.set(convId, { message, resolve }));
+  paintAiDeleteConfirmation(convId);
+  const title = '⚠️ AI 删除操作待确认';
+  const body = `${conv && conv.title ? conv.title + '：' : ''}${calls.length} 个删除操作等待你的确认`;
+  const target = { tab: 'ai', convId: conv && conv.id != null ? conv.id : null };
+  if (typeof sendNotification === 'function') {
+    sendNotification(title, body, 'ai-delete-confirm-' + convId, target);
+  } else if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+    try { new Notification(title, { body, tag: 'ai-delete-confirm-' + convId }); } catch (_) {}
   }
+  return decision;
 }
 
 // ═══════════ Tool call loop: keep calling AI until no more tool_calls ═══════════
@@ -895,7 +941,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     if (destructiveCalls.length > 0) {
       deleteDecision = deletePolicy === 'block'
         ? { ok: false, error: '当前对话的删除策略为「完全拦截删除」，已拒绝执行删除类操作' }
-        : await confirmAiDestructiveCalls(destructiveCalls);
+        : await confirmAiDestructiveCalls(destructiveCalls, conv);
     }
     const preflight = toolCalls.map(tc => {
       const checked = typeof validateAiToolCall === 'function' ? validateAiToolCall(tc.action, tc.params || {}) : { ok: true };
