@@ -600,8 +600,78 @@ async function renderSyncPanel() {
     if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
   }
   renderSyncConflicts(st);
+  renderSyncEventLog();
   ensureSyncProgressListener();
   ensureSyncStatusListener();
+}
+
+const SYNC_EVENT_LABELS = {
+  'local-change': '本地修改',
+  'upload-batch-start': '开始上传',
+  'upload-success': '上传成功',
+  'upload-failed': '上传失败',
+  'pull-start': '开始拉取',
+  'pull-plan': '制定拉取计划',
+  'merge-decision': '合并判定',
+  'remote-applied': '云端覆盖本机',
+  'pull-complete': '拉取完成',
+  'pull-failed': '拉取失败',
+  'pull-skipped': '跳过拉取',
+  'conflict-queued': '发现冲突',
+  'conflict-resolution-start': '开始处理冲突',
+  'conflict-resolved': '冲突已处理',
+  'conflict-resolution-failed': '冲突处理失败',
+  'manual-sync-requested': '手动立即同步',
+  'force-upload-all-requested': '强制上传全部',
+  'realtime-status': '实时连接状态',
+  'realtime-change-received': '收到远端变更'
+};
+
+function renderSyncEventLog() {
+  const list = document.getElementById('syncEventLogList');
+  const count = document.getElementById('syncEventLogCount');
+  if (!list || typeof window.Sync === 'undefined' || typeof window.Sync.getEventLog !== 'function') return;
+  const entries = window.Sync.getEventLog();
+  if (count) count.textContent = entries.length + ' 条';
+  if (!entries.length) {
+    list.innerHTML = '<div class="sync-event-empty">尚无同步事件。修改数据或点击“立即同步”后会在这里记录。</div>';
+    return;
+  }
+  list.innerHTML = entries.slice(0, 100).map(entry => {
+    const date = new Date(entry.at);
+    const time = Number.isNaN(date.getTime()) ? String(entry.at || '') : date.toLocaleString('zh-CN', { hour12: false });
+    const title = SYNC_EVENT_LABELS[entry.event] || entry.event;
+    const summary = [entry.key, entry.action, entry.reason || entry.error].filter(Boolean).join(' · ');
+    const detail = Object.keys(entry)
+      .filter(key => !['at', 'event', 'level'].includes(key))
+      .map(key => '<div><dt>' + escapeHtml(key) + '</dt><dd>' + escapeHtml(String(entry[key])) + '</dd></div>')
+      .join('');
+    return '<details class="sync-event-item sync-event-' + escapeHtml(entry.level || 'info') + '">' +
+      '<summary><span class="sync-event-dot"></span><span class="sync-event-title">' + escapeHtml(title) + '</span>' +
+      '<span class="sync-event-summary">' + escapeHtml(summary) + '</span><time>' + escapeHtml(time) + '</time></summary>' +
+      '<dl>' + detail + '</dl></details>';
+  }).join('');
+}
+
+async function syncCopyEventLog() {
+  if (typeof window.Sync === 'undefined' || typeof window.Sync.getEventLog !== 'function') return;
+  const text = JSON.stringify({ exportedAt: new Date().toISOString(), events: window.Sync.getEventLog() }, null, 2);
+  try {
+    await navigator.clipboard.writeText(text);
+    showToast('同步日志已复制');
+  } catch (e) {
+    const area = document.createElement('textarea');
+    area.value = text; document.body.appendChild(area); area.select();
+    document.execCommand('copy'); area.remove();
+    showToast('同步日志已复制');
+  }
+}
+
+function syncClearEventLog() {
+  if (typeof window.Sync === 'undefined' || typeof window.Sync.clearEventLog !== 'function') return;
+  window.Sync.clearEventLog();
+  renderSyncEventLog();
+  showToast('同步日志已清空');
 }
 
 function _formatSyncConflictTime(value, emptyText) {

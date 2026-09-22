@@ -56,7 +56,7 @@
     'study_ai_memory',         // AI 记忆画像
     'study_ai_skills_v1',      // 用户创建的 AI 技能
     'study_bk_quiz_state_v1',  // 教材测验状态
-    'study_translation_history_v1', // 划词翻译历史与生词本
+    'study_translation_history_v1', // 划词翻译列表、生词本与闪卡进度
     'study_todo_completed_log' // 待办完成日志（历史完成记录）
   ];
 
@@ -100,8 +100,10 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260922-r17';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260922-r18';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
+  const EVENT_LOG_KEY = 'study_sync_event_log_v1';
+  const EVENT_LOG_LIMIT = 300;
   const PENDING_CONFLICTS_KEY = 'study_sync_pending_conflicts_v1';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
   const IDB_NAME = 'mst-sync';
@@ -126,6 +128,7 @@
   let _lastPushAt = 0;                        // 上次主动上传完成时间（抑制自己变更的 realtime 回显）
   let _lastPullError = '';                    // 最近一次手动同步的失败原因（诊断用）
   let listeners = new Set();                  // 状态监听器（settings 面板刷新用）
+  const syncSessionId = 'sync_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
   const pullScheduler = policy.createRecurringTask(
     () => _pullAll(false),
     PULL_INTERVAL
@@ -143,6 +146,37 @@
     if (SENSITIVE_KEYS.indexOf(key) !== -1) return false;
     return SYNC_KEYS.indexOf(key) !== -1;
   }
+
+  // 本地诊断日志：只记录同步决策和版本元数据，绝不记录业务内容、账号或凭据。
+  function _getEventLog() {
+    try {
+      const parsed = JSON.parse(localStorage.getItem(EVENT_LOG_KEY)) || [];
+      return Array.isArray(parsed) ? parsed : [];
+    } catch (e) { return []; }
+  }
+  function _logSync(event, details = {}) {
+    try {
+      const entry = {
+        at: new Date().toISOString(),
+        sessionId: syncSessionId,
+        event: String(event || 'unknown'),
+        level: details.level || 'info'
+      };
+      const allowed = [
+        'key', 'trigger', 'action', 'reason', 'choice', 'error', 'localDirty',
+        'localEmpty', 'baseTimestamp', 'remoteTimestamp', 'remoteHasData',
+        'forceUpload', 'unchanged', 'count', 'targeted', 'fullReconcile',
+        'realtimeStatus', 'online', 'visible'
+      ];
+      for (const name of allowed) {
+        if (details[name] !== undefined) entry[name] = details[name];
+      }
+      const log = _getEventLog();
+      log.unshift(entry);
+      localStorage.setItem(EVENT_LOG_KEY, JSON.stringify(log.slice(0, EVENT_LOG_LIMIT)));
+    } catch (e) { /* 诊断日志绝不能影响同步主流程 */ }
+  }
+  function clearEventLog() { localStorage.removeItem(EVENT_LOG_KEY); }
 
   // 判断本地存储值是否为「空」：空数组 / 空对象 / 空字符串 / null，
   // 以及「空壳对象」（对象键存在但所有值均为空，如 AI 记忆的空结构）。
@@ -459,6 +493,7 @@
       const keys = Array.from(dirtyKeys).filter(key => isSyncKey(key) && !_conflictKeys.has(key));
       keys.forEach(key => dirtyKeys.delete(key));
       if (!keys.length) return;
+      _logSync('upload-batch-start', { count: keys.length, forceUpload });
 
       if (!forceUpload) {
         const checked = await _findUploadConflicts(keys);
@@ -482,8 +517,16 @@
       let done = 0;
       for (const key of keys) {
         const res = results[key] || { ok: false, reason: 'missing-upload-result' };
-        if (res.ok) okCount++;
-        else await _storeFailedUpload(key, res.reason);
+        if (res.ok) {
+          okCount++;
+          _logSync('upload-success', {
+            key, action: 'upload', remoteTimestamp: res.updatedAt || null,
+            unchanged: res.unchanged !== false, forceUpload
+          });
+        } else {
+          await _storeFailedUpload(key, res.reason);
+          _logSync('upload-failed', { key, level: 'error', error: res.reason, forceUpload });
+        }
         done++;
       }
       if (okCount > 0) {
@@ -566,6 +609,7 @@
     _clearLocalDirty(key);
     dirtyKeys.delete(key);
     await _outboxRemove(key);
+    _logSync('remote-applied', { key, action: 'pull', remoteTimestamp: updatedAt });
   }
   // 判断本地时间戳是否为「未来值」（旧版本用设备时钟写 localTs 的污染残留）：
   // localTs 语义 = 服务器 updated_at，与 remoteMaxTs（本次拉取的最大服务器时间）同源。
@@ -620,6 +664,11 @@
     };
     _savePendingConflictMap(map);
     _conflictKeys.add(key);
+    _logSync('conflict-queued', {
+      key, level: 'warning', reason: map[key].reason,
+      baseTimestamp: map[key].baseTimestamp, remoteTimestamp: map[key].remoteTimestamp,
+      localDirty: _isLocalDirty(key)
+    });
     _emitStatus();
   }
 
@@ -653,8 +702,10 @@
   // Safe merge cycle. force=true only waits for an active cycle; it never means
   // that the cloud may silently overwrite unsent local edits.
   async function _pullAll(force, targetKeys) {
-    if (!enabled) { _lastPullError = '同步未开启'; return false; }
-    if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return false; }
+    const pullTrigger = Array.isArray(targetKeys) && targetKeys.length ? 'realtime' : (force ? 'manual-or-startup' : 'scheduled');
+    _logSync('pull-start', { trigger: pullTrigger, targeted: !!(targetKeys && targetKeys.length) });
+    if (!enabled) { _lastPullError = '同步未开启'; _logSync('pull-skipped', { level: 'warning', reason: _lastPullError }); return false; }
+    if (!_client()) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; _logSync('pull-failed', { level: 'error', error: _lastPullError }); return false; }
     if (syncInProgress) {
       if (!force) return false;
       const waitStart = Date.now();
@@ -684,6 +735,7 @@
       const cfg = getConfig();
       const fullReconcile = !targeted && (force || !cfg.syncCursor || !cfg.lastFullReconcile ||
         Date.now() - cfg.lastFullReconcile >= FULL_RECONCILE_INTERVAL);
+      _logSync('pull-plan', { trigger: pullTrigger, targeted, fullReconcile });
       const incremental = !targeted && !fullReconcile;
       let metaQuery = c.from('user_data')
         .select('key,updated_at')
@@ -693,6 +745,7 @@
       const { data: meta, error } = await metaQuery;
       if (error) {
         _lastPullError = error.message || '拉取云端元数据失败';
+        _logSync('pull-failed', { level: 'error', error: _lastPullError, trigger: pullTrigger });
         return false;
       }
 
@@ -722,6 +775,7 @@
           .in('key', needValueKeys);
         if (valueError) {
           _lastPullError = valueError.message || '拉取云端数据失败';
+          _logSync('pull-failed', { level: 'error', error: _lastPullError, trigger: pullTrigger });
           return false;
         }
         (values || []).forEach(row => { valueMap[row.key] = row; });
@@ -755,6 +809,13 @@
           });
         }
 
+        _logSync('merge-decision', {
+          key: row.key, trigger: pullTrigger, action, localDirty, localEmpty,
+          baseTimestamp: localTs || null,
+          remoteTimestamp: (remoteRow && remoteRow.updated_at) || row.updated_at || null,
+          remoteHasData
+        });
+
         if (action === 'pull') {
           await _applyRemoteValue(row.key, remoteRow.value, remoteRow.updated_at);
           appliedRemote = true;
@@ -785,9 +846,12 @@
       if (fullReconcile) cfg.lastFullReconcile = Date.now();
       setConfig(cfg);
 
+      _logSync('pull-complete', { trigger: pullTrigger, count: syncRows.length, fullReconcile });
+
       return true;
     } catch (e) {
       _lastPullError = String((e && e.message) || e || '拉取异常');
+      _logSync('pull-failed', { level: 'error', error: _lastPullError, trigger: pullTrigger });
       console.warn('[sync] 拉取异常:', e);
       return false;
     } finally {
@@ -834,6 +898,7 @@
     if (_resolvingConflictKeys.has(key)) return { ok: false, reason: '该冲突正在处理中' };
 
     _resolvingConflictKeys.add(key);
+    _logSync('conflict-resolution-start', { key, choice });
     _emitStatus();
     try {
       const session = await getSession();
@@ -857,10 +922,12 @@
       _recordConflict(key, choice, conflict);
       _clearPendingConflict(key);
       _lastPullError = '';
+      _logSync('conflict-resolved', { key, choice });
       return { ok: true, key, choice };
     } catch (e) {
       const reason = String((e && e.message) || e || '处理冲突失败');
       _lastPullError = reason;
+      _logSync('conflict-resolution-failed', { key, choice, level: 'error', error: reason });
       return { ok: false, key, choice, reason };
     } finally {
       _resolvingConflictKeys.delete(key);
@@ -886,6 +953,11 @@
     // updated_at（与 remoteTs 同源可比）；本地是否有未上传修改由 dirty 标记承载。
     _markLocalDirty(key);
     dirtyKeys.add(key);
+    _logSync('local-change', {
+      key, action: 'mark-dirty', localDirty: true,
+      baseTimestamp: _getLocalTs()[key] || null,
+      online: typeof global.navigator === 'undefined' || global.navigator.onLine !== false
+    });
     // 自动上传仅在「云同步 + 自动同步」均开启时触发；关掉自动同步后需手动「立即同步/上传全部」
     if (!enabled || !autoSync || !loggedIn || !client) return;
     dirtyKeys.add(key);
@@ -933,6 +1005,11 @@
       channel.subscribe(function (status, error) {
         if (realtimeChannel !== channel) return;
         realtimeStatus = status || (error ? 'CHANNEL_ERROR' : 'UNKNOWN');
+        _logSync('realtime-status', {
+          realtimeStatus,
+          level: error || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' ? 'error' : 'info',
+          error: error && (error.message || String(error))
+        });
         if (status === 'SUBSCRIBED') {
           clearTimeout(realtimeRetryTimer);
           realtimeRetryTimer = null;
@@ -945,6 +1022,7 @@
       });
     } catch (e) {
       realtimeStatus = 'CHANNEL_ERROR';
+      _logSync('realtime-status', { realtimeStatus, level: 'error', error: String((e && e.message) || e) });
       _scheduleRealtimeRetry();
       if (typeof console !== 'undefined') console.error('[Sync] _subscribe error:', e);
     } finally {
@@ -959,7 +1037,10 @@
   }
   function _debouncedPull(payload) {
     const row = payload && payload.new;
-    if (row && isSyncKey(row.key)) pendingRealtimeRows.set(row.key, row.updated_at || '');
+    if (row && isSyncKey(row.key)) {
+      pendingRealtimeRows.set(row.key, row.updated_at || '');
+      _logSync('realtime-change-received', { key: row.key, remoteTimestamp: row.updated_at || null });
+    }
     clearTimeout(pullDebounceTimer);
     pullDebounceTimer = setTimeout(() => {
       if (!enabled || !autoSync) return;
@@ -1139,6 +1220,7 @@
 
   // ── 手动触发 ────────────────────────────────────────
   async function manualSync() {
+    _logSync('manual-sync-requested', { trigger: 'manual' });
     const completed = await _pullAll(true);
     if (completed) {
       const cfg = getConfig();
@@ -1149,6 +1231,7 @@
     return getStatus();
   }
   async function uploadAll() {
+    _logSync('force-upload-all-requested', { trigger: 'manual', forceUpload: true, level: 'warning' });
     dirtyKeys = new Set(SYNC_KEYS.filter(k => localStorage.getItem(k) !== null));
     dirtyKeys.forEach(_markLocalDirty);
     await _flush({ forceUpload: true });
@@ -1269,6 +1352,8 @@
     getStatus,
     getPendingConflicts,
     resolveConflict,
+    getEventLog: _getEventLog,
+    clearEventLog,
     getConflictHistory: _getConflictHistory,
     clearConflictHistory() { localStorage.removeItem(CONFLICT_HISTORY_KEY); },
     onStatus,

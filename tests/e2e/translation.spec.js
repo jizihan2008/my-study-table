@@ -75,6 +75,14 @@ test('selected English opens an English-first translation with a Chinese switch'
   await page.locator('.translation-page-tab[data-mode="vocabulary"]').click();
   await expect(page.locator('#translationHistoryList .translation-history-card')).toHaveCount(1);
 
+  await page.locator('.translation-page-tab[data-mode="review"]').click();
+  await expect(page.locator('.translation-flashcard')).toContainText('cognitive load');
+  await expect(page.locator('.translation-flashcard-answer')).toBeHidden();
+  await page.locator('.translation-flashcard').click();
+  await expect(page.locator('.translation-flashcard-answer')).toContainText('认知负荷');
+  await page.locator('.translation-review-ratings [data-rating="good"]').click();
+  await expect(page.locator('.translation-review-empty')).toContainText('本轮复习完成');
+
   await page.reload();
   await page.waitForLoadState('domcontentloaded');
   await page.waitForTimeout(700);

@@ -77,3 +77,36 @@ test('a saved history result is reused without an AI request', async () => {
   assert.equal(cached.englishDefinition, result.englishDefinition);
   assert.equal(cached.chineseMeaning, result.chineseMeaning);
 });
+
+test('vocabulary cards become due immediately and review ratings schedule the next review', () => {
+  const translation = loadTranslation();
+  const result = {
+    title: 'focus', phonetic: '/ˈfoʊkəs/', partOfSpeech: 'noun',
+    englishDefinition: 'the main object of attention', englishUsage: '', englishExample: '',
+    chineseMeaning: '注意力；重点', chineseNote: ''
+  };
+  const card = translation.recordResult('focus', result);
+  translation.toggleVocabulary(card.id, true);
+  assert.equal(translation.getReviewQueue().length, 1);
+
+  const reviewed = translation.gradeReview(card.id, 'good', '2026-09-22T00:00:00.000Z');
+  assert.equal(reviewed.reviewCount, 1);
+  assert.equal(reviewed.reviewStage, 1);
+  assert.equal(reviewed.reviewDueAt, '2026-09-23T00:00:00.000Z');
+  assert.equal(translation.getReviewQueue().length, 0);
+});
+
+test('forgotten flashcards reset their stage and return after ten minutes', () => {
+  const translation = loadTranslation();
+  const result = {
+    title: 'focus', phonetic: '', partOfSpeech: '', englishDefinition: 'attention',
+    englishUsage: '', englishExample: '', chineseMeaning: '注意力', chineseNote: ''
+  };
+  const card = translation.recordResult('focus', result);
+  translation.toggleVocabulary(card.id, true);
+  translation.gradeReview(card.id, 'good', '2026-09-20T00:00:00.000Z');
+  const forgotten = translation.gradeReview(card.id, 'again', '2026-09-22T00:00:00.000Z');
+  assert.equal(forgotten.reviewStage, 0);
+  assert.equal(forgotten.reviewLapses, 1);
+  assert.equal(forgotten.reviewDueAt, '2026-09-22T00:10:00.000Z');
+});

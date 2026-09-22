@@ -101,6 +101,34 @@ test('local changes remain persistently dirty while automatic sync is disabled',
   const status = await window.Sync.getStatus();
   assert.equal(status.pendingCount, 1);
   assert.deepEqual(JSON.parse(values.get('study_sync_dirty_v1')), { study_todos_v2: true });
+  const log = window.Sync.getEventLog();
+  assert.equal(log[0].event, 'local-change');
+  assert.equal(log[0].key, 'study_todos_v2');
+  assert.equal('value' in log[0], false);
+});
+
+test('sync event log is bounded, contains no business payload and can be cleared', () => {
+  const values = new Map([['study_sync_config', JSON.stringify({ enabled: false, autoSync: false })]]);
+  const localStorage = {
+    getItem: key => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key)
+  };
+  const window = { SyncPolicy: policy };
+  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'sync.js'), 'utf8');
+  vm.runInNewContext(code, {
+    window, localStorage,
+    setTimeout() { return 1; }, clearTimeout() {},
+    console: { log() {}, warn() {}, error() {} }
+  });
+
+  window.Sync.init();
+  for (let i = 0; i < 320; i++) window.Sync.onLocalChange('study_todos_v2');
+  const log = window.Sync.getEventLog();
+  assert.equal(log.length, 300);
+  assert.equal(log.every(entry => !('value' in entry) && !('payload' in entry)), true);
+  window.Sync.clearEventLog();
+  assert.equal(window.Sync.getEventLog().length, 0);
 });
 
 test('a thrown upload error keeps local data dirty for a later retry', async () => {

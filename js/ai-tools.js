@@ -140,6 +140,18 @@ const AI_TOOLS = {
     description: '查看间隔重复复习状态：待复习笔记列表（含逾期信息）、复习轮次分布、已复习笔记数',
     params: {}
   },
+  list_translations: {
+    description: '查询划词翻译列表，返回英文原文、英英释义、中文释义、生词与闪卡复习状态。支持搜索、生词筛选、待复习筛选和分页',
+    params: { search: '搜索英文原文、词形或中英文释义（string，可选）', vocabularyOnly: '是否仅返回生词本内容（boolean，可选）', dueOnly: '是否仅返回当前到期的闪卡（boolean，可选）', page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
+  },
+  set_translation_vocabulary: {
+    description: '批量设置翻译条目是否加入生词本（幂等设置；先用 list_translations 获取条目 ID）',
+    params: { entryIds: '翻译条目 ID 数组（array of strings，必填）', inVocabulary: '目标状态（boolean，必填；true=加入生词本，false=移出）' }
+  },
+  review_translation_flashcard: {
+    description: '记录一张翻译闪卡的复习结果并安排下次复习（先用 list_translations 查询到期条目）',
+    params: { entryId: '翻译条目 ID（string，必填）', rating: '复习结果：again=忘记、hard=模糊、good=记得（string，必填）' }
+  },
   get_habits_status: {
     description: '查看习惯追踪状态：所有习惯的今日完成情况、连续达标天数（明确标注统计截止日）、本周进度',
     params: {}
@@ -244,6 +256,7 @@ const AI_TOOLS = {
 const AI_TOOL_GROUPS = [
   { key: 'todo', label: '待办与聚焦', tools: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','list_todos','get_todo_detail','get_today_status','get_focus_tasks','set_focus_task','get_stats','get_todo_stats','batch_update_todos','get_review_status','get_habits_status'] },
   { key: 'note', label: '笔记与复习', tools: ['add_note','update_note','set_note_review','batch_set_note_tags','move_note','delete_note','list_notes','search_notes','get_note_tags','get_note_detail','get_note_changes'] },
+  { key: 'translation', label: '翻译与闪卡', tools: ['list_translations','set_translation_vocabulary','review_translation_flashcard'] },
   { key: 'skill', label: '技能库', tools: ['create_skill','list_skills','get_skill','update_skill','delete_skill'] },
   { key: 'link', label: '快捷访问', tools: ['add_link','delete_link','list_links'] },
   { key: 'automation', label: '定时提醒', tools: ['schedule_automation','list_automations','delete_automation'] },
@@ -391,7 +404,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += _nativeLocalTools
     ? '1. 一轮可以调用多个原生工具；写操作按依赖顺序排列。\n'
     : '1. 一个回复可以包含多个 <tool_call>，按操作顺序排列，文本说明放在各工具调用的前后\n';
-  prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_skills / get_skill / list_links / get_today_status / get_stats / get_todo_stats / list_calendar_events / list_chats / search_chat_messages）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
+  prompt += '2. 查询类操作（list_todos / get_todo_detail / list_notes / search_notes / get_note_detail / list_translations / list_skills / get_skill / list_links / get_today_status / get_stats / get_todo_stats / list_calendar_events / list_chats / search_chat_messages）的结果会注入为后续上下文，务必实际调用获取真实数据后再回答，不要编造\n';
   prompt += '   注意：当前数据快照（═══ 当前数据快照 ═══）与工具返回的数据来自同一数据源，查询结果应完全一致。如果快照已包含足够信息，可不必重复调用 list_todos / list_notes / list_links 等查询工具，直接基于快照回答即可。需要详细信息时才调用 get_todo_detail / get_note_detail。\n';
   prompt += '3. 注意：待办支持多层级（父子任务）。一个顶级任务下可能有子任务、孙任务、甚至更多层。list_todos 会以编号方式展示所有层级（如 [1] → [1.1] → [1.1.1]），请根据编号正确理解层级关系。优先使用 list_todos 获取完整层级，需要详细信息时才调用 get_todo_detail。\n';
   prompt += '4. 定时自动化触发时，你会收到一条以「[🤖 系统自动触发]」开头的消息，其中包含任务内容，请直接执行任务并在回复中向用户说明完成了什么。这条消息不是用户手动发送的，而是系统自动注入的\n';
@@ -770,6 +783,7 @@ async function executeCallAiAndPush(params, conv) {
 const AI_TOOL_REQUIRED_PARAMS = {
   add_todo:['text'], batch_add_todos:['todos'], update_todo:['id'], delete_todo:['id'], set_todo_completed:['id','completed'], move_todo:['id'], get_todo_detail:['id'],
   batch_update_todos:['ids','action'], batch_set_note_tags:['ids','tags'], add_note:['title'], update_note:['id'], set_note_review:['ids','needsReview'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'],
+  set_translation_vocabulary:['entryIds','inVocabulary'], review_translation_flashcard:['entryId','rating'],
   create_skill:['name','content'], get_skill:['skillId'], update_skill:['skillId'], delete_skill:['skillId'],
   add_link:['name','url'], delete_link:['id'], schedule_automation:['at','prompt'], delete_automation:['id'], get_memory_detail:['id'], web_search:['query'], read_webpage:['url'],
   quest_create_line:['name'], quest_update_line:['id'], quest_create:['lineId','title'], quest_update:['id'], quest_edit_condition:['action','questId'], quest_complete:['id'],
@@ -780,7 +794,7 @@ const AI_TOOL_READ_ONLY = new Set([
   'list_todos','get_todo_detail','get_today_status','get_focus_tasks','get_stats','get_todo_stats',
   'list_notes','search_notes','get_note_tags','get_note_detail','get_note_changes','list_skills','get_skill','list_links','list_automations',
   'list_memories','get_memory_detail','web_search','read_webpage','quest_get','quest_review',
-  'get_habits_status','get_review_status','list_chats','search_chat_messages','list_calendar_events'
+  'get_habits_status','get_review_status','list_translations','list_chats','search_chat_messages','list_calendar_events'
 ]);
 const AI_TOOL_DESTRUCTIVE = new Set(['delete_todo','delete_note','delete_skill','delete_link','delete_automation','delete_calendar_event']);
 // 「完全拦截删除」时要隐藏的接口：删除类 + 能通过 action=delete 删数据的批量接口
@@ -860,6 +874,7 @@ function inferAiToolPropertySchema(action, name, description) {
   if (name === 'type' && action === 'quest_create_line') schema.enum = ['main', 'quality'];
   if (name === 'type' && action === 'list_memories') schema.enum = ['fact','preference','goal','ability','behavior','mental'];
   if (name === 'sort' && action === 'list_memories') schema.enum = ['confidence','recent'];
+  if (name === 'rating' && action === 'review_translation_flashcard') schema.enum = ['again','hard','good'];
   if (name === 'kind' && /^quest_/.test(action)) schema.enum = ['main', 'side'];
   if (name === 'status' && /^quest_/.test(action)) schema.enum = ['draft', 'active', 'locked', 'done', 'skipped'];
   if (name === 'action') schema.enum = action === 'quest_edit_condition'
@@ -932,7 +947,8 @@ function validateAiToolCall(action, params) {
   for (const key of ['id','parentId','folderId','todoId','noteId','questId','lineId','targetId','conditionIndex']) {
     if (params[key] !== undefined && params[key] !== null && (!Number.isSafeInteger(Number(params[key])) || Number(params[key]) <= 0)) return { ok: false, error: `参数 ${key} 必须是正整数 ID` };
   }
-  for (const key of ['path','todos','ids','deps','weekdays']) if (params[key] !== undefined && !Array.isArray(params[key])) return { ok: false, error: `参数 ${key} 必须是数组` };
+  for (const key of ['path','todos','ids','entryIds','deps','weekdays']) if (params[key] !== undefined && !Array.isArray(params[key])) return { ok: false, error: `参数 ${key} 必须是数组` };
+  if (Array.isArray(params.entryIds) && (params.entryIds.length === 0 || params.entryIds.some(id => typeof id !== 'string' || !id.trim()))) return { ok: false, error: 'entryIds 必须是非空的翻译条目 ID 数组' };
   if (Array.isArray(params.weekdays)) {
     if (params.weekdays.length > 7) return { ok: false, error: 'weekdays 最多 7 个（0=周日…6=周六）' };
     for (const day of params.weekdays) {
@@ -962,10 +978,13 @@ function validateAiToolCall(action, params) {
   for (const key of ['ids','deps']) {
     if (Array.isArray(params[key]) && params[key].some(id => !Number.isSafeInteger(Number(id)) || Number(id) <= 0)) return { ok: false, error: `${key} 必须全部是正整数 ID` };
   }
-  for (const key of ['text','title','content','tags','query','name','prompt','label','color']) if (params[key] !== undefined && params[key] !== null && typeof params[key] !== 'string') return { ok: false, error: `参数 ${key} 必须是字符串` };
+  for (const key of ['text','title','content','tags','query','name','prompt','label','color','entryId','rating']) if (params[key] !== undefined && params[key] !== null && typeof params[key] !== 'string') return { ok: false, error: `参数 ${key} 必须是字符串` };
   if (params.completed !== undefined && typeof params.completed !== 'boolean') return { ok: false, error: '参数 completed 必须是 boolean' };
   if (params.done !== undefined && typeof params.done !== 'boolean') return { ok: false, error: '参数 done 必须是 boolean' };
   if (params.needsReview !== undefined && typeof params.needsReview !== 'boolean') return { ok: false, error: '参数 needsReview 必须是 boolean' };
+  if (params.inVocabulary !== undefined && typeof params.inVocabulary !== 'boolean') return { ok: false, error: '参数 inVocabulary 必须是 boolean' };
+  if (params.vocabularyOnly !== undefined && typeof params.vocabularyOnly !== 'boolean') return { ok: false, error: '参数 vocabularyOnly 必须是 boolean' };
+  if (params.dueOnly !== undefined && typeof params.dueOnly !== 'boolean') return { ok: false, error: '参数 dueOnly 必须是 boolean' };
   for (const key of ['autoRecord','autoTimer']) {
     if (params[key] !== undefined && typeof params[key] !== 'boolean') return { ok: false, error: `参数 ${key} 必须是 boolean` };
   }
@@ -992,6 +1011,7 @@ function validateAiToolCall(action, params) {
   if (params.type !== undefined && action === 'add_link' && !['link','app'].includes(params.type)) return { ok: false, error: 'type 值无效' };
   if (params.type !== undefined && action === 'list_memories' && !['fact','preference','goal','ability','behavior','mental'].includes(params.type)) return { ok: false, error: 'type 值无效' };
   if (params.sort !== undefined && action === 'list_memories' && !['confidence','recent'].includes(params.sort)) return { ok: false, error: 'sort 值无效' };
+  if (params.rating !== undefined && action === 'review_translation_flashcard' && !['again','hard','good'].includes(params.rating)) return { ok: false, error: 'rating 值无效' };
   if (action === 'batch_update_todos' && !['toggle_completed','set_tags','set_due_date','delete'].includes(params.action)) return { ok: false, error: 'action 值无效' };
   const questConditionError = validateAiQuestConditionEdit(params, action);
   if (questConditionError) return { ok: false, error: questConditionError };
@@ -1166,7 +1186,7 @@ function normalizeAiToolResult(action, value, durationMs = 0) {
 const AI_TOOL_TRANSACTION_KEYS = [
   'study_todos_v2','study_todo_completed_log','study_notes_v2','study_links_v3',
   'study_automations','study_taskline_v1','study_todos_trash','study_notes_trash','study_links_trash','study_today_focus','study_ai_skills_v1',
-  'study_calendar_events'
+  'study_calendar_events','study_translation_history_v1'
 ];
 
 function beginAiToolTransaction(action) {
@@ -1770,6 +1790,64 @@ async function executeToolCall(action, params, context = {}) {
       }
 
       return result;
+    }
+    case 'list_translations': {
+      const translation = typeof window !== 'undefined' ? window.GlobalTranslation : null;
+      if (!translation || typeof translation.getHistory !== 'function') return '⚠️ 翻译系统未加载。';
+      const query = String(params.search || '').trim().toLocaleLowerCase('zh-CN');
+      const now = Date.now();
+      const allEntries = translation.getHistory();
+      const matches = allEntries.filter(entry => {
+        if (params.vocabularyOnly && !entry.inVocabulary) return false;
+        const due = !!entry.inVocabulary && (!entry.reviewDueAt || new Date(entry.reviewDueAt).getTime() <= now);
+        if (params.dueOnly && !due) return false;
+        if (!query) return true;
+        const r = entry.result || {};
+        return [entry.sourceText, r.title, r.englishDefinition, r.chineseMeaning, r.englishExample]
+          .some(value => String(value || '').toLocaleLowerCase('zh-CN').includes(query));
+      });
+      const pageData = paginateAiToolItems(matches, params);
+      const vocabularyCount = allEntries.filter(entry => entry.inVocabulary).length;
+      const dueCount = allEntries.filter(entry => entry.inVocabulary && (!entry.reviewDueAt || new Date(entry.reviewDueAt).getTime() <= now)).length;
+      let result = `🌐 翻译列表：共 ${allEntries.length} 条，${vocabularyCount} 个生词，${dueCount} 张待复习闪卡；当前筛选 ${matches.length} 条，第 ${pageData.page}/${pageData.pageCount} 页\n\n`;
+      if (!pageData.items.length) return result + '（没有匹配的翻译条目）';
+      pageData.items.forEach((entry, index) => {
+        const r = entry.result || {};
+        const due = !!entry.inVocabulary && (!entry.reviewDueAt || new Date(entry.reviewDueAt).getTime() <= now);
+        const review = entry.inVocabulary
+          ? `生词；${due ? '待复习' : `下次 ${String(entry.reviewDueAt || '').slice(0, 10)}` }；已复习 ${Number(entry.reviewCount) || 0} 次`
+          : '未加入生词本';
+        result += `${(pageData.page - 1) * pageData.pageSize + index + 1}. [ID:${entry.id}] ${r.title || entry.sourceText}\n`;
+        result += `   EN：${r.englishDefinition || '—'}\n   中：${r.chineseMeaning || '—'}\n   状态：${review}\n`;
+      });
+      return result.trimEnd();
+    }
+    case 'set_translation_vocabulary': {
+      const translation = typeof window !== 'undefined' ? window.GlobalTranslation : null;
+      if (!translation || typeof translation.getHistory !== 'function' || typeof translation.toggleVocabulary !== 'function') return '⚠️ 翻译系统未加载。';
+      const existing = new Set(translation.getHistory().map(entry => String(entry.id)));
+      let changed = 0;
+      let unchanged = 0;
+      const missing = [];
+      for (const rawId of params.entryIds) {
+        const id = String(rawId);
+        const before = translation.getHistory().find(entry => String(entry.id) === id);
+        if (!existing.has(id) || !before) { missing.push(id); continue; }
+        if (!!before.inVocabulary === params.inVocabulary) { unchanged++; continue; }
+        if (translation.toggleVocabulary(id, params.inVocabulary)) changed++;
+      }
+      if (!changed && !unchanged) return `❌ 未找到翻译条目：${missing.join('、')}`;
+      return `✅ 已将 ${changed} 条翻译${params.inVocabulary ? '加入生词本' : '移出生词本'}，${unchanged} 条原本已是该状态` + (missing.length ? `；未找到 ${missing.length} 个 ID：${missing.join('、')}` : '') + '。';
+    }
+    case 'review_translation_flashcard': {
+      const translation = typeof window !== 'undefined' ? window.GlobalTranslation : null;
+      if (!translation || typeof translation.gradeReview !== 'function') return '⚠️ 翻译系统未加载。';
+      const updated = translation.gradeReview(params.entryId, params.rating);
+      if (!updated) return `❌ 未找到生词闪卡 ID ${params.entryId}`;
+      const labels = { again: '忘记', hard: '模糊', good: '记得' };
+      const next = new Date(updated.reviewDueAt);
+      const nextText = Number.isNaN(next.getTime()) ? updated.reviewDueAt : next.toLocaleString('zh-CN');
+      return `✅ 已记录闪卡“${(updated.result && updated.result.title) || updated.sourceText}”为「${labels[params.rating]}」，下次复习：${nextText}。`;
     }
     case 'get_habits_status': {
       if (typeof loadHabits !== 'function' || typeof calcStreak !== 'function') return '⚠️ 习惯系统未加载。';

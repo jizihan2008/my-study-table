@@ -214,6 +214,56 @@ test('set_note_review explicitly and idempotently controls review for multiple n
   assert.equal(selected.has('set_note_review'), true);
 });
 
+test('translation tools expose the list, vocabulary membership and flashcard review to AI', async () => {
+  const ctx = harness();
+  const entries = [{
+    id: 'tr-focus', sourceText: 'focus', inVocabulary: false, reviewDueAt: '', reviewCount: 0,
+    result: { title: 'focus', englishDefinition: 'the main object of attention', chineseMeaning: '注意力', englishExample: 'Focus on the task.' }
+  }];
+  ctx.window.GlobalTranslation = {
+    getHistory: () => entries.map(entry => ({ ...entry, result: { ...entry.result } })),
+    toggleVocabulary: (id, value) => {
+      const entry = entries.find(item => item.id === id);
+      if (!entry) return false;
+      entry.inVocabulary = value;
+      entry.reviewDueAt = value ? new Date(0).toISOString() : entry.reviewDueAt;
+      return true;
+    },
+    gradeReview: (id, rating) => {
+      const entry = entries.find(item => item.id === id && item.inVocabulary);
+      if (!entry) return null;
+      entry.reviewCount++;
+      entry.lastReviewRating = rating;
+      entry.reviewDueAt = '2026-09-23T00:00:00.000Z';
+      return { ...entry, result: { ...entry.result } };
+    }
+  };
+
+  const selected = ctx.selectAiToolsForConversation({ id: 'translations', messages: [], _toolGroups: ['translation'] }, false, false);
+  assert.equal([...selected].sort().join(','), 'list_translations,review_translation_flashcard,set_translation_vocabulary');
+  assert.equal(ctx.getAiToolMetadata('list_translations').effect, 'read');
+  assert.equal(ctx.getAiToolJsonSchema('review_translation_flashcard').properties.rating.enum.join(','), 'again,hard,good');
+  assert.equal(ctx.validateAiToolCall('set_translation_vocabulary', { entryIds: ['tr-focus'], inVocabulary: true }).ok, true);
+  assert.equal(ctx.validateAiToolCall('set_translation_vocabulary', { entryIds: [], inVocabulary: true }).ok, false);
+  assert.equal(ctx.validateAiToolCall('review_translation_flashcard', { entryId: 'tr-focus', rating: 'easy' }).ok, false);
+
+  const initial = await ctx.executeToolCallStructured('list_translations', { search: '注意力' });
+  assert.match(initial.text, /翻译列表：共 1 条/);
+  assert.match(initial.text, /\[ID:tr-focus\]/);
+  assert.match(initial.text, /未加入生词本/);
+
+  const saved = await ctx.executeToolCallStructured('set_translation_vocabulary', { entryIds: ['tr-focus'], inVocabulary: true });
+  assert.equal(saved.ok, true);
+  assert.equal(entries[0].inVocabulary, true);
+  const due = await ctx.executeToolCallStructured('list_translations', { dueOnly: true });
+  assert.match(due.text, /待复习/);
+
+  const reviewed = await ctx.executeToolCallStructured('review_translation_flashcard', { entryId: 'tr-focus', rating: 'good' });
+  assert.equal(reviewed.ok, true);
+  assert.match(reviewed.text, /记得/);
+  assert.equal(entries[0].reviewCount, 1);
+});
+
 test('required params reject blank input except the parameters where blank means "clear"', () => {
   const ctx = harness();
   // 空字符串在绝大多数接口里是「没填」；只有 tags 这类参数用空串表达「清空」。

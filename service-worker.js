@@ -36,7 +36,7 @@ const PRECACHE_URLS = [
   './js/ai-tree.js?v=20260912-r3',
   './js/ai-attach.js?v=20260920-r1',
   './js/ai-render.js?v=20260920-r1',
-  './js/ai-tools.js?v=20260921-r1',
+  './js/ai-tools.js?v=20260922-r2',
   './js/notes.js?v=20260920-r1',
   './js/stats.js?v=20260914-r3',
   './js/platform.js?v=20260826-r2',
@@ -58,7 +58,7 @@ const PRECACHE_URLS = [
   './js/settings.js?v=20260920-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20260825-r1',
-  './js/sync.js?v=20260922-r17',
+  './js/sync.js?v=20260922-r18',
   './js/sync-logs.js?v=20260917-r1',
   './js/ai-utils.js?v=20260826-r2',
   './js/bg-media-idb.js?v=20260906-r2',
@@ -66,7 +66,7 @@ const PRECACHE_URLS = [
   './js/taskline.js?v=20260914-r14',
   './js/calendar.js?v=20260825-r10',
   './js/bootstrap.js?v=20260911-r1',
-  './js/translation.js?v=20260914-r3',
+  './js/translation.js?v=20260922-r4',
   './icons/icon-192.png',
   './icons/icon-512.png'
 ];

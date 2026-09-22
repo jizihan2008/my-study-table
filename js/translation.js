@@ -15,6 +15,9 @@
   let activeEntryId = '';
   let pageMode = 'history';
   let pageQuery = '';
+  let reviewSession = null;
+
+  const REVIEW_INTERVALS = [1, 3, 7, 14, 30, 60, 120];
 
   function escapeTranslationHtml(value) {
     if (typeof global.escapeHtml === 'function') return global.escapeHtml(String(value || ''));
@@ -119,7 +122,8 @@
     entries[index] = {
       ...entries[index],
       inVocabulary,
-      vocabularyAddedAt: inVocabulary ? (entries[index].vocabularyAddedAt || new Date().toISOString()) : ''
+      vocabularyAddedAt: inVocabulary ? (entries[index].vocabularyAddedAt || new Date().toISOString()) : '',
+      reviewDueAt: inVocabulary ? (entries[index].reviewDueAt || new Date().toISOString()) : entries[index].reviewDueAt
     };
     if (!saveHistory(trimHistory(entries))) return false;
     if (activeEntryId === String(entryId)) updatePanelVocabularyButton(entries[index]);
@@ -174,7 +178,7 @@
             <i data-lucide="star" class="lucide-icon" aria-hidden="true"></i>
             <span>加入生词本</span>
           </button>
-          <button class="global-translate-history-link" id="globalTranslateHistoryLink" type="button">查看翻译历史</button>
+          <button class="global-translate-history-link" id="globalTranslateHistoryLink" type="button">查看翻译列表</button>
         </footer>
       </section>`);
 
@@ -401,9 +405,127 @@
       });
   }
 
+  function getReviewQueue(includeFuture) {
+    const now = Date.now();
+    return loadHistory()
+      .filter(entry => entry.inVocabulary)
+      .filter(entry => includeFuture || !entry.reviewDueAt || new Date(entry.reviewDueAt).getTime() <= now)
+      .sort((a, b) => String(a.reviewDueAt || '').localeCompare(String(b.reviewDueAt || '')));
+  }
+
+  function gradeReview(entryId, rating, reviewedAt) {
+    const entries = loadHistory();
+    const index = entries.findIndex(item => item.id === String(entryId) && item.inVocabulary);
+    if (index < 0) return null;
+    const now = reviewedAt ? new Date(reviewedAt) : new Date();
+    if (Number.isNaN(now.getTime())) return null;
+    const previousStage = Math.max(0, Number(entries[index].reviewStage) || 0);
+    let nextStage = previousStage;
+    let delayMs;
+    if (rating === 'again') {
+      nextStage = 0;
+      delayMs = 10 * 60 * 1000;
+    } else if (rating === 'hard') {
+      nextStage = Math.max(0, previousStage - 1);
+      delayMs = 24 * 60 * 60 * 1000;
+    } else {
+      nextStage = Math.min(previousStage + 1, REVIEW_INTERVALS.length - 1);
+      delayMs = REVIEW_INTERVALS[previousStage] * 24 * 60 * 60 * 1000;
+      rating = 'good';
+    }
+    entries[index] = {
+      ...entries[index],
+      reviewStage: nextStage,
+      reviewDueAt: new Date(now.getTime() + delayMs).toISOString(),
+      lastReviewedAt: now.toISOString(),
+      reviewCount: Math.max(0, Number(entries[index].reviewCount) || 0) + 1,
+      reviewLapses: Math.max(0, Number(entries[index].reviewLapses) || 0) + (rating === 'again' ? 1 : 0),
+      lastReviewRating: rating
+    };
+    if (!saveHistory(trimHistory(entries))) return null;
+    return entries[index];
+  }
+
+  function startReviewSession(includeFuture) {
+    reviewSession = {
+      ids: getReviewQueue(!!includeFuture).map(entry => entry.id),
+      index: 0,
+      revealed: false,
+      completed: 0
+    };
+    renderReviewSession();
+  }
+
+  function renderReviewSession() {
+    const list = document.getElementById('translationHistoryList');
+    if (!list) return;
+    if (!reviewSession) {
+      reviewSession = { ids: getReviewQueue(false).map(entry => entry.id), index: 0, revealed: false, completed: 0 };
+    }
+    const history = loadHistory();
+    const entry = history.find(item => item.id === reviewSession.ids[reviewSession.index] && item.inVocabulary);
+    if (!entry) {
+      const vocabularyCount = history.filter(item => item.inVocabulary).length;
+      const finished = reviewSession.completed > 0;
+      list.innerHTML = `
+        <div class="translation-review-empty">
+          <i data-lucide="${finished ? 'party-popper' : 'circle-check-big'}" class="lucide-icon" aria-hidden="true"></i>
+          <strong>${finished ? '本轮复习完成' : '今天没有待复习闪卡'}</strong>
+          <p>${finished ? `你刚刚复习了 ${reviewSession.completed} 张闪卡。` : (vocabularyCount ? '所有生词都在按计划巩固中。' : '先把翻译结果加入生词本，就能开始闪卡复习。')}</p>
+          ${vocabularyCount ? '<button type="button" class="translation-review-all">复习全部生词</button>' : ''}
+        </div>`;
+      list.querySelector('.translation-review-all')?.addEventListener('click', () => startReviewSession(true));
+      if (typeof global.lucide !== 'undefined') global.lucide.createIcons();
+      return;
+    }
+    const result = entry.result || {};
+    const title = result.title || entry.sourceText;
+    const position = reviewSession.index + 1;
+    const total = reviewSession.ids.length;
+    list.innerHTML = `
+      <div class="translation-review-shell">
+        <div class="translation-review-progress"><span>第 ${position} / ${total} 张</span><div><i style="width:${Math.round(((position - 1) / total) * 100)}%"></i></div><span>已完成 ${reviewSession.completed}</span></div>
+        <button type="button" class="translation-flashcard ${reviewSession.revealed ? 'revealed' : ''}" aria-label="${reviewSession.revealed ? '闪卡答案已显示' : '点击显示闪卡答案'}">
+          <span class="translation-flashcard-hint">${reviewSession.revealed ? '答案' : '想一想它的含义'}</span>
+          <strong lang="en">${escapeTranslationHtml(title)}</strong>
+          ${result.phonetic ? `<span class="translation-flashcard-phonetic">${escapeTranslationHtml(result.phonetic)}</span>` : ''}
+          <div class="translation-flashcard-answer" ${reviewSession.revealed ? '' : 'hidden'}>
+            <p lang="zh-CN">${escapeTranslationHtml(result.chineseMeaning || '')}</p>
+            <p lang="en">${escapeTranslationHtml(result.englishDefinition || '')}</p>
+            ${result.englishExample ? `<blockquote lang="en">${escapeTranslationHtml(result.englishExample)}</blockquote>` : ''}
+          </div>
+          ${reviewSession.revealed ? '' : '<span class="translation-flashcard-reveal"><i data-lucide="rotate-3d"></i> 点击翻面</span>'}
+        </button>
+        <div class="translation-review-ratings" ${reviewSession.revealed ? '' : 'hidden'} aria-label="复习结果">
+          <button type="button" data-rating="again"><i data-lucide="rotate-ccw"></i><span>忘记<small>10 分钟后</small></span></button>
+          <button type="button" data-rating="hard"><i data-lucide="brain"></i><span>模糊<small>明天</small></span></button>
+          <button type="button" data-rating="good"><i data-lucide="check"></i><span>记得<small>${REVIEW_INTERVALS[Math.max(0, Number(entry.reviewStage) || 0)]} 天后</small></span></button>
+        </div>
+      </div>`;
+    list.querySelector('.translation-flashcard').addEventListener('click', () => {
+      if (reviewSession.revealed) return;
+      reviewSession.revealed = true;
+      renderReviewSession();
+    });
+    list.querySelector('.translation-review-ratings')?.addEventListener('click', event => {
+      const button = event.target.closest('[data-rating]');
+      if (!button) return;
+      gradeReview(entry.id, button.dataset.rating);
+      reviewSession.index += 1;
+      reviewSession.completed += 1;
+      reviewSession.revealed = false;
+      renderReviewSession();
+    });
+    if (typeof global.lucide !== 'undefined') global.lucide.createIcons();
+  }
+
   function renderTranslationList() {
     const list = document.getElementById('translationHistoryList');
     if (!list) return;
+    if (pageMode === 'review') {
+      renderReviewSession();
+      return;
+    }
     const entries = filteredHistory();
     if (!entries.length) {
       const searching = !!pageQuery.trim();
@@ -420,7 +542,8 @@
   }
 
   function setPageMode(mode) {
-    pageMode = mode === 'vocabulary' ? 'vocabulary' : 'history';
+    pageMode = ['vocabulary', 'review'].includes(mode) ? mode : 'history';
+    if (pageMode === 'review') reviewSession = null;
     document.querySelectorAll('#translationApp .translation-page-tab').forEach(button => {
       const active = button.dataset.mode === pageMode;
       button.classList.toggle('active', active);
@@ -434,22 +557,24 @@
     if (!app) return;
     const history = loadHistory();
     const vocabularyCount = history.filter(entry => entry.inVocabulary).length;
+    const dueCount = getReviewQueue(false).length;
     app.innerHTML = `
       <header class="translation-page-header">
         <div>
           <div class="translation-page-title"><i data-lucide="languages" class="lucide-icon" aria-hidden="true"></i>划词翻译</div>
-          <div class="translation-page-summary">${history.length} 条翻译记录 · ${vocabularyCount} 个生词</div>
+          <div class="translation-page-summary">${history.length} 条翻译记录 · ${vocabularyCount} 个生词 · ${dueCount} 张待复习</div>
         </div>
         <div class="translation-page-tip"><i data-lucide="mouse-pointer-2" class="lucide-icon" aria-hidden="true"></i>选中英文后右键即可翻译</div>
       </header>
       <div class="translation-page-toolbar">
         <div class="translation-page-tabs" role="tablist" aria-label="词汇记录类型">
-          <button class="translation-page-tab ${pageMode === 'history' ? 'active' : ''}" type="button" role="tab" data-mode="history" aria-selected="${String(pageMode === 'history')}">翻译历史<span>${history.length}</span></button>
+          <button class="translation-page-tab ${pageMode === 'history' ? 'active' : ''}" type="button" role="tab" data-mode="history" aria-selected="${String(pageMode === 'history')}">翻译列表<span>${history.length}</span></button>
           <button class="translation-page-tab ${pageMode === 'vocabulary' ? 'active' : ''}" type="button" role="tab" data-mode="vocabulary" aria-selected="${String(pageMode === 'vocabulary')}">生词本<span>${vocabularyCount}</span></button>
+          <button class="translation-page-tab ${pageMode === 'review' ? 'active' : ''}" type="button" role="tab" data-mode="review" aria-selected="${String(pageMode === 'review')}">闪卡复习<span>${dueCount}</span></button>
         </div>
-        <label class="translation-page-search">
+        <label class="translation-page-search" ${pageMode === 'review' ? 'hidden' : ''}>
           <i data-lucide="search" class="lucide-icon" aria-hidden="true"></i>
-          <input type="search" id="translationPageSearch" value="${escapeTranslationHtml(pageQuery)}" placeholder="搜索单词或释义…" aria-label="搜索翻译历史">
+          <input type="search" id="translationPageSearch" value="${escapeTranslationHtml(pageQuery)}" placeholder="搜索单词或释义…" aria-label="搜索翻译列表">
           <button type="button" class="translation-page-search-clear" aria-label="清除搜索" ${pageQuery ? '' : 'hidden'}><i data-lucide="x" class="lucide-icon" aria-hidden="true"></i></button>
         </label>
       </div>
@@ -558,6 +683,8 @@
     getCachedResult: getHistoricalResult,
     recordResult: recordTranslation,
     toggleVocabulary: setVocabulary,
+    getReviewQueue,
+    gradeReview,
     renderPage: renderTranslationPage,
     translate: getTranslation,
     close: closePanel
