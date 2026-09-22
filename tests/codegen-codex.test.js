@@ -58,4 +58,3 @@ test('Codex JSONL agent messages expose plugin summaries', () => {
     }
   );
 });
-
