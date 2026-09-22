@@ -380,6 +380,8 @@ test('timer records support task binding, merge matching neighbours, and hide em
 });
 
 test('AI policy detects secrets and records token usage', async () => {
+  // 统计页由内置扩展注册；Windows CI 较慢时不能假定首屏完成后它已就绪。
+  await page.waitForFunction(() => !!document.getElementById('section-stats') && !!document.getElementById('nav-stats'));
   const result = await page.evaluate(async () => {
     window.AIClient.clearUsage();
     const matches = window.AIClient.findSensitiveContent([
