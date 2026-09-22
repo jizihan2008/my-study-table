@@ -251,8 +251,10 @@ test('a timer left running moments ago resumes without counting the gap', async 
       name: 'E2E 时长回归',
       linkedTodoId: null,
       linkedGoalId: null,
-      savedAt: now - 30 * 1000,
-      lastActiveAt: now - 30 * 1000
+      // 超过 60 秒：这不是同一渲染器的 Ctrl+R 连续时段，应该走应用重启的恢复路径。
+      // 仍在短暂恢复窗口内，因此不会被当作陈旧计时器停放。
+      savedAt: now - 61 * 1000,
+      lastActiveAt: now - 61 * 1000
     }));
     loadAndRestoreTimerState();
     return {
@@ -384,6 +386,7 @@ test('AI policy detects secrets and records token usage', async () => {
       { role: 'user', content: 'password: hunter2 and sk-abcdefghijklmnopqrstuvwxyz' }
     ]);
     const usage = window.AIClient.recordUsage('gpt-4o-mini', { prompt_tokens: 1000, completion_tokens: 500 }, { feature: 'chat' });
+    window.switchTab('stats');
     window.renderStats();
     await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
     return {

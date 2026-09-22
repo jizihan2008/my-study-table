@@ -1326,6 +1326,8 @@ function saveManualRecord() {
 function editTimerRecord(recordId) {
   timerEditingRecordId = recordId;
   timerManualFormOpen = true;
+  // 编辑入口必须展开历史区域；否则专注进行时折叠的布局会把表单一并藏起。
+  timerHistoryExpanded = true;
   renderTimer();
 }
 

@@ -61,13 +61,14 @@ test('skills can be managed and multiple skill snapshots are inserted into a pro
   expect((await page.evaluate(() => getAiContextInsertSnapshot()))[0].content).toBe('只使用可核实的事实。');
 
   page.once('dialog', dialog => dialog.accept());
-  await page.getByRole('button', { name: '删除' }).click();
+  await page.locator('.skills-delete-btn').click();
   expect(await page.evaluate(() => loadAiSkills().length)).toBe(1);
   expect(inserted.snapshot[0].content).toBe('先核对事实，再给出结论。');
 });
 
 test('AI generation writes a reviewable draft before saving', async () => {
   await page.evaluate(() => {
+    localStorage.removeItem('study_ai_skills_v1');
     window.getEffectiveApiConfig = () => ({ apiKey: 'test', baseUrl: 'https://example.test/v1', model: 'test-model' });
     window.callAiApiNonStream = async (messages, config, conv, options) => {
       if (messages[1].content.includes('先确认上下文') && options.disableTools && conv === null) {
@@ -82,7 +83,7 @@ test('AI generation writes a reviewable draft before saving', async () => {
   await page.locator('#aiSkillIdea').fill('先确认上下文，再给建议');
   await page.getByRole('button', { name: 'AI 整理为技能文字' }).click();
   await expect(page.locator('#aiSkillContent')).toHaveValue('先确认上下文，再按优先级给出建议。');
-  expect(await page.evaluate(() => loadAiSkills().length)).toBe(1);
+  expect(await page.evaluate(() => loadAiSkills().length)).toBe(0);
   await page.getByRole('button', { name: '保存技能' }).click();
-  expect(await page.evaluate(() => loadAiSkills().length)).toBe(2);
+  expect(await page.evaluate(() => loadAiSkills().length)).toBe(1);
 });
