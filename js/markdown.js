@@ -285,8 +285,9 @@
     md.renderer.rules.fence = function (tokens, idx, options, env, self) {
       const token = tokens[idx];
       const language = String(token.info || '').trim().split(/\s+/)[0].toLowerCase();
-      const looksLikeMindmap = typeof root.looksLikeMindmap === 'function' && root.looksLikeMindmap(token.content);
-      if ((language === 'mindmap' || (!language && looksLikeMindmap)) && typeof root.renderNoteMindmap === 'function') {
+      // 思维导图必须由作者显式声明为 ```mindmap；无语言代码块一律按普通代码渲染，
+      // 避免把缩进文本、目录树或 AI 输出的示例代码误判成导图。
+      if (language === 'mindmap' && typeof root.renderNoteMindmap === 'function') {
         return root.renderNoteMindmap(md.utils.escapeHtml(token.content));
       }
       const html = defaultFence(tokens, idx, options, env, self);

@@ -2105,12 +2105,20 @@ function toggleNoteToc(force){
 }
 
 function setActiveNoteTocItem(targetId){
+  let activeButton=null;
   document.querySelectorAll('#notesTocList .notes-toc-item').forEach(button=>{
     const active=button.dataset.target===targetId;
     button.classList.toggle('active',active);
-    if(active)button.setAttribute('aria-current','location');
+    if(active){button.setAttribute('aria-current','location');activeButton=button;}
     else button.removeAttribute('aria-current');
   });
+  const list=document.getElementById('notesTocList');
+  if(activeButton&&list){
+    const top=activeButton.offsetTop;
+    const bottom=top+activeButton.offsetHeight;
+    if(top<list.scrollTop)list.scrollTop=Math.max(0,top-8);
+    else if(bottom>list.scrollTop+list.clientHeight)list.scrollTop=bottom-list.clientHeight+8;
+  }
 }
 
 function jumpToNoteHeading(targetId){
@@ -2140,7 +2148,8 @@ function onNotePreviewScroll(){
     _noteTocScrollFrame=0;
     const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
     updateNoteReadingProgress(preview);
-    if((noteViewMode!=='preview'&&noteViewMode!=='rich')||!notesTocVisible)return;
+    const tocVisible=notesIsMobile()?notesTocMobileOpen:notesTocVisible;
+    if((noteViewMode!=='preview'&&noteViewMode!=='rich')||!tocVisible)return;
     const headings=getNotePreviewHeadings();
     if(!preview||!headings.length)return;
     // Smooth scrolling over a long document can take over a second. Keep the

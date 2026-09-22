@@ -78,6 +78,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   codebuddyRun: (payload) => ipcRenderer.invoke('codebuddy:run', payload),
   codebuddyCheckLogin: (payload) => ipcRenderer.invoke('codebuddy:check-login', payload),
   codebuddyOpenLoginTerminal: (payload) => ipcRenderer.invoke('codebuddy:open-login-terminal', payload),
+  // ── Codex CLI IPC ──
+  codexLocate: (payload) => ipcRenderer.invoke('codex:locate', payload),
+  codexInstall: (payload) => ipcRenderer.invoke('codex:install', payload),
+  codexRun: (payload) => ipcRenderer.invoke('codex:run', payload),
+  codexCheckLogin: (payload) => ipcRenderer.invoke('codex:check-login', payload),
+  codexOpenLoginTerminal: (payload) => ipcRenderer.invoke('codex:open-login-terminal', payload),
   srcExportSnapshot: () => ipcRenderer.invoke('src:export-snapshot'),
   onCodegenAgentOutput: (callback) => {
     const listener = (_event, payload) => callback(payload);
@@ -88,6 +94,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     const listener = (_event, payload) => callback(payload);
     ipcRenderer.on('codebuddy:install-output', listener);
     return () => ipcRenderer.removeListener('codebuddy:install-output', listener);
+  },
+  onCodexInstallOutput: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on('codex:install-output', listener);
+    return () => ipcRenderer.removeListener('codex:install-output', listener);
   },
   // ── Inbox Assistant IPC ──
   inboxMailTest: (cfg) => ipcRenderer.invoke('mail:test', cfg),

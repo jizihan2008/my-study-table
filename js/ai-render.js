@@ -333,6 +333,9 @@ function openAiAttachmentImage(imgEl) {
 let _aiMessageImmersiveZoom = (typeof localStorage !== 'undefined' ? Number(localStorage.getItem('study_ai_message_immersive_zoom')) : 100) || 100;
 _aiMessageImmersiveZoom = Math.min(180, Math.max(70, Math.round(_aiMessageImmersiveZoom / 10) * 10));
 let _aiMessageImmersiveOpener = null;
+let _aiMessageImmersiveScrollFrame = 0;
+let _aiMessageImmersiveJumpTarget = '';
+let _aiMessageImmersiveJumpTimer = 0;
 
 function updateAiMessageImmersiveZoom(value) {
   const next = Math.min(180, Math.max(70, Math.round(Number(value) / 10) * 10));
@@ -367,15 +370,65 @@ function buildAiMessageImmersiveToc() {
     const id = 'ai-message-immersive-heading-' + index;
     heading.id = id;
     const depth = Math.max(0, (Number(heading.tagName.slice(1)) || 1) - minLevel);
-    return `<button type="button" style="--ai-toc-indent:${depth * 12}px" onclick="jumpToAiMessageImmersiveHeading('${id}')">${escapeHtml((heading.textContent || '').trim() || ('章节 ' + (index + 1)))}</button>`;
+    return `<button type="button" class="${index === 0 ? 'active' : ''}" data-target="${id}" style="--ai-toc-indent:${depth * 12}px" onclick="jumpToAiMessageImmersiveHeading(this.dataset.target)"${index === 0 ? ' aria-current="location"' : ''}>${escapeHtml((heading.textContent || '').trim() || ('章节 ' + (index + 1)))}</button>`;
   }).join('');
+}
+
+function setActiveAiMessageImmersiveTocItem(targetId) {
+  const list = document.getElementById('aiMessageImmersiveTocList');
+  if (!list) return;
+  let activeButton = null;
+  list.querySelectorAll('button[data-target]').forEach(button => {
+    const active = button.dataset.target === targetId;
+    button.classList.toggle('active', active);
+    if (active) { button.setAttribute('aria-current', 'location'); activeButton = button; }
+    else button.removeAttribute('aria-current');
+  });
+  if (!activeButton) return;
+  const top = activeButton.offsetTop;
+  const bottom = top + activeButton.offsetHeight;
+  if (top < list.scrollTop) list.scrollTop = Math.max(0, top - 8);
+  else if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight + 8;
+}
+
+function onAiMessageImmersiveScroll() {
+  if (_aiMessageImmersiveScrollFrame) return;
+  const schedule = window.requestAnimationFrame || function(callback) { return setTimeout(callback, 16); };
+  _aiMessageImmersiveScrollFrame = schedule(() => {
+    _aiMessageImmersiveScrollFrame = 0;
+    const article = document.getElementById('aiMessageImmersiveArticle');
+    if (!article) return;
+    const headings = Array.from(article.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]'));
+    if (!headings.length) return;
+    if (_aiMessageImmersiveJumpTarget) {
+      setActiveAiMessageImmersiveTocItem(_aiMessageImmersiveJumpTarget);
+      return;
+    }
+    const threshold = article.getBoundingClientRect().top + 28;
+    let active = headings[0];
+    for (const heading of headings) {
+      if (heading.getBoundingClientRect().top <= threshold) active = heading;
+      else break;
+    }
+    if (article.scrollTop + article.clientHeight >= article.scrollHeight - 4) active = headings[headings.length - 1];
+    setActiveAiMessageImmersiveTocItem(active.id);
+  });
 }
 
 function jumpToAiMessageImmersiveHeading(id) {
   const article = document.getElementById('aiMessageImmersiveArticle');
   const heading = document.getElementById(id);
   if (!article || !heading) return;
-  article.scrollTo({ top: Math.max(0, heading.offsetTop - 24), behavior: 'smooth' });
+  const reduceMotion = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+  _aiMessageImmersiveJumpTarget = id;
+  if (_aiMessageImmersiveJumpTimer) clearTimeout(_aiMessageImmersiveJumpTimer);
+  _aiMessageImmersiveJumpTimer = setTimeout(() => {
+    _aiMessageImmersiveJumpTarget = '';
+    _aiMessageImmersiveJumpTimer = 0;
+    onAiMessageImmersiveScroll();
+  }, reduceMotion ? 80 : 1400);
+  article.scrollTo({ top: Math.max(0, heading.offsetTop - 24), behavior: reduceMotion ? 'auto' : 'smooth' });
+  setActiveAiMessageImmersiveTocItem(id);
 }
 
 function toggleAiMessageImmersiveToc(force) {
@@ -390,6 +443,11 @@ function closeAiMessageImmersive() {
   const overlay = document.getElementById('aiMessageImmersive');
   if (!overlay) return;
   overlay.remove();
+  if (_aiMessageImmersiveJumpTimer) clearTimeout(_aiMessageImmersiveJumpTimer);
+  if (_aiMessageImmersiveScrollFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(_aiMessageImmersiveScrollFrame);
+  _aiMessageImmersiveJumpTimer = 0;
+  _aiMessageImmersiveScrollFrame = 0;
+  _aiMessageImmersiveJumpTarget = '';
   document.body.classList.remove('ai-message-immersive-open');
   const opener = _aiMessageImmersiveOpener;
   _aiMessageImmersiveOpener = null;
@@ -414,6 +472,7 @@ function openAiMessageImmersive(trigger) {
     element.removeAttribute('tabindex');
   });
   article.querySelectorAll('input').forEach(input => { input.disabled = true; });
+  article.addEventListener('scroll', onAiMessageImmersiveScroll, { passive: true });
 
   const overlay = document.createElement('div');
   overlay.className = 'ai-message-immersive';
@@ -1171,8 +1230,8 @@ function toggleToolCallData(toggleEl) {
   contentEl.classList.toggle('open');
 }
 
-// ── 内嵌思维导图（```mindmap），复用教材知识库导图样式 ──
-// 支持两种格式（自动识别）：
+// ── 内嵌思维导图（必须显式使用 ```mindmap），复用教材知识库导图样式 ──
+// 围栏内部支持两种节点格式：
 //   A. 缩进树：每行一个节点，2 空格 / Tab 表示层级
 //   B. Unicode 树形字符（AI 常用）：├─ / └─ / │ 前缀，如：
 //       0x22 深度优先搜索
@@ -1181,25 +1240,6 @@ function toggleToolCallData(toggleEl) {
 //       │  └─ DFS 三要素
 //       └─ 方法论
 // 输入 code 已由 formatMarkdownBase 整体 HTML 转义，节点名不再二次转义。
-// 判断代码块内容是否"看起来像"思维导图（用于裸 ``` 无语言标记时自动识别）：
-//   - 含树形字符（├ └ │）→ 是
-//   - 否则：≥2 个非空行 + ≥2 个不同缩进级别 + 无代码特征 + 无 ASCII 树连接线
-function looksLikeMindmap(code) {
-  const s = String(code || '');
-  if (/[├└]/.test(s)) return true; // 树形字符格式
-  const nonEmpty = s.split('\n').filter(l => l.trim());
-  if (nonEmpty.length < 2) return false;
-  // 缩进的纯数字/符号行通常是矩阵，不应作为节点树渲染。
-  if (nonEmpty.every(l => /^[\s\[\]()|+\-−.,&\d]+$/.test(l))) return false;
-  // 排除 ASCII 树/图（如二叉树图、目录树）：
-  // 存在以连接符（\ / |）开头的行（如 "/"、"/ \"、"|-- main.js"、"|\"）→ 是结构图，
-  // 不是"每行一个纯文本节点名"的思维导图缩进树
-  if (nonEmpty.some(l => /^[\\/|]/.test(l.trim()))) return false;
-  const indents = nonEmpty.map(l => (l.match(/^(\t| {2,})/) ? l.match(/^(\t| {2,})/)[0].length : 0));
-  if (new Set(indents).size < 2) return false; // 无嵌套层级
-  if (/[{};]|=>|<\/|<!--|\$\{|\b(function|const|let|var|return|if|else|for|while|class|import|export)\b/.test(s)) return false;
-  return true;
-}
 
 function renderNoteMindmap(code) {
   const lines = String(code || '').split('\n');
@@ -1322,24 +1362,30 @@ function formatNoteContent(text, note) {
 // ═══════════ AI Chat: 选中文字右键保存为笔记 ═══════════
 let _aiCtxSelection = '';    // 纯文本（用于复制）
 let _aiCtxMarkdown = '';     // 还原为 Markdown（用于保存为笔记，保留表格/分隔线等格式）
+let _aiCtxMessageRow = null; // 未选中文字时，右键命中的整条 AI 回复
 
-// 右键在 AI 消息区内且存在选中文字时，显示"保存为笔记"菜单
+// 右键 AI 回复始终提供沉浸式阅读；存在选区时再显示讲解、保存和复制操作。
 function showAiChatContextMenu(e) {
   const container = document.getElementById('aiMessages');
   if (!container || !container.contains(e.target)) return;
+  const messageRow = e.target.closest ? e.target.closest('.ai-chat-msg.assistant') : null;
   const sel = window.getSelection();
-  if (!sel || sel.isCollapsed) return; // 无选中文字 → 走默认右键菜单
-  const text = sel.toString().trim();
-  // 确保选区位于 AI 聊天区域之内
-  if (!container.contains(sel.anchorNode) || !container.contains(sel.focusNode)) return;
-  // 同时捕获选区 HTML 并还原为 Markdown（表格/分隔线等格式化内容不丢失）
-  const md = selectionToMarkdown();
-  if (!text && !md) return;
+  const selectionInChat = !!(sel && !sel.isCollapsed
+    && container.contains(sel.anchorNode) && container.contains(sel.focusNode));
+  const text = selectionInChat ? sel.toString().trim() : '';
+  const md = selectionInChat ? selectionToMarkdown() : '';
+  if (!messageRow && !text && !md) return;
   e.preventDefault();
   _aiCtxSelection = text;
   _aiCtxMarkdown = md;
+  _aiCtxMessageRow = messageRow;
   const menu = document.getElementById('aiChatContextMenu');
   if (!menu) return;
+  const immersiveAction = document.getElementById('aiCtxImmersive');
+  if (immersiveAction) immersiveAction.style.display = messageRow ? '' : 'none';
+  menu.querySelectorAll('.ai-context-selection-action').forEach(action => {
+    action.style.display = (text || md) ? '' : 'none';
+  });
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
   menu.classList.add('visible');
@@ -1355,6 +1401,13 @@ function closeAiChatContextMenu() {
   if (menu) menu.classList.remove('visible');
   _aiCtxSelection = '';
   _aiCtxMarkdown = '';
+  _aiCtxMessageRow = null;
+}
+
+function openAiContextMessageImmersive() {
+  const row = _aiCtxMessageRow;
+  closeAiChatContextMenu();
+  if (row && row.isConnected) openAiMessageImmersive(row);
 }
 
 function saveAiSelectionAsNote() {

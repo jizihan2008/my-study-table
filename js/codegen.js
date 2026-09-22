@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════
-//  AI 编程助手（codegen）— CodeBuddy CLI Agent 模式
-//  通过本机 CodeBuddy CLI（-p 非交互 + stream-json）运行 agent，
+//  AI 编程助手（codegen）— Codex CLI Agent 模式
+//  通过本机 Codex CLI（exec --json）运行 agent，
 //  agent 在扩展目录（可写）+ 源码目录（只读）内全栈式自动读写
 //  文件生成扩展。流程：输入需求 → 检查 CLI → 预备份 → runAgent
 //  → 流式日志 → 解析摘要 → 重新装载 → 提示完成。
@@ -14,7 +14,7 @@
 window.Codegen = (function () {
   // ── CLI 状态 ──
   function getCliPath() {
-    try { return localStorage.getItem('study_codebuddy_cli_path') || ''; } catch (e) { return ''; }
+    try { return localStorage.getItem('study_codex_cli_path') || ''; } catch (e) { return ''; }
   }
   function getCodebuddyApiKey() {
     try {
@@ -35,7 +35,7 @@ window.Codegen = (function () {
   async function locateCli(force) {
     if (_cliCache && !force) return _cliCache;
     try {
-      const res = await window.electronAPI.codebuddyLocate({ userPath: getCliPath() });
+      const res = await window.electronAPI.codexLocate({ userPath: getCliPath() });
       _cliCache = res || { ok: true, found: false, path: '' };
     } catch (e) {
       _cliCache = { ok: false, found: false, path: '', reason: String(e && e.message || e) };
@@ -49,7 +49,7 @@ window.Codegen = (function () {
   let _loginModalShown = false; // 本会话是否已弹过登录引导
 
   function ensureLoginCheck(force) {
-    if (typeof window.electronAPI === 'undefined' || !window.electronAPI.codebuddyCheckLogin) {
+    if (typeof window.electronAPI === 'undefined' || !window.electronAPI.codexCheckLogin) {
       return Promise.resolve(null);
     }
     const now = Date.now();
@@ -59,7 +59,7 @@ window.Codegen = (function () {
     if (_loginPromise) return _loginPromise;
     _loginPromise = (async () => {
       try {
-        const res = await window.electronAPI.codebuddyCheckLogin({ userPath: getCliPath() });
+        const res = await window.electronAPI.codexCheckLogin({ userPath: getCliPath() });
         _loginState = { loggedIn: !!(res && res.loggedIn), reason: (res && res.reason) || '', ok: !!(res && res.ok), ts: Date.now() };
       } catch (e) {
         _loginState = { loggedIn: false, reason: String(e && e.message || e), ok: false, ts: Date.now() };
@@ -139,7 +139,7 @@ window.Codegen = (function () {
       '',
       '## 扩展目录结构（当前工作目录即扩展根目录）',
       '每个扩展是一个子目录 <id>/，包含两个文件：',
-      '- manifest.json：{ id, name, version, type, description, author, enabled: true, createdAt }',
+      '- manifest.json：{ id, name, version, type, description, author, enabled: false, createdAt }',
       '- main.js：扩展代码（扩展装载时自动执行）',
       '',
       '## 两类扩展',
@@ -156,6 +156,7 @@ window.Codegen = (function () {
       '## 权限约束（必须严格遵守）',
       _modePermissionConstraint(effectiveMode),
       '- 应用核心源码（js/ css/ index.html）只读，禁止修改任何核心文件。',
+      '- manifest.enabled 必须保持 false，由用户审查代码后手动启用。',
       '- 若目标扩展已存在，先读取其 manifest.json 与 main.js 了解现状再修改。',
       '- 避免使用 Bash 等系统命令，只做文件读写。',
       '',
@@ -326,7 +327,7 @@ window.Codegen = (function () {
   async function runAgent(userReq, mode, project) {
     const cli = await locateCli();
     if (!cli.found) {
-      throw new Error('未检测到 CodeBuddy CLI，请先安装（设置 → AI 设置 → 一键安装，或 npm install -g @tencent-ai/codebuddy-code）');
+      throw new Error('未检测到 Codex CLI，请先安装（设置 → AI 设置 → 一键安装，或 npm install -g @openai/codex）');
     }
 
     const effectiveMode = mode || 'craft';
@@ -344,10 +345,9 @@ window.Codegen = (function () {
 
     // 2. 构建 prompt 并运行
     const prompt = await buildAgentPrompt(userReq, effectiveMode, proj);
-    const result = await window.electronAPI.codebuddyRun({
+    const result = await window.electronAPI.codexRun({
       prompt,
       userPath: getCliPath(),
-      apiKey: getCodebuddyApiKey(),
       mode: effectiveMode
     });
 
@@ -413,6 +413,11 @@ window.Codegen = (function () {
         const nested = findSummaryInTexts(obj.message.content);
         if (nested) return nested;
       }
+      const codexText = codexAgentMessageText(obj);
+      if (codexText) {
+        const nested = findSummaryInPlainText(codexText);
+        if (nested) return nested;
+      }
     }
     return null;
   }
@@ -439,6 +444,11 @@ window.Codegen = (function () {
       // 形态 2：嵌套在 assistant 事件的 text 字段里
       if (obj && obj.type === 'assistant' && obj.message && Array.isArray(obj.message.content)) {
         const nested = findClarifyInTexts(obj.message.content);
+        if (nested) return nested;
+      }
+      const codexText = codexAgentMessageText(obj);
+      if (codexText) {
+        const nested = findClarifyInPlainText(codexText);
         if (nested) return nested;
       }
     }
@@ -479,6 +489,23 @@ window.Codegen = (function () {
     return null;
   }
 
+  function codexAgentMessageText(obj) {
+    if (!obj || obj.type !== 'item.completed' || !obj.item || obj.item.type !== 'agent_message') return '';
+    return typeof obj.item.text === 'string' ? obj.item.text : '';
+  }
+
+  function findClarifyInPlainText(text) {
+    const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const match = lines[i].match(/\{[\s\S]*\}/);
+      const obj = tryParseJson(match ? match[0] : lines[i]);
+      if (!obj || obj.type !== 'clarify' || !Array.isArray(obj.questions)) continue;
+      const questions = normalizeClarifyQuestions(obj.questions);
+      if (questions.length) return { questions };
+    }
+    return null;
+  }
+
   // 判断是否为约定的插件/补丁摘要
   function isSummaryObj(obj) {
     return !!(obj && typeof obj === 'object' &&
@@ -501,6 +528,16 @@ window.Codegen = (function () {
     return null;
   }
 
+  function findSummaryInPlainText(text) {
+    const lines = String(text || '').split('\n').map(l => l.trim()).filter(Boolean);
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const match = lines[i].match(/\{[\s\S]*\}/);
+      const obj = tryParseJson(match ? match[0] : lines[i]);
+      if (isSummaryObj(obj)) return obj;
+    }
+    return null;
+  }
+
   // 从 agent 输出中检测明确的失败事件（stream-json result 事件的 is_error）。
   // CLI 进程退出码为 0 时 agent 内部也可能报错（如未登录），必须据此判断真实成败。
   function extractAgentError(stdout) {
@@ -512,6 +549,12 @@ window.Codegen = (function () {
         if (obj && obj.type === 'result' && obj.is_error) {
           const errs = Array.isArray(obj.errors) && obj.errors.length ? obj.errors : [];
           return errs.join('；') || 'agent 执行出错';
+        }
+        if (obj && obj.type === 'turn.failed') {
+          return String((obj.error && (obj.error.message || obj.error)) || 'Codex agent 执行出错');
+        }
+        if (obj && obj.type === 'error') {
+          return String(obj.message || (obj.error && (obj.error.message || obj.error)) || 'Codex CLI 返回错误');
         }
       } catch (e) { /* 继续 */ }
     }
@@ -743,7 +786,7 @@ window.Codegen = (function () {
   }
 
   const CG_GUIDE_ITEMS = [
-    { icon: 'bot', color: '#8b5cf6', title: 'CodeBuddy Agent', desc: '调用本机 CodeBuddy CLI，agent 会自主读文件、写代码、建扩展，全栈式完成你的需求。' },
+    { icon: 'bot', color: '#8b5cf6', title: 'Codex Agent', desc: '调用本机 Codex CLI，agent 会自主读取项目、编写代码并创建或修改现有扩展。' },
     { icon: 'message-circle-question', color: '#10b981', title: '需求澄清', desc: '需求不明确时先用澄清模式，AI 会主动提问，回答后自动带上下文进入方案与开发。' },
     { icon: 'wrench', color: '#d97706', title: '修改现有功能', desc: '可生成「源码补丁」覆盖任意全局函数，或直接修改已有扩展，卸载时自动恢复原状。' },
     { icon: 'shield-check', color: '#0284c7', title: '安全可回滚', desc: '运行前自动备份全部扩展，完成后随时可在「扩展」页面中禁用、卸载或一键回滚。' }
@@ -829,7 +872,7 @@ window.Codegen = (function () {
   function renderCgAssistantBody(m) {
     if (m.running) {
       const label = m.install
-        ? '<i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;"></i> 正在安装 CodeBuddy CLI…'
+        ? '<i data-lucide="download" class="lucide-icon" style="width:14px;height:14px;"></i> 正在安装 Codex CLI…'
         : '<i data-lucide="loader-2" class="lucide-icon spin" style="width:14px;height:14px;"></i> Agent 运行中（可能需要 1~3 分钟），可切换标签页等待…';
       return `
         <div class="cg-msg-bubble cg-running-label">${label}</div>
@@ -853,7 +896,7 @@ window.Codegen = (function () {
         <div class="cg-result">
           <div class="cg-result-header">
             <div class="cg-result-title-wrap">
-              <span class="cg-result-title"><i data-lucide="${m.ok ? 'check-circle-2' : 'x-circle'}" class="lucide-icon" style="width:16px;height:16px;"></i> ${m.ok ? 'CodeBuddy CLI 安装完成' : 'CodeBuddy CLI 安装失败'}</span>
+              <span class="cg-result-title"><i data-lucide="${m.ok ? 'check-circle-2' : 'x-circle'}" class="lucide-icon" style="width:16px;height:16px;"></i> ${m.ok ? 'Codex CLI 安装完成' : 'Codex CLI 安装失败'}</span>
             </div>
           </div>
           <div class="cg-result-desc">${m.ok ? 'CLI 已安装，现在可以直接在下方输入需求运行 Agent 了。' : escapeHtml(m.error || '安装失败，请到 设置 → AI 设置 查看详情或手动安装。')}</div>
@@ -884,7 +927,7 @@ window.Codegen = (function () {
           </div>`
           : `
           <div class="cg-result">
-            <div class="cg-result-desc">Agent 执行完成。扩展文件已写入，扩展列表已刷新，可到「扩展」页面查看与管理。</div>
+            <div class="cg-result-desc">Agent 执行完成。扩展文件已校验并保持禁用，请到「扩展」页面审查代码后手动启用。</div>
             <div class="cg-result-actions">
               <button class="cg-apply-btn" onclick="openExtensionsSettings()"><i data-lucide="puzzle" class="lucide-icon" style="width:14px;height:14px;"></i> 打开扩展管理</button>
               <button class="cg-ghost-btn" onclick="cgContinue()"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i> 继续生成</button>
@@ -908,7 +951,7 @@ window.Codegen = (function () {
   function cgAuthHint(text) {
     const t = String(text || '').toLowerCase();
     if (/login|log\s*in|authoriz|auth|credential|api[-\s]?key|sign\s*in|未登录|未授权|登录|授权|token/.test(t)) {
-      return '提示：若为登录/授权相关错误，请在终端运行 <b>codebuddy</b> 完成登录，或到 设置 → AI 设置 配置 API Key。';
+      return '提示：若为登录/授权相关错误，请在终端运行 <b>codex login</b> 完成登录。';
     }
     return '';
   }
@@ -1295,7 +1338,10 @@ window.Codegen = (function () {
   function isCliMetaText(s) {
     return s.indexOf('启动 CodeBuddy CLI agent') === 0 ||
       s.indexOf('CodeBuddy agent 执行完成') === 0 ||
-      s.indexOf('CodeBuddy agent 异常退出') === 0;
+      s.indexOf('CodeBuddy agent 异常退出') === 0 ||
+      s.indexOf('启动 Codex CLI agent') === 0 ||
+      s.indexOf('Codex agent 执行完成') === 0 ||
+      s.indexOf('Codex agent 异常退出') === 0;
   }
 
   // 由单个 stream-json 事件对象构造回复组；无法识别时返回 null
@@ -1325,6 +1371,35 @@ window.Codegen = (function () {
       }
       return { kind: 'ok', parts: [{ kind: 'ok', text: '✔ Agent 执行完成' }] };
     }
+    if (obj.type === 'thread.started') {
+      return { kind: 'sys', parts: [{ kind: 'sys', text: '✔ Codex Agent 已连接' }] };
+    }
+    if (obj.type === 'item.completed' && obj.item) {
+      const item = obj.item;
+      if (item.type === 'agent_message' && item.text) {
+        return { kind: 'assistant', parts: [{ kind: 'text', text: item.text }] };
+      }
+      if (item.type === 'command_execution') {
+        return { kind: 'assistant', parts: [{ kind: 'tool', name: '命令执行', input: String(item.command || '') }] };
+      }
+      if (item.type === 'file_change') {
+        let input = '';
+        try { input = JSON.stringify(item.changes || item); } catch (e) { input = ''; }
+        return { kind: 'assistant', parts: [{ kind: 'tool', name: '文件修改', input }] };
+      }
+      if (item.type === 'mcp_tool_call') {
+        let input = '';
+        try { input = JSON.stringify(item.arguments || item); } catch (e) { input = ''; }
+        return { kind: 'assistant', parts: [{ kind: 'tool', name: item.tool || item.name || 'MCP 工具', input }] };
+      }
+      return null;
+    }
+    if (obj.type === 'turn.completed') return { kind: 'ok', parts: [{ kind: 'ok', text: '✔ Codex Agent 执行完成' }] };
+    if (obj.type === 'turn.failed' || obj.type === 'error') {
+      const message = String(obj.message || (obj.error && (obj.error.message || obj.error)) || '未知错误');
+      return { kind: 'error', parts: [{ kind: 'error', text: '✘ Codex Agent 执行出错：' + message }] };
+    }
+    if (obj.type === 'turn.started' || obj.type === 'item.started' || obj.type === 'item.updated') return null;
     if (obj.type === 'file-history-snapshot' || obj.type === 'progress') return null;
     return null;
   }
@@ -1463,7 +1538,7 @@ window.Codegen = (function () {
         <div class="cg-topbar-left">
           <span class="cg-key-status" id="cgCliStatus">
             <i data-lucide="loader-2" class="lucide-icon spin" style="width:15px;height:15px;"></i>
-            正在检测 CodeBuddy CLI…
+            正在检测 Codex CLI…
           </span>
           <span class="cg-topbar-model" id="cgCliPath"></span>
         </div>
@@ -1543,16 +1618,16 @@ window.Codegen = (function () {
       const login = await ensureLoginCheck();
       if (login && login.loggedIn) {
         statusEl.className = 'cg-key-status ok';
-        statusEl.innerHTML = '<i data-lucide="check-circle-2" class="lucide-icon" style="width:15px;height:15px;"></i> CodeBuddy CLI 已连接';
+        statusEl.innerHTML = '<i data-lucide="check-circle-2" class="lucide-icon" style="width:15px;height:15px;"></i> Codex CLI 已连接';
         if (pathEl) pathEl.innerHTML = '<i data-lucide="file-code" class="lucide-icon" style="width:13px;height:13px;"></i> ' + escapeHtml(cli.path);
       } else {
         statusEl.className = 'cg-key-status installing';
-        statusEl.innerHTML = '<i data-lucide="user-x" class="lucide-icon" style="width:15px;height:15px;"></i> CodeBuddy CLI 未登录';
+        statusEl.innerHTML = '<i data-lucide="user-x" class="lucide-icon" style="width:15px;height:15px;"></i> Codex CLI 未登录';
         if (pathEl) pathEl.innerHTML = '<button class="cg-key-btn" onclick="showCgLoginModal()"><i data-lucide="log-in" class="lucide-icon" style="width:13px;height:13px;"></i> 去登录</button>';
       }
     } else {
       statusEl.className = 'cg-key-status warn';
-      statusEl.innerHTML = '<i data-lucide="alert-circle" class="lucide-icon" style="width:15px;height:15px;"></i> 未安装 CodeBuddy CLI';
+      statusEl.innerHTML = '<i data-lucide="alert-circle" class="lucide-icon" style="width:15px;height:15px;"></i> 未安装 Codex CLI';
       if (pathEl) pathEl.innerHTML = '<button class="cg-key-btn" onclick="installCliFromCodegen()"><i data-lucide="download" class="lucide-icon" style="width:13px;height:13px;"></i> 一键安装</button>';
     }
     if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
@@ -1570,9 +1645,7 @@ window.Codegen = (function () {
   }
 
   // ── 登录引导弹窗 ──
-  // 可用性判定：已配置 API Key 即可工作（无需 CLI OAuth 登录）
   function cgLoginUsable(login) {
-    if (getCodebuddyApiKey()) return true;
     return !!(login && login.loggedIn);
   }
 
@@ -1588,24 +1661,17 @@ window.Codegen = (function () {
     ov.innerHTML = `
       <div class="modal" style="max-width:480px;" onclick="event.stopPropagation()">
         <div class="modal-header">
-          <span class="modal-title"><i data-lucide="log-in" class="lucide-icon" style="width:16px;height:16px;"></i> 需要登录 CodeBuddy</span>
+          <span class="modal-title"><i data-lucide="log-in" class="lucide-icon" style="width:16px;height:16px;"></i> 需要登录 Codex</span>
           <button class="modal-close" onclick="closeCgLoginModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
         </div>
         <div class="modal-body">
-          <p class="cg-login-desc">未检测到 CodeBuddy CLI 登录，AI 编程 Agent 无法正常工作。请选择一种方式继续：</p>
+          <p class="cg-login-desc">未检测到 Codex CLI 登录，AI 编程 Agent 无法正常工作。请先在终端完成登录：</p>
           <div class="cg-login-actions">
             <button class="cg-login-btn primary" onclick="openCgLoginTerminal()">
               <i data-lucide="terminal" class="lucide-icon" style="width:18px;height:18px;"></i>
               <span class="cg-login-btn-text">
                 <span class="cg-login-btn-main">打开终端登录</span>
-                <span class="cg-login-btn-desc">自动打开终端运行 codebuddy，执行 /login 完成账号登录</span>
-              </span>
-            </button>
-            <button class="cg-login-btn" onclick="openCgApiKeyConfig()">
-              <i data-lucide="key-round" class="lucide-icon" style="width:18px;height:18px;"></i>
-              <span class="cg-login-btn-text">
-                <span class="cg-login-btn-main">配置 API Key</span>
-                <span class="cg-login-btn-desc">跳转到设置，填写 CodeBuddy API Key 直接使用</span>
+                <span class="cg-login-btn-desc">自动打开终端并运行 codex login</span>
               </span>
             </button>
           </div>
@@ -1628,10 +1694,10 @@ window.Codegen = (function () {
 
   function openCgLoginTerminal() {
     closeCgLoginModal();
-    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.codebuddyOpenLoginTerminal) {
-      window.electronAPI.codebuddyOpenLoginTerminal({ userPath: getCliPath() }).catch(function () {});
+    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.codexOpenLoginTerminal) {
+      window.electronAPI.codexOpenLoginTerminal({ userPath: getCliPath() }).catch(function () {});
     }
-    cgStatus('已打开终端，请在窗口中执行 /login 完成登录，然后点击「已登录？重新检测」。');
+    cgStatus('已打开终端，请完成 codex login，然后点击「已登录？重新检测」。');
   }
 
   function openCgApiKeyConfig() {
@@ -1647,14 +1713,14 @@ window.Codegen = (function () {
     if (cgLoginUsable(login)) {
       cgStatus('登录状态正常，可以开始使用。');
     } else {
-      cgStatus('仍未检测到登录，请先在终端 /login 或配置 API Key。', true);
+      cgStatus('仍未检测到登录，请先在终端运行 codex login。', true);
     }
     if (typeof refreshCliBar === 'function') refreshCliBar();
   }
 
   // ── 一键安装 CLI（AI 编程页入口，安装日志写入当前项目消息流）──
   async function installCliFromCodegen() {
-    if (typeof window.electronAPI === 'undefined' || !window.electronAPI.codebuddyInstall) return;
+    if (typeof window.electronAPI === 'undefined' || !window.electronAPI.codexInstall) return;
     if (_generating) { cgStatus('已有 Agent 在运行，请稍后再安装 CLI。', true); return; }
     const p = getActiveCgProject();
     if (!p) return;
@@ -1672,11 +1738,11 @@ window.Codegen = (function () {
       if (el) { el.textContent = aMsg.log; el.scrollTop = el.scrollHeight; }
     };
 
-    const off = window.electronAPI.onCodebuddyInstallOutput((payload) => {
+    const off = window.electronAPI.onCodexInstallOutput((payload) => {
       if (payload && payload.text) appendLog(payload.text);
     });
     try {
-      const res = await window.electronAPI.codebuddyInstall({ useMirror: true });
+      const res = await window.electronAPI.codexInstall({ useMirror: true });
       aMsg.running = false;
       aMsg.ok = !!(res && res.ok);
       if (!aMsg.ok) aMsg.error = ((res && res.reason) || '未知错误');
@@ -1702,7 +1768,7 @@ window.Codegen = (function () {
 
     const cli = await locateCli();
     if (!cli.found) {
-      cgStatus('未检测到 CodeBuddy CLI，请先点击顶部「一键安装」或到 设置 → AI 设置 配置。', true);
+      cgStatus('未检测到 Codex CLI，请先点击顶部「一键安装」或到 设置 → AI 设置 配置。', true);
       return;
     }
 
@@ -1721,7 +1787,7 @@ window.Codegen = (function () {
     _generating = true;
     renderCodegen();
     updateCgGenBtn();
-    cgStatus('正在运行 CodeBuddy Agent（可能需 1~3 分钟），可切换标签页等待…');
+    cgStatus('正在运行 Codex Agent（可能需 1~3 分钟），可切换标签页等待…');
 
     const appendAgentLog = createLogAppender(aMsg);
     const off = (typeof window.electronAPI !== 'undefined' && window.electronAPI.onCodegenAgentOutput)
@@ -1751,7 +1817,7 @@ window.Codegen = (function () {
       _generating = false;
       renderCodegen();
       scrollCgToBottom();
-      cgStatus(aMsg.ok ? 'Agent 执行完成，扩展已写入并装载。' : 'Agent 执行失败，详见消息区日志。', !aMsg.ok);
+      cgStatus(aMsg.ok ? 'Agent 执行完成，扩展已写入但保持禁用，请审查后手动启用。' : 'Agent 执行失败，详见消息区日志。', !aMsg.ok);
     }
   }
 
@@ -1815,7 +1881,7 @@ window.Codegen = (function () {
     _generating = true;
     renderCodegen();
     scrollCgToBottom();
-    cgStatus('正在运行 CodeBuddy Agent（基于澄清回答）…');
+    cgStatus('正在运行 Codex Agent（基于澄清回答）…');
     const appendAgentLog = createLogAppender(aMsg);
     const off = (typeof window.electronAPI !== 'undefined' && window.electronAPI.onCodegenAgentOutput)
       ? window.electronAPI.onCodegenAgentOutput((payload) => {
@@ -1869,7 +1935,7 @@ window.Codegen = (function () {
     _generating = true;
     renderCodegen();
     scrollCgToBottom();
-    cgStatus('正在运行 CodeBuddy Agent（开始开发）…');
+    cgStatus('正在运行 Codex Agent（开始开发）…');
     const appendAgentLog = createLogAppender(aMsg);
     const off = (typeof window.electronAPI !== 'undefined' && window.electronAPI.onCodegenAgentOutput)
       ? window.electronAPI.onCodegenAgentOutput((payload) => {
@@ -1920,6 +1986,8 @@ window.Codegen = (function () {
   window.cgStartDev = cgStartDev;
   window.installCliFromCodegen = installCliFromCodegen;
   window.refreshCliBar = refreshCliBar;
+  window.locateCodexCli = locateCli;
+  // 旧名保留一个版本，避免已打开的设置页引用失效。
   window.locateCodebuddyCli = locateCli;
   window.getCodebuddyApiKey = getCodebuddyApiKey;
   window.setCodebuddyApiKey = setCodebuddyApiKey;

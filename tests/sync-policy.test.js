@@ -191,6 +191,54 @@ test('multiple ordinary dirty keys are written in one batch', async () => {
   assert.equal(window.Sync.__test.isOwnRealtimeChange('study_todos_v2', '2026-08-26T08:00:00.000Z'), true);
 });
 
+test('an edit made while an upload is in flight stays dirty for the next upload', async () => {
+  const original = JSON.stringify([{ id: 1, text: 'first edit' }]);
+  const newer = JSON.stringify([{ id: 1, text: 'second edit' }]);
+  const values = new Map([
+    ['study_sync_config', JSON.stringify({ enabled: true, autoSync: false })],
+    ['study_todos_v2', original]
+  ]);
+  const localStorage = {
+    getItem: key => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key)
+  };
+  let releaseUpload;
+  let markUploadStarted;
+  const uploadResult = new Promise(resolve => { releaseUpload = resolve; });
+  const uploadStarted = new Promise(resolve => { markUploadStarted = resolve; });
+  const client = {
+    auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+    from() {
+      return {
+        upsert() { return this; },
+        select() { return this; },
+        single() { markUploadStarted(); return uploadResult; }
+      };
+    }
+  };
+  const window = { __MST_TEST__: true, SyncPolicy: policy };
+  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'sync.js'), 'utf8');
+  vm.runInNewContext(code, {
+    window, localStorage, getSupabaseClient: () => client,
+    setTimeout() { return 1; }, clearTimeout() {},
+    console: { log() {}, warn() {}, error() {} }
+  });
+
+  window.Sync.init();
+  await window.Sync.getStatus();
+  const uploading = window.Sync.uploadAll();
+  await uploadStarted;
+  localStorage.setItem('study_todos_v2', newer);
+  window.Sync.onLocalChange('study_todos_v2');
+  releaseUpload({ data: { updated_at: '2026-09-22T08:00:00.000Z' }, error: null });
+  const status = await uploading;
+
+  assert.equal(localStorage.getItem('study_todos_v2'), newer);
+  assert.deepEqual(JSON.parse(values.get('study_sync_dirty_v1')), { study_todos_v2: true });
+  assert.equal(status.pendingCount, 1);
+});
+
 test('pending conflicts survive reload and are exposed without opening a dialog', async () => {
   const pending = {
     study_notes_v2: {

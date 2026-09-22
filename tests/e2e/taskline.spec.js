@@ -210,3 +210,39 @@ test('a quest created from the canvas lands exactly under the mouse at any zoom 
   expect(zoomedDelta.deltaX).toBeLessThanOrEqual(1.5);
   expect(zoomedDelta.deltaY).toBeLessThanOrEqual(1.5);
 });
+
+test('touch tap opens quest detail and a two-finger gesture zooms the canvas', async () => {
+  const result = await page.evaluate(() => {
+    const line = tlAddLine({ name: '移动端手势回归', type: 'quality' });
+    const quest = tlAddQuest({ lineId: line.id, title: '轻触查看详情', status: 'active' });
+    tlSwitchLine(line.id);
+    const canvas = document.querySelector('#tlGraphWrap .tl-graph-canvas');
+    const node = canvas.querySelector('.tl-node[data-qid="' + quest.id + '"]');
+    const makeTouch = (id, x, y, target) => new Touch({
+      identifier: id, target, clientX: x, clientY: y, pageX: x, pageY: y,
+      screenX: x, screenY: y, radiusX: 2, radiusY: 2, force: 1
+    });
+
+    const nr = node.getBoundingClientRect();
+    const tap = makeTouch(1, nr.left + 10, nr.top + 10, node);
+    tlNodeDragTouchStart({ preventDefault() {}, currentTarget: node, touches: [tap] }, quest.id);
+    document.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [tap] }));
+    const detailOpened = document.getElementById('editModalBody').textContent.includes('轻触查看详情');
+    closeEditModal();
+
+    const cr = canvas.getBoundingClientRect();
+    const a = makeTouch(2, cr.left + 120, cr.top + 150, canvas);
+    const b = makeTouch(3, cr.left + 220, cr.top + 150, canvas);
+    canvas.dispatchEvent(new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [a, b], targetTouches: [a, b], changedTouches: [a, b] }));
+    const a2 = makeTouch(2, cr.left + 80, cr.top + 150, canvas);
+    const b2 = makeTouch(3, cr.left + 260, cr.top + 150, canvas);
+    document.dispatchEvent(new TouchEvent('touchmove', { bubbles: true, cancelable: true, touches: [a2, b2], targetTouches: [a2, b2], changedTouches: [a2, b2] }));
+    const scale = tlGraphView.scale;
+    const indicator = document.getElementById('tlZoomIndicator').textContent;
+    document.dispatchEvent(new TouchEvent('touchend', { bubbles: true, cancelable: true, touches: [], targetTouches: [], changedTouches: [a2, b2] }));
+    return { detailOpened, scale, indicator };
+  });
+  expect(result.detailOpened).toBe(true);
+  expect(result.scale).toBeGreaterThan(1.5);
+  expect(result.indicator).toBe(Math.round(result.scale * 100) + '%');
+});

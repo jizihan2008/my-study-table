@@ -1019,7 +1019,8 @@ function getGoalTimerMs(id) {
   let totalMs = 0;
   for (const rec of records) {
     if (rec.affectsFocus === false) continue;
-    if (rec.targetId === id && rec.targetType === 'goal') totalMs += rec.totalMs;
+    const goalId = rec.goalId ?? (rec.targetType === 'goal' ? rec.targetId : null);
+    if (goalId === id) totalMs += rec.totalMs;
   }
   return totalMs;
 }

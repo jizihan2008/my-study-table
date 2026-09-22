@@ -3601,21 +3601,20 @@ function formatDailyReportTimerLabel(record) {
   const sessionName = typeof record.name === 'string' ? record.name.trim() : '';
   if (sessionName) parts.push('⏱ ' + sessionName);
 
-  const targetId = record.targetId ?? record.todoId;
-  const targetType = record.targetType || 'todo';
-  if (targetId !== null && targetId !== undefined) {
-    if (targetType === 'goal') {
-      const goal = typeof loadGoals === 'function'
-        ? loadGoals().find(g => g.id === targetId)
-        : null;
-      if (goal && goal.text) parts.push('🎯 ' + goal.text);
-    } else {
-      const todo = (typeof todos !== 'undefined' && Array.isArray(todos))
-        ? todos.find(t => t.id === targetId)
-        : null;
-      // 关联待办给出完整父级路径，日报里同名子任务才能区分
-      if (todo && todo.text) parts.push('📋 ' + formatDailyReportTodoPath(todo));
-    }
+  const todoId = record.todoId ?? (record.targetType === 'todo' || !record.targetType ? record.targetId : null);
+  const goalId = record.goalId ?? (record.targetType === 'goal' ? record.targetId : null);
+  const taskId = record.taskId ?? (record.targetType === 'task' ? record.targetId : null);
+  if (todoId != null) {
+    const todo = (typeof todos !== 'undefined' && Array.isArray(todos)) ? todos.find(t => t.id === todoId) : null;
+    if (todo && todo.text) parts.push('📋 ' + formatDailyReportTodoPath(todo));
+  }
+  if (goalId != null) {
+    const goal = typeof loadGoals === 'function' ? loadGoals().find(g => g.id === goalId) : null;
+    if (goal && goal.text) parts.push('🎯 ' + goal.text);
+  }
+  if (taskId != null && typeof tlGetQuests === 'function') {
+    const task = tlGetQuests().find(item => item.id === taskId);
+    if (task && task.title) parts.push('🗺️ ' + task.title);
   }
 
   return parts.length > 0 ? parts.join(' · ') : '自由计时';
@@ -5029,30 +5028,27 @@ async function saveSupabaseSettings(reconnect) {
   if (test.ok) setTimeout(() => { if (st) st.style.display = 'none'; }, 3500);
 }
 
-// ═══════════ CodeBuddy CLI 配置区 ═══════════
+// ═══════════ Codex CLI 配置区 ═══════════
 function getCliPath() {
-  try { return localStorage.getItem('study_codebuddy_cli_path') || ''; } catch (e) { return ''; }
+  try { return localStorage.getItem('study_codex_cli_path') || ''; } catch (e) { return ''; }
 }
 function saveCliPath(p) {
-  try { localStorage.setItem('study_codebuddy_cli_path', p); } catch (e) {}
+  try { localStorage.setItem('study_codex_cli_path', p); } catch (e) {}
 }
 
 async function renderCodebuddyCliConfig() {
   const el = document.getElementById('codebuddyCliConfig');
   if (!el) return;
-  el.innerHTML = '<div class="hint" style="text-align:center;padding:12px;">正在检测 CodeBuddy CLI…</div>';
+  el.innerHTML = '<div class="hint" style="text-align:center;padding:12px;">正在检测 Codex CLI…</div>';
   let cli = { found: false, path: '' };
   try {
-    if (window.electronAPI && window.electronAPI.codebuddyLocate) {
-      const res = await window.electronAPI.codebuddyLocate({ userPath: getCliPath() });
+    if (window.electronAPI && window.electronAPI.codexLocate) {
+      const res = await window.electronAPI.codexLocate({ userPath: getCliPath() });
       cli = res || { found: false, path: '' };
     }
   } catch (e) {
     cli = { found: false, path: '', reason: e.message };
   }
-
-  const apiKey = (typeof window.Codegen !== 'undefined' && window.Codegen.getCodebuddyApiKey)
-    ? window.Codegen.getCodebuddyApiKey() : '';
 
   el.innerHTML = `
     <div style="background:var(--todo-bg);border:1px solid var(--border);border-radius:10px;padding:12px;margin-bottom:10px;">
@@ -5065,7 +5061,7 @@ async function renderCodebuddyCliConfig() {
       </div>
       <div class="settings-field" style="margin-bottom:6px;">
         <label>CLI 路径（留空自动探测）</label>
-        <input type="text" id="codebuddyCliPathInput" value="${escapeHtml(getCliPath())}" placeholder="如 C:\\Users\\you\\AppData\\Roaming\\npm\\codebuddy.cmd">
+        <input type="text" id="codebuddyCliPathInput" value="${escapeHtml(getCliPath())}" placeholder="如 C:\\Users\\you\\AppData\\Roaming\\npm\\codex.cmd">
       </div>
       <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px;">
         <button class="btn-save-settings" onclick="saveCodebuddyCliPath()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--primary);">保存路径</button>
@@ -5074,23 +5070,15 @@ async function renderCodebuddyCliConfig() {
       </div>
       ${!cli.found ? `
       <div style="background:rgba(245,158,11,0.08);border:1px solid rgba(245,158,11,0.3);border-radius:8px;padding:8px 10px;font-size:12px;color:var(--text-secondary);line-height:1.6;">
-        <b>安装指引：</b>需 Node.js ≥ 18.20，然后执行：<br>
-        <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px;">npm install -g @tencent-ai/codebuddy-code</code><br>
-        或在终端运行 <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px;">codebuddy</code> 完成微信/QQ 登录。
+        <b>安装指引：</b>需 Node.js，然后执行：<br>
+        <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px;">npm install -g @openai/codex</code><br>
+        安装后运行 <code style="background:rgba(0,0,0,0.2);padding:2px 6px;border-radius:4px;">codex login</code> 完成登录。
       </div>` : ''}
       <label style="display:flex;align-items:center;gap:6px;cursor:pointer;margin-top:8px;font-size:12px;color:var(--text-secondary);">
         <input type="checkbox" id="codebuddyUseMirror" style="width:14px;height:14px;accent-color:var(--primary);"> 使用国内镜像安装（npmmirror）
       </label>
     </div>
-    <div class="settings-field" style="margin-bottom:8px;">
-      <label>CodeBuddy API Key（可选，用于无需扫码登录的授权）</label>
-      <input type="password" id="codebuddyApiKeyInput" value="${escapeHtml(apiKey)}" placeholder="留空则使用本机已登录凭据">
-      <span class="hint">从 CodeBuddy 控制台获取；中国版环境自动设为 internal。留空时使用 CLI 已登录的 OAuth 凭据。</span>
-    </div>
-    <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:8px;">
-      <button class="btn-save-settings" onclick="saveCodebuddyApiKey()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--primary);">保存 API Key</button>
-      <button class="btn-save-settings" onclick="clearCodebuddyApiKey()" style="width:auto;padding:5px 12px;font-size:12px;background:var(--border);color:var(--text);">清除</button>
-    </div>
+    <span class="hint" style="display:block;margin-bottom:8px;">Codex 使用本机 CLI 的登录凭据；本应用不保存 OpenAI API Key。</span>
     <div class="settings-status" id="codebuddyCliStatus"></div>
     <div class="cg-agent-log-wrap" id="codebuddyInstallLogWrap" style="display:none;">
       <div class="cg-col-title"><i data-lucide="terminal" class="lucide-icon" style="width:13px;height:13px;"></i> 安装日志</div>
@@ -5119,7 +5107,7 @@ function saveCodebuddyCliPath() {
 async function reprobeCodebuddyCli() {
   codebuddyCliStatus('正在重新探测…');
   try {
-    const res = await window.electronAPI.codebuddyLocate({ userPath: getCliPath() });
+    const res = await window.electronAPI.codexLocate({ userPath: getCliPath() });
     codebuddyCliStatus(res && res.found ? '✅ 已找到 CLI: ' + res.path : '❌ 仍未检测到 CLI');
   } catch (e) {
     codebuddyCliStatus('探测失败: ' + e.message, true);
@@ -5137,12 +5125,12 @@ async function installCodebuddyCli() {
   const append = (text) => {
     if (logEl) { logEl.textContent += text; logEl.scrollTop = logEl.scrollHeight; }
   };
-  codebuddyCliStatus('正在安装 CodeBuddy CLI…');
-  const off = window.electronAPI.onCodebuddyInstallOutput((payload) => {
+  codebuddyCliStatus('正在安装 Codex CLI…');
+  const off = window.electronAPI.onCodexInstallOutput((payload) => {
     if (payload && payload.text) append(payload.text);
   });
   try {
-    const res = await window.electronAPI.codebuddyInstall({ useMirror });
+    const res = await window.electronAPI.codexInstall({ useMirror });
     codebuddyCliStatus(res && res.ok ? '✅ 安装完成，CLI 已就绪' : '❌ 安装失败：' + ((res && res.reason) || '未知错误'), !(res && res.ok));
   } catch (e) {
     codebuddyCliStatus('安装出错: ' + e.message, true);

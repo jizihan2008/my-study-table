@@ -63,6 +63,7 @@ function createContext(options) {
     setTimeout: () => 0,
     setInterval: () => 1,
     clearInterval: () => {},
+    performance: opts.navigationType ? { getEntriesByType: type => type === 'navigation' ? [{ type: opts.navigationType }] : [] } : undefined,
     formatDate: d => localDateStr(d.getTime()),
     saveData: (key, value) => {
       if (key === 'study_timer_records') records = JSON.parse(JSON.stringify(value));
@@ -157,6 +158,31 @@ test('刚关掉就重开（半小时内）：自动接着计时，且不含离�
   assert.equal(state.sessions.length, 1);
   assert.equal(state.sessions[0].start, sessionStart);
   assert.equal(state.sessions[0].end, lastActiveAt);
+});
+
+test('Ctrl+Shift+R 刷新继续同一个时段，不在刷新点切成两段', () => {
+  const now = Date.now();
+  const sessionStart = now - 20 * 60 * 1000;
+  const harness = restore({
+    navigationType: 'reload',
+    savedState: {
+      running: true,
+      elapsed: 0,
+      displayMs: 20 * 60 * 1000,
+      sessionStart,
+      sessions: [],
+      name: '连续阅读',
+      linkedTodoId: null,
+      linkedGoalId: null,
+      savedAt: now - 500,
+      lastActiveAt: now - 500
+    }
+  });
+  const state = timerState(harness);
+  assert.equal(state.running, true);
+  assert.equal(state.sessions.length, 0);
+  assert.equal(state.sessionStart, sessionStart);
+  assert.ok(state.elapsed + Date.now() - state.sessionStart >= 20 * 60 * 1000);
 });
 
 test('很久以前忘了停的计时器：只找回时长，不会自己跑起来', () => {
@@ -321,16 +347,57 @@ test('保存记录时把超出实际时长的尾巴剪掉', () => {
 test('normalizeTimerSessionsForRecord 保持正常数据原样、按时长等比例裁剪超长数据', () => {
   const { ctx } = createContext();
   const normal = [{ start: 1000, end: 61000 }];
-  assert.deepEqual([...ctx.normalizeTimerSessionsForRecord(normal, 60000)], normal);
+  assert.deepEqual(JSON.parse(JSON.stringify(ctx.normalizeTimerSessionsForRecord(normal, 60000))), normal);
 
   const inflated = [
     { start: 0, end: 3 * HOUR },
     { start: 3 * HOUR, end: 3 * HOUR + 60000 }
   ];
-  const trimmed = [...ctx.normalizeTimerSessionsForRecord(inflated, 10 * 60 * 1000)];
+  const trimmed = JSON.parse(JSON.stringify(ctx.normalizeTimerSessionsForRecord(inflated, 10 * 60 * 1000)));
   const span = trimmed.reduce((acc, s) => acc + (s.end - s.start), 0);
   assert.equal(span, 10 * 60 * 1000);
   assert.equal(trimmed[0].start, 0);
-  assert.equal(trimmed[1].start, 3 * HOUR);
+  assert.equal(trimmed.length, 1);
   for (const s of trimmed) assert.ok(s.end > s.start);
+});
+
+test('首尾时间完全相接的时段会自动合并，真实暂停间隔会保留', () => {
+  const { ctx } = createContext();
+  const merged = JSON.parse(JSON.stringify(ctx.mergeContiguousTimerSessions([
+    { start: 1000, end: 2000 },
+    { start: 2000, end: 3500 },
+    { start: 4000, end: 5000 }
+  ])));
+  assert.deepEqual(merged, [
+    { start: 1000, end: 3500 },
+    { start: 4000, end: 5000 }
+  ]);
+});
+
+test('相邻且标题与全部绑定相同的计时记录合并，任务绑定不同则不合并', () => {
+  const { ctx } = createContext();
+  const records = [
+    { id: 1, name: '复习', date: '2026-09-21', totalMs: 1000, sessions: [{ start: 1000, end: 2000 }], todoId: 11, goalId: 22, taskId: 33, affectsFocus: true },
+    { id: 2, name: '复习', date: '2026-09-21', totalMs: 1000, sessions: [{ start: 3000, end: 4000 }], todoId: 11, goalId: 22, taskId: 33, affectsFocus: true },
+    { id: 3, name: '复习', date: '2026-09-21', totalMs: 1000, sessions: [{ start: 5000, end: 6000 }], todoId: 11, goalId: 22, taskId: 44, affectsFocus: true }
+  ];
+  const merged = JSON.parse(JSON.stringify(ctx.mergeAdjacentTimerRecords(records)));
+  assert.equal(merged.length, 2);
+  assert.equal(merged[0].totalMs, 2000);
+  assert.deepEqual(merged[0].sessions, [{ start: 1000, end: 2000 }, { start: 3000, end: 4000 }]);
+  assert.equal(merged[0].taskId, 33);
+  assert.equal(merged[1].taskId, 44);
+});
+
+test('时间轴中插入了其他计时记录时，前后相同记录也不会合并', () => {
+  const { ctx } = createContext();
+  // 存储数组故意把两条 A 放在一起；真实时间轴是 A → B → A。
+  const records = [
+    { id: 1, name: 'A', date: '2026-09-21', totalMs: 1000, sessions: [{ start: 1000, end: 2000 }], taskId: 33, affectsFocus: true },
+    { id: 2, name: 'A', date: '2026-09-21', totalMs: 1000, sessions: [{ start: 5000, end: 6000 }], taskId: 33, affectsFocus: true },
+    { id: 3, name: 'B', date: '2026-09-21', totalMs: 1000, sessions: [{ start: 3000, end: 4000 }], taskId: 44, affectsFocus: true }
+  ];
+  const merged = JSON.parse(JSON.stringify(ctx.mergeAdjacentTimerRecords(records)));
+  assert.equal(merged.length, 3);
+  assert.equal(merged.filter(record => record.name === 'A').length, 2);
 });

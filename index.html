@@ -243,7 +243,7 @@
             <div class="notes-rich-editor" id="notesRichEditor" contenteditable="true"
                  role="textbox" aria-multiline="true" aria-label="笔记正文"
                  data-placeholder="在这里记录你的想法、笔记、备忘……"
-                 spellcheck="true"></div>
+                 spellcheck="true" onscroll="onNotePreviewScroll()"></div>
             <textarea class="notes-editor-textarea" id="notesTextarea"
                       placeholder="在这里记录你的想法、笔记、备忘……&#10;内容会自动保存 ✨"
                       spellcheck="false"
@@ -873,8 +873,8 @@
         </div>
 
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
-        <div class="settings-section-title"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> CodeBuddy CLI（AI 编程助手引擎）</div>
-        <span class="hint" style="display:block;margin-bottom:8px;">「AI 编程」页通过本机 CodeBuddy CLI 运行 Agent 来生成扩展。首次使用需安装并登录。</span>
+        <div class="settings-section-title"><i data-lucide="bot" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> Codex CLI（AI 编程助手引擎）</div>
+        <span class="hint" style="display:block;margin-bottom:8px;">「AI 编程」页通过本机 Codex CLI 读取应用源码，并在受限的扩展目录中创建或修改插件。首次使用需安装并登录。</span>
         <div id="codebuddyCliConfig"></div>
 
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
@@ -1681,7 +1681,7 @@
 <script src="js/store.js?v=20260913-r2"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260916-r16"></script>
+<script src="js/sync.js?v=20260922-r17"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260917-r1"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
@@ -1810,9 +1810,10 @@
 
 <!-- Right-click context menu for AI chat: save selected text as a note -->
 <div class="context-menu" id="aiChatContextMenu">
-  <div class="context-menu-item" onclick="askAiExplainSelection()"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 仔细讲解</div>
-  <div class="context-menu-item" onclick="saveAiSelectionAsNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 保存为笔记</div>
-  <div class="context-menu-item" onclick="copyAiSelection()"><i data-lucide="copy" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 复制选中文字</div>
+  <div class="context-menu-item" id="aiCtxImmersive" onclick="openAiContextMessageImmersive()"><i data-lucide="maximize-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 沉浸式阅读</div>
+  <div class="context-menu-item ai-context-selection-action" onclick="askAiExplainSelection()"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 仔细讲解</div>
+  <div class="context-menu-item ai-context-selection-action" onclick="saveAiSelectionAsNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 保存为笔记</div>
+  <div class="context-menu-item ai-context-selection-action" onclick="copyAiSelection()"><i data-lucide="copy" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 复制选中文字</div>
 </div>
 
 <!-- 教材术语：右键添加到术语表 / 移除术语标记 / 解释一下 / 举个例子 -->

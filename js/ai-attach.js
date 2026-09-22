@@ -1388,6 +1388,69 @@ const PASTE_FILE_MIME_EXT = {
   'text/plain': '.txt', 'text/markdown': '.md', 'application/json': '.json'
 };
 
+// 纯文本达到该长度时，先询问是否转成 .txt 附件，避免超长正文挤满输入框。
+const LARGE_PASTE_TEXT_THRESHOLD = 2000;
+let largePasteDialogResolver = null;
+
+function normalizePastedTextFileName(value) {
+  let name = String(value || '').trim().replace(/[\\/:*?"<>|]/g, '-');
+  if (!name) name = '粘贴文本';
+  if (!name.toLowerCase().endsWith('.txt')) name += '.txt';
+  return name;
+}
+
+function closeLargePasteDialog(asFile) {
+  const overlay = document.getElementById('aiLargePasteOverlay');
+  if (!overlay || !largePasteDialogResolver) return;
+  const input = document.getElementById('aiLargePasteFileName');
+  const resolve = largePasteDialogResolver;
+  largePasteDialogResolver = null;
+  overlay.classList.remove('open');
+  overlay.setAttribute('aria-hidden', 'true');
+  resolve(asFile ? normalizePastedTextFileName(input && input.value) : null);
+}
+
+function askLargePasteAsFile(text) {
+  let overlay = document.getElementById('aiLargePasteOverlay');
+  if (!overlay) {
+    overlay = document.createElement('div');
+    overlay.id = 'aiLargePasteOverlay';
+    overlay.className = 'modal-overlay ai-large-paste-overlay';
+    overlay.setAttribute('aria-hidden', 'true');
+    overlay.innerHTML = `<div class="modal ai-large-paste-dialog" role="dialog" aria-modal="true" aria-labelledby="aiLargePasteTitle">
+      <div class="modal-header">
+        <div class="modal-title" id="aiLargePasteTitle">粘贴为文本文件？</div>
+        <button class="modal-close" type="button" onclick="closeLargePasteDialog(false)" aria-label="关闭">✕</button>
+      </div>
+      <div class="modal-body">
+        <p class="ai-large-paste-summary"></p>
+        <label class="modal-field"><span>文件名</span><input id="aiLargePasteFileName" type="text" value="粘贴文本.txt" autocomplete="off" spellcheck="false"></label>
+        <div class="ai-large-paste-actions">
+          <button type="button" class="btn-secondary" onclick="closeLargePasteDialog(false)">直接粘贴</button>
+          <button type="button" class="btn-save-modal" onclick="closeLargePasteDialog(true)">作为 .txt 附件</button>
+        </div>
+      </div>
+    </div>`;
+    overlay.addEventListener('click', event => { if (event.target === overlay) closeLargePasteDialog(false); });
+    overlay.addEventListener('keydown', event => {
+      if (event.key === 'Escape') closeLargePasteDialog(false);
+      if (event.key === 'Enter') { event.preventDefault(); closeLargePasteDialog(true); }
+    });
+    document.body.appendChild(overlay);
+  }
+  // 若极短时间内重复触发粘贴，上一段按直接粘贴处理，不让 Promise 永久悬空。
+  if (largePasteDialogResolver) closeLargePasteDialog(false);
+  overlay.querySelector('.ai-large-paste-summary').textContent = `检测到 ${text.length.toLocaleString()} 个字符。转为附件可以保持输入框简洁。`;
+  const nameInput = overlay.querySelector('#aiLargePasteFileName');
+  nameInput.value = `粘贴文本-${new Date().toISOString().slice(0, 10)}.txt`;
+  overlay.classList.add('open');
+  overlay.setAttribute('aria-hidden', 'false');
+  return new Promise(resolve => {
+    largePasteDialogResolver = resolve;
+    requestAnimationFrame(() => { nameInput.focus(); nameInput.select(); });
+  });
+}
+
 function buildClipboardFileName(file, index) {
   const type = String((file && file.type) || '').toLowerCase();
   const isImage = type.startsWith('image/');
@@ -1424,17 +1487,19 @@ function getClipboardPlainText(clipboardData) {
 }
 
 // 把文本插到输入框光标处（尽量用 execCommand 以保留原生撤销栈与 input 事件）
-function insertPastedInputText(text) {
+function insertPastedInputText(text, selection) {
   const input = document.getElementById('aiInput');
   if (!input || input.disabled || !text) return;
   input.focus();
   let inserted = false;
-  if (typeof document.execCommand === 'function') {
+  if (!selection && typeof document.execCommand === 'function') {
     try { inserted = document.execCommand('insertText', false, text); } catch (e) { inserted = false; }
   }
   if (!inserted) {
-    const start = typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length;
-    const end = typeof input.selectionEnd === 'number' ? input.selectionEnd : start;
+    const start = selection && Number.isInteger(selection.start)
+      ? selection.start : (typeof input.selectionStart === 'number' ? input.selectionStart : input.value.length);
+    const end = selection && Number.isInteger(selection.end)
+      ? selection.end : (typeof input.selectionEnd === 'number' ? input.selectionEnd : start);
     input.value = input.value.slice(0, start) + text + input.value.slice(end);
     const caret = start + text.length;
     try { input.setSelectionRange(caret, caret); } catch (e) { /* 忽略：光标恢复失败不影响已插入的文本 */ }
@@ -1456,20 +1521,33 @@ function isAiPasteZone(event) {
   return !!(section && section.classList.contains('active'));
 }
 
-// 粘贴文件 → 加入附件；纯文本粘贴仍走浏览器原生行为（不做任何拦截）
-function handleAiPaste(event) {
+// 粘贴文件 → 加入附件；短纯文本仍走浏览器原生行为，长纯文本可转成可命名的 .txt 附件。
+async function handleAiPaste(event) {
   const dt = event.clipboardData;
   if (!dt) return;
   const input = document.getElementById('aiInput');
   if (input && input.disabled) return; // 未配置 Key 时界面只读，保持原生粘贴
   if (!isAiPasteZone(event)) return;
   const files = getClipboardFiles(dt);
-  if (files.length === 0) return;
+  const plainText = getClipboardPlainText(dt);
+  if (files.length === 0) {
+    if (!input || event.target !== input || plainText.length < LARGE_PASTE_TEXT_THRESHOLD) return;
+    const selection = { start: input.selectionStart, end: input.selectionEnd };
+    event.preventDefault();
+    const fileName = await askLargePasteAsFile(plainText);
+    if (fileName) {
+      const file = new File([plainText], fileName, { type: 'text/plain;charset=utf-8' });
+      const added = addAiAttachmentFiles([file]);
+      if (added.length && typeof showAiToast === 'function') showAiToast(`📎 已添加文本附件：${added[0]}`);
+    } else {
+      insertPastedInputText(plainText, selection);
+    }
+    return;
+  }
   event.preventDefault(); // 有文件时不要把二进制/文件名当文本贴进输入框
   const added = addAiAttachmentFiles(files);
   if (added.length === 0) return;
-  const text = getClipboardPlainText(dt);
-  if (text) insertPastedInputText(text);
+  if (plainText) insertPastedInputText(plainText);
   if (typeof showAiToast === 'function') {
     showAiToast(added.length === 1 ? `📎 已粘贴附件：${added[0]}` : `📎 已粘贴 ${added.length} 个附件`);
   }

@@ -100,7 +100,7 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260916-r16';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260922-r17';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const PENDING_CONFLICTS_KEY = 'study_sync_pending_conflicts_v1';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
@@ -310,13 +310,20 @@
       // 网络异常的结果是不确定的，绝不能按成功清除 dirty/outbox。
       return { ok: false, reason: String((e && e.message) || e || 'network-error') };
     }
-    // 成功上传后清掉对应 outbox
-    await _outboxRemove(key);
     // 同步本地与云端时间戳（以服务器时间为准），标记该 key 本地已是最新
     _setRemoteTs(key, updatedAt);
     _setLocalTs(key, updatedAt);
-    _clearLocalDirty(key);   // 上传成功 → 清除待上传标记
-    return { ok: true, updatedAt };
+    // 上传期间用户可能再次编辑同一个 key。只有当前内容仍等于本次上传快照时，
+    // 才能清除 dirty/outbox；否则保留新修改，交给下一轮继续上传。
+    const unchanged = localStorage.getItem(key) === value;
+    if (unchanged) {
+      await _outboxRemove(key);
+      _clearLocalDirty(key);
+    } else {
+      _markLocalDirty(key);
+      dirtyKeys.add(key);
+    }
+    return { ok: true, updatedAt, unchanged };
   }
 
   // 同一轮有多个 dirty key 时一次 upsert，减少逐 key 往返；单 key 仍走原路径，
@@ -335,6 +342,7 @@
 
     const results = {};
     const rows = [];
+    const snapshots = new Map();
     for (const key of list) {
       const raw = localStorage.getItem(key);
       if (raw != null && _valueTooLarge(raw)) {
@@ -343,6 +351,7 @@
       }
       try {
         rows.push({ user_id: session.user.id, key, value: raw ? JSON.parse(raw) : null });
+        snapshots.set(key, raw);
       } catch (e) {
         results[key] = { ok: false, reason: 'invalid-local-json' };
       }
@@ -361,11 +370,17 @@
           results[row.key] = { ok: false, reason: 'missing-server-timestamp' };
           continue;
         }
-        await _outboxRemove(row.key);
         _setRemoteTs(row.key, updatedAt);
         _setLocalTs(row.key, updatedAt);
-        _clearLocalDirty(row.key);
-        results[row.key] = { ok: true, updatedAt };
+        const unchanged = localStorage.getItem(row.key) === snapshots.get(row.key);
+        if (unchanged) {
+          await _outboxRemove(row.key);
+          _clearLocalDirty(row.key);
+        } else {
+          _markLocalDirty(row.key);
+          dirtyKeys.add(row.key);
+        }
+        results[row.key] = { ok: true, updatedAt, unchanged };
       }
     } catch (e) {
       const reason = String((e && e.message) || e || 'network-error');

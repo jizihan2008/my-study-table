@@ -364,6 +364,65 @@ test('pasting files into the chat area attaches them, while plain text paste sta
   expect(output.bodyAdded).toBe(1);
 });
 
+test('large plain-text paste can become a named txt attachment or stay in the input', async () => {
+  const previousKeys = await page.evaluate(() => {
+    const keys = window.loadApiKeys();
+    window.saveApiKeys([{ id: 'e2e-large-paste', name: '长文本粘贴测试', apiKey: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }]);
+    window.switchTab('ai');
+    window.createNewConv();
+    window.renderAiChat();
+    document.getElementById('aiInput').value = '';
+    while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
+    return keys;
+  });
+
+  try {
+    const longText = '长文本内容'.repeat(500);
+    const prevented = await page.evaluate(text => {
+      const input = document.getElementById('aiInput');
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      input.dispatchEvent(event);
+      return event.defaultPrevented;
+    }, longText);
+    expect(prevented).toBe(true);
+    await expect(page.locator('#aiLargePasteOverlay')).toHaveClass(/open/);
+    await expect(page.locator('.ai-large-paste-summary')).toContainText(longText.length.toLocaleString());
+    await page.locator('#aiLargePasteFileName').fill('课程笔记');
+    await page.getByRole('button', { name: '作为 .txt 附件' }).click();
+    await expect(page.locator('#aiLargePasteOverlay')).not.toHaveClass(/open/);
+
+    const attached = await page.evaluate(() => ({
+      items: window.getAiAttachmentsSnapshot(),
+      input: document.getElementById('aiInput').value
+    }));
+    expect(attached.items).toHaveLength(1);
+    expect(attached.items[0].name).toBe('课程笔记.txt');
+    expect(attached.items[0].size).toBe(new Blob([longText]).size);
+    expect(attached.input).toBe('');
+
+    await page.evaluate(() => {
+      window.removeAttachment(0);
+      const input = document.getElementById('aiInput');
+      input.value = '开头结尾';
+      input.setSelectionRange(2, 2);
+      const dt = new DataTransfer();
+      dt.setData('text/plain', '甲'.repeat(2000));
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+    });
+    await page.getByRole('button', { name: '直接粘贴' }).click();
+    await expect.poll(() => page.locator('#aiInput').inputValue()).toBe('开头' + '甲'.repeat(2000) + '结尾');
+    expect(await page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(0);
+  } finally {
+    await page.evaluate(keys => {
+      window.saveApiKeys(keys);
+      window.renderAiChat();
+      while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
+    }, previousKeys);
+  }
+});
+
 test('PDF compatibility lets the user choose extracted text or rendered page images', async () => {
   const pdfBase64 = buildTestPdf(3).toString('base64');
   const output = await page.evaluate(async ({ pdfBase64 }) => {

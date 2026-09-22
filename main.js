@@ -1,6 +1,8 @@
 const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell, Tray, Menu, nativeImage, dialog } = require('electron');
 const path = require('path');
 const fs = require('fs');
+const crypto = require('crypto');
+const vm = require('vm');
 const http = require('http');
 const { spawn } = require('child_process');
 const APP_ICON_PNG_PATH = path.join(__dirname, 'icons', 'icon-512-v2.png');
@@ -15,7 +17,12 @@ const {
 } = require('./electron/security');
 const { registerBackupIpc } = require('./electron/register-backup-ipc');
 const { registerDiagnostics } = require('./electron/diagnostics');
-const { registerExtensionIpc } = require('./electron/register-extension-ipc');
+const {
+  MAX_MAIN_BYTES,
+  MAX_MANIFEST_BYTES,
+  registerExtensionIpc,
+  validateManifest
+} = require('./electron/register-extension-ipc');
 const { registerLibraryIpc } = require('./electron/register-library-ipc');
 const { registerSecretIpc } = require('./electron/register-secret-ipc');
 const { registerUpdaterIpc } = require('./electron/register-updater-ipc');
@@ -394,6 +401,7 @@ ipcMain.handle('src:read', async (event, { file, offset, limit }) => {
 // CLI 包名：@tencent-ai/codebuddy-code（命令 codebuddy，兼容 cbc），需 Node.js >= 18.20。
 
 const codebuddyPkg = '@tencent-ai/codebuddy-code';
+const codexPkg = '@openai/codex';
 const sourceSnapshotDir = path.join(userDataPath, 'source-snapshot');
 
 // 流式发送事件到渲染进程
@@ -539,6 +547,103 @@ function npmGlobalBinCandidates() {
   const pf = process.env.ProgramFiles;
   if (pf) candidates.push(path.join(pf, 'nodejs'));
   return candidates;
+}
+
+// 探测 Codex CLI 路径（用户配置 → npm 全局 bin → PATH）。
+// 不依赖 shell/where，避免中文路径和命令行二次解析。
+async function locateCodexCli(userConfiguredPath) {
+  if (userConfiguredPath && isExecutableCli(userConfiguredPath)) {
+    return { found: true, path: userConfiguredPath, source: 'user' };
+  }
+  const names = process.platform === 'win32'
+    ? ['codex.cmd', 'codex.exe', 'codex.bat', 'codex']
+    : ['codex'];
+  const dirs = npmGlobalBinCandidates();
+  for (const dir of String(process.env.PATH || '').split(path.delimiter)) {
+    const clean = String(dir || '').replace(/^"|"$/g, '').trim();
+    if (clean && !dirs.includes(clean)) dirs.push(clean);
+  }
+  for (const binDir of dirs) {
+    for (const name of names) {
+      const candidate = path.join(binDir, name);
+      if (isExecutableCli(candidate)) return { found: true, path: candidate, source: 'path' };
+    }
+  }
+  return { found: false, path: '' };
+}
+
+function spawnResolvedCli(cliPath, args, options) {
+  const entry = resolveCliEntry(cliPath);
+  if (entry && entry.script) {
+    const env = Object.assign({}, options.env || process.env, { ELECTRON_RUN_AS_NODE: '1' });
+    return spawn(process.execPath, [entry.script].concat(args), Object.assign({}, options, { env }));
+  }
+  if (process.platform === 'win32' && /\.(cmd|bat)$/i.test(cliPath)) {
+    return spawn(process.env.ComSpec || 'cmd.exe', ['/d', '/s', '/c', quoteCmdArgs(cliPath, args)], options);
+  }
+  return spawn(cliPath, args, Object.assign({}, options, { shell: false }));
+}
+
+function extensionPackageFingerprint(dir) {
+  const hash = crypto.createHash('sha256');
+  for (const name of ['manifest.json', 'main.js']) {
+    const target = path.join(dir, name);
+    hash.update(name + '\0');
+    if (fs.existsSync(target) && fs.statSync(target).isFile()) hash.update(fs.readFileSync(target));
+  }
+  return hash.digest('hex');
+}
+
+function snapshotExtensionPackages() {
+  const result = new Map();
+  if (!fs.existsSync(extensionsDir)) return result;
+  for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === 'trash' || entry.name.startsWith('.')) continue;
+    result.set(entry.name, extensionPackageFingerprint(path.join(extensionsDir, entry.name)));
+  }
+  return result;
+}
+
+function validateCodexExtensionChanges(before) {
+  const changed = [];
+  const errors = [];
+  const knownPermissions = new Set(['ui', 'storage', 'events', 'log', 'notifications', 'external']);
+  for (const entry of fs.readdirSync(extensionsDir, { withFileTypes: true })) {
+    if (!entry.isDirectory() || entry.name === 'trash' || entry.name.startsWith('.')) continue;
+    const dir = path.join(extensionsDir, entry.name);
+    const fingerprint = extensionPackageFingerprint(dir);
+    if (before.get(entry.name) === fingerprint) continue;
+    try {
+      const unexpected = fs.readdirSync(dir, { withFileTypes: true })
+        .filter(item => item.name !== 'manifest.json' && item.name !== 'main.js' && item.name !== 'backup')
+        .map(item => item.name);
+      if (unexpected.length) throw new Error('包含不允许的文件: ' + unexpected.join(', '));
+      const manifestPath = path.join(dir, 'manifest.json');
+      const mainPath = path.join(dir, 'main.js');
+      const manifestStat = fs.statSync(manifestPath);
+      const mainStat = fs.statSync(mainPath);
+      if (!manifestStat.isFile() || manifestStat.size > MAX_MANIFEST_BYTES) throw new Error('manifest.json 无效或过大');
+      if (!mainStat.isFile() || mainStat.size > MAX_MAIN_BYTES) throw new Error('main.js 无效或过大');
+      const manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+      validateManifest(manifest, entry.name);
+      if (manifest.type !== 'plugin' && manifest.type !== 'patch') throw new Error('manifest.type 必须是 plugin 或 patch');
+      if (manifest.permissions !== undefined) {
+        if (!Array.isArray(manifest.permissions) || manifest.permissions.some(value => !knownPermissions.has(String(value)))) {
+          throw new Error('manifest.permissions 包含未知权限');
+        }
+      }
+      const source = fs.readFileSync(mainPath, 'utf8');
+      new vm.Script(source, { filename: path.join(entry.name, 'main.js') });
+      // Codex 写入的代码必须经用户审查后才能启用。
+      manifest.enabled = false;
+      manifest.source = manifest.source || 'codex-generated';
+      fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2), 'utf8');
+      changed.push(entry.name);
+    } catch (error) {
+      errors.push(entry.name + ': ' + String(error && error.message || error));
+    }
+  }
+  return { ok: errors.length === 0, changed, errors };
 }
 
 // 探测 CodeBuddy CLI 路径（用户配置优先 → 常见 npm 全局 bin → PATH）
@@ -819,6 +924,207 @@ ipcMain.handle('codebuddy:run', async (event, { prompt, userPath, apiKey, mode }
       });
       resolve({ ok: code === 0, exitCode: code, stdout: stdoutBuf, stderr: stderrBuf });
     });
+  });
+});
+
+// ═════════ Codex CLI 扩展开发引擎 ═════════
+ipcMain.handle('codex:locate', async (event, { userPath } = {}) => {
+  try {
+    return { ok: true, ...(await locateCodexCli(userPath)) };
+  } catch (e) {
+    return { ok: false, found: false, path: '', reason: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('codex:check-login', async (event, { userPath } = {}) => {
+  const loc = await locateCodexCli(userPath);
+  if (!loc.found) return { ok: true, loggedIn: false, reason: 'cli-not-found', hint: '未安装 Codex CLI' };
+  await ensureExtensionsDir();
+  return new Promise((resolve) => {
+    let child;
+    let output = '';
+    let settled = false;
+    const finish = value => {
+      if (settled) return;
+      settled = true;
+      resolve(value);
+    };
+    try {
+      child = spawnResolvedCli(loc.path, ['login', 'status'], {
+        cwd: extensionsDir,
+        env: Object.assign({}, process.env),
+        windowsHide: true
+      });
+    } catch (e) {
+      finish({ ok: false, loggedIn: false, reason: String((e && e.message) || e) });
+      return;
+    }
+    child.stdout.on('data', chunk => { output += String(chunk); });
+    child.stderr.on('data', chunk => { output += String(chunk); });
+    child.on('error', err => finish({ ok: false, loggedIn: false, reason: String(err.message || err) }));
+    child.on('close', code => finish({
+      ok: true,
+      loggedIn: code === 0,
+      reason: code === 0 ? '' : 'auth-required',
+      hint: code === 0 ? String(output).trim() : '请运行 codex login 完成登录'
+    }));
+  });
+});
+
+ipcMain.handle('codex:open-login-terminal', async (event, { userPath } = {}) => {
+  const loc = await locateCodexCli(userPath);
+  let cmdName = 'codex';
+  if (loc.found && loc.path) {
+    const base = path.basename(loc.path).replace(/\.(cmd|bat|exe)$/i, '');
+    if (/^[A-Za-z0-9_-]+$/.test(base)) cmdName = base;
+  }
+  try {
+    if (process.platform === 'win32') {
+      const child = spawn('cmd.exe', ['/d', '/k', cmdName, 'login'], {
+        detached: true, stdio: 'ignore', windowsHide: false
+      });
+      child.unref();
+    } else if (process.platform === 'darwin') {
+      spawn('open', ['-a', 'Terminal', cmdName + ' login']);
+    } else {
+      spawn('x-terminal-emulator', ['-e', cmdName, 'login'], { detached: true, stdio: 'ignore' }).unref();
+    }
+    return { ok: true, cmdName };
+  } catch (e) {
+    return { ok: false, reason: String((e && e.message) || e) };
+  }
+});
+
+ipcMain.handle('codex:install', async (event, { useMirror } = {}) => new Promise((resolve) => {
+  const args = ['install', '-g', codexPkg];
+  if (useMirror) args.push('--registry', 'https://registry.npmmirror.com');
+  sendToRenderer('codex:install-output', { type: 'info', text: '开始安装 ' + codexPkg + ' …\n' });
+  let child;
+  try {
+    child = spawn(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { shell: false, windowsHide: true });
+  } catch (e) {
+    resolve({ ok: false, reason: String((e && e.message) || e) });
+    return;
+  }
+  const outDec = createStreamDecoder();
+  const errDec = createStreamDecoder();
+  child.stdout.on('data', data => {
+    const text = outDec.decode(data);
+    if (text) sendToRenderer('codex:install-output', { type: 'out', text });
+  });
+  child.stderr.on('data', data => {
+    const text = errDec.decode(data);
+    if (text) sendToRenderer('codex:install-output', { type: 'out', text });
+  });
+  child.on('error', err => {
+    sendToRenderer('codex:install-output', { type: 'error', text: '安装失败: ' + err.message + '\n' });
+    resolve({ ok: false, reason: String(err.message || err) });
+  });
+  child.on('close', async code => {
+    const tail = (outDec.flush() || '') + (errDec.flush() || '');
+    if (tail) sendToRenderer('codex:install-output', { type: 'out', text: tail });
+    if (code !== 0) {
+      resolve({ ok: false, reason: 'exit-' + code, exitCode: code });
+      return;
+    }
+    const loc = await locateCodexCli();
+    sendToRenderer('codex:install-output', {
+      type: loc.found ? 'success' : 'error',
+      text: loc.found ? '\nCodex CLI 已就绪: ' + loc.path + '\n' : '\n安装完成，但未在 PATH 中找到 codex。\n'
+    });
+    resolve({ ok: !!loc.found, exitCode: code, ...loc });
+  });
+}));
+
+ipcMain.handle('codex:run', async (event, { prompt, userPath, mode } = {}) => {
+  const cleanPrompt = String(prompt || '').trim();
+  if (!cleanPrompt) return { ok: false, reason: 'prompt 为空' };
+  const loc = await locateCodexCli(userPath);
+  if (!loc.found) {
+    return { ok: false, reason: 'codex-cli-not-found', hint: '未检测到 Codex CLI，请先安装 npm install -g @openai/codex' };
+  }
+  await ensureExtensionsDir();
+  const sourceDir = app.isPackaged ? exportSourceSnapshot() : __dirname;
+  const effectiveMode = mode || 'craft';
+  const readOnly = effectiveMode === 'plan' || effectiveMode === 'ask' || effectiveMode === 'clarify';
+  const scopedPrompt = cleanPrompt + '\n\n## 运行时路径\n- 扩展根目录（唯一允许写入的位置）: ' + extensionsDir +
+    '\n- 应用源码参考目录（只读，严禁修改）: ' + sourceDir;
+  const args = [
+    'exec', '--json', '--color', 'never', '--skip-git-repo-check', '--ephemeral',
+    '--sandbox', readOnly ? 'read-only' : 'workspace-write',
+    '-C', extensionsDir, '-'
+  ];
+  const beforePackages = snapshotExtensionPackages();
+  return new Promise((resolve) => {
+    sendToRenderer('codegen:agent-output', { type: 'meta', text: '启动 Codex CLI agent …\n' });
+    let child;
+    try {
+      child = spawnResolvedCli(loc.path, args, {
+        cwd: extensionsDir,
+        env: Object.assign({}, process.env),
+        windowsHide: true
+      });
+    } catch (e) {
+      resolve({ ok: false, reason: String((e && e.message) || e) });
+      return;
+    }
+    let stdoutBuf = '';
+    let stderrBuf = '';
+    let settled = false;
+    const outDec = createStreamDecoder();
+    const errDec = createStreamDecoder();
+    child.stdout.on('data', data => {
+      const text = outDec.decode(data);
+      if (!text) return;
+      stdoutBuf += text;
+      sendToRenderer('codegen:agent-output', { type: 'out', text });
+    });
+    child.stderr.on('data', data => {
+      const text = errDec.decode(data);
+      if (!text) return;
+      stderrBuf += text;
+      sendToRenderer('codegen:agent-output', { type: 'err', text });
+    });
+    child.on('error', err => {
+      if (settled) return;
+      settled = true;
+      sendToRenderer('codegen:agent-output', { type: 'error', text: 'Codex CLI 启动失败: ' + err.message + '\n' });
+      resolve({ ok: false, reason: String(err.message || err), stdout: stdoutBuf, stderr: stderrBuf });
+    });
+    child.on('close', code => {
+      if (settled) return;
+      settled = true;
+      stdoutBuf += outDec.flush() || '';
+      stderrBuf += errDec.flush() || '';
+      const validation = code === 0
+        ? validateCodexExtensionChanges(beforePackages)
+        : { ok: false, changed: [], errors: [] };
+      if (code === 0 && !validation.ok) {
+        sendToRenderer('codegen:agent-output', {
+          type: 'error',
+          text: '扩展校验失败：' + validation.errors.join('；') + '\n'
+        });
+      } else if (validation.changed.length) {
+        sendToRenderer('codegen:agent-output', {
+          type: 'meta',
+          text: '已校验扩展并保持禁用，请审查后手动启用：' + validation.changed.join(', ') + '\n'
+        });
+      }
+      const successful = code === 0 && validation.ok;
+      sendToRenderer('codegen:agent-output', {
+        type: 'meta',
+        text: (successful ? 'Codex agent 执行完成。' : 'Codex agent 执行未完成（code=' + code + '）。') + '\n'
+      });
+      resolve({
+        ok: successful,
+        exitCode: code,
+        stdout: stdoutBuf,
+        stderr: validation.errors.length ? validation.errors.join('；') : stderrBuf,
+        changedExtensions: validation.changed
+      });
+    });
+    child.stdin.on('error', () => {});
+    child.stdin.end(scopedPrompt, 'utf8');
   });
 });
 

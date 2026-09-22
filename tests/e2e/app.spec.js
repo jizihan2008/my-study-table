@@ -281,6 +281,102 @@ test('a timer left running moments ago resumes without counting the gap', async 
   await expect.poll(() => page.evaluate(() => localStorage.getItem('study_timer_state'))).toBeNull();
 });
 
+test('editing a timer record preserves and edits its separate sessions', async () => {
+  const recordId = await page.evaluate(() => {
+    timerReset();
+    const base = new Date(2026, 8, 21, 9, 0, 0, 0).getTime();
+    const id = genTimerRecordId();
+    saveTimerRecords([{
+      id, name: 'E2E 多时段', date: '2026-09-21', totalMs: 60 * 60 * 1000,
+      sessions: [
+        { start: base, end: base + 30 * 60 * 1000 },
+        { start: base + 60 * 60 * 1000, end: base + 90 * 60 * 1000 }
+      ],
+      affectsFocus: true, manual: false
+    }]);
+    switchTab('timer');
+    editTimerRecord(id);
+    return id;
+  });
+
+  await expect(page.locator('#manualRecSessions .timer-manual-session-row')).toHaveCount(2);
+  await page.evaluate(() => {
+    document.querySelectorAll('.manual-rec-session-end')[1].value = '10:45';
+    saveManualRecord();
+  });
+
+  const record = await page.evaluate(id => loadTimerRecords().find(item => item.id === id), recordId);
+  expect(record.sessions).toHaveLength(2);
+  expect(record.sessions[0].end).toBeLessThan(record.sessions[1].start);
+  expect(record.sessions[1].end - record.sessions[1].start).toBe(45 * 60 * 1000);
+  expect(record.totalMs).toBe(75 * 60 * 1000);
+});
+
+test('renderer reload keeps a running timer as one continuous session', async () => {
+  const originalStart = await page.evaluate(() => {
+    timerReset();
+    localStorage.removeItem('study_timer_records');
+    timerStart();
+    timerSessionName = 'E2E 刷新连续计时';
+    timerSessionStart = Date.now() - 5 * 60 * 1000;
+    saveTimerState();
+    return timerSessionStart;
+  });
+
+  await page.reload();
+  await page.waitForFunction(() => typeof window.timerStop === 'function' && timerRunning === true);
+  const restored = await page.evaluate(() => ({ start: timerSessionStart, completedSessions: timerSessions.length }));
+  expect(restored.start).toBe(originalStart);
+  expect(restored.completedSessions).toBe(0);
+
+  const saved = await page.evaluate(() => {
+    timerStop();
+    return loadTimerRecords().find(record => record.name === 'E2E 刷新连续计时');
+  });
+  expect(saved).toBeTruthy();
+  expect(saved.sessions).toHaveLength(1);
+  expect(saved.sessions[0].start).toBe(originalStart);
+});
+
+test('timer records support task binding, merge matching neighbours, and hide empty float metadata', async () => {
+  const result = await page.evaluate(() => {
+    timerReset();
+    const line = tlAddLine({ name: 'E2E 计时章节', type: 'quality' });
+    const task = tlAddQuest({ lineId: line.id, title: 'E2E 绑定任务', status: 'active' });
+    const base = new Date(2026, 8, 21, 14, 0, 0, 0).getTime();
+    saveTimerRecords([
+      { id: genTimerRecordId(), name: '同一学习块', date: '2026-09-21', totalMs: 20 * 60000, sessions: [{ start: base, end: base + 20 * 60000 }], todoId: null, goalId: null, taskId: task.id, affectsFocus: true, manual: false },
+      { id: genTimerRecordId(), name: '同一学习块', date: '2026-09-21', totalMs: 15 * 60000, sessions: [{ start: base + 30 * 60000, end: base + 45 * 60000 }], todoId: null, goalId: null, taskId: task.id, affectsFocus: true, manual: false }
+    ]);
+    const records = loadTimerRecords();
+    timerSessionName = '';
+    timerLinkedTodoId = null;
+    timerLinkedGoalId = null;
+    timerLinkedTaskId = task.id;
+    switchTab('timer');
+    renderTimer();
+    const floatHtml = timerFloatTargetHtml();
+    const mainHasTaskButton = Array.from(document.querySelectorAll('.timer-context-row .timer-link-btn, .timer-context-stack .timer-link-btn')).some(button => button.textContent.includes('关联任务'));
+    toggleManualRecordForm();
+    return {
+      records,
+      floatHtml,
+      mainHasTaskButton,
+      manualTaskOptions: Array.from(document.querySelectorAll('#manualRecTask option')).map(option => option.textContent)
+    };
+  });
+
+  expect(result.records).toHaveLength(1);
+  expect(result.records[0].sessions).toHaveLength(2);
+  expect(result.records[0].totalMs).toBe(35 * 60000);
+  expect(result.records[0].taskId).toBeTruthy();
+  expect(result.floatHtml).toContain('E2E 绑定任务');
+  expect(result.floatHtml).not.toContain('未关联待办');
+  expect(result.floatHtml).not.toContain('未关联目标');
+  expect(result.mainHasTaskButton).toBe(false); // 已绑定后显示任务名称而不是“关联任务”按钮
+  expect(result.manualTaskOptions.join(' ')).toContain('E2E 绑定任务');
+});
+
 test('AI policy detects secrets and records token usage', async () => {
   const result = await page.evaluate(async () => {
     window.AIClient.clearUsage();

@@ -207,9 +207,12 @@ function tlCheckCondition(cond) {
         const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
         let total = 0;
         for (const r of records) {
-          const targetId = r.targetId || r.todoId;
-          const targetType = r.targetType || 'todo';
-          if (cond.targetType && targetType !== cond.targetType) continue;
+          const wantedType = cond.targetType || 'todo';
+          const targetId = wantedType === 'goal'
+            ? (r.goalId ?? (r.targetType === 'goal' ? r.targetId : null))
+            : wantedType === 'task'
+              ? (r.taskId ?? (r.targetType === 'task' ? r.targetId : null))
+              : (r.todoId ?? (r.targetType === 'todo' || !r.targetType ? (r.targetId || r.todoId) : null));
           if (targetId === cond.targetId) total += (r.totalMs || 0);
         }
         return total >= minutes * 60000;
@@ -504,9 +507,12 @@ function tlTimerProgress(cond) {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
     let total = 0;
     for (const r of records) {
-      const targetId = r.targetId || r.todoId;
-      const targetType = r.targetType || 'todo';
-      if (cond.targetType && targetType !== cond.targetType) continue;
+      const wantedType = cond.targetType || 'todo';
+      const targetId = wantedType === 'goal'
+        ? (r.goalId ?? (r.targetType === 'goal' ? r.targetId : null))
+        : wantedType === 'task'
+          ? (r.taskId ?? (r.targetType === 'task' ? r.targetId : null))
+          : (r.todoId ?? (r.targetType === 'todo' || !r.targetType ? (r.targetId || r.todoId) : null));
       if (targetId === cond.targetId) total += (r.totalMs || 0);
     }
     return { curMs: total, needMs: minutes * 60000 };
@@ -1001,7 +1007,10 @@ function tlRenderSidebar(store, line) {
   let html = `<div class="tl-sidebar" id="tlSidebar">`;
   html += `<div class="tl-side-bar-head">
     <span class="tl-side-bar-title">任务线</span>
-    <button class="tl-side-toggle" onclick="tlToggleSidebar()" title="收起侧边栏"><i data-lucide="panel-right-close" class="lucide-icon" style="width:15px;height:15px;"></i></button>
+    <div class="tl-side-bar-actions">
+      <button type="button" class="tl-side-add" onclick="tlOpenLineForm()" title="添加章节"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;"></i><span>添加章节</span></button>
+      <button class="tl-side-toggle" onclick="tlToggleSidebar()" title="收起侧边栏"><i data-lucide="panel-right-close" class="lucide-icon" style="width:15px;height:15px;"></i></button>
+    </div>
   </div>`;
   // 主线章节（无标题、无框）
   html += `<div class="tl-side-group">${tlRenderSideLines(store, 'main')}</div>`;
@@ -1281,6 +1290,7 @@ function tlNodeClientToQuestPos(nodeEl, pad = TL_PAD) {
 // ── 画布平移（手型工具）──
 // 视口固定为主卡片区域（overflow hidden），拖动空白处平移 .tl-graph-inner 位置
 let tlGraphPan = null; // { startX, startY, origLeft, origTop }
+let tlGraphPinch = null; // 双指缩放状态（iPad / iPhone）
 // 平移自由余量：内容允许完全拖出视口（露出的空白区域大小），防止拖到找不回
 const TL_PAN_MARGIN = 150;
 // 画布缩放范围：40% ~ 300%
@@ -1393,10 +1403,16 @@ function tlGraphCanvasDown(ev) {
 
 // 触屏版画布平移（手机：单指拖动平移任务图画布）
 function tlGraphCanvasTouchStart(ev) {
-  if (ev.target.closest('.tl-node') || ev.target.closest('.tl-graph-legend-float') || ev.target.closest('.tl-locked-banner-float') || ev.target.closest('.tl-zoom-indicator')) return;
   const canvas = ev.currentTarget;
   const inner = canvas ? canvas.querySelector('.tl-graph-inner') : null;
-  if (!inner || ev.touches.length !== 1) return;
+  if (!inner) return;
+  // 双指手势即使从任务节点上开始也应缩放，因此必须先于节点排除逻辑处理。
+  if (ev.touches.length >= 2) {
+    tlStartGraphPinch(ev, canvas, inner);
+    return;
+  }
+  if (ev.target.closest('.tl-node') || ev.target.closest('.tl-graph-legend-float') || ev.target.closest('.tl-locked-banner-float') || ev.target.closest('.tl-zoom-indicator')) return;
+  if (ev.touches.length !== 1) return;
   ev.preventDefault();
   ev.stopPropagation();
   const touch = ev.touches[0];
@@ -1428,6 +1444,68 @@ function tlGraphCanvasTouchStart(ev) {
   document.addEventListener('touchmove', onMove, { passive: false });
   document.addEventListener('touchend', onUp);
   document.addEventListener('touchcancel', onUp);
+}
+
+function tlTouchPairMetrics(touches) {
+  if (!touches || touches.length < 2) return null;
+  const a = touches[0], b = touches[1];
+  return {
+    x: (a.clientX + b.clientX) / 2,
+    y: (a.clientY + b.clientY) / 2,
+    distance: Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY)
+  };
+}
+
+// iOS/iPadOS 双指缩放：缩放中心对应的画布内容始终留在两指中点下方，
+// 同时允许两指一起移动来平移画布。
+function tlStartGraphPinch(ev, canvas, inner) {
+  const first = tlTouchPairMetrics(ev.touches);
+  if (!first || first.distance <= 0) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  const rect = canvas.getBoundingClientRect();
+  const anchorX = first.x - rect.left;
+  const anchorY = first.y - rect.top;
+  tlGraphPinch = {
+    distance: first.distance,
+    scale: tlGraphView.scale,
+    contentX: (anchorX - tlGraphView.left) / tlGraphView.scale,
+    contentY: (anchorY - tlGraphView.top) / tlGraphView.scale
+  };
+  tlGraphPan = null;
+  canvas.classList.add('tl-graph-panning');
+  function cleanup() {
+    document.removeEventListener('touchmove', onMove);
+    document.removeEventListener('touchend', onEnd);
+    document.removeEventListener('touchcancel', onEnd);
+    canvas.classList.remove('tl-graph-panning');
+    tlGraphPinch = null;
+  }
+  function onMove(e) {
+    if (!tlGraphPinch) return;
+    const pair = tlTouchPairMetrics(e.touches);
+    if (!pair) return;
+    e.preventDefault();
+    const currentRect = canvas.getBoundingClientRect();
+    const ns = Math.min(TL_SCALE_MAX, Math.max(TL_SCALE_MIN,
+      tlGraphPinch.scale * pair.distance / tlGraphPinch.distance));
+    tlGraphView.scale = ns;
+    tlGraphView.left = pair.x - currentRect.left - tlGraphPinch.contentX * ns;
+    tlGraphView.top = pair.y - currentRect.top - tlGraphPinch.contentY * ns;
+    tlClampGraphView(inner, canvas);
+    inner.style.transform = `scale(${ns})`;
+    inner.style.transformOrigin = '0 0';
+    inner.style.left = tlGraphView.left + 'px';
+    inner.style.top = tlGraphView.top + 'px';
+    tlUpdateGraphZoomUI();
+  }
+  function onEnd(e) {
+    if (e.touches && e.touches.length >= 2) return;
+    cleanup();
+  }
+  document.addEventListener('touchmove', onMove, { passive: false });
+  document.addEventListener('touchend', onEnd);
+  document.addEventListener('touchcancel', onEnd);
 }
 
 function tlCtxToggleAuto() {
@@ -1564,7 +1642,6 @@ function tlNodeDragStart(ev, questId) {
 function tlNodeDragTouchStart(ev, questId) {
   if (!tlDragMode) return true; // 拖拽关闭：放行，正常触击打开详情
   ev.preventDefault();
-  ev.stopPropagation();
   const el = ev.currentTarget;
   if (ev.touches.length !== 1) return false;
   const touch = ev.touches[0];
@@ -1577,6 +1654,7 @@ function tlNodeDragTouchStart(ev, questId) {
   let longPress = false;
   const longTimer = setTimeout(function() { longPress = true; }, 200);
   function onMove(e) {
+    if (tlGraphPinch || e.touches.length > 1) return;
     const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
     if (!t || !longPress) return;
     const dx = t.clientX - startX, dy = t.clientY - startY;
@@ -1590,12 +1668,22 @@ function tlNodeDragTouchStart(ev, questId) {
     // 拖拽过程中不修改 nodes 平移与 viewBox，避免画布闪烁
     tlFollowNodeInView(el, true);
   }
-  function onUp() {
+  function onUp(e) {
     clearTimeout(longTimer);
     document.removeEventListener('touchmove', onMove);
     document.removeEventListener('touchend', onUp);
     document.removeEventListener('touchcancel', onUp);
-    if (!dragging) return; // 未拖动 = 点击，onclick 打开详情
+    // iOS 上 preventDefault 会取消后续 click，因此轻触必须在这里显式打开详情。
+    // 双指缩放结束时则绝不能误开节点。
+    if (!dragging) {
+      if (!tlGraphPinch && (!e.touches || e.touches.length === 0)) {
+        tlOpenQuestDetail(questId);
+        // 某些浏览器仍会在 touchend 后补发 click；详情打开后再短暂抑制它。
+        tlSuppressClick = true;
+        setTimeout(function() { tlSuppressClick = false; }, 350);
+      }
+      return;
+    }
     tlDraggingQuestId = null; // 解除拖拽锁
     tlSuppressClick = true;
     setTimeout(function() { tlSuppressClick = false; }, 0);

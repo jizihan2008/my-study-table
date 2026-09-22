@@ -101,14 +101,18 @@ test('browser renderer sanitizes hostile input and preserves rich markdown', asy
 test('mindmap extension and syntax highlighting remain available', async () => {
   const result = await page.evaluate(() => {
     const mindmap = window.formatMarkdownBase('```mindmap\n根节点\n  子节点\n```');
+    const unlabelledTree = window.formatMarkdownBase('```\n根节点\n  子节点\n```');
     const code = window.formatMarkdownBase('```javascript\nconst answer = 42;\n```');
     return {
       mindmap,
+      unlabelledTree,
       code
     };
   });
   expect(result.mindmap).toContain('bk-mindmap-wrap');
   expect(result.mindmap).toContain('子节点');
+  expect(result.unlabelledTree).not.toContain('bk-mindmap-wrap');
+  expect(result.unlabelledTree).toContain('<pre><code>');
   expect(result.code).toContain('language-javascript');
   expect(result.code).toContain('hljs-keyword');
 });
@@ -478,6 +482,14 @@ test('note preview builds a hierarchical TOC and jumps to the selected heading',
   expect(initial.targets).toEqual(['总览', '第一部分', '详细说明', '第一部分-1']);
   expect(initial.indents).toEqual(['0px', '12px', '24px', '12px']);
 
+  await page.evaluate(() => {
+    const preview = document.getElementById('notesPreview');
+    const heading = window.getNotePreviewHeadings().find(item => item.id === '第一部分');
+    preview.scrollTop = Math.max(0, heading.offsetTop - 12);
+    preview.dispatchEvent(new Event('scroll'));
+  });
+  await expect.poll(() => page.locator('#notesTocList .notes-toc-item.active').getAttribute('data-target')).toBe('第一部分');
+
   const jumped = await page.evaluate(async () => {
     window.jumpToNoteHeading('详细说明');
     await new Promise(resolve => setTimeout(resolve, 1000));
@@ -700,11 +712,14 @@ test('immersive display zoom changes reading and editing size without changing M
 test('an AI reply can be opened as an immersive, zoomable document with a TOC', async () => {
   const sourceState = await page.evaluate(() => {
     window.switchTab('ai');
+    const firstSection = Array.from({ length: 45 }, (_, index) => '总览内容第 ' + (index + 1) + ' 段。').join('\n\n');
+    const secondSection = Array.from({ length: 45 }, (_, index) => '详细内容第 ' + (index + 1) + ' 段。').join('\n\n');
+    const markdown = '# 回答总览\n\n' + firstSection + '\n\n## 详细说明\n\n' + secondSection;
     const row = document.createElement('div');
     row.className = 'ai-chat-msg assistant';
     row.innerHTML = `
       <div class="ai-chat-msg-body">
-        <div class="ai-chat-bubble">${window.formatAiContent('# 回答总览\n\n这是一段用于沉浸阅读的回答。\n\n## 详细说明\n\n- 第一项\n- 第二项')}</div>
+        <div class="ai-chat-bubble">${window.formatAiContent(markdown)}</div>
         <button type="button" id="e2eAiImmersiveTrigger">沉浸查看</button>
       </div>`;
     document.getElementById('aiMessages').appendChild(row);
@@ -716,9 +731,18 @@ test('an AI reply can be opened as an immersive, zoomable document with a TOC', 
 
   const overlay = page.locator('#aiMessageImmersive');
   await expect(overlay).toBeVisible();
-  await expect(page.locator('#aiMessageImmersiveArticle')).toContainText('这是一段用于沉浸阅读的回答');
+  await expect(page.locator('#aiMessageImmersiveArticle')).toContainText('总览内容第 1 段');
   await expect(page.locator('#aiMessageImmersiveTocList button')).toHaveCount(2);
   await expect(page.locator('#aiMessageImmersiveToc')).toBeVisible();
+  await expect(page.locator('#aiMessageImmersiveTocList button.active')).toHaveText('回答总览');
+
+  await page.evaluate(() => {
+    const article = document.getElementById('aiMessageImmersiveArticle');
+    const heading = document.getElementById('ai-message-immersive-heading-1');
+    article.scrollTop = Math.max(0, heading.offsetTop - 24);
+    article.dispatchEvent(new Event('scroll'));
+  });
+  await expect.poll(() => page.locator('#aiMessageImmersiveTocList button.active').getAttribute('data-target')).toBe('ai-message-immersive-heading-1');
 
   await overlay.getByRole('button', { name: '放大' }).click();
   await expect(page.locator('#aiMessageImmersiveZoomValue')).toHaveText('110%');

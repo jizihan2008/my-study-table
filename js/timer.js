@@ -2,7 +2,7 @@
 // Records time spent on linked todos or long-term goals.
 // Data stored in localStorage key: study_timer_records
 //
-// Record format: { id, name, targetId, targetType: 'todo'|'goal', date (YYYY-MM-DD), totalMs, sessions: [{ start: timestamp_ms, end: timestamp_ms }], affectsFocus: bool, manual: bool }
+// Record format: { id, name, todoId, goalId, taskId, targetId, targetType, date, totalMs, sessions, affectsFocus, manual }
 
 // ═══════════ Data persistence ═══════════
 // 计数器从「当前时间戳」与「已存记录最大 id+1」中取较大者，避免加载历史记录后
@@ -25,6 +25,99 @@ function genTimerRecordId() {
   return _timerRecordIdCounter++;
 }
 
+// 记录层兜底：严格首尾相接的相邻时段属于同一次连续计时，合并后再展示/保存。
+// 只合并 first.end === second.start，不吞掉真实的暂停间隔。
+function mergeContiguousTimerSessions(sessions) {
+  const source = Array.isArray(sessions) ? sessions : [];
+  const merged = [];
+  for (const session of source) {
+    if (!session || !Number.isFinite(session.start) || !Number.isFinite(session.end) || session.end <= session.start) continue;
+    const current = { start: session.start, end: session.end };
+    const previous = merged[merged.length - 1];
+    if (previous && previous.end === current.start) previous.end = current.end;
+    else merged.push(current);
+  }
+  return merged;
+}
+
+function normalizeTimerRecordBindings(record) {
+  const rec = record || {};
+  const legacyId = rec.targetId ?? rec.todoId ?? null;
+  const legacyType = rec.targetType || (rec.todoId ? 'todo' : null);
+  rec.todoId = rec.todoId ?? (legacyType === 'todo' ? legacyId : null);
+  rec.goalId = rec.goalId ?? (legacyType === 'goal' ? legacyId : null);
+  rec.taskId = rec.taskId ?? (legacyType === 'task' ? legacyId : null);
+  if (rec.todoId != null) { rec.targetType = 'todo'; rec.targetId = rec.todoId; }
+  else if (rec.goalId != null) { rec.targetType = 'goal'; rec.targetId = rec.goalId; }
+  else if (rec.taskId != null) { rec.targetType = 'task'; rec.targetId = rec.taskId; }
+  else { rec.targetType = null; rec.targetId = null; }
+  return rec;
+}
+
+function timerRecordsHaveSameIdentity(a, b) {
+  if (!a || !b || a.date !== b.date) return false;
+  normalizeTimerRecordBindings(a);
+  normalizeTimerRecordBindings(b);
+  return String(a.name || '').trim() === String(b.name || '').trim()
+    && (a.todoId ?? null) === (b.todoId ?? null)
+    && (a.goalId ?? null) === (b.goalId ?? null)
+    && (a.taskId ?? null) === (b.taskId ?? null)
+    && a.affectsFocus === b.affectsFocus;
+}
+
+function mergeAdjacentTimerRecords(records) {
+  const normalized = (Array.isArray(records) ? records : []).map(source =>
+    normalizeTimerRecordBindings({ ...source, sessions: mergeContiguousTimerSessions(source.sessions) })
+  );
+  // 把所有时段放到同一时间轴。一个记录的全部时段必须形成连续区块，才能继续参与自动合并；
+  // 因此 A → B → A 中两条 A 不会合并，已经合并成连续区块的 A1/A2 则仍可与紧邻的 A3 合并。
+  const timeline = normalized
+    .flatMap((record, index) => (record.sessions || []).map(session => ({ record, index, session })))
+    .sort((a, b) => a.session.start - b.session.start || a.session.end - b.session.end || a.index - b.index);
+  const blockCounts = new Map();
+  let previousOwner = null;
+  for (const item of timeline) {
+    if (item.index !== previousOwner) blockCounts.set(item.index, (blockCounts.get(item.index) || 0) + 1);
+    previousOwner = item.index;
+  }
+  const parent = normalized.map((_, index) => index);
+  const find = index => parent[index] === index ? index : (parent[index] = find(parent[index]));
+  const union = (a, b) => { const ra = find(a), rb = find(b); if (ra !== rb) parent[rb] = ra; };
+  for (let i = 1; i < timeline.length; i++) {
+    const previous = timeline[i - 1];
+    const current = timeline[i];
+    if (previous.index !== current.index
+      && blockCounts.get(previous.index) === 1
+      && blockCounts.get(current.index) === 1
+      && timerRecordsHaveSameIdentity(previous.record, current.record)) {
+      union(previous.index, current.index);
+    }
+  }
+  const groups = new Map();
+  normalized.forEach((record, index) => {
+    const root = find(index);
+    if (!groups.has(root)) groups.set(root, []);
+    groups.get(root).push({ record, index });
+  });
+  const emitted = new Set();
+  const result = [];
+  normalized.forEach((record, index) => {
+    const root = find(index);
+    if (emitted.has(root)) return;
+    emitted.add(root);
+    const members = groups.get(root) || [{ record, index }];
+    if (members.length === 1) { result.push(record); return; }
+    members.sort((a, b) => a.record.sessions[0].start - b.record.sessions[0].start);
+    const first = members[0].record;
+    first.sessions = mergeContiguousTimerSessions(members.flatMap(member => member.record.sessions || []));
+    first.totalMs = members.reduce((sum, member) => sum + (member.record.totalMs || 0), 0);
+    first.manual = members.some(member => member.record.manual);
+    first.auto = members.some(member => member.record.auto);
+    result.push(first);
+  });
+  return result;
+}
+
 function loadTimerRecords() {
   let records;
   try { records = JSON.parse(localStorage.getItem('study_timer_records') || '[]'); }
@@ -34,12 +127,28 @@ function loadTimerRecords() {
     if (!rec.id) { rec.id = genTimerRecordId(); changed = true; }
     if (rec.affectsFocus == null) { rec.affectsFocus = true; changed = true; }
     if (rec.manual == null) { rec.manual = false; changed = true; }
+    const bindingsBefore = JSON.stringify([rec.todoId, rec.goalId, rec.taskId, rec.targetType, rec.targetId]);
+    normalizeTimerRecordBindings(rec);
+    if (bindingsBefore !== JSON.stringify([rec.todoId, rec.goalId, rec.taskId, rec.targetType, rec.targetId])) changed = true;
+    if (Array.isArray(rec.sessions)) {
+      const merged = mergeContiguousTimerSessions(rec.sessions);
+      if (JSON.stringify(merged) !== JSON.stringify(rec.sessions)) {
+        rec.sessions = merged;
+        changed = true;
+      }
+    }
+  }
+  const merged = mergeAdjacentTimerRecords(records);
+  if (JSON.stringify(merged) !== JSON.stringify(records)) {
+    records = merged;
+    changed = true;
   }
   if (changed) saveTimerRecords(records);
   return records;
 }
 
 function saveTimerRecords(records) {
+  records = mergeAdjacentTimerRecords(records);
   // 走 saveData → 触发 Sync.onLocalChange → 计时记录跨设备同步（此前直接 setItem 不通知同步）
   if (typeof saveData === 'function') {
     saveData('study_timer_records', records);
@@ -56,6 +165,7 @@ let timerSessions = [];      // completed segments: [{ start: timestamp, end: ti
 let timerSessionName = '';
 let timerLinkedTodoId = null;
 let timerLinkedGoalId = null;
+let timerLinkedTaskId = null;
 let timerPickerMode = 'todo'; // 'todo' or 'goal'
 let timerPickerTarget = 'timer'; // 'timer' | 'manualTodo' — who opened the picker
 let timerInterval = null;
@@ -82,6 +192,7 @@ function saveTimerState() {
     name: timerSessionName,
     linkedTodoId: timerLinkedTodoId,
     linkedGoalId: timerLinkedGoalId,
+    linkedTaskId: timerLinkedTaskId,
     savedAt: now,
     // 最后一次「应用在运行」的时刻：重启后用它把关机/关窗期间的空白切掉，
     // 否则重进时 Date.now() - sessionStart 会把整段离线时间算成计时
@@ -103,6 +214,7 @@ function loadAndRestoreTimerState() {
   // Restore linked targets
   timerLinkedTodoId = state.linkedTodoId || null;
   timerLinkedGoalId = state.linkedGoalId || null;
+  timerLinkedTaskId = state.linkedTaskId || null;
 
   // Restore completed sessions & elapsed
   timerElapsed = state.elapsed || 0;
@@ -116,13 +228,22 @@ function loadAndRestoreTimerState() {
     // 把上一段封口在「最后一刻仍在跑」的时间点，并作为独立时段保留
     const prevStart = state.sessionStart || lastActiveAt;
     const prevEnd = Math.max(prevStart, lastActiveAt);
-    if (prevEnd - prevStart >= 500) timerSessions.push({ start: prevStart, end: prevEnd });
-    // 以存档里「当时显示的总时长」为准，时长不会因为刷新而变少
-    if (Number.isFinite(state.displayMs) && state.displayMs >= 0) {
-      timerElapsed = state.displayMs;
-    } else {
-      // 旧存档只存了已封口的 elapsed：把正在跑的这一段补上
-      timerElapsed += Math.max(0, lastActiveAt - (state.sessionStart || lastActiveAt));
+    const navigation = typeof performance !== 'undefined' && typeof performance.getEntriesByType === 'function'
+      ? performance.getEntriesByType('navigation')[0]
+      : null;
+    const isPageReload = !!(navigation && navigation.type === 'reload');
+    // Ctrl+R / Ctrl+Shift+R 只是重载渲染进程：保持原 sessionStart，避免把同一次连续计时
+    // 在刷新点切成两段。普通退出再打开仍会切掉离线空白。
+    const seamlessReload = isPageReload && now - lastActiveAt <= 60 * 1000;
+    if (!seamlessReload) {
+      if (prevEnd - prevStart >= 500) timerSessions.push({ start: prevStart, end: prevEnd });
+      // 以存档里「当时显示的总时长」为准，时长不会因为刷新而变少
+      if (Number.isFinite(state.displayMs) && state.displayMs >= 0) {
+        timerElapsed = state.displayMs;
+      } else {
+        // 旧存档只存了已封口的 elapsed：把正在跑的这一段补上
+        timerElapsed += Math.max(0, lastActiveAt - (state.sessionStart || lastActiveAt));
+      }
     }
 
     // 只有「刚刚关掉应用」的残留状态才自动续跑并接着计时；
@@ -131,8 +252,8 @@ function loadAndRestoreTimerState() {
     if (now - lastActiveAt <= TIMER_STALE_RESUME_MS) {
       timerRunning = true;
       timerResumedFromRestart = true;
-      // 新的一段从重启这一刻开始（关掉期间的空白不计入，避免虚增时长）
-      timerSessionStart = now;
+      // 页面刷新沿用原时段；应用重启则从此刻新开一段，避免计入离线空白。
+      timerSessionStart = seamlessReload ? prevStart : now;
       timerInterval = setInterval(function() {
         updateTimerTick();
         saveTimerState(); // persist on every tick
@@ -189,13 +310,20 @@ if (typeof window !== 'undefined' && window.electronAPI && typeof window.electro
 let timerManualFormOpen = false;
 let timerEditingRecordId = null; // null = add mode, id = edit mode
 let manualRecSelectedTodoId = null; // selected todo for the manual record form
+let manualRecSelectedTaskId = null;
 let timerPickerOpen = false; // 待办选择遮罩是否打开（心跳重绘后需恢复）
 
 // ═══════════ Render ═══════════
+function getTimerTask(taskId) {
+  if (taskId == null || typeof tlGetQuests !== 'function') return null;
+  return tlGetQuests().find(task => task.id === taskId) || null;
+}
+
 function renderTimer() {
   const container = document.getElementById('timerContainer');
   const linkedTodo = timerLinkedTodoId ? findTodo(timerLinkedTodoId) : null;
   const linkedGoal = timerLinkedGoalId ? loadGoals().find(g => g.id === timerLinkedGoalId) : null;
+  const linkedTask = getTimerTask(timerLinkedTaskId);
 
   const totalMs = timerElapsed + (timerRunning ? Date.now() - timerSessionStart : 0);
   const display = formatTimerTime(totalMs);
@@ -208,14 +336,17 @@ function renderTimer() {
     if (rec.date === todayStr) {
       let match = false;
       // Show records matching todo OR goal (both independent)
-      if (timerLinkedTodoId && rec.targetType === 'todo') {
-        match = getAllDescendantIds(timerLinkedTodoId).includes(rec.targetId);
+      if (timerLinkedTodoId) {
+        const recordTodoId = rec.todoId ?? (rec.targetType === 'todo' ? rec.targetId : null);
+        match = getAllDescendantIds(timerLinkedTodoId).includes(recordTodoId);
       }
-      if (timerLinkedGoalId && rec.targetType === 'goal') {
-        if (rec.targetId === timerLinkedGoalId) match = true;
+      if (timerLinkedGoalId) {
+        const recordGoalId = rec.goalId ?? (rec.targetType === 'goal' ? rec.targetId : null);
+        if (recordGoalId === timerLinkedGoalId) match = true;
       }
+      if (timerLinkedTaskId && (rec.taskId === timerLinkedTaskId || (rec.targetType === 'task' && rec.targetId === timerLinkedTaskId))) match = true;
       // If nothing linked, show all records
-      if (!timerLinkedTodoId && !timerLinkedGoalId) match = true;
+      if (!timerLinkedTodoId && !timerLinkedGoalId && !timerLinkedTaskId) match = true;
       if (match) {
         todayMs += rec.totalMs;
         if (rec.sessions) todaySessions.push(...rec.sessions);
@@ -240,17 +371,25 @@ function renderTimer() {
         <button class="timer-unlink-btn" onclick="event.stopPropagation(); unlinkTimerGoal()" title="解除关联">✕</button>
       </div>`
     : `<button class="timer-link-btn" onclick="openTimerGoalPicker()">🎯 关联目标</button>`;
+  const taskHtml = timerLinkedTaskId && linkedTask
+    ? `<div class="timer-linked-todo" onclick="openTimerTaskPicker()">
+        <span class="timer-linked-label">🗺️ 任务：</span>
+        <span class="timer-linked-text">${escapeHtml(linkedTask.title)}</span>
+        <button class="timer-unlink-btn" onclick="event.stopPropagation(); unlinkTimerTask()" title="解除关联">✕</button>
+      </div>`
+    : `<button class="timer-link-btn" onclick="openTimerTaskPicker()">🗺️ 关联任务</button>`;
   const nameHtml = `<label class="timer-name-field" title="为这次计时时段命名">
       <span class="timer-name-icon">✎</span>
       <input id="timerSessionName" type="text" maxlength="80" value="${escapeAttr(timerSessionName)}" placeholder="给计时时段命名" oninput="setTimerSessionName(this.value)" onkeydown="if(event.key === 'Enter') this.blur()">
     </label>`;
   const isCentered = !timerHistoryExpanded;
   const pickerHtml = isCentered
-    ? `<div class="timer-context-row centered">${nameHtml}${todoHtml}${goalHtml}</div>`
+    ? `<div class="timer-context-row centered">${nameHtml}${todoHtml}${goalHtml}${taskHtml}</div>`
     : `<div class="timer-context-stack">
         <div class="timer-context-item">${nameHtml}</div>
         <div class="timer-context-item">${todoHtml}</div>
         <div class="timer-context-item">${goalHtml}</div>
+        <div class="timer-context-item">${taskHtml}</div>
       </div>`;
 
   // Today's sessions
@@ -317,7 +456,7 @@ function renderTimer() {
   if (timerPickerOpen && pickerOverlay) {
     pickerOverlay.style.display = '';
     const header = pickerOverlay.querySelector('.timer-picker-header span');
-    if (header) header.textContent = timerPickerMode === 'goal' ? '选择要关联的长期目标' : '选择要关联的待办';
+    if (header) header.textContent = timerPickerMode === 'goal' ? '选择要关联的长期目标' : (timerPickerMode === 'task' ? '选择要关联的任务线任务' : '选择要关联的待办');
     renderTimerPickerList();
   }
 
@@ -401,18 +540,21 @@ function renderTimerHistory(records) {
     let dayTotal = 0;
     const itemHtml = [];
     for (const rec of items) {
-      let targetName = '';
-      const targetId = rec.targetId ?? rec.todoId;
-      const targetType = rec.targetType || 'todo';
-      if (targetId !== null && targetId !== undefined) {
-        if (targetType === 'goal') {
-          const goal = loadGoals().find(g => g.id === targetId);
-          targetName = goal ? '🎯 ' + goal.text : '(已删除的目标)';
-        } else {
-          const todo = findTodo(targetId);
-          targetName = todo ? getTimerTodoFullPath(todo) : '(已删除)';
-        }
+      normalizeTimerRecordBindings(rec);
+      const targetParts = [];
+      if (rec.todoId != null) {
+        const todo = findTodo(rec.todoId);
+        targetParts.push(todo ? getTimerTodoFullPath(todo) : '(已删除的待办)');
       }
+      if (rec.goalId != null) {
+        const goal = loadGoals().find(g => g.id === rec.goalId);
+        targetParts.push(goal ? '🎯 ' + goal.text : '🎯 (已删除的目标)');
+      }
+      if (rec.taskId != null) {
+        const task = getTimerTask(rec.taskId);
+        targetParts.push(task ? '🗺️ ' + task.title : '🗺️ (已删除的任务)');
+      }
+      const targetName = targetParts.join(' · ');
       const sessionName = typeof rec.name === 'string' ? rec.name.trim() : '';
       // 已命名的计时记录：即使未关联待办也只显示名称，不再补「自由计时」
       const name = sessionName
@@ -500,7 +642,7 @@ function updateTimerTick() {
 function startFocusTimer(todoId) {
   if (!findTodo(todoId)) return;
   // Clicking the currently running task only opens its timer; a paused session resumes.
-  if (timerLinkedTodoId === todoId && !timerLinkedGoalId && (timerRunning || timerElapsed > 0)) {
+  if (timerLinkedTodoId === todoId && !timerLinkedGoalId && !timerLinkedTaskId && (timerRunning || timerElapsed > 0)) {
     if (!timerRunning) timerStart();
     switchTab('timer');
     return;
@@ -510,6 +652,7 @@ function startFocusTimer(todoId) {
   else clearTimerState();
   timerLinkedTodoId = todoId;
   timerLinkedGoalId = null;
+  timerLinkedTaskId = null;
   timerElapsed = 0;
   timerSessions = [];
   timerSessionName = '';
@@ -553,18 +696,19 @@ function timerPause() {
 // 旧版本把「关掉应用的那段时间」也算进了 sessionStart→end，这里把多余的尾巴剪掉，
 // 保证记录里的时间轴与 totalMs 一致（历史/日历里的时长不会虚高）。
 function normalizeTimerSessionsForRecord(sessions, totalMs) {
-  const list = (Array.isArray(sessions) ? sessions : []).filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start);
+  const list = mergeContiguousTimerSessions(sessions);
   if (list.length === 0) return [];
   const sum = list.reduce((acc, s) => acc + (s.end - s.start), 0);
   if (sum <= totalMs + 1000 || sum <= 0) return list;
   const ratio = totalMs <= 0 ? 0 : totalMs / sum;
   let distributed = 0;
-  return list.map((s, i) => {
+  const trimmed = list.map((s, i) => {
     const span = s.end - s.start;
     const duration = (i === list.length - 1) ? Math.max(0, totalMs - distributed) : Math.round(span * ratio);
     distributed += duration;
     return { start: s.start, end: s.start + duration };
-  });
+  }).filter(s => s.end > s.start);
+  return mergeContiguousTimerSessions(trimmed);
 }
 
 function timerStop() {
@@ -581,19 +725,8 @@ function timerStop() {
     const todayStr = formatDate(new Date());
     const rawSessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
     const sessions = normalizeTimerSessionsForRecord(rawSessions, timerElapsed);
-    const baseRecord = { id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
-    // Save for todo if linked
-    if (timerLinkedTodoId) {
-      records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedTodoId, targetType: 'todo' });
-    }
-    // Save for goal if linked
-    if (timerLinkedGoalId) {
-      records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedGoalId, targetType: 'goal' });
-    }
-    // Always push a generic record if not linked to anything
-    if (!timerLinkedTodoId && !timerLinkedGoalId) {
-      records.push(baseRecord);
-    }
+    const baseRecord = normalizeTimerRecordBindings({ id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false, todoId: timerLinkedTodoId, goalId: timerLinkedGoalId, taskId: timerLinkedTaskId });
+    records.push(baseRecord);
     saveTimerRecords(records);
   }
   timerElapsed = 0;
@@ -613,16 +746,8 @@ function timerSave() {
   const todayStr = formatDate(new Date());
   const rawSessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
   const sessions = normalizeTimerSessionsForRecord(rawSessions, timerElapsed);
-  const baseRecord = { id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false };
-  if (timerLinkedTodoId) {
-    records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedTodoId, targetType: 'todo' });
-  }
-  if (timerLinkedGoalId) {
-    records.push({ ...baseRecord, id: genTimerRecordId(), targetId: timerLinkedGoalId, targetType: 'goal' });
-  }
-  if (!timerLinkedTodoId && !timerLinkedGoalId) {
-    records.push(baseRecord);
-  }
+  const baseRecord = normalizeTimerRecordBindings({ id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, affectsFocus: true, manual: false, todoId: timerLinkedTodoId, goalId: timerLinkedGoalId, taskId: timerLinkedTaskId });
+  records.push(baseRecord);
   saveTimerRecords(records);
   timerElapsed = 0;
   timerSessions = [];
@@ -673,6 +798,19 @@ function unlinkTimerGoal() {
   renderTimer();
 }
 
+function unlinkTimerTask() {
+  timerLinkedTaskId = null;
+  if (timerRunning) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+    timerRunning = false;
+  }
+  timerElapsed = 0;
+  timerSessions = [];
+  clearTimerState();
+  renderTimer();
+}
+
 function openTimerGoalPicker() {
   timerPickerMode = 'goal';
   timerPickerOpen = true;
@@ -687,6 +825,42 @@ function openTimerGoalPicker() {
 
 function pickTimerGoal(id) {
   timerLinkedGoalId = id;
+  closeTimerTodoPicker();
+  if (timerRunning) {
+    clearInterval(timerInterval);
+    timerInterval = null;
+    timerRunning = false;
+  }
+  timerElapsed = 0;
+  timerSessions = [];
+  clearTimerState();
+  renderTimer();
+}
+
+function openTimerTaskPicker(target = 'timer') {
+  timerPickerTarget = target;
+  timerPickerMode = 'task';
+  timerPickerOpen = true;
+  const overlay = document.getElementById('timerPickerOverlay');
+  const header = overlay?.querySelector('.timer-picker-header span');
+  if (header) header.textContent = '选择要关联的任务线任务';
+  if (overlay) overlay.style.display = '';
+  const search = document.getElementById('timerPickerSearch');
+  if (search) search.value = '';
+  renderTimerPickerList();
+  setTimeout(() => search?.focus(), 100);
+}
+
+function pickTimerTask(id) {
+  if (!getTimerTask(id)) return;
+  if (timerPickerTarget === 'manualTask') {
+    manualRecSelectedTaskId = id;
+    closeTimerTodoPicker();
+    const select = document.getElementById('manualRecTask');
+    if (select) select.value = String(id);
+    return;
+  }
+  timerLinkedTaskId = id;
   closeTimerTodoPicker();
   if (timerRunning) {
     clearInterval(timerInterval);
@@ -836,6 +1010,22 @@ function renderTimerPickerList() {
     return;
   }
 
+  if (timerPickerMode === 'task') {
+    const quests = typeof tlGetQuests === 'function' ? tlGetQuests() : [];
+    const lines = typeof tlGetLines === 'function' ? tlGetLines() : [];
+    const lineNames = Object.fromEntries(lines.map(line => [line.id, line.name]));
+    const searchQuery = (document.getElementById('timerPickerSearch')?.value || '').toLowerCase();
+    const filtered = searchQuery ? quests.filter(task => String(task.title || '').toLowerCase().includes(searchQuery)) : quests;
+    if (!filtered.length) { list.innerHTML = '<div class="todo-picker-empty">没有匹配的任务线任务</div>'; return; }
+    const selectedId = timerPickerTarget === 'manualTask' ? manualRecSelectedTaskId : timerLinkedTaskId;
+    list.innerHTML = filtered.map(task => `<div class="todo-picker-item${selectedId === task.id ? ' selected' : ''}" onclick="pickTimerTask(${task.id})">
+      <span class="picker-expand-spacer"></span><div class="picker-check"></div>
+      <span class="picker-text">🗺️ ${escapeHtml(task.title)}</span>
+      <span class="picker-due">${escapeHtml(lineNames[task.lineId] || '')}</span>
+    </div>`).join('');
+    return;
+  }
+
   // Todo picker mode
   const searchQuery = (document.getElementById('timerPickerSearch')?.value || '').toLowerCase();
   if (searchQuery) {
@@ -862,9 +1052,6 @@ function renderTimerPickerList() {
 function selectTimerTodo(id) {
   if (timerPickerTarget === 'manualTodo') {
     manualRecSelectedTodoId = id;
-    // Clear goal selection (mutual exclusion)
-    const goalEl = document.getElementById('manualRecGoal');
-    if (goalEl) goalEl.value = '';
     closeTimerTodoPicker();
     // Targeted DOM update — don't re-render the whole form to preserve unsaved edits
     const container = document.getElementById('manualRecTodoContainer');
@@ -886,10 +1073,34 @@ function toTimeStr(ts) {
   return String(d.getHours()).padStart(2, '0') + ':' + String(d.getMinutes()).padStart(2, '0');
 }
 
+function timerSessionDateStr(ts) {
+  return formatDate(new Date(ts));
+}
+
+function renderManualRecordSessionRow(session, index, total) {
+  return `<div class="timer-manual-session-row" data-session-index="${index}">
+    <span class="timer-manual-session-index">时段 ${index + 1}</span>
+    <div class="timer-manual-field timer-manual-session-date">
+      <label>日期</label>
+      <input type="date" class="manual-rec-session-date" value="${timerSessionDateStr(session.start)}">
+    </div>
+    <div class="timer-manual-field">
+      <label>开始时间</label>
+      <input type="time" class="manual-rec-session-start" value="${toTimeStr(session.start)}">
+    </div>
+    <div class="timer-manual-field">
+      <label>结束时间</label>
+      <input type="time" class="manual-rec-session-end" value="${toTimeStr(session.end)}">
+    </div>
+    <button type="button" class="timer-manual-session-remove" onclick="removeManualRecordSession(this)" title="删除这个时段" aria-label="删除时段 ${index + 1}" ${total <= 1 ? 'disabled' : ''}>×</button>
+  </div>`;
+}
+
 function toggleManualRecordForm() {
   timerManualFormOpen = !timerManualFormOpen;
   timerEditingRecordId = null;
   manualRecSelectedTodoId = null;
+  manualRecSelectedTaskId = null;
   renderTimer();
 }
 
@@ -897,17 +1108,19 @@ function renderManualRecordForm() {
   const isEdit = timerEditingRecordId !== null;
   const records = loadTimerRecords();
   const rec = isEdit ? records.find(r => r.id === timerEditingRecordId) : null;
+  if (rec) normalizeTimerRecordBindings(rec);
 
   const now = new Date();
-  const defaultDate = rec ? rec.date : formatDate(now);
-  const defaultStart = rec && rec.sessions && rec.sessions.length ? new Date(rec.sessions[0].start) : new Date(now.getTime() - 25 * 60000);
-  const defaultEnd = rec && rec.sessions && rec.sessions.length ? new Date(rec.sessions[rec.sessions.length - 1].end) : now;
+  const defaultSessions = rec && Array.isArray(rec.sessions) && rec.sessions.length
+    ? mergeContiguousTimerSessions(rec.sessions)
+    : [{ start: now.getTime() - 25 * 60000, end: now.getTime() }];
   const defaultAffectsFocus = rec ? rec.affectsFocus : true;
   const defaultName = rec && typeof rec.name === 'string' ? rec.name : '';
 
   // Normalize target for old-format records
-  const recTargetType = rec ? (rec.targetType || (rec.todoId ? 'todo' : null)) : null;
-  const recTargetId = rec ? (rec.targetId || rec.todoId || null) : null;
+  const recTodoId = rec ? rec.todoId : null;
+  const recGoalId = rec ? rec.goalId : null;
+  const recTaskId = rec ? rec.taskId : null;
 
   return `
     <div class="timer-manual-form">
@@ -918,37 +1131,37 @@ function renderManualRecordForm() {
           <input type="text" id="manualRecName" maxlength="80" value="${escapeAttr(defaultName)}" placeholder="例如：复习线性代数">
         </div>
       </div>
-      <div class="timer-manual-row">
-        <div class="timer-manual-field">
-          <label>日期</label>
-          <input type="date" id="manualRecDate" value="${defaultDate}">
-        </div>
-        <div class="timer-manual-field">
-          <label>开始时间</label>
-          <input type="time" id="manualRecStart" value="${toTimeStr(defaultStart)}">
-        </div>
-        <div class="timer-manual-field">
-          <label>结束时间</label>
-          <input type="time" id="manualRecEnd" value="${toTimeStr(defaultEnd)}">
-        </div>
+      <div class="timer-manual-sessions-head">
+        <span>计时时段</span>
+        <button type="button" class="timer-manual-add-session" onclick="addManualRecordSession()">＋ 添加时段</button>
+      </div>
+      <div class="timer-manual-sessions" id="manualRecSessions">
+        ${defaultSessions.map((session, index) => renderManualRecordSessionRow(session, index, defaultSessions.length)).join('')}
       </div>
       <div class="timer-manual-row">
         <div class="timer-manual-field">
           <label>关联待办</label>
-          <span id="manualRecTodoContainer">${renderManualTodoSelector(recTargetId, recTargetType)}</span>
+          <span id="manualRecTodoContainer">${renderManualTodoSelector(recTodoId, 'todo')}</span>
         </div>
         <div class="timer-manual-field">
           <label>关联目标</label>
           <select id="manualRecGoal" onchange="onManualRecGoalChange()">
             <option value="">无关联</option>
-            ${buildManualGoalOptions(recTargetId, recTargetType)}
+            ${buildManualGoalOptions(recGoalId, 'goal')}
+          </select>
+        </div>
+        <div class="timer-manual-field">
+          <label>关联任务</label>
+          <select id="manualRecTask" onchange="manualRecSelectedTaskId = parseInt(this.value) || null">
+            <option value="">无关联</option>
+            ${buildManualTaskOptions(recTaskId)}
           </select>
         </div>
       </div>
       <div class="timer-manual-row timer-manual-check">
         <label class="timer-manual-check-label">
           <input type="checkbox" id="manualRecAffectsFocus" ${defaultAffectsFocus ? 'checked' : ''}>
-          <span>计入待办/目标的专注时间</span>
+          <span>计入专注时间统计</span>
         </label>
       </div>
       <div class="timer-manual-actions">
@@ -956,6 +1169,44 @@ function renderManualRecordForm() {
         <button class="timer-btn timer-btn-reset" onclick="toggleManualRecordForm()">取消</button>
       </div>
     </div>`;
+}
+
+function refreshManualRecordSessionRows() {
+  const host = document.getElementById('manualRecSessions');
+  if (!host) return;
+  const rows = Array.from(host.querySelectorAll('.timer-manual-session-row'));
+  rows.forEach((row, index) => {
+    row.dataset.sessionIndex = String(index);
+    const label = row.querySelector('.timer-manual-session-index');
+    if (label) label.textContent = '时段 ' + (index + 1);
+    const remove = row.querySelector('.timer-manual-session-remove');
+    if (remove) {
+      remove.disabled = rows.length <= 1;
+      remove.setAttribute('aria-label', '删除时段 ' + (index + 1));
+    }
+  });
+}
+
+function addManualRecordSession() {
+  const host = document.getElementById('manualRecSessions');
+  if (!host) return;
+  const rows = host.querySelectorAll('.timer-manual-session-row');
+  const last = rows[rows.length - 1];
+  const date = last ? last.querySelector('.manual-rec-session-date')?.value : formatDate(new Date());
+  const end = last ? last.querySelector('.manual-rec-session-end')?.value : toTimeStr(Date.now());
+  const dateParts = String(date || formatDate(new Date())).split('-').map(Number);
+  const timeParts = String(end || '00:00').split(':').map(Number);
+  const start = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], timeParts[0], timeParts[1]).getTime();
+  const session = { start, end: start + 25 * 60000 };
+  host.insertAdjacentHTML('beforeend', renderManualRecordSessionRow(session, rows.length, rows.length + 1));
+  refreshManualRecordSessionRows();
+}
+
+function removeManualRecordSession(button) {
+  const host = document.getElementById('manualRecSessions');
+  if (!host || host.querySelectorAll('.timer-manual-session-row').length <= 1) return;
+  button.closest('.timer-manual-session-row')?.remove();
+  refreshManualRecordSessionRows();
 }
 
 function renderManualTodoSelector(recTargetId, recTargetType) {
@@ -994,53 +1245,49 @@ function buildManualGoalOptions(recTargetId, recTargetType) {
 }
 
 function onManualRecGoalChange() {
-  manualRecSelectedTodoId = null;
-  const todoEl = document.getElementById('manualRecTodo');
-  if (todoEl) todoEl.value = '';
-  // Targeted DOM update
-  const container = document.getElementById('manualRecTodoContainer');
-  if (container) container.outerHTML = `<span id="manualRecTodoContainer">${renderManualTodoSelector(null, null)}</span>`;
+  // 待办、目标和任务可同时关联；这里保留其他选择。
+}
+
+function buildManualTaskOptions(selectedId) {
+  const quests = typeof tlGetQuests === 'function' ? tlGetQuests() : [];
+  const lines = typeof tlGetLines === 'function' ? tlGetLines() : [];
+  const lineNames = Object.fromEntries(lines.map(line => [line.id, line.name]));
+  return quests.map(task => `<option value="${task.id}"${selectedId === task.id ? ' selected' : ''}>${escapeHtml((lineNames[task.lineId] ? lineNames[task.lineId] + ' · ' : '') + task.title)}</option>`).join('');
 }
 
 function saveManualRecord() {
   const nameEl = document.getElementById('manualRecName');
-  const dateEl = document.getElementById('manualRecDate');
-  const startEl = document.getElementById('manualRecStart');
-  const endEl = document.getElementById('manualRecEnd');
   const todoEl = document.getElementById('manualRecTodo');
   const goalEl = document.getElementById('manualRecGoal');
+  const taskEl = document.getElementById('manualRecTask');
   const affectsEl = document.getElementById('manualRecAffectsFocus');
-
-  if (!dateEl || !startEl || !endEl) return;
-
-  const dateStr = dateEl.value;
-  const startStr = startEl.value;
-  const endStr = endEl.value;
-
-  if (!dateStr || !startStr || !endStr) return;
-
-  // Parse times
-  const [sh, sm] = startStr.split(':').map(Number);
-  const [eh, em] = endStr.split(':').map(Number);
-  const dateParts = dateStr.split('-').map(Number);
-  const startTs = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], sh, sm).getTime();
-  let endTs = new Date(dateParts[0], dateParts[1] - 1, dateParts[2], eh, em).getTime();
-
-  // If end is before start, assume next day
-  if (endTs <= startTs) endTs += 86400000;
-
-  const totalMs = endTs - startTs;
-  if (totalMs < 1000) return; // at least 1 second
+  const sessionRows = Array.from(document.querySelectorAll('#manualRecSessions .timer-manual-session-row'));
+  const sessions = [];
+  for (const row of sessionRows) {
+    const dateStr = row.querySelector('.manual-rec-session-date')?.value;
+    const startStr = row.querySelector('.manual-rec-session-start')?.value;
+    const endStr = row.querySelector('.manual-rec-session-end')?.value;
+    if (!dateStr || !startStr || !endStr) return;
+    const [year, month, day] = dateStr.split('-').map(Number);
+    const [startHour, startMinute] = startStr.split(':').map(Number);
+    const [endHour, endMinute] = endStr.split(':').map(Number);
+    const start = new Date(year, month - 1, day, startHour, startMinute).getTime();
+    let end = new Date(year, month - 1, day, endHour, endMinute).getTime();
+    if (end <= start) end += 86400000; // 结束早于开始视为跨到次日
+    if (!Number.isFinite(start) || !Number.isFinite(end) || end - start < 1000) return;
+    sessions.push({ start, end });
+  }
+  if (sessions.length === 0) return;
+  sessions.sort((a, b) => a.start - b.start);
+  const normalizedSessions = mergeContiguousTimerSessions(sessions);
+  const totalMs = normalizedSessions.reduce((sum, session) => sum + session.end - session.start, 0);
+  const dateStr = timerSessionDateStr(normalizedSessions[0].start);
 
   const todoId = todoEl ? parseInt(todoEl.value) || null : null;
   const goalId = goalEl ? parseInt(goalEl.value) || null : null;
+  const taskId = taskEl ? parseInt(taskEl.value) || null : null;
   const affectsFocus = affectsEl ? affectsEl.checked : true;
   const name = nameEl ? nameEl.value.trim().slice(0, 80) : '';
-
-  // Determine target
-  let targetId = null, targetType = null;
-  if (todoId) { targetId = todoId; targetType = 'todo'; }
-  else if (goalId) { targetId = goalId; targetType = 'goal'; }
 
   const records = loadTimerRecords();
 
@@ -1048,30 +1295,31 @@ function saveManualRecord() {
     // Edit mode: replace existing record
     const idx = records.findIndex(r => r.id === timerEditingRecordId);
     if (idx >= 0) {
-      records[idx] = {
+      records[idx] = normalizeTimerRecordBindings({
         ...records[idx],
-        name, targetId, targetType,
+        name, todoId, goalId, taskId,
         date: dateStr, totalMs,
-        sessions: [{ start: startTs, end: endTs }],
+        sessions: normalizedSessions,
         affectsFocus, manual: true
-      };
+      });
     }
   } else {
     // Add mode
-    records.push({
+    records.push(normalizeTimerRecordBindings({
       id: genTimerRecordId(),
       name,
-      targetId, targetType,
+      todoId, goalId, taskId,
       date: dateStr, totalMs,
-      sessions: [{ start: startTs, end: endTs }],
+      sessions: normalizedSessions,
       affectsFocus, manual: true
-    });
+    }));
   }
 
   saveTimerRecords(records);
   timerManualFormOpen = false;
   timerEditingRecordId = null;
   manualRecSelectedTodoId = null;
+  manualRecSelectedTaskId = null;
   renderTimer();
 }
 
@@ -1085,6 +1333,7 @@ function deleteTimerRecord(recordId) {
   const records = loadTimerRecords();
   const rec = records.find(r => r.id === recordId);
   if (!rec) return;
+  normalizeTimerRecordBindings(rec);
 
   let name = '记录';
   if (typeof rec.name === 'string' && rec.name.trim()) {
@@ -1095,6 +1344,9 @@ function deleteTimerRecord(recordId) {
   } else if (rec.targetType === 'todo' || rec.todoId) {
     const todo = findTodo(rec.targetId || rec.todoId);
     if (todo) name = '待办「' + todo.text + '」';
+  } else if (rec.taskId) {
+    const task = getTimerTask(rec.taskId);
+    if (task) name = '任务「' + task.title + '」';
   }
 
   if (typeof showCustomConfirm === 'function') {
@@ -1123,6 +1375,7 @@ let timerFloatVisible = false; // 浮窗是否显示
 function timerFloatTargetHtml() {
   const linkedTodo = timerLinkedTodoId ? findTodo(timerLinkedTodoId) : null;
   const linkedGoal = timerLinkedGoalId ? loadGoals().find(g => g.id === timerLinkedGoalId) : null;
+  const linkedTask = getTimerTask(timerLinkedTaskId);
   let html = '';
   if (timerSessionName.trim()) {
     html += `<div class="tf-target-row"><span class="tf-target-ico">✎</span><span class="tf-target-text" title="${escapeAttr(timerSessionName.trim())}">${escapeHtml(timerSessionName.trim())}</span></div>`;
@@ -1130,13 +1383,12 @@ function timerFloatTargetHtml() {
   // 只显示待办名称，不显示目录路径
   if (linkedTodo) {
     html += `<div class="tf-target-row"><span class="tf-target-ico">📋</span><span class="tf-target-text" title="${escapeHtml(linkedTodo.text)}">${escapeHtml(linkedTodo.text)}</span></div>`;
-  } else {
-    html += `<div class="tf-target-row tf-empty"><span class="tf-target-ico">📋</span><span class="tf-target-text">未关联待办</span></div>`;
   }
   if (linkedGoal) {
     html += `<div class="tf-target-row"><span class="tf-target-ico">🎯</span><span class="tf-target-text" title="${escapeHtml(linkedGoal.text)}">${escapeHtml(linkedGoal.text)}</span></div>`;
-  } else {
-    html += `<div class="tf-target-row tf-empty"><span class="tf-target-ico">🎯</span><span class="tf-target-text">未关联目标</span></div>`;
+  }
+  if (linkedTask) {
+    html += `<div class="tf-target-row"><span class="tf-target-ico">🗺️</span><span class="tf-target-text" title="${escapeAttr(linkedTask.title)}">${escapeHtml(linkedTask.title)}</span></div>`;
   }
   return html;
 }
