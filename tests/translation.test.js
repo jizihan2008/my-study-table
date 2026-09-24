@@ -89,10 +89,12 @@ test('vocabulary cards become due immediately and review ratings schedule the ne
   translation.toggleVocabulary(card.id, true);
   assert.equal(translation.getReviewQueue().length, 1);
 
-  const reviewed = translation.gradeReview(card.id, 'good', '2026-09-22T00:00:00.000Z');
+  const reviewedAt = new Date(Date.now() + 24 * 60 * 60 * 1000);
+  const expectedDueAt = new Date(reviewedAt.getTime() + 24 * 60 * 60 * 1000).toISOString();
+  const reviewed = translation.gradeReview(card.id, 'good', reviewedAt.toISOString());
   assert.equal(reviewed.reviewCount, 1);
   assert.equal(reviewed.reviewStage, 1);
-  assert.equal(reviewed.reviewDueAt, '2026-09-23T00:00:00.000Z');
+  assert.equal(reviewed.reviewDueAt, expectedDueAt);
   assert.equal(translation.getReviewQueue().length, 0);
 });
 
