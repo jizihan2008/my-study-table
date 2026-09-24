@@ -10,7 +10,7 @@
 // ═══════════ AI Chat: Attachments ═══════════
 // Selected local items are injected into the next user message as readable
 // context, rather than uploaded as files.
-let aiContextInserts = []; // [{ type: 'note'|'todo'|'skill', id }]
+let aiContextInserts = []; // [{ type: 'note'|'todo'|'skill', id } | { type: 'quote', ... }]
 let aiContextPickerType = null;
 let aiContextPickerQuery = '';
 let aiContextPickerExpandedIds = new Set();
@@ -41,6 +41,11 @@ function getAiContextNotePath(note) {
 function getAiContextInsertSnapshot() {
   if (!Array.isArray(aiContextInserts)) return [];
   return aiContextInserts.map(item => {
+    if (item.type === 'quote') {
+      const selectedText = String(item.selectedText || '').trim();
+      if (!selectedText) return null;
+      return { type: 'quote', selectedText, contextBefore: String(item.contextBefore || ''), contextAfter: String(item.contextAfter || ''), sourceRole: item.sourceRole || 'assistant' };
+    }
     if (item.type === 'note') {
       const note = (typeof notes !== 'undefined' ? notes : []).find(n => n.id === item.id && n.type === 'note');
       return note ? { type: 'note', id: note.id, label: getAiContextNotePath(note), content: note.content || '' } : null;
@@ -57,9 +62,11 @@ function getAiContextInsertSnapshot() {
 function buildAiContextInsertText(snapshot) {
   const items = Array.isArray(snapshot) ? snapshot : getAiContextInsertSnapshot();
   if (items.length === 0) return '';
-  const blocks = items.map(item => item.type === 'note'
-    ? `【插入笔记】${item.label}\n正文：\n${item.content || '（空笔记）'}`
-    : item.type === 'skill'
+  const blocks = items.map(item => item.type === 'quote'
+    ? `【引用的 AI 原话】\n${item.selectedText}\n\n【引用处的前后文（仅用于理解引用）】\n${item.contextBefore || ''}《引用》${item.selectedText}《/引用》${item.contextAfter || ''}`
+    : item.type === 'note'
+      ? `【插入笔记】${item.label}\n正文：\n${item.content || '（空笔记）'}`
+      : item.type === 'skill'
       ? `【启用技能：${item.label}】\n${item.content}`
       : `【插入待办】${item.label}`);
   return blocks.length ? `\n\n---\n${blocks.join('\n\n')}\n---` : '';
@@ -79,6 +86,7 @@ function renderAiContextPreview() {
   const wrap = document.getElementById('aiContextPreview');
   if (!wrap) return;
   const valid = aiContextInserts.map((item, index) => ({ item, index })).filter(({ item }) => {
+    if (item.type === 'quote') return !!String(item.selectedText || '').trim();
     if (item.type === 'skill') return typeof getAiSkill === 'function' && !!getAiSkill(item.id);
     return item.type === 'note'
       ? (typeof notes !== 'undefined' && notes.some(n => n.id === item.id && n.type === 'note'))
@@ -88,12 +96,18 @@ function renderAiContextPreview() {
   if (valid.length === 0) { wrap.style.display = 'none'; wrap.innerHTML = ''; return; }
   wrap.style.display = 'flex';
   wrap.innerHTML = valid.map(({ item }, index) => {
+    if (item.type === 'quote') {
+      const text = String(item.selectedText || '').replace(/\s+/g, ' ').trim();
+      const preview = text.length > 120 ? text.slice(0, 120) + '…' : text;
+      return `<span class="ai-attach-preview ai-quote-preview" title="${escapeAttr(text)}"><i data-lucide="quote" class="lucide-icon"></i><span class="preview-name">${escapeHtml(preview)}</span><button class="preview-remove" onclick="removeAiContextInsert(${index})" title="取消引用">✕</button></span>`;
+    }
     const isNote = item.type === 'note';
     const isSkill = item.type === 'skill';
     const source = isNote ? notes.find(n => n.id === item.id) : isSkill ? getAiSkill(item.id) : findTodo(item.id);
     const label = isNote ? getAiContextNotePath(source) : isSkill ? source.name : getAiContextTodoPath(source);
     return `<span class="ai-attach-preview" title="${escapeAttr(label)}">${isNote ? '📝 笔记正文：' : isSkill ? '✨ 技能：' : '📋 待办路径：'}<span class="preview-name">${escapeHtml(label)}</span><button class="preview-remove" onclick="removeAiContextInsert(${index})">✕</button></span>`;
   }).join('');
+  if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 function openAiContextPicker(type) {

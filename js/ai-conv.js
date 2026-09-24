@@ -10,7 +10,19 @@ function openConvSettingsModal() {
   const conv = getActiveConv();
   document.getElementById('convSettingsModal').classList.add('open');
   document.getElementById('convTitleInput').value = conv ? conv.title : '';
-  document.getElementById('convSystemPrompt').value = conv ? (conv.systemPrompt || '') : '';
+  const promptSelect = document.getElementById('convPromptTemplate');
+  if (promptSelect && typeof getChatPromptTemplateDefs === 'function') {
+    const defs = getChatPromptTemplateDefs();
+    promptSelect.innerHTML = defs.map(item => `<option value="${item.id}">${promptEsc(item.name)}</option>`).join('');
+    if (conv && !conv.promptTemplateId && conv.systemPrompt) {
+      promptSelect.insertAdjacentHTML('afterbegin', '<option value="legacy">历史对话提示词（保留）</option>');
+      promptSelect.value = 'legacy';
+    } else {
+      promptSelect.value = defs.some(item => item.id === conv?.promptTemplateId) ? conv.promptTemplateId : 'chat';
+    }
+    const importButton = document.getElementById('convImportLegacyPrompt');
+    if (importButton) importButton.style.display = conv && !conv.promptTemplateId && conv.systemPrompt ? '' : 'none';
+  }
   document.getElementById('convSettingsStatus').className = 'settings-status';
   document.getElementById('convSettingsStatus').textContent = '';
   renderConvAiToolSettings(conv);
@@ -33,6 +45,24 @@ function openConvSettingsModal() {
   }
 }
 
+function importLegacyConversationPrompt() {
+  const conv = getActiveConv();
+  if (!conv || !conv.systemPrompt || conv.promptTemplateId || typeof getPromptTemplate !== 'function') return;
+  const id = 'custom-' + genId();
+  const saved = loadPromptTemplates();
+  const name = (conv.title || '历史对话').slice(0, 32) + ' 提示词';
+  saved.customTemplates = [...(Array.isArray(saved.customTemplates) ? saved.customTemplates : []), { id, name }];
+  saved[id] = conv.systemPromptMode === 'full'
+    ? conv.systemPrompt
+    : defaultPromptTemplate('chat', conv, getEffectiveApiConfig()) + '\n\n【用户自定义角色】' + conv.systemPrompt;
+  persistPromptTemplates(saved);
+  conv.promptTemplateId = id;
+  safeSaveAiConvs();
+  selectedPromptTemplate = id;
+  closeConvSettingsModal();
+  switchTab('prompts');
+}
+
 function closeConvSettingsModal(e) {
   if (e && e.target !== document.getElementById('convSettingsModal')) return;
   convSettingsModalOpen = false;
@@ -43,7 +73,8 @@ function saveConvSettings() {
   const conv = getActiveConv();
   if (!conv) return;
   conv.title = document.getElementById('convTitleInput').value.trim() || '未命名对话';
-  conv.systemPrompt = document.getElementById('convSystemPrompt').value.trim();
+  const promptSelect = document.getElementById('convPromptTemplate');
+  if (promptSelect && promptSelect.value !== 'legacy') conv.promptTemplateId = promptSelect.value;
   safeSaveAiConvs();
   renderAiChat();
 }

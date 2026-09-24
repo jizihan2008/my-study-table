@@ -6,6 +6,18 @@ let _aiForceScrollBottom = false; // 强制滚动到底部标志（发送/切换
 const _aiStreamingDrafts = new Map(); // convId -> transient assistant output (never persisted)
 const _aiStreamingPaintTimers = new Map();
 const AI_STREAM_PAINT_INTERVAL_MS = 32;
+const AI_HISTORY_BATCH_SIZE = 80;
+const _aiVisibleMessageCounts = new Map();
+let _aiPrependingHistory = false;
+
+function showEarlierAiMessages() {
+  const conv = getActiveConv();
+  if (!conv) return;
+  const key = String(conv.id);
+  _aiVisibleMessageCounts.set(key, (_aiVisibleMessageCounts.get(key) || AI_HISTORY_BATCH_SIZE) + AI_HISTORY_BATCH_SIZE);
+  _aiPrependingHistory = true;
+  renderAiMessages();
+}
 
 function stripHallucinatedToolTranscriptForDisplay(value) {
   const text = String(value || '');
@@ -171,7 +183,6 @@ function renderAiChat(options) {
     ${typeof getAiDeleteConfirmationHtml === 'function' ? getAiDeleteConfirmationHtml(conv.id) : '<div id="aiDeleteConfirmHost"></div>'}
     <div class="ai-chat-messages" id="aiMessages"></div>
     <div class="ai-attach-preview-wrap" id="aiAttachPreview" style="display:none;"></div>
-    <div class="ai-attach-preview-wrap" id="aiContextPreview" style="display:none;"></div>
     <!-- Toolbar: API Key selector + toggles + quick actions -->
     <div class="ai-toolbar" id="aiToolbar">
       <div class="ai-toolbar-row">
@@ -210,6 +221,7 @@ function renderAiChat(options) {
     </div>
     <div class="ai-queue-indicator" id="aiQueueIndicator" style="display:none;" onclick="toggleAiQueuePanel(event)"></div>
     <div class="ai-queue-panel" id="aiQueuePanel" style="display:none;"></div>
+    <div class="ai-attach-preview-wrap ai-context-preview-wrap" id="aiContextPreview" style="display:none;"></div>
     <div class="ai-chat-input-wrap">
       <textarea id="aiInput" placeholder="${noKey ? '未配置 AI Key，仅可查看历史记录' : '输入你的问题，回车发送... (可上传 .txt 附件)'}" rows="1"
                 ${noKey ? 'disabled' : ''}
@@ -526,7 +538,8 @@ function renderAiMessages() {
   // AI 回复/工具调用会频繁重渲染；若用户正在翻阅历史消息，不应被强制拉到末尾。
   // 仅当用户本就接近底部（或显式强制）时才在渲染后滚动到底部。
   const prevScrollTop = container.scrollTop;
-  const wasNearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+  const prevScrollHeight = container.scrollHeight;
+  const wasNearBottom = prevScrollHeight - container.scrollTop - container.clientHeight < 120;
 
   // 树状对话：conv.messages 是活跃路径的扁平视图（由树引擎同步）。
   // 直接遍历节点序列渲染，同时为每个消息记录其树节点 id（nodeId），
@@ -586,7 +599,12 @@ function renderAiMessages() {
     });
   }
 
-  container.innerHTML = renderItems.map(item => {
+  const visibleCount = _aiVisibleMessageCounts.get(String(conv.id)) || AI_HISTORY_BATCH_SIZE;
+  const hiddenCount = Math.max(0, renderItems.length - visibleCount);
+  const visibleItems = hiddenCount ? renderItems.slice(hiddenCount) : renderItems;
+  container.innerHTML = (hiddenCount
+    ? `<button type="button" class="ai-history-more" onclick="showEarlierAiMessages()">加载更早消息（还有 ${hiddenCount} 条）</button>`
+    : '') + visibleItems.map(item => {
     const m = item.msg;
     if (!m) return ''; // safety: skip items without a message object
     const idx = item.idx;
@@ -610,6 +628,10 @@ function renderAiMessages() {
     if (item.type === 'user' && Array.isArray(m.contextInserts) && m.contextInserts.length > 0) {
       if (typeof m.displayContent === 'string') cleanContent = m.displayContent;
       contextHtml = '<div class="ai-message-context-list">' + m.contextInserts.map(context => {
+        if (context.type === 'quote') {
+          const quote = String(context.selectedText || '').trim();
+          return `<div class="ai-message-quote"><span class="ai-message-quote-label"><i data-lucide="quote" class="lucide-icon"></i> 引用 AI 回复</span><div>${formatAiContent(quote)}</div></div>`;
+        }
         const label = escapeHtml(context.label || (context.type === 'note' ? '未命名笔记' : '未命名待办'));
         if (context.type === 'note') {
           return `<details class="note-fold ai-message-note-context"><summary>📝 ${label}</summary><div class="note-fold-body">${formatAiContent(context.content || '（空笔记）')}</div></details>`;
@@ -837,7 +859,7 @@ function renderAiMessages() {
     const kimiSearchBadge = (m._kimiSearchResult) ? '<div class="ai-kimi-search-badge">🔍 Kimi 联网搜索</div>' : '';
 
     return `
-      <div class="ai-chat-msg ${roleClass}"${m._streaming ? ' id="aiStreamingDraft" aria-live="polite"' : ''}>
+      <div class="ai-chat-msg ${roleClass}" data-message-index="${idx}"${item.nodeId ? ` data-node-id="${item.nodeId}"` : ''}${m._streaming ? ' id="aiStreamingDraft" aria-live="polite"' : ''}>
         <div class="ai-chat-avatar">${avatar}</div>
         <div class="ai-chat-msg-body">
           ${keyNameHtml}
@@ -854,21 +876,24 @@ function renderAiMessages() {
     // Show typing indicator if the last message is from user (waiting for first AI response)
     // or if the last message is a tool result (waiting for AI to process it)
     if (lastMsg.role === 'user' || (lastMsg.role === 'system' && lastMsg._toolInfo)) {
-      container.innerHTML += `
+      container.insertAdjacentHTML('beforeend', `
         <div class="ai-chat-msg assistant">
           <div class="ai-chat-avatar">🤖</div>
           <div class="ai-chat-bubble"><div class="ai-chat-typing"><span></span><span></span><span></span></div></div>
         </div>
-      `;
+      `);
     }
   }
   // ── 渲染后滚动：仅在接近底部或强制时滚到底，否则保持原位置 ──
-  if (_aiForceScrollBottom || wasNearBottom) {
+  if (_aiPrependingHistory) {
+    container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
+  } else if (_aiForceScrollBottom || wasNearBottom) {
     container.scrollTop = container.scrollHeight;
   } else {
     container.scrollTop = prevScrollTop;
   }
   _aiForceScrollBottom = false;
+  _aiPrependingHistory = false;
 }
 
 // ═══════════ 树形导航浮窗（模仿复习浮窗，body 级可拖拽） ═══════════
@@ -1372,6 +1397,8 @@ function showAiChatContextMenu(e) {
   const sel = window.getSelection();
   const selectionInChat = !!(sel && !sel.isCollapsed
     && container.contains(sel.anchorNode) && container.contains(sel.focusNode));
+  const selectionInMessage = !!(selectionInChat && messageRow
+    && messageRow.contains(sel.anchorNode) && messageRow.contains(sel.focusNode));
   const text = selectionInChat ? sel.toString().trim() : '';
   const md = selectionInChat ? selectionToMarkdown() : '';
   if (!messageRow && !text && !md) return;
@@ -1386,6 +1413,8 @@ function showAiChatContextMenu(e) {
   menu.querySelectorAll('.ai-context-selection-action').forEach(action => {
     action.style.display = (text || md) ? '' : 'none';
   });
+  const quoteAction = menu.querySelector('.ai-context-quote-action');
+  if (quoteAction) quoteAction.style.display = (selectionInMessage && (text || md)) ? '' : 'none';
   menu.style.left = e.clientX + 'px';
   menu.style.top = e.clientY + 'px';
   menu.classList.add('visible');
@@ -1443,6 +1472,31 @@ function copyAiSelection() {
     ta.remove();
   }
   showAiToast('已复制选中文字 📋');
+}
+
+// 右键「引用」：把选中原话及其附近文字放到输入框上方，随下一条消息发送。
+function quoteAiSelection() {
+  const selectedText = (_aiCtxMarkdown || _aiCtxSelection || '').trim();
+  const row = _aiCtxMessageRow;
+  if (!selectedText || !row) { closeAiChatContextMenu(); return; }
+  const conv = typeof getActiveConv === 'function' ? getActiveConv() : null;
+  const messageIndex = Number(row.dataset.messageIndex);
+  const source = conv && Number.isInteger(messageIndex) ? conv.messages[messageIndex] : null;
+  const raw = String(source && source.content || row.querySelector('.ai-chat-bubble')?.innerText || '');
+  const plainSelected = String(_aiCtxSelection || selectedText).trim();
+  let start = raw.indexOf(plainSelected);
+  if (start < 0) start = raw.indexOf(selectedText);
+  const radius = 320;
+  const contextBefore = start >= 0 ? raw.slice(Math.max(0, start - radius), start) : raw.slice(0, radius);
+  const contextAfter = start >= 0 ? raw.slice(start + plainSelected.length, start + plainSelected.length + radius) : raw.slice(-radius);
+  if (typeof aiContextInserts !== 'undefined') {
+    aiContextInserts = aiContextInserts.filter(item => item.type !== 'quote');
+    aiContextInserts.push({ type: 'quote', selectedText, contextBefore, contextAfter, sourceRole: 'assistant' });
+  }
+  closeAiChatContextMenu();
+  if (typeof renderAiContextPreview === 'function') renderAiContextPreview();
+  const input = document.getElementById('aiInput');
+  if (input && !input.disabled) input.focus();
 }
 
 // 右键「仔细讲解」：把选中文字作为提问，在当前 AI 对话内发送

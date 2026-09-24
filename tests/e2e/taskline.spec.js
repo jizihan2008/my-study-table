@@ -246,3 +246,80 @@ test('touch tap opens quest detail and a two-finger gesture zooms the canvas', a
   expect(result.scale).toBeGreaterThan(1.5);
   expect(result.indicator).toBe(Math.round(result.scale * 100) + '%');
 });
+
+test('right-edge swipe opens the taskline sidebar and a right swipe closes it', async () => {
+  const result = await page.evaluate(() => {
+    switchTab('taskline');
+    renderTaskLine();
+    // Electron 的测试窗口可能不报告触点；直接初始化仍应复用生产手势入口。
+    if (!tlSidebarSwipeInitialized) {
+      Object.defineProperty(navigator, 'maxTouchPoints', { configurable: true, value: 1 });
+      initTlSidebarSwipe();
+    }
+    const sidebar = document.getElementById('tlSidebar');
+    closeTlSidebar();
+    const makeTouch = (id, x, y, target) => new Touch({
+      identifier: id, target, clientX: x, clientY: y, pageX: x, pageY: y,
+      screenX: x, screenY: y, radiusX: 2, radiusY: 2, force: 1
+    });
+    const dispatch = (type, touch) => document.dispatchEvent(new TouchEvent(type, {
+      bubbles: true, cancelable: true,
+      touches: type === 'touchend' ? [] : [touch],
+      targetTouches: type === 'touchend' ? [] : [touch],
+      changedTouches: [touch]
+    }));
+
+    const openStart = makeTouch(10, window.innerWidth - 8, 180, document.body);
+    const openEnd = makeTouch(10, window.innerWidth - 100, 184, document.body);
+    dispatch('touchstart', openStart);
+    dispatch('touchmove', openEnd);
+    const opened = sidebar.classList.contains('open');
+    dispatch('touchend', openEnd);
+
+    const rect = sidebar.getBoundingClientRect();
+    const closeStart = makeTouch(11, rect.left + 24, 180, sidebar);
+    const closeEnd = makeTouch(11, rect.left + 116, 184, sidebar);
+    dispatch('touchstart', closeStart);
+    dispatch('touchmove', closeEnd);
+    const closed = !sidebar.classList.contains('open');
+    dispatch('touchend', closeEnd);
+    return { opened, closed };
+  });
+  expect(result).toEqual({ opened: true, closed: true });
+});
+
+test('context menu can pick a prerequisite with a snapping arrow without opening details', async () => {
+  const ids = await page.evaluate(() => {
+    closeEditModal();
+    switchTab('taskline');
+    tlGraphView = { scale: 1, left: 0, top: 0 };
+    const line = tlAddLine({ name: '鼠标设置前置任务', type: 'quality' });
+    const dependent = tlAddQuest({ lineId: line.id, title: '需要前置的任务', status: 'active', pos: { x: 300, y: 120 } });
+    const prerequisite = tlAddQuest({ lineId: line.id, title: '候选前置任务', status: 'active', pos: { x: 40, y: 120 } });
+    tlSwitchLine(line.id);
+    return { dependent: dependent.id, prerequisite: prerequisite.id };
+  });
+
+  const dependent = page.locator(`.tl-node[data-qid="${ids.dependent}"]`);
+  const prerequisite = page.locator(`.tl-node[data-qid="${ids.prerequisite}"]`);
+  await dependent.click({ button: 'right' });
+  await page.locator('#tlQuestContextMenu').getByText('设置前置任务').click();
+  await prerequisite.hover();
+
+  await expect(page.locator('#tlPrerequisitePreview')).not.toHaveAttribute('style', /display:\s*none/);
+  await expect(prerequisite).toHaveClass(/tl-prerequisite-target/);
+  const previewPath = await page.locator('#tlPrerequisitePreview').getAttribute('d');
+  expect(previewPath).toContain(' C ');
+
+  await prerequisite.click();
+  const result = await page.evaluate(({ dependent, prerequisite }) => ({
+    deps: tlGetQuest(dependent).deps,
+    status: tlGetQuest(dependent).status,
+    detailOpen: document.getElementById('editModal').classList.contains('open'),
+    picking: !!tlPrerequisitePick
+  }), ids);
+  expect(result.deps).toContain(ids.prerequisite);
+  expect(result.status).toBe('locked');
+  expect(result.detailOpen).toBe(false);
+  expect(result.picking).toBe(false);
+});

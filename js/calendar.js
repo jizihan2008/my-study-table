@@ -53,13 +53,17 @@ function addCalendarEvent(date, title, time, color, note, times, auto) {
       ? normalizeCalWeekdays(times.weekdays)
       : (() => { const d = parseCalDate(date); return d ? [d.getDay()] : []; })())
     : [];
+  const allDay = !!(times && times.allDay);
+  const endDate = normalizeCalDate(times && times.endDate) || date;
   events.push({
-    id: now,
+    id: typeof genId === 'function' ? genId() : now,
     date,
     title: title.trim(),
-    time: startTime,
-    startTime,
-    endTime: normalizeCalTime(times && times.end),
+    time: allDay ? '' : startTime,
+    startTime: allDay ? '' : startTime,
+    endTime: allDay ? '' : normalizeCalTime(times && times.end),
+    endDate: endDate < date ? date : endDate,
+    allDay,
     color: color || 'blue',
     note: note || '',
     repeat,
@@ -81,6 +85,16 @@ function updateCalendarEvent(id, updates) {
   if (updates.title !== undefined) ev.title = updates.title.trim();
   if (updates.color !== undefined) ev.color = updates.color;
   if (updates.note !== undefined) ev.note = updates.note;
+  if (updates.allDay !== undefined) {
+    ev.allDay = !!updates.allDay;
+    if (ev.allDay) { ev.time = ''; ev.startTime = ''; ev.endTime = ''; ev.autoRecord = false; }
+  }
+  if (updates.endDate !== undefined) {
+    const startDate = normalizeCalDate(updates.date) || ev.date;
+    const nextEndDate = normalizeCalDate(updates.endDate) || startDate;
+    ev.endDate = nextEndDate < startDate ? startDate : nextEndDate;
+    ev.lastAutoRecordEnd = 0;
+  }
   // 日期变更（重复事件的起点）等同于换了一整个系列，清空跳过列表与记账水位
   if (updates.date !== undefined && updates.date !== ev.date) {
     ev.date = updates.date;
@@ -130,6 +144,7 @@ function updateCalendarEvent(id, updates) {
   if (updates.autoRecord !== undefined) ev.autoRecord = !!updates.autoRecord;
   if (updates.autoTimer !== undefined) ev.autoTimer = !!updates.autoTimer;
   // 关掉自动计入后清掉记账水位，重新开启时按当前时段重新判定
+  if (ev.allDay) ev.autoRecord = false;
   if (ev.autoRecord !== true) ev.lastAutoRecordEnd = 0;
   saveCalendarEvents(events);
   return true;
@@ -156,6 +171,28 @@ function normalizeCalTime(value) {
   return String(hour).padStart(2, '0') + ':' + String(minute).padStart(2, '0');
 }
 
+function normalizeCalDate(value) {
+  const text = String(value == null ? '' : value).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(text);
+  if (!m) return '';
+  const d = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]));
+  return d.getFullYear() === Number(m[1]) && d.getMonth() === Number(m[2]) - 1 && d.getDate() === Number(m[3]) ? text : '';
+}
+
+function calDateOffset(dateStr, days) {
+  const d = parseCalDate(dateStr);
+  if (!d) return '';
+  d.setDate(d.getDate() + Number(days || 0));
+  return _formatCalAutoDate(d.getTime());
+}
+
+function getCalEventDurationDays(ev) {
+  const start = parseCalDate(ev && ev.date);
+  const end = parseCalDate(ev && ev.endDate);
+  if (!start || !end || end < start) return 0;
+  return Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000));
+}
+
 function getCalEventStartTime(ev) {
   return normalizeCalTime(ev && (ev.startTime || ev.time));
 }
@@ -168,6 +205,7 @@ function getCalEventTimeRange(ev) {
 }
 
 function formatCalEventTimeRange(ev, separator) {
+  if (ev && ev.allDay) return '全天';
   const range = getCalEventTimeRange(ev);
   if (!range) return '';
   if (!range.end) return range.start;
@@ -228,9 +266,13 @@ function isCalEventSkippedOn(ev, dateStr) {
 // 重复事件在指定日期是否出现（纯判定，便于回归测试）
 function isCalEventOnDate(ev, dateStr) {
   if (!ev || !dateStr) return false;
-  if (!isCalEventRecurring(ev)) return ev.date === dateStr;
-  if (isCalEventSkippedOn(ev, dateStr)) return false;   // 被单独删掉的那一天
-  return isCalEventSeriesDate(ev, dateStr);
+  const durationDays = getCalEventDurationDays(ev);
+  if (!isCalEventRecurring(ev)) return dateStr >= ev.date && dateStr <= (ev.endDate || ev.date);
+  for (let offset = 0; offset <= durationDays; offset++) {
+    const occurrenceDate = calDateOffset(dateStr, -offset);
+    if (occurrenceDate && !isCalEventSkippedOn(ev, occurrenceDate) && isCalEventSeriesDate(ev, occurrenceDate)) return true;
+  }
+  return false;
 }
 
 function parseCalDate(dateStr) {
@@ -300,6 +342,7 @@ function restoreCalendarEventDate(eventId, dateStr) {
 
 // 时段跨天时（结束时间早于或等于开始时间）结束时间顺延到次日
 function resolveCalEventRange(ev, dateStr) {
+  if (ev && ev.allDay) return null;
   const startTime = getCalEventStartTime(ev);
   if (!startTime) return null;
   const parts = String(dateStr || ev.date || '').split('-').map(Number);
@@ -309,9 +352,13 @@ function resolveCalEventRange(ev, dateStr) {
   const endTime = normalizeCalTime(ev.endTime);
   if (!endTime) return { startTs, endTs: startTs, startTime, endTime: '', crossDay: false, hasEnd: false };
   const [eh, em] = endTime.split(':').map(Number);
-  let endTs = new Date(parts[0], parts[1] - 1, parts[2], eh, em, 0, 0).getTime();
-  const crossDay = endTs <= startTs;
-  if (crossDay) endTs += 24 * 60 * 60 * 1000;
+  const explicitEndDate = normalizeCalDate(ev.endDate);
+  const occurrenceEndDate = explicitEndDate ? calDateOffset(dateStr || ev.date, getCalEventDurationDays(ev)) : '';
+  const endParts = occurrenceEndDate ? occurrenceEndDate.split('-').map(Number) : parts;
+  let endTs = new Date(endParts[0], endParts[1] - 1, endParts[2], eh, em, 0, 0).getTime();
+  const crossDay = endParts.join('-') !== parts.join('-') || endTs <= startTs;
+  // 兼容旧的“结束时间早于开始时间 = 次日”语义；新表单也会显式保存结束日期。
+  if (endTs <= startTs) endTs += 24 * 60 * 60 * 1000;
   return { startTs, endTs, startTime, endTime, crossDay, hasEnd: true };
 }
 
@@ -847,11 +894,16 @@ function openCalEventModal(dateStr, eventId) {
   const autoTimerInput = document.getElementById('calEventAutoTimer');
   const noteInput = document.getElementById('calEventNote');
   const dateLabel = document.getElementById('calEventDateLabel');
+  const startDateInput = document.getElementById('calEventStartDate');
+  const endDateInput = document.getElementById('calEventEndDate');
+  const allDayInput = document.getElementById('calEventAllDay');
   const modalTitle = document.getElementById('calEventModalTitle');
   const deleteBtn = document.getElementById('calEventDeleteBtn');
   const repeatSelect = document.getElementById('calEventRepeat');
 
   dateLabel.textContent = dateStr;
+  startDateInput.value = dateStr;
+  endDateInput.value = dateStr;
   if (eventId) {
     // Edit existing event
     modalTitle.textContent = '编辑事件';
@@ -860,6 +912,10 @@ function openCalEventModal(dateStr, eventId) {
     const ev = events.find(e => e.id === eventId);
     if (ev) {
       titleInput.value = ev.title;
+      startDateInput.value = ev.date;
+      endDateInput.value = normalizeCalDate(ev.endDate) || ev.date;
+      dateLabel.textContent = ev.date;
+      allDayInput.checked = ev.allDay === true;
       startInput.value = getCalEventStartTime(ev);
       endInput.value = normalizeCalTime(ev.endTime);
       autoRecordInput.checked = ev.autoRecord === true;
@@ -878,6 +934,7 @@ function openCalEventModal(dateStr, eventId) {
     modalTitle.textContent = '添加事件';
     deleteBtn.style.display = 'none';
     titleInput.value = '';
+    allDayInput.checked = false;
     startInput.value = '';
     endInput.value = '';
     autoRecordInput.checked = false;
@@ -893,10 +950,37 @@ function openCalEventModal(dateStr, eventId) {
     }
   }
 
-  syncCalEventAutoTimerEnabled();
+  syncCalEventAllDayFields();
   syncCalEventRepeatFields();
   overlay.classList.add('open');
   setTimeout(() => titleInput.focus(), 100);
+}
+
+function syncCalEventDateFields() {
+  const startInput = document.getElementById('calEventStartDate');
+  const endInput = document.getElementById('calEventEndDate');
+  const dateLabel = document.getElementById('calEventDateLabel');
+  if (!startInput || !endInput) return;
+  if (!normalizeCalDate(startInput.value)) return;
+  if (!normalizeCalDate(endInput.value) || endInput.value < startInput.value) endInput.value = startInput.value;
+  if (dateLabel) dateLabel.textContent = startInput.value;
+  syncCalEventRepeatFields();
+}
+
+function syncCalEventAllDayFields() {
+  const allDay = !!document.getElementById('calEventAllDay')?.checked;
+  const startTime = document.getElementById('calEventStartTime');
+  const endTime = document.getElementById('calEventEndTime');
+  const autoRecord = document.getElementById('calEventAutoRecord');
+  if (startTime) startTime.disabled = allDay;
+  if (endTime) endTime.disabled = allDay;
+  if (autoRecord) {
+    if (allDay) autoRecord.checked = false;
+    autoRecord.disabled = allDay;
+    const label = autoRecord.closest && autoRecord.closest('label');
+    if (label) label.classList.toggle('disabled', allDay);
+  }
+  syncCalEventAutoTimerEnabled();
 }
 
 function setCalEventWeekdaySelection(weekdays) {
@@ -929,7 +1013,7 @@ function syncCalEventRepeatFields() {
     hint.style.display = weekly ? '' : 'none';
     if (weekly) {
       const days = getCalEventWeekdaySelection();
-      const startStr = (document.getElementById('calEventDateLabel') || {}).textContent || '';
+      const startStr = (document.getElementById('calEventStartDate') || {}).value || '';
       const startText = startStr ? `，从 ${startStr} 那一周开始` : '';
       hint.textContent = days.length === 0
         ? '请至少选择一个星期几'
@@ -961,7 +1045,8 @@ function syncCalEventAutoTimerEnabled() {
   const autoRecordInput = document.getElementById('calEventAutoRecord');
   const autoTimerInput = document.getElementById('calEventAutoTimer');
   if (!autoRecordInput || !autoTimerInput) return;
-  const on = autoRecordInput.checked;
+  const allDay = !!document.getElementById('calEventAllDay')?.checked;
+  const on = autoRecordInput.checked && !allDay;
   autoTimerInput.disabled = !on;
   const label = document.getElementById('calEventAutoTimerLabel');
   if (label) label.classList.toggle('disabled', !on);
@@ -996,6 +1081,9 @@ function submitCalEvent() {
   const autoTimerInput = document.getElementById('calEventAutoTimer');
   const noteInput = document.getElementById('calEventNote');
   const dateLabel = document.getElementById('calEventDateLabel');
+  const startDateInput = document.getElementById('calEventStartDate');
+  const endDateInput = document.getElementById('calEventEndDate');
+  const allDayInput = document.getElementById('calEventAllDay');
 
   const title = titleInput.value.trim();
   if (!title) { titleInput.focus(); return; }
@@ -1006,30 +1094,34 @@ function submitCalEvent() {
     if (r.checked) { color = r.value; break; }
   }
 
-  const startTime = normalizeCalTime(startInput.value);
+  const allDay = !!(allDayInput && allDayInput.checked);
+  const startTime = allDay ? '' : normalizeCalTime(startInput.value);
   let endTime = normalizeCalTime(endInput.value);
   // 结束时间必须依附于开始时间；只有结束时间时按时间点处理
-  if (!startTime) endTime = '';
-  if (startTime && endTime && endTime === startTime) endTime = '';
+  if (allDay || !startTime) endTime = '';
+  const anchorDate = normalizeCalDate(startDateInput && startDateInput.value) || dateLabel.textContent;
+  let endDate = normalizeCalDate(endDateInput && endDateInput.value) || anchorDate;
+  if (endDate < anchorDate) endDate = anchorDate;
+  if (startTime && endTime && endDate === anchorDate && endTime < startTime) endDate = calDateOffset(anchorDate, 1);
+  if (startTime && endTime && endTime === startTime && endDate === anchorDate) endTime = '';
 
   const auto = {
-    autoRecord: !!(autoRecordInput && autoRecordInput.checked),
+    autoRecord: !allDay && !!(autoRecordInput && autoRecordInput.checked),
     autoTimer: autoTimerInput ? autoTimerInput.checked !== false : true
   };
 
   const repeatSelect = document.getElementById('calEventRepeat');
   const repeat = repeatSelect && repeatSelect.value === 'weekly' ? 'weekly' : 'none';
   // 事件的开始日期就是日历上那一天；重复时由所选星期几决定还会出现在哪些天
-  const anchorDate = dateLabel.textContent;
   const weekdays = repeat === 'weekly' ? getCalEventWeekdaySelection() : [];
 
   if (calendarEditingEventId) {
     updateCalendarEvent(calendarEditingEventId, {
-      title, startTime, endTime, color, note: noteInput.value.trim(), repeat, weekdays, date: anchorDate, ...auto
+      title, startTime, endTime, endDate, allDay, color, note: noteInput.value.trim(), repeat, weekdays, date: anchorDate, ...auto
     });
   } else {
     addCalendarEvent(anchorDate, title, startTime, color, noteInput.value.trim(),
-      { start: startTime, end: endTime, repeat, weekdays }, auto);
+      { start: startTime, end: endTime, endDate, allDay, repeat, weekdays }, auto);
   }
 
   // 新增/修改后立刻安排自动巡检，无需等待设置页开关

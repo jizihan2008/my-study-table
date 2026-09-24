@@ -642,6 +642,8 @@ aiConvs = [{
 📚 复习与习惯：get_review_status / get_habits_status
 📅 日历：list_calendar_events / create_calendar_event / update_calendar_event /
         delete_calendar_event / restore_calendar_event_date
+        （事件用 date/endDate 表示包含首尾的日期区间，allDay=true 时不保存具体时间且不自动计时；
+          旧数据没有 endDate/allDay 时仍按单日普通事件读取。）
         （重复事件用 weekdays 数组表达「每周哪几天」（0=周日…6=周六），date 是开始日期且
           所在那一周整周算起点；delete_calendar_event 带 date 时只删那一天（写 skippedDates），
           不带 date 才删整个系列，属于 destructive 会走删除策略与确认框）

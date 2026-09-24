@@ -264,17 +264,31 @@ let _sidebarSwipe = null; // { startX, startY, fired }
 function initSidebarDismiss() {
   const sidebar = document.getElementById('sidebar');
 
-  // ① 点击外部关闭（两种布局通用）
-  document.addEventListener('click', (e) => {
+  const dismissFromOutside = (target) => {
     if (!sidebar || !sidebar.classList.contains('open')) return;
-    if (sidebar.contains(e.target)) return;   // 点击侧边栏内部（导航项等）不关闭
+    if (sidebar.contains(target)) return;   // 侧边栏内部仍可正常操作
+    const edgeTrigger = document.getElementById('sidebarHoverTrigger');
+    if (edgeTrigger && edgeTrigger.contains(target)) return;
     if (isDesktopSidebarMode()) closeSidebar();
     else closeMobileDrawer();
+  };
+
+  // ① 点击外部关闭（两种布局通用）
+  document.addEventListener('click', (e) => {
+    dismissFromOutside(e.target);
   });
 
   // ② 左滑关闭（触屏）
   const canTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
   if (!canTouch) return;
+
+  // iOS/iPadOS 在滑动手势后可能不派发 click，因此在下一次外部点按开始时即关闭。
+  // 右滑打开的那次 touchstart 发生时侧边栏尚未打开，不会误关闭。
+  document.addEventListener('touchstart', (e) => {
+    const t = e.touches && e.touches[0];
+    if (t) dismissFromOutside(e.target);
+  }, { passive: true });
+
   const minDist = 70;      // 最小水平滑动距离（与右滑打开一致）
   const slope = 1.6;       // 水平/垂直比值阈值（防竖滑误触）
 
@@ -374,7 +388,10 @@ function switchTab(tab) {
   if (typeof window.ExtManager !== 'undefined' && window.ExtManager.switchToExtSection) {
     window.ExtManager.switchToExtSection(tab);
   }
-  if (tab === 'todo' && typeof refreshRepeatTodos === 'function') refreshRepeatTodos();
+  if (tab === 'todo') {
+    if (typeof refreshRepeatTodos === 'function') refreshRepeatTodos(false);
+    if (typeof renderTodos === 'function') renderTodos();
+  }
   if (tab === 'taskline' && typeof renderTaskLine === 'function') renderTaskLine();
   if (tab === 'notes') renderNotes();
   if (tab === 'files' && typeof renderFileLibrary === 'function') renderFileLibrary();

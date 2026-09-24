@@ -55,6 +55,7 @@
     // 已剥离到独立通道 sync-logs.js（gzip 压缩 + 分片 + 配额），不再走普通同步
     'study_ai_memory',         // AI 记忆画像
     'study_ai_skills_v1',      // 用户创建的 AI 技能
+    'study_prompt_templates_v1', // 共用提示词模板
     'study_bk_quiz_state_v1',  // 教材测验状态
     'study_translation_history_v1', // 划词翻译列表、生词本与闪卡进度
     'study_todo_completed_log' // 待办完成日志（历史完成记录）
@@ -95,17 +96,19 @@
     'study_quick_access': '快捷访问',
     'study_ai_memory': 'AI 记忆画像',
     'study_ai_skills_v1': 'AI 技能',
+    'study_prompt_templates_v1': '提示词模板',
     'study_bk_quiz_state_v1': '教材测验状态',
     'study_translation_history_v1': '划词翻译与生词本',
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260922-r18';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260923-r22';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const EVENT_LOG_KEY = 'study_sync_event_log_v1';
   const EVENT_LOG_LIMIT = 300;
   const PENDING_CONFLICTS_KEY = 'study_sync_pending_conflicts_v1';
   const CFG_KEY = 'study_sync_config';       // 本地同步配置（开关 + 上次全量拉取时间）
+  const ACCOUNT_KEY = 'study_sync_account_id_v1';
   const IDB_NAME = 'mst-sync';
   const IDB_STORE = 'outbox';                // 离线变更队列
   const OUTBOX_KEY = 'pending';              // 单条记录 key
@@ -143,6 +146,7 @@
   // 判断某 key 是否参与同步
   function isSyncKey(key) {
     if (!key) return false;
+    if (global.SyncCollections && global.SyncCollections.isCollection(key)) return false;
     if (SENSITIVE_KEYS.indexOf(key) !== -1) return false;
     return SYNC_KEYS.indexOf(key) !== -1;
   }
@@ -291,6 +295,18 @@
     return null;
   }
 
+  function _accountMatches(userId) {
+    if (!userId) return false;
+    const bound = localStorage.getItem(ACCOUNT_KEY);
+    if (!bound) {
+      localStorage.setItem(ACCOUNT_KEY, String(userId));
+      return true;
+    }
+    if (bound === String(userId)) return true;
+    _lastPullError = '当前设备的数据属于另一账号；为防止跨账号上传，已暂停云同步。请先备份并清空本机应用数据，再登录新账号。';
+    return false;
+  }
+
   // 实时获取 Supabase 单例客户端（避免 init() 时序问题）
   function _client() {
     if (typeof getSupabaseClient === 'function') {
@@ -301,9 +317,10 @@
   }
 
   // ── 上传一个 key 到云端（UPSERT）─────────────────────
-  async function _uploadKey(key) {
+  async function _uploadKey(key, forceUpload = false) {
     const session = await getSession();
     if (!session) return { ok: false, reason: 'not-logged-in' };
+    if (!_accountMatches(session.user.id)) return { ok: false, reason: 'account-mismatch' };
     const c = _client();
     if (!c) return { ok: false, reason: 'no-client' };
     const value = localStorage.getItem(key);
@@ -332,11 +349,27 @@
     // 设备时钟写进 localTs 造成新的污染（污染值会被 _tsIsFuture 5s 灵敏识别并校准）。
     let updatedAt = '';
     try {
-      const { data, error } = await c.from('user_data')
-        .upsert({ user_id: session.user.id, key, value: payload },
-          { onConflict: 'user_id,key' })
-        .select('updated_at')
-        .single();
+      const baseTimestamp = _getLocalTs()[key] || null;
+      let result;
+      if (forceUpload) {
+        result = await c.from('user_data')
+          .upsert({ user_id: session.user.id, key, value: payload }, { onConflict: 'user_id,key' })
+          .select('updated_at').single();
+      } else if (baseTimestamp) {
+        // The predicate and write execute in one SQL statement. A competing device
+        // changing updated_at between the earlier read and this write yields no row.
+        result = await c.from('user_data').update({ value: payload })
+          .eq('user_id', session.user.id).eq('key', key)
+          .eq('updated_at', baseTimestamp).select('updated_at').maybeSingle();
+      } else {
+        // A unique-key violation means another device inserted this key first.
+        result = await c.from('user_data').insert({ user_id: session.user.id, key, value: payload })
+          .select('updated_at').single();
+      }
+      const { data, error } = result || {};
+      if (!forceUpload && ((error && error.code === '23505') || (!error && !data))) {
+        return { ok: false, conflict: true, reason: 'cloud-changed-during-upload' };
+      }
       if (error) return { ok: false, reason: error.message || 'upload-failed' };
       if (!data || !data.updated_at) return { ok: false, reason: 'missing-server-timestamp' };
       updatedAt = data.updated_at;
@@ -360,65 +393,55 @@
     return { ok: true, updatedAt, unchanged };
   }
 
-  // 同一轮有多个 dirty key 时一次 upsert，减少逐 key 往返；单 key 仍走原路径，
-  // 便于保留精确错误信息和兼容旧版 Supabase/PostgREST 行为。
-  async function _uploadKeys(keys) {
+  // 普通自动上传逐 key 执行带基准版本条件的写入；用户明确选择“上传全部”时
+  // 才允许批量强制覆盖。
+  async function _uploadKeys(keys, forceUpload = false) {
     const list = Array.from(new Set((keys || []).filter(isSyncKey)));
-    if (list.length <= 1) {
-      const only = list[0];
-      return only ? { [only]: await _uploadKey(only) } : {};
-    }
-    const session = await getSession();
-    const c = _client();
-    if (!session || !c) {
-      return Object.fromEntries(list.map(key => [key, { ok: false, reason: !session ? 'not-logged-in' : 'no-client' }]));
-    }
-
     const results = {};
-    const rows = [];
-    const snapshots = new Map();
-    for (const key of list) {
-      const raw = localStorage.getItem(key);
-      if (raw != null && _valueTooLarge(raw)) {
-        results[key] = await _uploadKey(key); // 本地完成“超大值跳过”处理，不产生网络写入
-        continue;
+    if (forceUpload && list.length > 1) {
+      const session = await getSession();
+      const c = _client();
+      if (!session || !c || !_accountMatches(session.user.id)) {
+        return Object.fromEntries(list.map(key => [key, { ok: false, reason: 'account-or-session-unavailable' }]));
       }
-      try {
-        rows.push({ user_id: session.user.id, key, value: raw ? JSON.parse(raw) : null });
-        snapshots.set(key, raw);
-      } catch (e) {
-        results[key] = { ok: false, reason: 'invalid-local-json' };
-      }
-    }
-    if (!rows.length) return results;
-
-    try {
-      const { data, error } = await c.from('user_data')
-        .upsert(rows, { onConflict: 'user_id,key' })
-        .select('key,updated_at');
-      if (error) throw new Error(error.message || 'batch-upload-failed');
-      const returned = new Map((data || []).map(row => [row.key, row.updated_at]));
-      for (const row of rows) {
-        const updatedAt = returned.get(row.key);
-        if (!updatedAt) {
-          results[row.key] = { ok: false, reason: 'missing-server-timestamp' };
+      const rows = [];
+      const snapshots = new Map();
+      for (const key of list) {
+        const raw = localStorage.getItem(key);
+        if (raw !== null && _valueTooLarge(raw)) {
+          results[key] = await _uploadKey(key, true);
           continue;
         }
-        _setRemoteTs(row.key, updatedAt);
-        _setLocalTs(row.key, updatedAt);
-        const unchanged = localStorage.getItem(row.key) === snapshots.get(row.key);
-        if (unchanged) {
-          await _outboxRemove(row.key);
-          _clearLocalDirty(row.key);
-        } else {
-          _markLocalDirty(row.key);
-          dirtyKeys.add(row.key);
-        }
-        results[row.key] = { ok: true, updatedAt, unchanged };
+        try {
+          rows.push({ user_id: session.user.id, key, value: raw ? JSON.parse(raw) : null });
+          snapshots.set(key, raw);
+        } catch (e) { results[key] = { ok: false, reason: 'invalid-local-json' }; }
       }
-    } catch (e) {
-      const reason = String((e && e.message) || e || 'network-error');
-      for (const row of rows) results[row.key] = { ok: false, reason };
+      if (rows.length) {
+        try {
+          const { data, error } = await c.from('user_data')
+            .upsert(rows, { onConflict: 'user_id,key' }).select('key,updated_at');
+          if (error) throw new Error(error.message || 'batch-upload-failed');
+          const returned = new Map((data || []).map(row => [row.key, row.updated_at]));
+          for (const row of rows) {
+            const updatedAt = returned.get(row.key);
+            if (!updatedAt) { results[row.key] = { ok: false, reason: 'missing-server-timestamp' }; continue; }
+            _setRemoteTs(row.key, updatedAt);
+            _setLocalTs(row.key, updatedAt);
+            const unchanged = localStorage.getItem(row.key) === snapshots.get(row.key);
+            if (unchanged) { await _outboxRemove(row.key); _clearLocalDirty(row.key); }
+            else { _markLocalDirty(row.key); dirtyKeys.add(row.key); }
+            results[row.key] = { ok: true, updatedAt, unchanged };
+          }
+        } catch (e) {
+          const reason = String((e && e.message) || e || 'network-error');
+          for (const row of rows) results[row.key] = { ok: false, reason };
+        }
+      }
+      return results;
+    }
+    for (const key of list) {
+      results[key] = await _uploadKey(key, forceUpload);
     }
     return results;
   }
@@ -453,6 +476,7 @@
     const session = await getSession();
     const c = _client();
     if (!session || !c) return { ok: false, reason: '未登录或 Supabase 客户端不可用' };
+    if (!_accountMatches(session.user.id)) return { ok: false, reason: _lastPullError };
     try {
       const { data, error } = await c.from('user_data')
         .select('key,updated_at')
@@ -485,6 +509,18 @@
     uploadChain = uploadChain.then(async () => {
       queuePending--;
       if (!enabled || !loggedIn || !_client()) return;
+      const activeSession = await getSession();
+      if (!activeSession || !_accountMatches(activeSession.user.id)) return;
+      if (global.SyncCollections) {
+        const itemResult = await global.SyncCollections.sync({
+          session: activeSession, client: _client(), force: forceUpload,
+          full: !!options.fullCollections
+        });
+        if (itemResult && itemResult.applied) _refreshUI();
+        if (itemResult && itemResult.errors && itemResult.errors.length) {
+          _lastPullError = itemResult.errors.join('；');
+        }
+      }
       // 持久化 dirty/outbox 是事实来源，应用重启后也必须恢复到运行时队列。
       _hydrateDirtyKeys();
       await _restoreOutboxDirtyKeys();
@@ -513,7 +549,7 @@
       if (keys.length) {
         _emitProgress({ active: true, phase: 'upload', current: 1, total, key: keys[0], label: keys.length > 1 ? ('批量上传 ' + keys.length + ' 项') : (SYNC_LABELS[keys[0]] || keys[0]), queuePending });
       }
-      const results = await _uploadKeys(keys);
+      const results = await _uploadKeys(keys, forceUpload);
       let done = 0;
       for (const key of keys) {
         const res = results[key] || { ok: false, reason: 'missing-upload-result' };
@@ -523,6 +559,8 @@
             key, action: 'upload', remoteTimestamp: res.updatedAt || null,
             unchanged: res.unchanged !== false, forceUpload
           });
+        } else if (res.conflict) {
+          _queueConflict(key, null, 'cloud-changed-during-upload');
         } else {
           await _storeFailedUpload(key, res.reason);
           _logSync('upload-failed', { key, level: 'error', error: res.reason, forceUpload });
@@ -683,7 +721,7 @@
 
   function getPendingConflicts() {
     const map = _getPendingConflictMap();
-    return Object.keys(map)
+    const ordinary = Object.keys(map)
       .filter(isSyncKey)
       .map(key => ({
         key,
@@ -696,6 +734,7 @@
         resolving: _resolvingConflictKeys.has(key)
       }))
       .sort((a, b) => String(a.detectedAt || '').localeCompare(String(b.detectedAt || '')));
+    return ordinary.concat(global.SyncCollections ? global.SyncCollections.getPendingConflicts() : []);
   }
 
 
@@ -724,6 +763,7 @@
       _lastPullError = '未登录或登录状态失效（请在「好友」页面重新登录）';
       return false;
     }
+    if (!_accountMatches(session.user.id)) return false;
     const c = _client();
     if (!c) { _lastPullError = 'Supabase 客户端不可用（检查 Supabase 连接配置）'; return false; }
 
@@ -836,7 +876,7 @@
 
       if (fullReconcile) {
         for (const key of SYNC_KEYS) {
-          if (remoteKeys.has(key) || _isEmptyLocalValue(key)) continue;
+          if (!isSyncKey(key) || remoteKeys.has(key) || _isEmptyLocalValue(key)) continue;
           _markLocalDirty(key);
           dirtyKeys.add(key);
         }
@@ -856,7 +896,7 @@
       return false;
     } finally {
       syncInProgress = false;
-      try { await _flush(); } catch (e) { console.warn('[sync] 上传失败:', e); }
+      try { await _flush({ fullCollections: true }); } catch (e) { console.warn('[sync] 上传失败:', e); }
       // Realtime 可能高频触发元数据检查；只有真正应用了远端值才重绘，
       // 避免无变更时打断正在输入的用户。
       if (appliedRemote) _refreshUI();
@@ -891,6 +931,12 @@
   }
 
   async function resolveConflict(key, choice) {
+    if (global.SyncCollections && global.SyncCollections.isCloudKey(key)) {
+      const result = await global.SyncCollections.resolveConflict(key, choice, await getSession(), _client());
+      if (result.applied) _refreshUI();
+      _emitStatus();
+      return result;
+    }
     const conflicts = _getPendingConflictMap();
     const conflict = conflicts[key];
     if (!conflict || !isSyncKey(key)) return { ok: false, reason: '该冲突已不存在或已处理' };
@@ -904,9 +950,10 @@
       const session = await getSession();
       const c = _client();
       if (!session || !c) throw new Error('未登录或 Supabase 客户端不可用');
+      if (!_accountMatches(session.user.id)) throw new Error(_lastPullError);
 
       if (choice === 'local') {
-        const result = await _uploadKey(key);
+        const result = await _uploadKey(key, true);
         if (!result.ok || result.skipped) {
           if (!result.skipped) await _storeFailedUpload(key, result.reason);
           throw new Error(result.skipped ? '该类本地数据过大，无法上传覆盖云端' : (result.reason || '上传本地版本失败'));
@@ -937,6 +984,14 @@
 
   // ── 变更上报（saveData 钩子调用）─────────────────────
   function onLocalChange(key) {
+    if (global.SyncCollections && global.SyncCollections.isCollection(key)) {
+      if (!global.SyncCollections.onLocalChange(key)) return;
+      if (enabled && autoSync && loggedIn && client) {
+        clearTimeout(uploadTimer);
+        uploadTimer = setTimeout(_flush, UPLOAD_DEBOUNCE);
+      }
+      return;
+    }
     // 日志类 key（AI 对话 / 教材讲解 / 全书问答）已剥离到独立通道 sync-logs.js：
     // 走 saveData 的写点（如 settings.js 写 study_ai_convs）在此转发给 SyncLogs。
     if (key === 'study_ai_convs' || key === 'study_bk_explain_logs_v1' || key === 'study_bk_qa_logs_v1') {
@@ -1037,6 +1092,12 @@
   }
   function _debouncedPull(payload) {
     const row = payload && payload.new;
+    if (row && global.SyncCollections && global.SyncCollections.isCloudKey(row.key)) {
+      global.SyncCollections.onRemoteChange(row.key);
+      clearTimeout(pullDebounceTimer);
+      pullDebounceTimer = setTimeout(() => { if (enabled && autoSync) void _flush(); }, 250);
+      return;
+    }
     if (row && isSyncKey(row.key)) {
       pendingRealtimeRows.set(row.key, row.updated_at || '');
       _logSync('realtime-change-received', { key: row.key, remoteTimestamp: row.updated_at || null });
@@ -1145,7 +1206,8 @@
       enabled: enabled,
       autoSync: !!cfg.autoSync,
       loggedIn: !!sess,
-      pendingCount: Object.keys(_getDirtyMap()).filter(isSyncKey).length,
+      pendingCount: Object.keys(_getDirtyMap()).filter(isSyncKey).length +
+        (global.SyncCollections ? global.SyncCollections.pendingCount() : 0),
       lastPull: cfg.lastPull || 0,
       lastError: _lastPullError || '',
       // 诊断字段（排查 iPad 不同步）：
@@ -1351,6 +1413,7 @@
     uploadAll,
     getStatus,
     getPendingConflicts,
+    canSyncAccount: _accountMatches,
     resolveConflict,
     getEventLog: _getEventLog,
     clearEventLog,

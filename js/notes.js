@@ -368,6 +368,7 @@ function redoNote() {
 // Detect and repair circular folder references in the notes tree
 function repairCircularFolderRefs() {
   const folders = notes.filter(n => n.type === 'folder');
+  const byId = new Map(notes.map(note => [note.id, note]));
   for (const f of folders) {
     // Check if folder's parentId points to itself
     if (f.parentId === f.id) {
@@ -387,7 +388,7 @@ function repairCircularFolderRefs() {
         break;
       }
       seen.add(current.id);
-      current = notes.find(n => n.id === current.parentId);
+      current = byId.get(current.parentId);
       if (!current) break; // parent no longer exists
     }
   }
@@ -465,14 +466,21 @@ function getNoteSearchSnippet(note) {
   return (start ? '…' : '') + plain.slice(start, end) + (end < plain.length ? '…' : '');
 }
 
+let notesSearchTimer = null;
 function handleNotesSearchInput(value) {
   notesSearchQuery = normalizeNoteSearch(value);
-  renderNoteList();
+  if (notesSearchTimer) clearTimeout(notesSearchTimer);
+  if (!notesSearchQuery) { renderNoteList(); return; }
+  notesSearchTimer = setTimeout(() => {
+    notesSearchTimer = null;
+    renderNoteList();
+  }, 120);
 }
 
 function handleNotesSearchKey(event) {
   if (event.key !== 'Escape') return;
   event.preventDefault();
+  if (notesSearchTimer) { clearTimeout(notesSearchTimer); notesSearchTimer = null; }
   const input = document.getElementById('notesSearchInput');
   if (input) input.value = '';
   notesSearchQuery = '';
@@ -489,9 +497,29 @@ function changeNotesSort(mode) {
 function renderNoteList() {
   const list = document.getElementById('notesList');
   if (!list) return;
+  if (notesSearchTimer) { clearTimeout(notesSearchTimer); notesSearchTimer = null; }
   
   // First, detect and repair circular folder references
   repairCircularFolderRefs();
+
+  const childrenByParent = new Map();
+  for (const item of notes) {
+    if (!childrenByParent.has(item.parentId)) childrenByParent.set(item.parentId, []);
+    childrenByParent.get(item.parentId).push(item);
+  }
+  const matchCache = new Map();
+  function matchesTree(item, visiting = new Set()) {
+    if (!item || visiting.has(item.id)) return false;
+    if (matchCache.has(item.id)) return matchCache.get(item.id);
+    visiting.add(item.id);
+    const matches = item.type === 'note'
+      ? notePassesActiveFilters(item)
+      : ((!notesTagFilter && notesSearchQuery && normalizeNoteSearch(item.title).includes(notesSearchQuery))
+        || (childrenByParent.get(item.id) || []).some(child => matchesTree(child, visiting)));
+    visiting.delete(item.id);
+    matchCache.set(item.id, !!matches);
+    return !!matches;
+  }
 
   // Collect note IDs matching the active tag filter
   const tagFilterMatchIds = notesTagFilter
@@ -507,7 +535,7 @@ function renderNoteList() {
     if (item.type === 'folder') {
       const ownFolderMatch = !notesTagFilter && notesSearchQuery && normalizeNoteSearch(item.title).includes(notesSearchQuery);
       const showAllChildren = !!includeAll || !!ownFolderMatch;
-      const children = sortNoteItems(getNoteItemChildren(item.id)).filter(child => showAllChildren ? (!notesTagFilter || noteTreeMatches(child)) : noteTreeMatches(child));
+      const children = sortNoteItems(childrenByParent.get(item.id) || []).filter(child => showAllChildren ? (!notesTagFilter || matchesTree(child)) : matchesTree(child));
       if ((notesSearchQuery || notesTagFilter) && !ownFolderMatch && children.length === 0) return '';
       const expandId = 'ns-exp-' + item.id;
       const isRenaming = item.id === renamingFolderId;
@@ -534,7 +562,7 @@ function renderNoteList() {
     } else {
       // Apply tag filter
       if (tagFilterMatchIds && !tagFilterMatchIds.has(item.id)) return '';
-      if (notesSearchQuery && !includeAll && !notePassesActiveFilters(item)) return '';
+      if (notesSearchQuery && !includeAll && !matchesTree(item)) return '';
 
       // Review status badge（全局关闭复习时不显示任何复习徽章）
       let reviewBadge = '';
@@ -572,7 +600,7 @@ function renderNoteList() {
     }
   }
   
-  const rootItems = sortNoteItems(notes.filter(n => !n.parentId)).filter(item => (!notesSearchQuery && !notesTagFilter) || noteTreeMatches(item));
+  const rootItems = sortNoteItems(notes.filter(n => !n.parentId)).filter(item => (!notesSearchQuery && !notesTagFilter) || matchesTree(item));
   
   // Build tag filter bar HTML
   let filterBarHtml = '';
@@ -590,7 +618,7 @@ function renderNoteList() {
   if (!hasAny) list.innerHTML += `<div class="notes-empty-hint">${notesSearchQuery || notesTagFilter ? '没有找到匹配的笔记' : '暂无笔记，右键可新建文件夹'}</div>`;
   const searchCount = document.getElementById('notesSearchCount');
   if (searchCount) {
-    const count = notes.filter(note => note.type === 'note' && notePassesActiveFilters(note)).length;
+    const count = notes.filter(note => note.type === 'note' && matchesTree(note)).length;
     searchCount.textContent = notesSearchQuery ? String(count) : '';
     searchCount.title = notesSearchQuery ? `找到 ${count} 篇笔记` : '';
   }
@@ -2192,7 +2220,7 @@ function switchNoteView(mode){
   [eb,rb,pb,sb].forEach(b=>{if(b)b.classList.remove('active')});
   const tb=document.getElementById('notesFormatToolbar');if(tb)tb.style.display=(mode==='edit'||mode==='rich')?'':'none';
   if(mode==='preview'){const n=getActiveNote();pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';if(n)applyNoteFoldStates(pv,n.id);pv.classList.add('active');if(pb)pb.classList.add('active');}
-  else if(mode==='summary'){if(sp)sp.style.display='flex';if(sb)sb.classList.add('active');renderNoteSummary();const n=getActiveNote();if(n&&!n._summaryFresh&&(n.content||'').trim().length>0&&isAutoSummaryEnabled()){n._summaryUpdating=true;renderNoteSummary();generateNoteSummary(n).then(()=>{n._summaryUpdating=false;renderNoteSummary()});}}
+  else if(mode==='summary'){if(sp)sp.style.display='flex';if(sb)sb.classList.add('active');renderNoteSummary();const n=getActiveNote();if(n&&!n._summaryFresh&&!n._summaryUpdating&&(n.content||'').trim().length>0&&isAutoSummaryEnabled())generateNoteSummary(n);}
   else if(mode==='rich'){const n=getActiveNote();if(typeof RichNoteEditor!=='undefined')RichNoteEditor.setMarkdown(n?.content||'',n?.id);rich?.classList.add('active');if(rb)rb.classList.add('active');}
   else{const n=getActiveNote();if(ta&&n)ta.value=n.content||'';ta.classList.remove('hidden');if(eb)eb.classList.add('active');} // 不自动聚焦，避免移动端切编辑模式弹键盘
   const immersiveButton=document.getElementById('notesImmersiveBtn');
@@ -2208,37 +2236,92 @@ function switchNoteView(mode){
 }
 
 // ═══════════ Notes: Summary ═══════════
-function getSummaryAiKey(){try{const keyId=localStorage.getItem('study_summary_ai_key_id');if(keyId){const keys=loadApiKeys();return keys.find(k=>k.id===keyId)||null;}}catch{}return null;}
+function getSummaryAiKey(){
+  try{
+    const keys=loadApiKeys();
+    const summaryKeyId=localStorage.getItem('study_summary_ai_key_id')||'';
+    const activeKeyId=typeof getActiveApiKeyId==='function'?getActiveApiKeyId():(localStorage.getItem('study_active_api_key_id')||'');
+    return keys.find(k=>String(k.id)===String(summaryKeyId||activeKeyId))
+      ||keys.find(k=>String(k.id)===String(activeKeyId))
+      ||null;
+  }catch{return null;}
+}
 async function generateNoteSummary(note){
-  if(!note||!note.content){note.summary='';note._summaryFresh=true;saveData('study_notes_v2',notes);return;}
+  if(!note||note._summaryUpdating)return false;
+  if(!note.content){note.summary='';note._summaryFresh=true;note._summaryFailed=false;saveData('study_notes_v2',notes);renderNoteSummary();return true;}
+  note._summaryUpdating=true;
+  note._summaryFailed=false;
+  note._summaryError='';
+  renderNoteSummary();
   const aiKey=getSummaryAiKey();
-  if(!aiKey){note.summary='（未配置摘要 AI Key）';note._summaryFresh=true;saveData('study_notes_v2',notes);renderNoteSummary();return;}
+  if(!aiKey){
+    note._summaryUpdating=false;
+    note._summaryFailed=true;
+    note._summaryFresh=false;
+    saveData('study_notes_v2',notes);
+    renderNoteSummary();
+    return false;
+  }
   const baseUrl=(aiKey.baseUrl||'https://api.openai.com/v1').replace(/\/+$/,'');
   const truncContent=note.content.slice(0,6000);
+  let succeeded=false;
   try{
-    const resp=await fetch(baseUrl+'/chat/completions',{
-      method:'POST',headers:{'Content-Type':'application/json','Authorization':'Bearer '+aiKey.key},
-      body:JSON.stringify({model:aiKey.model||'gpt-3.5-turbo',messages:[{role:'system',content:'你是一个笔记摘要助手。根据以下笔记内容，生成一段简短的中文摘要（不超过100字），概括核心要点。只输出摘要文本，不要加额外说明。'},{role:'user',content:'笔记标题：'+(note.title||'未命名')+'\n\n笔记内容：\n'+truncContent}],temperature:0.3,max_tokens:200})
-    });
-    if(resp.ok){const data=await resp.json();if(typeof AIClient!=='undefined')AIClient.recordUsage(aiKey.model||'gpt-3.5-turbo',data.usage,{feature:'note_summary',input:truncContent,output:data.choices?.[0]?.message});note.summary=(data.choices?.[0]?.message?.content||'').trim().slice(0,200);}else note.summary='（摘要生成失败）';
-  }catch{note.summary='（摘要生成失败）';}
-  note._summaryFresh=true;saveData('study_notes_v2',notes);renderNoteSummary();
+    if(typeof callAiApi!=='function')throw new Error('AI 请求模块尚未加载，请刷新应用后重试');
+    const apiCfg=typeof getEffectiveApiConfig==='function'
+      ?getEffectiveApiConfig(aiKey.id)
+      :{apiKey:aiKey.key,baseUrl,model:aiKey.model||'gpt-3.5-turbo'};
+    const result=await callAiApi([
+      {role:'system',content:'你是一个笔记摘要助手。根据以下笔记内容，生成一段简短的中文摘要（不超过100字），概括核心要点。只输出摘要文本，不要加额外说明。'},
+      {role:'user',content:'笔记标题：'+(note.title||'未命名')+'\n\n笔记内容：\n'+truncContent}
+    ],{...apiCfg,temperature:0.3,deepThink:false,maxTokens:300},null,{feature:'note_summary',disableTools:true});
+    const generated=(result?.cleanText||'').trim().slice(0,200);
+    if(!generated)throw new Error('模型未返回摘要文本，请检查所选模型是否可用');
+    note.summary=generated;
+    succeeded=true;
+  }catch(error){
+    note._summaryError=formatNoteSummaryError(error);
+  }
+  note._summaryUpdating=false;
+  note._summaryFailed=!succeeded;
+  note._summaryFresh=succeeded;
+  saveData('study_notes_v2',notes);
+  renderNoteSummary();
+  return succeeded;
+}
+function formatNoteSummaryError(error){
+  const message=String(error?.message||error||'未知错误').replace(/\s+/g,' ').trim();
+  if(/failed to fetch|network|fetch failed|网络/i.test(message))return '网络连接失败，请检查网络或接口地址';
+  if(/401|unauthorized|invalid.*key|api key/i.test(message))return 'AI Key 无效或已过期';
+  if(/403|forbidden|permission/i.test(message))return '当前 AI Key 没有调用该模型的权限';
+  if(/404|not found/i.test(message))return '接口地址或模型名称不正确';
+  if(/429|rate limit|quota|余额|额度/i.test(message))return '调用过于频繁，或账户额度不足';
+  if(/timeout|timed out|超时/i.test(message))return '请求超时，请稍后重试';
+  return message.slice(0,160)||'未知错误';
 }
 function renderNoteSummary(){
   const panel=document.getElementById('notesSummaryPanel');if(!panel)return;
   const note=getActiveNote();if(!note){panel.innerHTML='';return;}
   const isFresh=note._summaryFresh,needsUpdate=!isFresh&&(note.content||'').trim().length>0;
-  if(!note.summary&&!isFresh&&!needsUpdate)panel.innerHTML='<div class="notes-summary-empty">暂无摘要</div>';
-  else if(!note.summary&&isFresh&&!note.content)panel.innerHTML='<div class="notes-summary-empty">空笔记</div>';
-  else if(note._summaryUpdating)panel.innerHTML='<div class="notes-summary-status stale">⏳ 正在更新摘要…</div>';
-  else{const stale=!isFresh&&needsUpdate;panel.innerHTML=`<div class="notes-summary-status ${isFresh?'fresh':'stale'}">${isFresh?'✅ 最新':'🔄 需要更新'}${stale?'<button class="notes-summary-inline-btn" onclick="refreshNoteSummary()">更新</button>':''}</div><div class="notes-summary-text">${escapeHtml(note.summary||'')}</div>`;}
+  const canGenerate=(note.content||'').trim().length>0;
+  const action=`<div class="notes-summary-actions"><button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()" ${!canGenerate||note._summaryUpdating?'disabled':''}><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> ${note.summary?'重新生成摘要':'生成摘要'}</button></div>`;
+  let content='';
+  if(note._summaryUpdating)content='<div class="notes-summary-status stale">⏳ 正在生成摘要…</div>';
+  else if(note._summaryFailed){
+    const failureText=getSummaryAiKey()?(note._summaryError||'摘要生成失败，将在可以生成时再次尝试'):'未配置摘要 AI Key，请先在设置中选择';
+    content=`<div class="notes-summary-status error">⚠️ ${failureText}<button class="notes-summary-inline-btn" onclick="refreshNoteSummary()">重试</button></div>${note.summary?`<div class="notes-summary-text">${escapeHtml(note.summary)}</div>`:''}`;
+  }else if(!note.summary&&!isFresh&&!needsUpdate)content='<div class="notes-summary-empty">暂无摘要</div>';
+  else if(!note.summary&&isFresh&&!note.content)content='<div class="notes-summary-empty">空笔记</div>';
+  else{const stale=!isFresh&&needsUpdate;content=`<div class="notes-summary-status ${isFresh?'fresh':'stale'}">${isFresh?'✅ 最新':'🔄 需要更新'}${stale?'<button class="notes-summary-inline-btn" onclick="refreshNoteSummary()">更新</button>':''}</div><div class="notes-summary-text">${escapeHtml(note.summary||'')}</div>`;}
+  panel.innerHTML=action+content;
+  if(typeof lucide!=='undefined')lucide.createIcons();
 }
 function isAutoSummaryEnabled(){return localStorage.getItem('study_auto_summary')!=='false';}
-function checkAndUpdateSummary(){if(!isAutoSummaryEnabled())return;const n=getActiveNote();if(n&&!n._summaryFresh&&(n.content||'').trim().length>0)generateNoteSummary(n);}
-function refreshNoteSummary(){const n=getActiveNote();if(!n)return;const p=document.getElementById('notesSummaryPanel');if(p)p.innerHTML='<div class="notes-summary-empty">生成中…</div>';generateNoteSummary(n);}
+function checkAndUpdateSummary(){if(!isAutoSummaryEnabled())return;const n=getActiveNote();if(n&&!n._summaryFresh&&!n._summaryUpdating&&(n.content||'').trim().length>0)generateNoteSummary(n);}
+function refreshNoteSummary(){const n=getActiveNote();if(!n||n._summaryUpdating)return;generateNoteSummary(n);}
 function autoResizeAiInput(){const i=document.getElementById('aiInput');if(!i)return;i.style.height='auto';i.style.height=Math.min(i.scrollHeight,120)+'px';}
 function handleAiInputKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAiMessage();}}
 document.addEventListener('visibilitychange',function(){if(document.hidden&&typeof checkAndUpdateSummary==='function')checkAndUpdateSummary();});
+window.addEventListener('online',function(){if(typeof checkAndUpdateSummary==='function')checkAndUpdateSummary();});
 
 // ═══════════ Notes: Tag Management ═══════════
 function renderNotesTagInput() {

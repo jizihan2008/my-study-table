@@ -506,36 +506,40 @@ test('third-party plugin runs in an opaque sandbox with declared permissions', a
   expect(result.compromised).toBe('');
   expect(sandboxData).toEqual({ escaped: false, hasNode: false });
 });
-test('prompt studio visually edits the active conversation system prompt', async () => {
+test('prompt studio edits shared templates and resolves app data at request time', async () => {
   await page.setViewportSize({ width: 1280, height: 820 });
   await page.evaluate(() => switchTab('prompts'));
-
   await expect(page.locator('#section-prompts')).toHaveClass(/active/);
-  await expect(page.locator('.prompt-section-card')).toHaveCount(6);
-  await page.getByRole('button', { name: '原始文本' }).click();
-  await expect(page.locator('#promptRawText')).toContainText('你是「我的学习桌面」的内置 AI 助手');
-  const untouched = await page.evaluate(() => ({ prompt: getActiveConv().systemPrompt, mode: getActiveConv().systemPromptMode || '', hasBuilder: !!getActiveConv().promptBuilder }));
-  expect(untouched).toEqual({ prompt: '', mode: '', hasBuilder: false });
-  await page.getByRole('button', { name: '可视化', exact: true }).click();
-  await page.getByRole('button', { name: '新建对话' }).click();
-  await page.locator('#promptNameInput').fill('物理概念讲解');
-  await page.locator('#promptSection-role').fill('你是一位物理老师。');
-  await page.locator('#promptSection-goal').fill('请解释');
-  await page.locator('#promptSection-goal').focus();
-  await page.getByRole('button', { name: '+ 主题', exact: true }).click();
-  await page.locator('[data-prompt-variable="主题"]').fill('动量守恒');
-
-  await expect(page.locator('#promptPreviewText')).toContainText('请解释 动量守恒');
-  const applied = await page.evaluate(() => {
+  await expect(page.locator('[data-template-id]')).toHaveCount(3);
+  await expect(page.locator('#promptTemplateText')).toContainText('你是「我的学习桌面」的内置 AI 助手');
+  await page.locator('#promptTemplateText').fill('请结合最新信息：\n');
+  await page.locator('[data-insert-token="待办信息"]').click();
+  await expect(page.locator('#promptTemplateText')).toHaveValue(/\{\{待办信息\}\}/);
+  await expect(page.locator('#promptHighlightLayer .prompt-token-highlight')).toContainText('{{待办信息}}');
+  const result = await page.evaluate(() => {
     const conv = getActiveConv();
-    return { systemPrompt: conv.systemPrompt, mode: conv.systemPromptMode, hasBuilder: !!conv.promptBuilder };
+    return { stored: getPromptTemplate('chat'), sent: buildConversationSystemPrompt(conv), perConversation: conv.systemPrompt };
   });
-  expect(applied.systemPrompt).toContain('【角色设定】\n你是一位物理老师。');
-  expect(applied.systemPrompt).toContain('动量守恒');
-  expect(applied.mode).toBe('full');
-  expect(applied.hasBuilder).toBe(true);
-  await page.getByRole('button', { name: /返回当前对话/ }).click();
-  await expect(page.locator('#section-ai')).toHaveClass(/active/);
+  expect(result.stored).toContain('{{待办信息}}');
+  expect(result.sent).not.toContain('{{待办信息}}');
+  expect(result.perConversation).toBe('');
+  await page.locator('[data-template-id="morning"]').click();
+  await expect(page.locator('#promptTemplateText')).toContainText('{{日报数据}}');
+  await page.locator('[data-template-id="evening"]').click();
+  await expect(page.locator('#promptTemplateText')).toContainText('{{日报数据}}');
+  const custom = await page.evaluate(() => {
+    const saved = loadPromptTemplates();
+    saved.customTemplates = [{ id: 'custom-e2e', name: '数学导师' }];
+    saved['custom-e2e'] = '你是数学导师。{{待办信息}}';
+    saveData('study_prompt_templates_v1', saved);
+    const conv = getActiveConv();
+    conv.promptTemplateId = 'custom-e2e';
+    return buildConversationSystemPrompt(conv);
+  });
+  expect(custom).toContain('你是数学导师。');
+  await page.evaluate(() => openConvSettingsModal());
+  await expect(page.locator('#convPromptTemplate')).toHaveValue('custom-e2e');
+  await page.evaluate(() => closeConvSettingsModal());
 });
 
 test('check-in report prompt releases the app input after submission', async () => {
@@ -557,6 +561,24 @@ test('check-in report prompt releases the app input after submission', async () 
   await expect(page.locator('#checkinReportOverlay')).not.toHaveClass(/open/);
   await page.locator('#todoSearch').fill('可正常输入');
   await expect(page.locator('#todoSearch')).toHaveValue('可正常输入');
+});
+
+test('long-term goals are available to morning and evening report prompts', async () => {
+  const result = await page.evaluate(() => {
+    localStorage.setItem('study_longterm_goals', JSON.stringify([
+      { id: 901, text: '完成毕业设计', done: false, dueDate: '2026-12-31', content: '每周稳定推进核心模块' }
+    ]));
+    const morning = collectDailyReportData().longTermGoals;
+    const evening = collectEveningReportData().longTermGoals;
+    return {
+      morning,
+      evening,
+      formatted: formatReportLongTermGoals(morning)
+    };
+  });
+  expect(result.morning).toEqual(result.evening);
+  expect(result.morning[0]).toMatchObject({ text: '完成毕业设计', done: false, dueDate: '2026-12-31' });
+  expect(result.formatted).toContain('完成毕业设计（截止 2026-12-31）：每周稳定推进核心模块');
 });
 
 test('calendar event time range drives automatic timer records', async () => {
@@ -620,6 +642,41 @@ test('calendar event time range drives automatic timer records', async () => {
   expect(autoRecord.records[0].affectsFocus).toBe(false);
   expect(autoRecord.records[0].totalMs).toBe(90 * 60000);
   expect(autoRecord.events[0].lastAutoRecordEnd).toBeGreaterThan(0);
+});
+
+test('calendar supports multi-day and all-day events', async () => {
+  await page.evaluate(() => switchTab('calendar'));
+  const result = await page.evaluate(() => {
+    localStorage.setItem('study_calendar_events', '[]');
+    openCalEventModal('2026-03-05', null);
+    document.getElementById('calEventTitle').value = 'E2E 跨天全天事件';
+    document.getElementById('calEventEndDate').value = '2026-03-07';
+    document.getElementById('calEventAllDay').checked = true;
+    syncCalEventAllDayFields();
+    submitCalEvent();
+    const event = JSON.parse(localStorage.getItem('study_calendar_events') || '[]')[0];
+    return {
+      event,
+      days: ['2026-03-04', '2026-03-05', '2026-03-06', '2026-03-07', '2026-03-08']
+        .map(date => [date, getCalendarEventsOnDate(date).length])
+    };
+  });
+
+  expect(result.event).toMatchObject({
+    date: '2026-03-05', endDate: '2026-03-07', allDay: true,
+    startTime: '', endTime: '', autoRecord: false
+  });
+  expect(result.days).toEqual([
+    ['2026-03-04', 0], ['2026-03-05', 1], ['2026-03-06', 1], ['2026-03-07', 1], ['2026-03-08', 0]
+  ]);
+  await page.evaluate(() => selectCalendarDay('2026-03-06'));
+  await expect(page.locator('#calendarTodoList .cal-event-item')).toContainText('全天');
+  await expect(page.locator('#calendarTodoList .cal-event-item')).toContainText('E2E 跨天全天事件');
+  await page.evaluate(() => {
+    calendarCurrentDate = new Date();
+    calendarSelectedDate = formatDate(new Date());
+    renderCalendar();
+  });
 });
 
 test('calendar opens on today and a weekly event can drop a single day', async () => {

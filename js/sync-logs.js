@@ -205,7 +205,10 @@
       let res = supabaseClient.auth.getSession();
       if (res && typeof res.then === 'function') res = await res;
       const data = res && res.data ? res.data : null;
-      return data && data.session ? data.session : null;
+      const session = data && data.session ? data.session : null;
+      if (session && global.Sync && typeof global.Sync.canSyncAccount === 'function' &&
+          !global.Sync.canSyncAccount(session.user && session.user.id)) return null;
+      return session;
     } catch (e) { return null; }
   }
   function _client() {
@@ -214,6 +217,23 @@
       if (c) { client = c; return c; }
     }
     return client;
+  }
+  async function _queryAll(makeQuery) {
+    const pageSize = 500;
+    const rows = [];
+    for (let start = 0; ; start += pageSize) {
+      let query = makeQuery();
+      if (typeof query.range !== 'function') {
+        const { data, error } = await query;
+        if (error) throw new Error(error.message || '读取云端数据失败');
+        return data || [];
+      }
+      if (typeof query.order === 'function') query = query.order('id', { ascending: true });
+      const { data, error } = await query.range(start, start + pageSize - 1);
+      if (error) throw new Error(error.message || '读取云端数据失败');
+      rows.push(...(data || []));
+      if (!data || data.length < pageSize) return rows;
+    }
   }
   // 总开关跟随 sync.js 的 Sync.enabled
   function _enabled() {
@@ -513,7 +533,7 @@
   // force=true（「上传全部」）：跳过 hash 增量判断，强制 upsert。
   // 增量（force=false）跳过条件 = hash 相同 **且** 云端该行仍存在（remoteSet 含此 piece）——
   // 否则即便 hash 相同也会重传补齐，防止云端行被外部清理/误删后本地永远 skip 不补。
-  async function _uploadPiece(session, piece, force, remoteSet) {
+  async function _uploadPiece(session, piece, force, remoteSet, remoteRows) {
     const key = piece.kind + '/' + piece.itemId;
     const hash = _hashStr(piece.wrap.d);
     const remoteHas = !remoteSet || remoteSet.has(key);   // remoteSet 查询失败(null)时视为存在，保守不重传
@@ -523,18 +543,26 @@
     let error = null;
     let serverUpdatedAt = '';
     try {
-      const result = await c.from('user_sync_items')
-        .upsert({
-          user_id: session.user.id,
-          kind: piece.kind,
-          item_id: piece.itemId,
-          data: piece.wrap,
-          bytes: piece.bytes
-        }, { onConflict: 'user_id,kind,item_id' })
-        .select('updated_at')
-        .single();
+      const payload = { user_id: session.user.id, kind: piece.kind,
+        item_id: piece.itemId, data: piece.wrap, bytes: piece.bytes };
+      const remoteRow = (remoteRows || []).find(row => row.item_id === piece.itemId);
+      let result;
+      if (force) {
+        result = await c.from('user_sync_items').upsert(payload,
+          { onConflict: 'user_id,kind,item_id' }).select('updated_at').single();
+      } else if (remoteRow) {
+        result = await c.from('user_sync_items').update({ data: piece.wrap, bytes: piece.bytes })
+          .eq('user_id', session.user.id).eq('kind', piece.kind)
+          .eq('item_id', piece.itemId).eq('updated_at', remoteRow.updated_at)
+          .select('updated_at').maybeSingle();
+      } else {
+        result = await c.from('user_sync_items').insert(payload).select('updated_at').single();
+      }
       error = result && result.error;
       serverUpdatedAt = result && result.data && result.data.updated_at;
+      if (!force && ((!error && !serverUpdatedAt) || (error && error.code === '23505'))) {
+        return { ok: false, conflict: true, reason: 'cloud-changed-during-upload' };
+      }
     } catch (e) {
       error = e || new Error('network-error');
     }
@@ -599,29 +627,26 @@
           byKind.set(target.kind, ids);
         });
         for (const [kind, ids] of byKind) {
-          const { data, error } = await c.from('user_sync_items')
+          const data = await _queryAll(() => c.from('user_sync_items')
             .select('id,kind,item_id,base_item_id,bytes,updated_at')
             .eq('user_id', session.user.id)
             .eq('kind', kind)
-            .in('base_item_id', ids);
-          if (error) throw new Error(error.message || 'target-inventory-failed');
+            .in('base_item_id', ids));
           rows.push(...(data || []));
         }
       } catch (e) {
         // 旧数据库还没有 base_item_id 时保持兼容：退回一次轻量元数据扫描，
         // 再在客户端按基础 item id 精确过滤。
-        const { data, error } = await c.from('user_sync_items')
+        const data = await _queryAll(() => c.from('user_sync_items')
           .select('id,kind,item_id,bytes,updated_at')
-          .eq('user_id', session.user.id);
-        if (error) throw new Error(error.message || '读取云端对话版本失败');
+          .eq('user_id', session.user.id));
         const wantedSet = new Set(wanted.map(target => _baseKey(target.kind, target.itemId)));
         rows = (data || []).filter(row => wantedSet.has(_remoteBaseKey(row.kind, row.item_id)));
       }
     } else {
-      const { data, error } = await c.from('user_sync_items')
+      const data = await _queryAll(() => c.from('user_sync_items')
         .select('id,kind,item_id,bytes,updated_at')
-        .eq('user_id', session.user.id);
-      if (error) throw new Error(error.message || '读取云端对话版本失败');
+        .eq('user_id', session.user.id));
       rows = Array.isArray(data) ? data : [];
     }
     const groups = {};
@@ -703,8 +728,15 @@
     for (const piece of pieces) {
       piece.kind = item.kind;
       currentIds.add(_baseKey(item.kind, piece.itemId));
-      const result = await _uploadPiece(session, piece, !!force, inventory.set);
-      if (!result.ok) return result;
+      const result = await _uploadPiece(session, piece, !!force, inventory.set, remoteRows);
+      if (!result.ok) {
+        if (result.conflict) _queueConflict(item.kind, item.itemId, {
+          name: _itemName(item.kind, item), reason: 'cloud-changed-during-upload',
+          localDeleted: false, baseTimestamp: baseTimestamp || null,
+          remoteTimestamp: remoteUpdated || null
+        });
+        return result;
+      }
       if (!result.skipped) wroteAny = true;
       if (result.updatedAt && (!latestUploaded || policy.compareTimestamps(result.updatedAt, latestUploaded) > 0)) {
         latestUploaded = result.updatedAt;
@@ -931,7 +963,10 @@
   }
 
   function _applyRemoteDeletion(kind, itemId) {
-    if (kind !== 'ai_conv' || typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') return false;
+    if (kind !== 'ai_conv') return false;
+    if (typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') {
+      throw new Error('AI 对话存储尚未就绪');
+    }
     if (!Array.isArray(aiConvs)) aiConvs = [];
     const previousConvs = aiConvs;
     const previousActiveId = typeof activeConvId === 'undefined' ? null : activeConvId;
@@ -964,10 +999,9 @@
   async function _fetchRemoteItemRows(session, c, targets) {
     const wanted = _normalizeTargets(targets);
     if (!wanted.length) {
-      const { data, error } = await c.from('user_sync_items')
+      const data = await _queryAll(() => c.from('user_sync_items')
         .select('kind,item_id,data,updated_at')
-        .eq('user_id', session.user.id);
-      if (error) throw new Error(error.message || '拉取云端对话失败');
+        .eq('user_id', session.user.id));
       return data || [];
     }
     try {
@@ -979,21 +1013,19 @@
         byKind.set(target.kind, ids);
       });
       for (const [kind, ids] of byKind) {
-        const { data, error } = await c.from('user_sync_items')
+        const data = await _queryAll(() => c.from('user_sync_items')
           .select('kind,item_id,base_item_id,data,updated_at')
           .eq('user_id', session.user.id)
           .eq('kind', kind)
-          .in('base_item_id', ids);
-        if (error) throw new Error(error.message || 'target-pull-failed');
+          .in('base_item_id', ids));
         rows.push(...(data || []));
       }
       return rows;
     } catch (e) {
       // 兼容尚未执行新版 schema 的云端。
-      const { data, error } = await c.from('user_sync_items')
+      const data = await _queryAll(() => c.from('user_sync_items')
         .select('kind,item_id,data,updated_at')
-        .eq('user_id', session.user.id);
-      if (error) throw new Error(error.message || '拉取云端对话失败');
+        .eq('user_id', session.user.id));
       const wantedSet = new Set(wanted.map(target => _baseKey(target.kind, target.itemId)));
       return (data || []).filter(row => wantedSet.has(_remoteBaseKey(row.kind, row.item_id)));
     }
@@ -1008,8 +1040,9 @@
       .eq('user_id', session.user.id);
     if (typeof query.gte !== 'function') return _pullItems(session, c);
     query = query.gte('updated_at', cfg.pullCursor);
-    const { data, error } = await query;
-    if (error) throw new Error(error.message || '读取对话增量版本失败');
+    const data = await _queryAll(() => c.from('user_sync_items')
+      .select('kind,item_id,updated_at').eq('user_id', session.user.id)
+      .gte('updated_at', cfg.pullCursor));
     const targets = _normalizeTargets((data || []).map(row => ({
       kind: row.kind,
       itemId: _baseIdFromRemoteId(row.item_id)
@@ -1102,12 +1135,13 @@
         const key = kind === 'bk_explain' ? 'study_bk_explain_logs_v1' : 'study_bk_qa_logs_v1';
         let store = {};
         try { store = JSON.parse(localStorage.getItem(key)) || {}; } catch (e) {}
-        if (Array.isArray(built.items)) {
-          store[itemId] = built.items;
-          localStorage.setItem(key, JSON.stringify(store));
-        }
+        if (!Array.isArray(built.items)) throw new Error('云端日志格式无效');
+        store[itemId] = built.items;
+        localStorage.setItem(key, JSON.stringify(store));
       } else if (kind === 'ai_conv') {
-        if (typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') return;
+        if (typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') {
+          throw new Error('AI 对话存储尚未就绪');
+        }
         // 防御：本地 study_ai_convs 若被降级写成对象，重置为数组再合并（配合 settings.js 的防御）
         if (!Array.isArray(aiConvs)) aiConvs = [];
         const id = built.meta ? built.meta.id : itemId;
@@ -1192,9 +1226,9 @@
         if (appliedConv && built.tree && built.activePath && typeof ensureTree === 'function') {
           ensureTree(appliedConv);
         }
-        safeSaveAiConvs();
+        if (!safeSaveAiConvs()) throw new Error('保存云端对话失败');
       }
-    } catch (e) { /* 写回失败不影响其它 item */ }
+    } catch (e) { throw e; }
   }
 
   // ── TTL 清理远端（纯云端时间戳，跨设备安全）────────────────
@@ -1206,11 +1240,10 @@
   async function _pruneRemoteTTL(session, c, inventoryRows) {
     let data = Array.isArray(inventoryRows) ? inventoryRows : null;
     if (!data) {
-      const result = await c.from('user_sync_items')
+      const dataRows = await _queryAll(() => c.from('user_sync_items')
         .select('id,kind,item_id,bytes,updated_at')
-        .eq('user_id', session.user.id);
-      if (result.error) return;
-      data = result.data || [];
+        .eq('user_id', session.user.id));
+      data = dataRows;
     }
     if (!data.length) return;
     const now = Date.now();
@@ -1276,11 +1309,10 @@
       } catch (e) { /* 旧 schema 无 RPC，退回轻量列查询 */ }
     }
     if (!data) {
-      const result = await c.from('user_sync_items')
+      const dataRows = await _queryAll(() => c.from('user_sync_items')
         .select('kind,bytes')
-        .eq('user_id', session.user.id);
-      if (result.error) throw new Error(result.error.message || '读取云存储用量失败');
-      data = result.data || [];
+        .eq('user_id', session.user.id));
+      data = dataRows;
     }
     const byKind = { ai_conv: 0, bk_explain: 0, bk_qa: 0 };
     let total = 0;
@@ -2060,6 +2092,7 @@
       pullItems: _pullItems,
       uploadPreparedItem: _uploadPreparedItem,
       processTombstone: _processTombstone,
+      queryAll: _queryAll,
       normalizeTargets: _normalizeTargets
     };
   }

@@ -233,12 +233,12 @@ const AI_TOOLS = {
     params: { date: '只看某一天，格式YYYY-MM-DD（string，可选，含重复事件展开）', from: '开始日期 YYYY-MM-DD（string，可选，与to配合，按事件日期筛选）', to: '结束日期 YYYY-MM-DD（string，可选）', search: '标题/备注关键词（string，可选）', page: '页码，从1开始（number，可选）', pageSize: '每页条数，1~50，默认20（number，可选）' }
   },
   create_calendar_event: {
-    description: '创建日历事件（日程）。可设置时间段、8 种颜色之一、备注，以及每周重复（用 weekdays 指定星期几，0=周日…6=周六）；开启 autoRecord 后，事件时段结束时会自动写一条计时记录，计入当天计时与日历角标',
-    params: { title: '事件标题（string，必填）', date: '开始日期 YYYY-MM-DD（string，必填，重复事件从这一天所在的那一周开始）', startTime: '开始时间 HH:MM（string，可选）', endTime: '结束时间 HH:MM（string，可选，留空则只是时间点）', weekdays: '每周重复的星期几数组，0=周日 1=周一 … 6=周六（array of numbers，可选，如[1,3,5]；填了就是每周重复）', color: '颜色：red/orange/amber/green/blue/purple/pink/teal（string，可选，默认blue）', note: '备注（string，可选）', autoRecord: '是否在时段结束后自动计入当天计时记录（boolean，可选，默认false，需要 endTime）', autoTimer: '自动生成的计时记录是否计入专注时间统计（boolean，可选，默认true）' }
+    description: '创建日历事件（日程）。支持跨天、全天和每周重复；开启 autoRecord 后，普通时段结束时会自动写一条计时记录',
+    params: { title: '事件标题（string，必填）', date: '开始日期 YYYY-MM-DD（string，必填）', endDate: '结束日期 YYYY-MM-DD（string，可选，默认同开始日期）', allDay: '是否为全天事件（boolean，可选）', startTime: '开始时间 HH:MM（string，可选）', endTime: '结束时间 HH:MM（string，可选）', weekdays: '每周重复的星期几数组，0=周日…6=周六（array of numbers，可选）', color: '颜色：red/orange/amber/green/blue/purple/pink/teal（string，可选）', note: '备注（string，可选）', autoRecord: '是否在时段结束后自动计时（boolean，可选）', autoTimer: '自动计时是否计入专注时间（boolean，可选）' }
   },
   update_calendar_event: {
     description: '更新已有日历事件。只传要改的字段；weekdays 传空数组表示改为不重复。改时间或星期几后会重新判定当天的自动计时',
-    params: { id: '事件ID（number，必填，来自 list_calendar_events）', title: '新标题（string，可选）', date: '新的开始日期 YYYY-MM-DD（string，可选）', startTime: '新的开始时间 HH:MM（string，可选，空字符串清除）', endTime: '新的结束时间 HH:MM（string，可选，空字符串清除）', weekdays: '新的重复星期几数组，0=周日…6=周六（array of numbers，可选，传[]取消重复）', color: '新颜色（string，可选）', note: '新备注（string，可选）', autoRecord: '是否自动计入当天计时记录（boolean，可选）', autoTimer: '自动计时是否计入专注时间（boolean，可选）' }
+    params: { id: '事件ID（number，必填，来自 list_calendar_events）', title: '新标题（string，可选）', date: '新的开始日期 YYYY-MM-DD（string，可选）', endDate: '新的结束日期 YYYY-MM-DD（string，可选）', allDay: '是否全天（boolean，可选）', startTime: '新的开始时间 HH:MM（string，可选）', endTime: '新的结束时间 HH:MM（string，可选）', weekdays: '新的重复星期几数组（array，可选）', color: '新颜色（string，可选）', note: '新备注（string，可选）', autoRecord: '是否自动计时（boolean，可选）', autoTimer: '是否计入专注时间（boolean，可选）' }
   },
   delete_calendar_event: {
     description: '删除日历事件。默认删除整个事件系列；对每周重复事件，传 date 可只删除那一天（其它日期保留），用 list_calendar_events 可以恢复被单独删除的那一天',
@@ -514,6 +514,27 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
       const timerStr = getTodoTimerStr(t.id);
       prompt += `   [ID:${t.id}] ${t.done ? '✅' : '⬜'} ${t.text}` + (childCount > 0 ? `（含 ${childCount} 个子任务）` : '') + (t.dueDate ? ` 📅${t.dueDate}` : '') + (t.done && t.completedAt ? ` ✅完成于${t.completedAt}` : '') + timerStr + (t.tags && t.tags.length > 0 ? ` 🏷️${t.tags.join(',')}` : '') + '\n';
     });
+  }
+
+  // 长期目标与「今天」页使用同一数据源。正文做单项目限长，避免异常长备注挤占整段上下文。
+  if (typeof loadGoals === 'function') {
+    try {
+      const longTermGoals = loadGoals();
+      prompt += `\n🏁 长期目标：共 ${longTermGoals.length} 个，已完成 ${longTermGoals.filter(g => g.done).length} 个\n`;
+      if (longTermGoals.length === 0) {
+        prompt += '   （尚未设置长期目标）\n';
+      } else {
+        longTermGoals.forEach(goal => {
+          const detail = String(goal.content || '').replace(/\s+/g, ' ').trim().slice(0, 500);
+          prompt += `   [ID:${goal.id}] ${goal.done ? '✅' : '⬜'} ${goal.text || '未命名目标'}`
+            + (goal.dueDate ? ` 📅${goal.dueDate}` : '')
+            + (detail ? `｜说明：${detail}${String(goal.content || '').replace(/\s+/g, ' ').trim().length > 500 ? '…' : ''}` : '')
+            + '\n';
+        });
+      }
+    } catch (e) {
+      prompt += '\n🏁 长期目标：读取失败\n';
+    }
   }
 
   prompt += buildAiFocusSnapshot();
@@ -985,7 +1006,7 @@ function validateAiToolCall(action, params) {
   if (params.inVocabulary !== undefined && typeof params.inVocabulary !== 'boolean') return { ok: false, error: '参数 inVocabulary 必须是 boolean' };
   if (params.vocabularyOnly !== undefined && typeof params.vocabularyOnly !== 'boolean') return { ok: false, error: '参数 vocabularyOnly 必须是 boolean' };
   if (params.dueOnly !== undefined && typeof params.dueOnly !== 'boolean') return { ok: false, error: '参数 dueOnly 必须是 boolean' };
-  for (const key of ['autoRecord','autoTimer']) {
+  for (const key of ['autoRecord','autoTimer','allDay']) {
     if (params[key] !== undefined && typeof params[key] !== 'boolean') return { ok: false, error: `参数 ${key} 必须是 boolean` };
   }
   for (const key of ['startTime','endTime']) {
@@ -993,7 +1014,7 @@ function validateAiToolCall(action, params) {
     if (!/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(String(params[key]))) return { ok: false, error: `参数 ${key} 必须是 HH:MM（00:00–23:59）` };
   }
   if (params.url !== undefined && !/^https?:\/\//i.test(String(params.url))) return { ok: false, error: 'url 必须以 http:// 或 https:// 开头' };
-  for (const key of ['dueDate','dueFrom','dueTo','date','due_date','due_from','due_to']) {
+  for (const key of ['dueDate','dueFrom','dueTo','date','endDate','due_date','due_from','due_to']) {
     if (!params[key]) continue;
     const value = String(params[key]);
     if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return { ok: false, error: `参数 ${key} 必须是 YYYY-MM-DD` };
@@ -2793,7 +2814,7 @@ async function executeToolCall(action, params, context = {}) {
 
       const search = String(params.search || '').trim().toLowerCase();
       let filtered = all.slice();
-      if (params.from) filtered = filtered.filter(ev => ev.date >= params.from);
+      if (params.from) filtered = filtered.filter(ev => (ev.endDate || ev.date) >= params.from);
       if (params.to) filtered = filtered.filter(ev => ev.date <= params.to);
       if (search) filtered = filtered.filter(ev => `${ev.title || ''} ${ev.note || ''}`.toLowerCase().includes(search));
       filtered.sort((a, b) => String(a.date).localeCompare(String(b.date)) || String(a.startTime || a.time || '').localeCompare(String(b.startTime || b.time || '')));
@@ -2811,20 +2832,25 @@ async function executeToolCall(action, params, context = {}) {
       const date = String(params.date || '');
       const dateInfo = validateAiCalendarDate(date);
       if (dateInfo.error) return '❌ 创建失败：' + dateInfo.error;
-      const startTime = params.startTime ? String(params.startTime) : '';
+      let endDate = String(params.endDate || date);
+      const endDateInfo = validateAiCalendarDate(endDate);
+      if (endDateInfo.error || endDate < date) return '❌ 创建失败：结束日期不能早于开始日期';
+      const allDay = params.allDay === true;
+      const startTime = allDay ? '' : (params.startTime ? String(params.startTime) : '');
       let endTime = params.endTime ? String(params.endTime) : '';
-      if (!startTime) endTime = '';
-      if (startTime && endTime === startTime) endTime = '';
+      if (allDay || !startTime) endTime = '';
+      if (startTime && endTime && endDate === date && endTime < startTime && typeof calDateOffset === 'function') endDate = calDateOffset(date, 1);
+      if (startTime && endTime === startTime && endDate === date) endTime = '';
       const weekdays = Array.isArray(params.weekdays) ? params.weekdays.map(Number) : [];
       const repeat = weekdays.length > 0 ? 'weekly' : 'none';
-      const autoRecord = params.autoRecord === true;
+      const autoRecord = !allDay && params.autoRecord === true;
       const autoTimer = params.autoTimer !== false;
       const id = addCalendarEvent(date, title, startTime, params.color || 'blue', params.note || '',
-        { start: startTime, end: endTime, repeat, weekdays }, { autoRecord, autoTimer });
+        { start: startTime, end: endTime, endDate, allDay, repeat, weekdays }, { autoRecord, autoTimer });
       if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
       if (typeof renderCalendar === 'function' && document.getElementById('calendarGrid')) renderCalendar();
       const warn = autoRecord && !endTime ? '（⚠️ 未填结束时间，不会自动计入计时记录）' : '';
-      return `✅ 已创建日历事件：${date} ${startTime ? startTime + (endTime ? '-' + endTime : '') + ' ' : ''}${title}（ID:${id}）`
+      return `✅ 已创建日历事件：${date}${endDate !== date ? '至' + endDate : ''} ${allDay ? '全天 ' : (startTime ? startTime + (endTime ? '-' + endTime : '') + ' ' : '')}${title}（ID:${id}）`
         + (repeat === 'weekly' ? `，${typeof formatCalRepeatText === 'function' ? formatCalRepeatText(weekdays) : '每周'}重复` : '')
         + (autoRecord ? '，结束后自动计入当天计时记录' : '') + warn;
     }
@@ -2842,6 +2868,13 @@ async function executeToolCall(action, params, context = {}) {
         updates.date = String(params.date);
         changes.push('日期');
       }
+      if (params.endDate !== undefined) {
+        const info = validateAiCalendarDate(String(params.endDate));
+        if (info.error) return '❌ 更新失败：' + info.error;
+        updates.endDate = String(params.endDate);
+        changes.push('结束日期');
+      }
+      if (params.allDay !== undefined) { updates.allDay = params.allDay === true; changes.push('全天设置'); }
       if (params.startTime !== undefined) { updates.startTime = params.startTime ? String(params.startTime) : ''; changes.push('开始时间'); }
       if (params.endTime !== undefined) { updates.endTime = params.endTime ? String(params.endTime) : ''; changes.push('结束时间'); }
       if (params.color !== undefined) { updates.color = String(params.color); changes.push('颜色'); }

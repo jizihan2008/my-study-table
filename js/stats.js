@@ -153,6 +153,32 @@ function formatTokenCount(value) {
   return String(Math.round(n));
 }
 
+function statsTip(text) {
+  return escapeHtml(String(text)).replace(/"/g, '&quot;');
+}
+
+function bindStatsTooltip(container) {
+  if (container.dataset.statsTooltipBound) return;
+  container.dataset.statsTooltipBound = 'true';
+  let tip = document.getElementById('statsNodeTooltip');
+  if (!tip) {
+    tip = document.createElement('div');
+    tip.id = 'statsNodeTooltip';
+    tip.className = 'stats-node-tooltip';
+    tip.hidden = true;
+    document.body.appendChild(tip);
+  }
+  container.addEventListener('pointermove', event => {
+    const node = event.target.closest('[data-stats-tip]');
+    if (!node || !container.contains(node)) { tip.hidden = true; return; }
+    tip.textContent = node.dataset.statsTip;
+    tip.hidden = false;
+    tip.style.left = Math.min(event.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
+    tip.style.top = Math.max(8, event.clientY - tip.offsetHeight - 12) + 'px';
+  });
+  container.addEventListener('pointerleave', () => { tip.hidden = true; });
+}
+
 function aiUsageBreakdownHtml(entries, labels) {
   const sorted = Object.entries(entries || {}).sort((a, b) => (b[1].totalTokens || 0) - (a[1].totalTokens || 0)).slice(0, 6);
   if (!sorted.length) return '<div class="stats-ai-empty">暂无数据</div>';
@@ -160,7 +186,7 @@ function aiUsageBreakdownHtml(entries, labels) {
   return sorted.map(([name, row]) => {
     const label = labels?.[name] || name;
     const width = Math.max(3, Math.round((Number(row.totalTokens) || 0) / max * 100));
-    return '<div class="stats-ai-breakdown-row"><div class="stats-ai-breakdown-meta"><span>'+escapeHtml(label)+'</span><span>'+formatTokenCount(row.totalTokens)+' · '+(row.requests||0)+'次</span></div><div class="stats-ai-breakdown-track"><span style="width:'+width+'%"></span></div></div>';
+    return '<div class="stats-ai-breakdown-row" data-stats-tip="'+statsTip(label+'：'+Math.round(row.totalTokens||0)+' Token，'+(row.requests||0)+' 次请求')+'"><div class="stats-ai-breakdown-meta"><span>'+escapeHtml(label)+'</span><span>'+formatTokenCount(row.totalTokens)+' · '+(row.requests||0)+'次</span></div><div class="stats-ai-breakdown-track"><span style="width:'+width+'%"></span></div></div>';
   }).join('');
 }
 
@@ -171,7 +197,7 @@ function renderAiTokenTrend(cId, stats) {
   el.innerHTML = '<div class="stats-ai-bars">' + values.map((value, index) => {
     const height = value > 0 ? Math.max(4, Math.round(value / max * 100)) : 2;
     const label = stats.range.length <= 7 || index % (stats.range.length > 14 ? 5 : 2) === 0 ? stats.range[index].slice(5) : '';
-    return '<div class="stats-ai-bar-col" title="'+stats.range[index]+'：'+Math.round(value)+' Token"><span class="stats-ai-bar" style="height:'+height+'%"></span><small>'+label+'</small></div>';
+    return '<div class="stats-ai-bar-col" data-stats-tip="'+statsTip(stats.range[index]+'：'+Math.round(value)+' Token')+'"><span class="stats-ai-bar" style="height:'+height+'%"></span><small>'+label+'</small></div>';
   }).join('') + '</div>';
 }
 
@@ -229,7 +255,7 @@ function renderTodoLineChart(cId, stats) {
   vals.forEach((v, i) => {
     const x = padL + (i / Math.max(1, vals.length - 1)) * plotW;
     const y = padT + plotH - (v / maxY * plotH);
-    dots += '<circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="3.5" fill="var(--primary)" stroke="#fff" stroke-width="1.5"/>';
+    dots += '<g class="stats-chart-node" data-stats-tip="'+statsTip(range[i]+'：完成 '+v+' 个待办')+'"><circle cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="11" fill="transparent"/><circle class="stats-chart-dot" cx="'+x.toFixed(1)+'" cy="'+y.toFixed(1)+'" r="3.5" fill="var(--primary)" stroke="#fff" stroke-width="1.5"/></g>';
     if (i % li === 0) xLabels += '<text x="'+x.toFixed(1)+'" y="'+(H-4)+'" text-anchor="middle" font-size="10" fill="var(--text-secondary)">'+range[i].slice(5)+'</text>';
   });
   el.innerHTML = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'"><defs><linearGradient id="ag" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="var(--primary)" stop-opacity="0.25"/><stop offset="100%" stop-color="var(--primary)" stop-opacity="0.02"/></linearGradient></defs>'+grid+'<path d="'+areaD+'" fill="url(#ag)"/><polyline points="'+pts.trim()+'" fill="none" stroke="var(--primary)" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>'+dots+xLabels+'</svg>';
@@ -257,7 +283,7 @@ function renderFocusBarChart(cId, stats) {
     const x = padL + i * gap + (gap - bw) / 2;
     const barH = Math.max(2, (v / maxY) * plotH);
     const y = padT + plotH - barH;
-    bars += '<rect x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+barH.toFixed(1)+'" rx="3" fill="'+((v>=avg && v>0)?'var(--primary)':'var(--border)')+'" opacity="'+(v>=avg && v>0?'0.9':'0.5')+'"/>';
+    bars += '<g class="stats-chart-node" data-stats-tip="'+statsTip(range[i]+'：专注 '+formatStatsTime(v)+'，'+(stats.dailySessions?.[range[i]]||0)+' 次')+'"><rect x="'+x.toFixed(1)+'" y="'+padT+'" width="'+bw.toFixed(1)+'" height="'+plotH+'" fill="transparent"/><rect class="stats-chart-bar" x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+barH.toFixed(1)+'" rx="3" fill="'+((v>=avg && v>0)?'var(--primary)':'var(--border)')+'" opacity="'+(v>=avg && v>0?'0.9':'0.5')+'"/></g>';
   });
   let xLabels = ''; const li = range.length > 14 ? 4 : (range.length > 7 ? 2 : 1);
   range.forEach((d, i) => { if (i % li === 0) { const x = padL + i * gap + gap / 2; xLabels += '<text x="'+x.toFixed(1)+'" y="'+(H-4)+'" text-anchor="middle" font-size="10" fill="var(--text-secondary)">'+d.slice(5)+'</text>'; } });
@@ -272,8 +298,8 @@ function renderHabitDoughnut(cId, stats) {
   const angle = (Math.min(100, overallRate) / 100) * 360;
   const strokeColor = overallRate >= 80 ? '#10b981' : (overallRate >= 50 ? '#f59e0b' : '#ef4444');
   el.innerHTML = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${sw}" opacity="0.25"/>
-    <circle cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${strokeColor}" stroke-width="${sw}"
+    <circle class="stats-chart-node" data-stats-tip="${statsTip('最近 '+range.length+' 天：习惯完成率 '+Math.round(overallRate)+'%')}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${sw}" opacity="0.25"/>
+    <circle class="stats-chart-node stats-doughnut-progress" data-stats-tip="${statsTip('最近 '+range.length+' 天：习惯完成率 '+Math.round(overallRate)+'%')}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${strokeColor}" stroke-width="${sw}"
       stroke-dasharray="${(angle/360)*2*Math.PI*r} ${(1-angle/360)*2*Math.PI*r}"
       stroke-dashoffset="${2*Math.PI*r*0.25}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
     <text x="${cx}" y="${cy-6}" text-anchor="middle" font-size="26" font-weight="700" fill="var(--text)">${Math.round(overallRate)}%</text>
@@ -301,7 +327,7 @@ function renderHeatmap(cId) {
     const row = Math.floor(daysAgo / cols);
     const intensity = maxVal > 0 ? Math.min(1, val / maxVal) : 0;
     const opacity = intensity < 0.01 ? 0.06 : 0.12 + intensity * 0.88;
-    cells += '<rect x="'+(col*(cs+cg)+lw)+'" y="'+(row*(cs+cg))+'" width="'+cs+'" height="'+cs+'" rx="3" fill="var(--primary)" opacity="'+opacity.toFixed(2)+'" title="'+ds+': '+Math.round(val)+'分"/>';
+    cells += '<rect class="stats-chart-node stats-heat-cell" data-stats-tip="'+statsTip(ds+'：活动量 '+Math.round(val)+' 分钟（待办按每项 15 分钟计）')+'" x="'+(col*(cs+cg)+lw)+'" y="'+(row*(cs+cg))+'" width="'+cs+'" height="'+cs+'" rx="3" fill="var(--primary)" opacity="'+opacity.toFixed(2)+'"/>';
   }
   // Day labels (Mon, Wed, Fri, Sun)
   const dayPositions = [{idx:0,y:10},{idx:2,y:27},{idx:4,y:44},{idx:6,y:61}];
@@ -446,6 +472,8 @@ function renderStats() {
         '<div class="stats-analysis-status" id="statsAnalysisStatus"></div>'+
       '</div>'+
     '</div>';
+
+  bindStatsTooltip(container);
 
   // Text summaries do not depend on layout width, so update them even while
   // the stats section is hidden. Charts will be retried once the tab is visible.

@@ -121,9 +121,13 @@ function moveToArchive(module, item) {
     expandedTodoIds.delete(item.id);
     saveExpandedTodoIds();
   } else if (module === 'notes') {
-    archive.unshift({ ...item, archivedAt: new Date().toISOString() });
-    notes = notes.filter(n => n.id !== item.id);
-    if (activeNoteId === item.id) {
+    const ids = item.type === 'folder'
+      ? new Set(collectStoredDescendantIds(notes, item.id))
+      : new Set([item.id]);
+    const archivedAt = new Date().toISOString();
+    notes.filter(n => ids.has(n.id)).forEach(n => archive.unshift({ ...n, archivedAt }));
+    notes = notes.filter(n => !ids.has(n.id));
+    if (ids.has(activeNoteId)) {
       activeNoteId = (notes.find(n => n.type === 'note') || notes[0])?.id || null;
     }
     localStorage.setItem('study_active_note', activeNoteId);
@@ -144,6 +148,42 @@ function moveToArchive(module, item) {
   saveArchive(module, archive);
 }
 
+function collectStoredDescendantIds(items, id) {
+  const ids = new Set([id]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    items.forEach(item => {
+      if (!ids.has(item.id) && ids.has(item.parentId)) {
+        ids.add(item.id);
+        changed = true;
+      }
+    });
+  }
+  return [...ids];
+}
+
+function orderedStoredTree(items) {
+  const byId = new Map(items.map(item => [item.id, item]));
+  const children = new Map();
+  items.forEach(item => {
+    const parent = item.parentId !== item.id && byId.has(item.parentId) ? item.parentId : null;
+    if (!children.has(parent)) children.set(parent, []);
+    children.get(parent).push(item);
+  });
+  const result = [];
+  const seen = new Set();
+  function visit(item, depth) {
+    if (seen.has(item.id)) return;
+    seen.add(item.id);
+    result.push({ item, depth });
+    (children.get(item.id) || []).forEach(child => visit(child, depth + 1));
+  }
+  (children.get(null) || []).forEach(item => visit(item, 0));
+  items.forEach(item => visit(item, 0)); // Legacy data may contain cycles.
+  return result;
+}
+
 // ── 从回收站恢复 ──
 function restoreFromTrash(module, id) {
   const trash = loadTrash(module);
@@ -155,20 +195,14 @@ function restoreFromTrash(module, id) {
   trash.splice(idx, 1);
   
   if (module === 'todos') {
-    // Restore all items with the same deletedAt (children of the restored parent)
-    if (restored.deletedAt) {
-      const siblings = trash.filter(t => t.deletedAt === restored.deletedAt).map(t => {
-        const { deletedAt: d, ...it } = t;
-        return it;
-      });
-      todos.push(item, ...siblings);
-      // Remove siblings from trash
-      siblings.forEach(s => {
-        const si = trash.findIndex(t => t.id === s.id);
-        if (si >= 0) trash.splice(si, 1);
-      });
-    } else {
-      todos.push(item);
+    const descendants = new Set(collectStoredDescendantIds(trash, id));
+    todos.push(item);
+    for (let i = trash.length - 1; i >= 0; i--) {
+      if (descendants.has(trash[i].id)) {
+        const { deletedAt: _, ...child } = trash[i];
+        todos.push(child);
+        trash.splice(i, 1);
+      }
     }
     saveData('study_todos_v2', todos);
     if (typeof renderTodos === 'function') renderTodos();
@@ -216,7 +250,15 @@ function restoreFromArchive(module, id) {
   archive.splice(idx, 1);
   
   if (module === 'todos') {
+    const descendants = new Set(collectStoredDescendantIds(archive, id));
     todos.push(item);
+    for (let i = archive.length - 1; i >= 0; i--) {
+      if (descendants.has(archive[i].id)) {
+        const { archivedAt: _, ...child } = archive[i];
+        todos.push(child);
+        archive.splice(i, 1);
+      }
+    }
     saveData('study_todos_v2', todos);
     if (typeof renderTodos === 'function') renderTodos();
   } else if (module === 'notes') {
@@ -265,14 +307,9 @@ function permanentlyDelete(module, id) {
     const currentIdx = trash.findIndex(item => item.id === id);
     if (currentIdx === -1) return;
     
-    // For todos, also remove children deleted at the same time
-    if (module === 'todos') {
-      const target = trash[currentIdx];
-      if (target.deletedAt) {
-        trash = trash.filter(t => t.deletedAt !== target.deletedAt);
-      } else {
-        trash.splice(currentIdx, 1);
-      }
+    if (module === 'todos' || module === 'notes') {
+      const ids = new Set(collectStoredDescendantIds(trash, id));
+      trash = trash.filter(t => !ids.has(t.id));
     } else {
       trash.splice(currentIdx, 1);
     }
@@ -302,8 +339,9 @@ function permanentlyDeleteFromArchive(module, id) {
     const currentArchive = loadArchive(module);
     const currentIdx = currentArchive.findIndex(item => item.id === id);
     if (currentIdx === -1) return;
-    currentArchive.splice(currentIdx, 1);
-    saveArchive(module, currentArchive);
+    const ids = module === 'todos' || module === 'notes'
+      ? new Set(collectStoredDescendantIds(currentArchive, id)) : new Set([id]);
+    saveArchive(module, currentArchive.filter(item => !ids.has(item.id)));
     
     const activeSection = document.querySelector('.section.active');
     if (activeSection && activeSection.id === 'section-archive') renderArchive();
@@ -329,8 +367,8 @@ function emptyTrash(module) {
   const doEmpty = () => {
     Object.keys(TRASH_KEYS).forEach(m => saveTrash(m, []));
     // 一并清空扩展回收站（文件系统目录）
-    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashEmpty) {
-      window.electronAPI.extTrashEmpty().catch(() => {});
+    if (window.ExtensionRepository && window.ExtensionRepository.trashEmpty) {
+      window.ExtensionRepository.trashEmpty().catch(() => {});
     }
     const activeSection = document.querySelector('.section.active');
     if (activeSection && activeSection.id === 'section-trash') renderTrash();
@@ -356,16 +394,6 @@ function renderTrash() {
     if (trash.length === 0) return;
     totalItems += trash.length;
     
-    // Group by deletedAt for hierarchical todos
-    const groups = {};
-    if (module === 'todos') {
-      trash.forEach(item => {
-        const key = item.deletedAt || 'unknown';
-        if (!groups[key]) groups[key] = [];
-        groups[key].push(item);
-      });
-    }
-    
     html += `<div class="trash-module-section">
       <div class="trash-module-header">
         <span><i data-lucide="${MODULE_ICONS[module]}" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> ${MODULE_LABELS[module]}</span>
@@ -374,32 +402,25 @@ function renderTrash() {
       <div class="trash-items">`;
     
     if (module === 'todos') {
-      // Render grouped todos
-      Object.keys(groups).forEach(key => {
-        const groupItems = groups[key];
-        const parent = groupItems.find(i => !i.parentId || !groupItems.some(g => g.id === i.parentId));
-        const mainItem = parent || groupItems[0];
-        const childCount = groupItems.length > 1 ? groupItems.length - 1 : 0;
-        const deletedDate = formatDate(new Date(groupItems[0].deletedAt));
-        
-        html += `<div class="trash-item">
+      orderedStoredTree(trash).forEach(({ item, depth }) => {
+        const deletedDate = formatDate(new Date(item.deletedAt));
+        html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
             <span class="trash-item-type-badge todo">待办</span>
-            <span class="trash-item-name">${escapeHtml(mainItem.text ? mainItem.text.slice(0, 60) : mainItem.title || '（无标题）')}</span>
-            ${childCount > 0 ? `<span class="trash-child-count">+${childCount} 子任务</span>` : ''}
+            <span class="trash-item-name">${escapeHtml(item.text ? item.text.slice(0, 60) : item.title || '（无标题）')}</span>
             <span class="trash-item-date">删除于 ${deletedDate}</span>
           </div>
           <div class="trash-item-actions">
-            <button onclick="restoreFromTrash('${module}', ${mainItem.id})" title="恢复" class="trash-action-btn restore"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
-            <button onclick="permanentlyDelete('${module}', ${mainItem.id})" title="永久删除" class="trash-action-btn perm-del"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button onclick="restoreFromTrash('${module}', ${item.id})" title="恢复" class="trash-action-btn restore"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button onclick="permanentlyDelete('${module}', ${item.id})" title="永久删除" class="trash-action-btn perm-del"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
           </div>
         </div>`;
       });
     } else if (module === 'notes') {
-      trash.forEach(item => {
+      orderedStoredTree(trash).forEach(({ item, depth }) => {
         const isFolder = item.type === 'folder';
         const deletedDate = formatDate(new Date(item.deletedAt));
-        html += `<div class="trash-item">
+        html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
             <span class="trash-item-type-badge note">${isFolder ? '文件夹' : '笔记'}</span>
             <span class="trash-item-name">${escapeHtml(item.title || '（无标题）')}</span>
@@ -467,8 +488,8 @@ async function renderTrashExtensions() {
   if (!container) return;
   let trashedExts = [];
   try {
-    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashList) {
-      trashedExts = await window.electronAPI.extTrashList();
+    if (window.ExtensionRepository && window.ExtensionRepository.trashList) {
+      trashedExts = await window.ExtensionRepository.trashList();
     }
   } catch (e) { /* 失败不阻塞 */ }
 
@@ -531,9 +552,9 @@ function renderArchive() {
       <div class="trash-items">`;
     
     if (module === 'todos') {
-      archive.forEach(item => {
+      orderedStoredTree(archive).forEach(({ item, depth }) => {
         const archivedDate = formatDate(new Date(item.archivedAt));
-        html += `<div class="trash-item">
+        html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
             <span class="trash-item-type-badge todo">待办</span>
             <span class="trash-item-name">${escapeHtml(item.text ? item.text.slice(0, 60) : item.title || '（无标题）')}</span>
@@ -546,10 +567,10 @@ function renderArchive() {
         </div>`;
       });
     } else if (module === 'notes') {
-      archive.forEach(item => {
+      orderedStoredTree(archive).forEach(({ item, depth }) => {
         const isFolder = item.type === 'folder';
         const archivedDate = formatDate(new Date(item.archivedAt));
-        html += `<div class="trash-item">
+        html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
             <span class="trash-item-type-badge note">${isFolder ? '文件夹' : '笔记'}</span>
             <span class="trash-item-name">${escapeHtml(item.title || '（无标题）')}</span>

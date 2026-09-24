@@ -171,7 +171,10 @@ test('a local conversation edit uses the fast path without downloading all paylo
         },
         eq() { return this; },
         in() { return this; },
+        insert(row) { upserted = row; calls.upload++; return this; },
+        update(row) { upserted = row; calls.upload++; return this; },
         upsert(row) { upserted = row; calls.upload++; return this; },
+        maybeSingle() { return this.single(); },
         single() {
           return Promise.resolve({ data: { updated_at: '2026-08-26T08:00:00.000Z' }, error: null });
         },
@@ -207,8 +210,12 @@ test('a partial upload retries its own successful shard without a false conflict
   const client = {
     from() {
       return {
+        insert() { return this; },
+        update() { return this; },
+        eq() { return this; },
         upsert() { return this; },
         select() { return this; },
+        maybeSingle() { return this.single(); },
         single() {
           calls++;
           return Promise.resolve(calls === 2
@@ -381,4 +388,53 @@ test('a tree-only fallback payload rebuilds the message cache after cloud pull',
   await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '30' }]);
   const restored = JSON.parse(values.get('study_ai_convs'))[0];
   assert.deepEqual(restored.messages.map(m => m.content), ['question', 'answer']);
+});
+
+test('a failed local conversation save does not advance the cloud cursor', async () => {
+  const row = { kind: 'ai_conv', item_id: '77', updated_at: '2026-08-25T08:02:00Z',
+    data: { meta: { id: 77, title: 'remote' }, items: [{ role: 'user', content: 'keep' }] } };
+  const client = { from() { return {
+    select() { return this; }, eq() { return this; }, in() { return this; },
+    then(resolve, reject) { return Promise.resolve({ data: [row], error: null }).then(resolve, reject); }
+  }; } };
+  const { SyncLogs, context, values } = loadSyncLogs({}, { client, aiConvs: [], activeConvId: 77 });
+  context.safeSaveAiConvs = () => false;
+  await assert.rejects(SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client,
+    [{ kind: 'ai_conv', itemId: '77' }]), /保存云端对话失败/);
+  assert.equal(JSON.parse(values.get('study_sync_logs_ts') || '{}')['ai_conv/77'], undefined);
+});
+
+test('cloud inventory pagination reads beyond the first server page', async () => {
+  const { SyncLogs } = loadSyncLogs();
+  const all = Array.from({ length: 1001 }, (_, id) => ({ id }));
+  const requests = [];
+  const rows = await SyncLogs.__test.queryAll(() => ({
+    order() { return this; },
+    range(start, end) {
+      requests.push([start, end]);
+      return Promise.resolve({ data: all.slice(start, end + 1), error: null });
+    }
+  }));
+  assert.equal(rows.length, 1001);
+  assert.deepEqual(requests, [[0, 499], [500, 999], [1000, 1499]]);
+});
+
+test('a conversation write detects a cloud change between inventory and update', async () => {
+  const client = { from() { return {
+    update() { return this; }, eq() { return this; }, select() { return this; },
+    maybeSingle() { return Promise.resolve({ data: null, error: null }); }
+  }; } };
+  const timestamp = '2026-08-25T08:00:00Z';
+  const { SyncLogs } = loadSyncLogs({
+    study_sync_logs_dirty_v2: { 'ai_conv/7': true },
+    study_sync_logs_ts: { 'ai_conv/7': timestamp, 'ai_conv/7_p0': timestamp }
+  }, { client });
+  const item = { kind: 'ai_conv', itemId: '7', meta: { id: 7 }, items: [] };
+  const piece = { itemId: '7_p0', wrap: { d: 'changed' }, bytes: 7 };
+  const inventory = { groups: { 'ai_conv/7': [{ item_id: '7_p0', updated_at: timestamp }] },
+    set: new Set(['ai_conv/7_p0']) };
+  const result = await SyncLogs.__test.uploadPreparedItem({ user: { id: 'u1' } }, client,
+    item, [piece], inventory, false);
+  assert.equal(result.conflict, true);
+  assert.equal(SyncLogs.getPendingConflicts().length, 1);
 });

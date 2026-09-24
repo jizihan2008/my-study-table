@@ -536,6 +536,26 @@ function getFilteredTodayReviewNotes(dueNotes) {
   return dueNotes;
 }
 
+function getTodayReviewNoteDisplayPath(note) {
+  const title = note?.title || '未命名笔记';
+  if (!note || !Array.isArray(notes)) return title;
+
+  const parents = [];
+  const visited = new Set([String(note.id)]);
+  let parentId = notes.find(item => String(item.id) === String(note.id))?.parentId;
+  while (parentId !== null && parentId !== undefined) {
+    const key = String(parentId);
+    if (visited.has(key)) break;
+    visited.add(key);
+    const parent = notes.find(item => String(item.id) === key && item.type === 'folder');
+    if (!parent) break;
+    parents.unshift(parent.title || '未命名文件夹');
+    parentId = parent.parentId;
+  }
+
+  return [...parents, title].join(' › ');
+}
+
 function setTodayReviewTagFilter(value) {
   todayReviewTagFilter = value;
   localStorage.setItem('study_today_review_tag_filter', value);
@@ -655,11 +675,12 @@ function renderReviewCard() {
     const preview = n.summary
       ? escapeHtml(n.summary.length > 80 ? n.summary.slice(0, 80) + '…' : n.summary)
       : '';
+    const displayPath = getTodayReviewNoteDisplayPath(n);
 
     return `
       <div class="review-item">
         <div class="review-item-header">
-          <span class="review-item-title">${escapeHtml(n.title)}</span>
+          <span class="review-item-title" title="${escapeAttr(displayPath)}">${escapeHtml(displayPath)}</span>
           <span class="review-item-stage">第 ${n.reviewCount + 1} 轮复习 · ${stageLabel}</span>
         </div>
         ${preview ? `<div class="review-item-preview">${preview}</div>` : ''}
@@ -1073,7 +1094,55 @@ function renderToday() {
   renderFocusList();
   renderReviewCard();
   renderGoals();
+  renderTodaySchedule();
   updateDebugPanel();
+}
+
+function renderTodaySchedule() {
+  const list = document.getElementById('todayScheduleList');
+  if (!list) return;
+  if (typeof loadCalendarEvents !== 'function' || typeof getCalendarEventsOnDate !== 'function') {
+    list.innerHTML = '<div class="today-schedule-empty">日历正在加载…</div>';
+    return;
+  }
+  const events = loadCalendarEvents();
+  const days = [];
+  for (let offset = 0; offset < 5; offset++) {
+    const date = new Date();
+    date.setHours(12, 0, 0, 0);
+    date.setDate(date.getDate() + offset);
+    const dateStr = formatDate(date);
+    const items = getCalendarEventsOnDate(dateStr, events);
+    if (items.length) days.push({ date, dateStr, items, offset });
+  }
+  if (!days.length) {
+    list.innerHTML = '<button type="button" class="today-schedule-empty" onclick="switchTab(\'calendar\')">未来 5 天还没有日程，去日历添加一项</button>';
+    return;
+  }
+  list.innerHTML = days.map(day => {
+    const label = day.offset === 0 ? '今天' : day.offset === 1 ? '明天' : new Intl.DateTimeFormat('zh-CN', { weekday: 'short' }).format(day.date);
+    const dateLabel = `${day.date.getMonth() + 1}月${day.date.getDate()}日`;
+    return `<div class="today-schedule-day">
+      <div class="today-schedule-date"><strong>${label}</strong><span>${dateLabel}</span></div>
+      <div class="today-schedule-events">${day.items.map(ev => {
+        const color = typeof getCalColor === 'function' ? getCalColor(ev.color) : { dot: '#4f6ef7' };
+        const time = typeof formatCalEventTimeRange === 'function' ? formatCalEventTimeRange(ev) : (ev.time || '');
+        const repeat = typeof calEventRepeatLabel === 'function' ? calEventRepeatLabel(ev) : '';
+        return `<button type="button" class="today-schedule-event" onclick="openTodayScheduleEvent('${day.dateStr}', ${JSON.stringify(ev.id)})">
+          <span class="today-schedule-dot" style="background:${color.dot}"></span>
+          <span class="today-schedule-time">${time || '全天'}</span>
+          <span class="today-schedule-name">${escapeHtml(ev.title || '未命名日程')}</span>
+          ${repeat ? `<span class="today-schedule-repeat">${escapeHtml(repeat)}</span>` : ''}
+        </button>`;
+      }).join('')}</div>
+    </div>`;
+  }).join('');
+}
+
+function openTodayScheduleEvent(dateStr, eventId) {
+  switchTab('calendar');
+  if (typeof selectCalendarDay === 'function') selectCalendarDay(dateStr);
+  if (typeof openCalEventModal === 'function') openCalEventModal(dateStr, eventId);
 }
 
 // 通知功能 - 兼容 Electron 和浏览器环境

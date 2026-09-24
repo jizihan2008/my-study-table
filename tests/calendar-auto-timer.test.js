@@ -129,6 +129,33 @@ test('resolveCalEventRange 结束时间早于开始时间时顺延到次日', ()
   assert.equal(range.endTs - range.startTs, 90 * 60 * 1000);
 });
 
+test('resolveCalEventRange 支持显式跨多天的结束日期', () => {
+  const { ctx } = createContext();
+  const ev = eventAt('2026-03-05', '23:00', '08:30', { endDate: '2026-03-08' });
+  const range = ctx.resolveCalEventRange(ev);
+  assert.equal(range.crossDay, true);
+  assert.equal(range.endTs, new Date(2026, 2, 8, 8, 30, 0, 0).getTime());
+  assert.equal(range.endTs - range.startTs, (57.5 * 60 * 60 * 1000));
+});
+
+test('跨天事件会出现在覆盖到的每个日期', () => {
+  const { ctx } = createContext();
+  const ev = eventAt('2026-03-05', '09:00', '10:00', { endDate: '2026-03-07' });
+  assert.equal(ctx.isCalEventOnDate(ev, '2026-03-04'), false);
+  assert.equal(ctx.isCalEventOnDate(ev, '2026-03-05'), true);
+  assert.equal(ctx.isCalEventOnDate(ev, '2026-03-06'), true);
+  assert.equal(ctx.isCalEventOnDate(ev, '2026-03-07'), true);
+  assert.equal(ctx.isCalEventOnDate(ev, '2026-03-08'), false);
+});
+
+test('全天事件无时间范围且不会自动记账', () => {
+  const { ctx } = createContext();
+  const ev = eventAt('2026-03-05', '', '', { endDate: '2026-03-06', allDay: true, autoRecord: true });
+  assert.equal(ctx.formatCalEventTimeRange(ev), '全天');
+  assert.equal(ctx.resolveCalEventRange(ev), null);
+  assert.equal(ctx.shouldAutoRecordCalEvent(ev, new Date(2026, 2, 7).getTime()), false);
+});
+
 test('只有时间点（没有结束时间）的事件不产生可自动记账的时段', () => {
   const { ctx } = createContext();
   const range = ctx.resolveCalEventRange(eventAt('2026-03-05', '09:00', ''));

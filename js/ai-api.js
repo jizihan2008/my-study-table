@@ -564,20 +564,65 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
   return callAiApiNonStream(apiMessages, apiCfg, conv, { ...options, skipSensitiveCheck: true });
 }
 
+function hasAiFinalText(result) {
+  const raw = String(result?.rawReply || '').trim();
+  if (raw) return true;
+  const clean = String(result?.cleanText || '').trim();
+  return !!clean && clean !== '（未收到回复）';
+}
+
+// Background writing tasks (such as daily reports) need a final answer, not
+// only a reasoning trace. Some thinking models can spend the whole completion
+// budget on reasoning. Retry that specific failure once with thinking disabled
+// where supported and a larger completion budget. Models with mandatory
+// thinking still benefit from the larger budget.
+async function callAiApiForFinalText(apiMessages, apiCfg, conv, options = {}) {
+  const first = await callAiApi(apiMessages, apiCfg, conv, options);
+  if (hasAiFinalText(first)) return first;
+  if (!String(first?.reasoning || '').trim()) return { ...first, cleanText: '' };
+
+  const retryCfg = {
+    ...apiCfg,
+    deepThink: false,
+    maxTokens: Math.max(Number(apiCfg.maxTokens) || 0, 8192)
+  };
+  const retryMessages = [
+    ...apiMessages,
+    {
+      role: 'system',
+      content: '上一次生成只产生了内部思考而没有正文。请直接输出完整的最终内容，不要展示分析过程。'
+    }
+  ];
+  const retried = await callAiApi(retryMessages, retryCfg, conv, options);
+  const recovered = hasAiFinalText(retried);
+  return {
+    ...retried,
+    cleanText: recovered ? retried.cleanText : '',
+    recoveredFromReasoningOnly: recovered
+  };
+}
+
 // Build the apiMessages array from conversation history.
 // 树状对话：conv.messages 已是活跃路径的扁平视图（由树引擎同步），
 // 因此直接遍历即可，无需旧的 _candidates 展开 / skipUntilNextUser 逻辑。
 function buildConversationSystemPrompt(conv, apiCfg = getEffectiveApiConfig()) {
-  // Keep the actual conversation's messages while applying request-specific
-  // settings such as the web-search toggle.  The base prompt itself is now
-  // identical for every conversation, including the 「每日日报」 one.
+  // Keep request-specific settings such as the web-search toggle while
+  // selecting the shared template assigned to this conversation.
   const promptConv = conv ? { ...conv, ...(apiCfg.conversationSettings || {}) }
     : apiCfg.conversationSettings;
-  const basePrompt = buildToolsSystemPrompt(promptConv, apiCfg);
-  if (conv && conv.systemPromptMode === 'full') return String(conv.systemPrompt || '');
-  return conv && conv.systemPrompt
-    ? basePrompt + '\n\n【用户自定义角色】' + conv.systemPrompt
-    : basePrompt;
+  // Preserve prompts saved by older versions until the user explicitly picks
+  // a shared template for that conversation.
+  if (conv && !conv.promptTemplateId && conv.systemPromptMode === 'full') return String(conv.systemPrompt || '');
+  if (conv && !conv.promptTemplateId && conv.systemPrompt) {
+    return buildToolsSystemPrompt(promptConv, apiCfg) + '\n\n【用户自定义角色】' + conv.systemPrompt;
+  }
+  const requestedTemplate = conv?.promptTemplateId || 'chat';
+  const templateId = typeof getChatPromptTemplateDefs === 'function' && getChatPromptTemplateDefs().some(item => item.id === requestedTemplate)
+    ? requestedTemplate : 'chat';
+  const basePrompt = typeof getPromptTemplate === 'function'
+    ? resolvePromptTemplate(getPromptTemplate(templateId, promptConv, apiCfg), { conv: promptConv, apiCfg })
+    : buildToolsSystemPrompt(promptConv, apiCfg);
+  return basePrompt;
 }
 
 // DeepSeek thinking-mode requests that expose tools are stateful at the

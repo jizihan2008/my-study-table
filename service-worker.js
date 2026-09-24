@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v163';
+const VERSION = 'mst-v171';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,13 +14,13 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260917-r3',
+  './css/style.css?v=20260923-r1',
   './css/workspace.css?v=20260915-r3',
   './css/appearance.css?v=20260913-r6',
   './js/theme-model.js?v=20260914-r5',
   './js/liquid-glass.js?v=20260906-r2',
   './js/appearance.js?v=20260914-r6',
-  './js/today.js?v=20260920-r1',
+  './js/today.js?v=20260922-r1',
   './lib/lucide/lucide.min.js',
   './lib/katex/katex.min.css',
   './lib/katex/katex.min.js',
@@ -38,12 +38,14 @@ const PRECACHE_URLS = [
   './js/ai-render.js?v=20260920-r1',
   './js/ai-tools.js?v=20260922-r2',
   './js/notes.js?v=20260920-r1',
+  './js/file-library.js?v=20260923-r1',
   './js/stats.js?v=20260914-r3',
   './js/platform.js?v=20260826-r2',
   './js/secrets.js?v=20260827-r2',
   './js/data-store.js?v=20260825-r1',
   './js/diagnostics.js?v=20260825-r1',
   './js/ext-sandbox.js?v=20260825-r1',
+  './js/extension-repository.js?v=20260923-r1',
   './js/ai-client.js?v=20260914-r3',
   './js/ai-stream.js?v=20260827-r1',
   './js/ai-api.js?v=20260916-r2',
@@ -55,11 +57,12 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20260920-r1',
+  './js/settings.js?v=20260923-r3',
   './js/store.js?v=20260913-r2',
-  './js/sync-policy.js?v=20260825-r1',
-  './js/sync.js?v=20260922-r18',
-  './js/sync-logs.js?v=20260917-r1',
+  './js/sync-policy.js?v=20260923-r2',
+  './js/sync-collections.js?v=20260923-r4',
+  './js/sync.js?v=20260923-r22',
+  './js/sync-logs.js?v=20260923-r2',
   './js/ai-utils.js?v=20260826-r2',
   './js/bg-media-idb.js?v=20260906-r2',
   './js/qq-chats.js?v=20260827-r2',

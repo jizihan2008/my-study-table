@@ -12,7 +12,7 @@
 <meta name="apple-mobile-web-app-title" content="Study Table">
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
 <link rel="apple-touch-icon" href="icons/icon-192.png">
-<link rel="stylesheet" href="css/style.css?v=20260917-r3">
+<link rel="stylesheet" href="css/style.css?v=20260923-r3">
 <link rel="stylesheet" href="css/workspace.css?v=20260915-r3">
 <link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -254,7 +254,7 @@
             </div>
             <div class="notes-summary-panel" id="notesSummaryPanel" style="display:none;">
               <div class="notes-summary-actions">
-                <button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 更新摘要</button>
+                <button class="notes-summary-refresh-btn" onclick="refreshNoteSummary()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重新生成摘要</button>
               </div>
             </div>
             <aside class="notes-toc-panel" id="notesTocPanel" aria-label="当前笔记目录">
@@ -319,6 +319,32 @@
     </div>
   </div>
 
+  <!-- ── File Library Section ── -->
+  <div class="section" id="section-files">
+    <div class="card file-library-card">
+      <div class="file-library-head">
+        <div>
+          <h2><i data-lucide="folder-open" aria-hidden="true"></i> 文件库</h2>
+          <p>集中保存学习资料，随时打开或交给 AI 阅读。</p>
+        </div>
+        <div class="file-library-head-actions">
+          <button type="button" class="file-library-primary" onclick="importLibraryFiles()"><i data-lucide="upload" aria-hidden="true"></i> 导入文件</button>
+          <button type="button" class="file-library-secondary" onclick="importLibraryFolder()"><i data-lucide="folder-input" aria-hidden="true"></i> 导入文件夹</button>
+          <button type="button" class="file-library-secondary" onclick="createLibraryFolder()"><i data-lucide="folder-plus" aria-hidden="true"></i> 新建文件夹</button>
+          <button type="button" class="file-library-secondary file-library-system-folder" onclick="showFileLibraryFolder()"><i data-lucide="folder" aria-hidden="true"></i> 打开文件夹</button>
+        </div>
+      </div>
+      <input id="fileLibraryInput" type="file" multiple hidden onchange="handleLibraryFileInput(event)">
+      <input id="fileLibraryFolderInput" type="file" webkitdirectory directory multiple hidden onchange="handleLibraryFolderInput(event)">
+      <nav class="file-library-breadcrumbs" id="fileLibraryBreadcrumbs" aria-label="文件夹路径"></nav>
+      <label class="file-library-toolbar" for="fileLibrarySearch">
+        <i data-lucide="search" aria-hidden="true"></i>
+        <input id="fileLibrarySearch" type="search" placeholder="搜索文件" oninput="searchFileLibrary(this.value)">
+      </label>
+      <div class="file-library-list" id="fileLibraryList"></div>
+    </div>
+  </div>
+
   <!-- ── Quick Access Section（内置扩展 builtin-links 提供）── -->
 
   <!-- ── Today Section ── -->
@@ -340,6 +366,8 @@
           <button onclick="switchTab('calendar')"><span class="shortcut-icon"><i data-lucide="calendar-days" aria-hidden="true"></i></span><span><strong>查看日程</strong><small>为重要的事留出时间</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
         </div>
 
+        <div class="today-main-grid">
+          <div class="today-left-column">
         <!-- Goals Card (top) -->
         <div class="today-goals-card" id="todayGoalsCard">
           <div class="today-goals-header">
@@ -367,6 +395,10 @@
           <button class="today-checkin-btn" id="todayCheckinBtn" onclick="requestNotificationPermission();doDailyCheckin()">
             <i data-lucide="plus" class="lucide-icon" style="width:20px;height:20px;"></i>今日打卡
           </button>
+          <div class="today-report-actions" aria-label="生成今日日报">
+            <button type="button" class="today-report-btn morning" onclick="openDayReportPrompt('morning')"><i data-lucide="sun" aria-hidden="true"></i>生成晨间日报</button>
+            <button type="button" class="today-report-btn evening" onclick="openDayReportPrompt('evening')"><i data-lucide="moon" aria-hidden="true"></i>生成晚间日报</button>
+          </div>
           <!-- Debug Panel -->
           <div class="debug-checkin-panel" id="debugCheckinPanel" style="display:none;">
             <div class="debug-checkin-header">
@@ -423,6 +455,15 @@
             <div class="todo-picker-list" id="todoPickerList"></div>
           </div>
         </div>
+          </div>
+          <div class="today-right-column">
+        <div class="today-schedule-card" id="todayScheduleCard">
+          <div class="today-schedule-header">
+            <span class="today-section-title"><i data-lucide="calendar-days" class="lucide-icon" aria-hidden="true"></i> 近日安排</span>
+            <button type="button" class="today-schedule-more" onclick="switchTab('calendar')">查看日历<i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
+          </div>
+          <div class="today-schedule-list" id="todayScheduleList"></div>
+        </div>
         <!-- Review Card -->
         <div class="today-review-card" id="todayReviewCard">
           <div class="today-review-header">
@@ -442,6 +483,8 @@
             <span class="today-review-filter-hint" id="todayReviewFilterHint" style="display:none;font-size:11px;color:var(--text-secondary);">待复习笔记都还没有标签，给笔记加上标签后即可按标签筛选</span>
           </div>
           <div class="today-review-list" id="todayReviewList"></div>
+        </div>
+          </div>
         </div>
       </div>
     </div>
@@ -623,7 +666,7 @@
       </div>
       <div class="card-scroll ext-card-scroll" id="extensionsScroll">
         <div id="extensionsList" style="display:flex;flex-direction:column;gap:8px;margin-top:4px;"></div>
-        <div class="ext-storage-hint"><i data-lucide="archive" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;"></i> 扩展文件保存在 <b>~/.my-study-table/extensions/</b>，卸载扩展不会删除扩展数据（各扩展数据以 study_ext_&lt;id&gt;_ 前缀存储）。</div>
+        <div class="ext-storage-hint"><i data-lucide="archive" class="lucide-icon" style="width:13px;height:13px;vertical-align:middle;"></i> <span class="electron-only">扩展文件保存在 <b>~/.my-study-table/extensions/</b>。</span><span class="pwa-only">扩展保存在此设备的 <b>IndexedDB</b> 中；清除 Safari 网站数据会一并删除它们。</span> 卸载扩展不会删除扩展数据（各扩展数据以 study_ext_&lt;id&gt;_ 前缀存储）。</div>
         <div class="settings-status" id="extensionsStatus"></div>
       </div>
     </div>
@@ -661,12 +704,28 @@
       <button class="modal-close" onclick="closeCalEventModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i></button>
     </div>
     <div class="modal-body">
-      <div class="cal-event-date-label">日期：<span id="calEventDateLabel"></span></div>
+      <div class="cal-event-time-row">
+        <label class="cal-event-time-field">
+          <span>开始日期</span>
+          <input type="date" id="calEventStartDate" class="cal-event-input" onchange="syncCalEventDateFields()">
+        </label>
+        <label class="cal-event-time-field">
+          <span>结束日期</span>
+          <input type="date" id="calEventEndDate" class="cal-event-input" onchange="syncCalEventDateFields()">
+        </label>
+      </div>
+      <span id="calEventDateLabel" style="display:none;"></span>
       <input type="text" id="calEventTitle" class="cal-event-input" placeholder="事件标题" maxlength="100" onkeydown="if(event.key==='Enter')submitCalEvent()">
+      <div class="cal-event-check-row cal-event-all-day-row">
+        <label class="cal-event-check-label">
+          <input type="checkbox" id="calEventAllDay" onchange="syncCalEventAllDayFields()">
+          <span>全天</span>
+        </label>
+      </div>
       <div class="cal-event-time-row">
         <label class="cal-event-time-field">
           <span>开始时间</span>
-          <input type="time" id="calEventStartTime" class="cal-event-input">
+          <input type="time" id="calEventStartTime" class="cal-event-input" oninput="syncCalEventAutoTimerEnabled()">
         </label>
         <label class="cal-event-time-field">
           <span>结束时间</span>
@@ -911,7 +970,7 @@
           <span class="hint">开启后每次打卡时自动生成晨间日报，回顾昨天、规划今天。</span>
         </div>
         <div class="settings-field">
-          <button class="btn-save-settings" onclick="debugTriggerReport()" style="background:var(--primary);width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="sun" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动生成晨间日报</button>
+          <button class="btn-save-settings" onclick="openDayReportPrompt('morning')" style="background:var(--primary);width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="sun" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动生成晨间日报</button>
           <span class="hint">手动触发一次今日晨间日报。</span>
         </div>
         <div style="margin:10px 0;border-top:1px solid var(--border);"></div>
@@ -927,7 +986,7 @@
           <span class="hint">超过此时间后，若今天尚未生成则自动生成晚间日报。</span>
         </div>
         <div class="settings-field">
-          <button class="btn-save-settings" onclick="debugTriggerEveningReport()" style="background:var(--primary);width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="moon" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动生成晚间日报</button>
+          <button class="btn-save-settings" onclick="openDayReportPrompt('evening')" style="background:var(--primary);width:auto;padding:8px 18px;font-size:13px;"><i data-lucide="moon" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 手动生成晚间日报</button>
           <span class="hint">强制生成一次今日晚间日报。</span>
         </div>
 
@@ -1103,9 +1162,9 @@
         <div class="settings-field">
           <label>🤖 笔记摘要 AI Key</label>
           <select id="settingsSummaryAiKey" onchange="saveSummaryAiKeySetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
-            <option value="">（未设置）</option>
+            <option value="">（使用当前启用的 AI Key）</option>
           </select>
-          <span class="hint">选择用于生成笔记摘要的 AI Key。若不设置则不会自动生成摘要。</span>
+          <span class="hint">可单独选择用于生成笔记摘要的 AI Key；不指定时使用当前启用的 AI Key。</span>
         </div>
         <div class="settings-field">
           <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
@@ -1476,10 +1535,11 @@
         <input type="text" id="convTitleInput" placeholder="给对话起个名字..." onchange="saveConvSettings()">
       </div>
       <div class="settings-field">
-        <label>系统提示词 (System Prompt)</label>
-        <textarea id="convSystemPrompt" placeholder="设定 AI 的角色和行为，例如：你是一个专业的数学老师，用通俗易懂的方式解答问题。&#10;&#10;留空则使用默认提示词。" onchange="saveConvSettings()"></textarea>
-        <span class="hint">提示词会在这段对话每次请求时作为 system message 发送</span>
-        <button type="button" class="prompt-open-studio-btn" onclick="closeConvSettingsModal();switchTab('prompts')"><i data-lucide="wand-sparkles"></i> 在提示词工作台中可视化编辑</button>
+        <label for="convPromptTemplate">提示词模板</label>
+        <select id="convPromptTemplate" onchange="saveConvSettings()"></select>
+        <span class="hint">同一模板可用于多段对话，修改后下次发送时生效。</span>
+        <button type="button" class="prompt-open-studio-btn" onclick="closeConvSettingsModal();switchTab('prompts')"><i data-lucide="wand-sparkles"></i> 编辑提示词模板</button>
+        <button type="button" class="prompt-open-studio-btn" id="convImportLegacyPrompt" style="display:none" onclick="importLegacyConversationPrompt()"><i data-lucide="file-input"></i> 将历史提示词保存为模板</button>
       </div>
       <div class="settings-field">
         <label>给 AI 的接口</label>
@@ -1525,12 +1585,12 @@
   </div>
 </div>
 
-<!-- Morning report input after daily check-in -->
+<!-- Morning/evening report input; after check-in this opens after the encouragement -->
 <div class="checkin-report-overlay" id="checkinReportOverlay" onclick="closeCheckinReportPrompt(event)">
   <div class="checkin-report-card" role="dialog" aria-modal="true" aria-labelledby="checkinReportTitle" onclick="event.stopPropagation()">
     <div class="checkin-report-icon"><i data-lucide="newspaper" class="lucide-icon" style="width:26px;height:26px;"></i></div>
     <div class="checkin-report-title" id="checkinReportTitle">生成晨间日报</div>
-    <p class="checkin-report-hint">可以补充今天的心情、计划或希望日报重点关注的内容；它会和日报请求一同发送给 AI。</p>
+    <p class="checkin-report-hint" id="checkinReportHint">可以补充今天的心情、计划或希望日报重点关注的内容；它会和日报请求一同发送给 AI。</p>
     <textarea id="checkinReportInput" rows="4" maxlength="2000" placeholder="例如：今天状态一般，帮我安排一个轻量但可执行的计划…"></textarea>
     <div class="checkin-report-actions">
       <button class="checkin-report-cancel" type="button" onclick="skipCheckinDailyReport()">暂不生成</button>
@@ -1627,33 +1687,33 @@
 <script src="js/liquid-glass.js?v=20260906-r2"></script>
 <script src="js/nav-shortcuts.js?v=20260920-r1"></script>
 <script src="js/core.js?v=20260916-r1"></script>
-<script src="js/trash.js?v=20260804-r4"></script>
-<script src="js/todos.js?v=20260823-r4"></script>
-<script src="js/notes.js?v=20260920-r1"></script>
-<script src="js/file-library.js?v=20260920-r1"></script>
+<script src="js/trash.js?v=20260923-r1"></script>
+<script src="js/todos.js?v=20260922-r1"></script>
+<script src="js/notes.js?v=20260922-r2"></script>
+<script src="js/file-library.js?v=20260923-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260920-r1"></script>
+<script src="js/today.js?v=20260922-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
-<script src="js/ai-conv.js?v=20260912-r1"></script>
-<script src="js/ai-attach.js?v=20260920-r1"></script>
-<script src="js/ai-render.js?v=20260920-r1"></script>
+<script src="js/ai-conv.js?v=20260923-r1"></script>
+<script src="js/ai-attach.js?v=20260922-r2"></script>
+<script src="js/ai-render.js?v=20260922-r2"></script>
 <script src="js/ai-tools.js?v=20260922-r2"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
-<script src="js/ai-api.js?v=20260916-r2"></script>
+<script src="js/ai-api.js?v=20260923-r1"></script>
 <script src="js/ai-send.js?v=20260915-r3"></script>
 <script src="js/skills.js?v=20260916-r1"></script>
-<script src="js/prompts.js?v=20260912-r3"></script>
+<script src="js/prompts.js?v=20260923-r2"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260914-r5"></script>
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
 <script src="js/appearance.js?v=20260914-r6"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
-<script src="js/settings.js?v=20260920-r1"></script>
+<script src="js/settings.js?v=20260923-r3"></script>
 <script src="js/utils.js?v=20260914-r2"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
@@ -1676,7 +1736,7 @@
 <script src="js/taskline.js?v=20260914-r14"></script>
 <script src="js/timer.js?v=20260914-r6"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
-<script src="js/stats.js?v=20260914-r3"></script>
+<script src="js/stats.js?v=20260923-hover"></script>
 <script src="js/updater.js?v=20260802-r1"></script>
 <!-- 好友系统 -->
 <script src="lib/supabase/supabase.js"></script>
@@ -1690,14 +1750,16 @@
 <script src="js/ext-sandbox.js?v=20260825-r1"></script>
 <script src="js/patch-engine.js?v=20260804-r1"></script>
 <script src="js/builtin-extensions.js?v=20260804-r1"></script>
-<script src="js/ext-manager.js?v=20260804-r2"></script>
+<script src="js/extension-repository.js?v=20260923-r1"></script>
+<script src="js/ext-manager.js?v=20260923-r1"></script>
 <script src="js/codegen.js?v=20260808-r14"></script>
 <script src="js/store.js?v=20260913-r2"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
-<script src="js/sync-policy.js?v=20260825-r1"></script>
-<script src="js/sync.js?v=20260922-r18"></script>
+<script src="js/sync-policy.js?v=20260923-r2"></script>
+<script src="js/sync-collections.js?v=20260923-r4"></script>
+<script src="js/sync.js?v=20260923-r22"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script src="js/sync-logs.js?v=20260917-r1"></script>
+<script src="js/sync-logs.js?v=20260923-r2"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
 <script src="js/translation.js?v=20260922-r4"></script>
 
@@ -1765,7 +1827,8 @@
   <div class="context-menu-item ctx-need-todo" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
   <div class="context-menu-item ctx-need-todo" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
   <div class="context-menu-sep ctx-need-todo"></div>
-  <div class="context-menu-item ctx-need-todo" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加至今日聚焦</div>
+  <div class="context-menu-item ctx-need-todo" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到今日聚焦</div>
+  <div class="context-menu-item ctx-need-todo" id="todoCtxAddTomorrowFocusItem" onclick="todoCtxAddTomorrowFocus()"><i data-lucide="calendar-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到明日聚焦</div>
   <div id="todoCtxSortItems" class="ctx-need-todo">
     <div class="context-menu-sep"></div>
     <div class="context-menu-item" onclick="todoCtxSort('alpha')"><i data-lucide="arrow-up-a-z" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按标题排序</div>
@@ -1792,6 +1855,7 @@
   <div class="context-menu-item" id="tlQCtxConfirm" onclick="tlQCtxConfirm()"><i data-lucide="play" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 确认任务</div>
   <div class="context-menu-item" id="tlQCtxDone" onclick="tlQCtxDone()"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 完成任务</div>
   <div class="context-menu-item" id="tlQCtxUncomplete" onclick="tlQCtxUncomplete()"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 取消完成</div>
+  <div class="context-menu-item" onclick="tlQCtxSetPrerequisite()"><i data-lucide="git-branch" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 设置前置任务</div>
   <div class="context-menu-item" onclick="tlQCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑任务</div>
   <div class="context-menu-sep"></div>
   <div class="context-menu-item danger" onclick="tlQCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除任务</div>
@@ -1825,6 +1889,7 @@
 <!-- Right-click context menu for AI chat: save selected text as a note -->
 <div class="context-menu" id="aiChatContextMenu">
   <div class="context-menu-item" id="aiCtxImmersive" onclick="openAiContextMessageImmersive()"><i data-lucide="maximize-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 沉浸式阅读</div>
+  <div class="context-menu-item ai-context-selection-action ai-context-quote-action" onclick="quoteAiSelection()"><i data-lucide="quote" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 引用</div>
   <div class="context-menu-item ai-context-selection-action" onclick="askAiExplainSelection()"><i data-lucide="message-circle-question" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 仔细讲解</div>
   <div class="context-menu-item ai-context-selection-action" onclick="saveAiSelectionAsNote()"><i data-lucide="sticky-note" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 保存为笔记</div>
   <div class="context-menu-item ai-context-selection-action" onclick="copyAiSelection()"><i data-lucide="copy" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 复制选中文字</div>

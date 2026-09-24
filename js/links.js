@@ -83,7 +83,7 @@ function renderLinkCards(linkList) {
         <div class="link-card-icon${isApp ? ' app-icon' : ''}">${letter}</div>
         <div class="link-card-name">${escapeHtml(l.name)}</div>
         ${l.url ? `<div class="link-card-url">${escapeHtml(l.url)}</div>` : ''}
-        <span class="link-card-type-badge ${isApp ? 'app' : 'link'}">${isApp ? '应用' : '链接'}</span>
+        <span class="link-card-type-badge ${isApp ? 'app-badge' : 'link'}">${isApp ? '应用' : '链接'}</span>
       </div>
     `;
   }).join('');

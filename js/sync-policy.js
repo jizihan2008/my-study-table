@@ -27,17 +27,15 @@
   // version, so two non-empty copies must be treated as a conflict.
   function decideMerge({ localEmpty, localDirty, baseTimestamp, remoteExists, remoteHasData, remoteTimestamp }) {
     if (!remoteExists) return localEmpty ? 'noop' : 'upload';
-    if (!remoteHasData) return localEmpty ? 'noop' : 'upload';
-    if (localEmpty) return 'pull';
-
     const compared = compareTimestamps(remoteTimestamp, baseTimestamp);
     if (localDirty) {
       if (!baseTimestamp || compared === null || compared > 0) return 'conflict';
       return 'upload';
     }
-    if (!baseTimestamp || compared === null) return 'conflict';
+    if (!baseTimestamp || compared === null) return localEmpty ? (remoteHasData ? 'pull' : 'noop') : 'conflict';
     if (compared > 0) return 'pull';
     if (compared < 0) return 'upload';
+    if (localEmpty && remoteHasData) return 'pull';
     return 'noop';
   }
 

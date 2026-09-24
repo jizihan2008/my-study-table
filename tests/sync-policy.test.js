@@ -49,6 +49,27 @@ test('merge policy detects concurrent edits after a shared base version', () => 
   }), 'conflict');
 });
 
+test('an intentional local clear uploads when the cloud is unchanged', () => {
+  const baseTimestamp = '2026-08-25T08:00:00.000Z';
+  assert.equal(policy.decideMerge({
+    localEmpty: true, localDirty: true, baseTimestamp,
+    remoteExists: true, remoteHasData: true, remoteTimestamp: baseTimestamp
+  }), 'upload');
+  assert.equal(policy.decideMerge({
+    localEmpty: true, localDirty: true, baseTimestamp,
+    remoteExists: true, remoteHasData: true, remoteTimestamp: '2026-08-25T08:01:00.000Z'
+  }), 'conflict');
+});
+
+test('a later cloud clear is pulled by another device', () => {
+  assert.equal(policy.decideMerge({
+    localEmpty: false, localDirty: false,
+    baseTimestamp: '2026-08-25T08:00:00.000Z',
+    remoteExists: true, remoteHasData: false,
+    remoteTimestamp: '2026-08-25T08:01:00.000Z'
+  }), 'pull');
+});
+
 test('recurring task reschedules after every completed run without overlap', async () => {
   let scheduled = null;
   let timerId = 0;
@@ -152,6 +173,7 @@ test('a thrown upload error keeps local data dirty for a later retry', async () 
     from() {
       const builder = query();
       builder.upsert = () => { throw new Error('offline'); };
+      builder.insert = () => { throw new Error('offline'); };
       return builder;
     }
   };

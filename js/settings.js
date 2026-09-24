@@ -685,7 +685,10 @@ function _syncConflictReasonText(reason) {
     'both-changed': '本机存在未上传修改，同时云端版本也已变化。',
     'cloud-newer-than-base': '准备上传时发现云端比本机上次同步基准更新。',
     'missing-sync-base': '首次同步或同步基准缺失，本机与云端都存在数据。',
-    'timestamp-uncertain': '检测到旧版时间戳或设备时间异常，无法安全自动判断新旧。'
+    'timestamp-uncertain': '检测到旧版时间戳或设备时间异常，无法安全自动判断新旧。',
+    'cloud-changed-during-upload': '上传期间另一台设备修改了这条记录。',
+    'legacy-device-change': '旧版本设备仍在写入整组数据，请在所有设备更新应用后选择保留版本。',
+    'both-changed-order': '本机和云端都调整了这组记录的顺序，请选择保留的排序。'
   };
   return descriptions[reason] || '本机与云端版本无法安全自动合并。';
 }
@@ -979,8 +982,8 @@ async function renderExtensionsPanel() {
 async function restoreTrashedExt(trashDir) {
   setExtStatus('正在恢复…');
   try {
-    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashRestore) {
-      const res = await window.electronAPI.extTrashRestore({ trashDir });
+    if (window.ExtensionRepository && window.ExtensionRepository.trashRestore) {
+      const res = await window.ExtensionRepository.trashRestore({ trashDir });
       if (res && res.ok) {
         if (typeof window.ExtManager !== 'undefined' && window.ExtManager.reload) {
           await window.ExtManager.reload();
@@ -1009,8 +1012,8 @@ async function purgeTrashedExt(trashDir) {
   }
   setExtStatus('正在彻底删除…');
   try {
-    if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extTrashPurge) {
-      const res = await window.electronAPI.extTrashPurge({ trashDir });
+    if (window.ExtensionRepository && window.ExtensionRepository.trashPurge) {
+      const res = await window.ExtensionRepository.trashPurge({ trashDir });
       if (res && res.ok) setExtStatus('已彻底删除');
       else setExtStatus('删除失败：' + ((res && res.reason) || '未知错误'), true);
     } else {
@@ -1070,8 +1073,8 @@ async function viewExtCode(id) {
     const ext = (typeof window.ExtManager !== 'undefined' && window.ExtManager.get) ? window.ExtManager.get(id) : null;
     if (ext && ext.builtin) {
       code = ext.mainCode || '';
-    } else if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extRead) {
-      code = await window.electronAPI.extRead({ id, file: 'main.js' });
+    } else if (window.ExtensionRepository && window.ExtensionRepository.read) {
+      code = await window.ExtensionRepository.read({ id, file: 'main.js' });
     }
     const win = window.open('', '_blank');
     if (win) {
@@ -1156,6 +1159,34 @@ async function refreshExtensionsList() {
 // 导入扩展：弹出文件夹选择框，复制到扩展目录
 async function importExtension() {
   try {
+    if (window.ExtensionRepository && window.ExtensionRepository.isWeb) {
+      if (!window.Store || !window.Store.installFromZip) {
+        setExtStatus('插件导入器未就绪', true);
+        return;
+      }
+      const input = document.createElement('input');
+      input.type = 'file';
+      input.accept = '.zip,.json,application/zip,application/json';
+      input.hidden = true;
+      input.onchange = async () => {
+        const file = input.files && input.files[0];
+        if (!file) { input.remove(); return; }
+        setExtStatus('正在导入扩展包…');
+        try {
+          const result = await window.Store.installFromZip(file);
+          setExtStatus('已导入扩展：' + result.name);
+          await renderExtensionsPanel();
+        } catch (error) {
+          setExtStatus('导入失败：' + error.message, true);
+        } finally {
+          input.remove();
+        }
+      };
+      document.body.appendChild(input);
+      input.click();
+      setExtStatus('请从“文件”中选择扩展包');
+      return;
+    }
     if (typeof window.electronAPI === 'undefined' || !window.electronAPI.extImport) {
       setExtStatus('当前环境不支持导入扩展', true);
       return;
@@ -1208,6 +1239,21 @@ function setupExtDropZone() {
     sec.classList.remove('dragging');
     const files = e.dataTransfer && e.dataTransfer.files;
     if (!files || !files.length) return;
+    if (window.ExtensionRepository && window.ExtensionRepository.isWeb) {
+      const file = Array.from(files).find(item => /\.(zip|json)$/i.test(item.name || ''));
+      if (!file || !window.Store || !window.Store.installFromZip) {
+        setExtStatus('请拖入有效的扩展包', true);
+        return;
+      }
+      try {
+        const result = await window.Store.installFromZip(file);
+        setExtStatus('已导入扩展：' + result.name);
+        await renderExtensionsPanel();
+      } catch (error) {
+        setExtStatus('导入失败：' + error.message, true);
+      }
+      return;
+    }
     const candidates = [];
     for (const f of Array.from(files)) {
       let p = '';
@@ -1717,7 +1763,7 @@ function populateSummaryAiKeySelect() {
   if (!select) return;
   const keys = loadApiKeys();
   const savedId = localStorage.getItem('study_summary_ai_key_id') || '';
-  select.innerHTML = '<option value="">（未设置）</option>';
+  select.innerHTML = '<option value="">（使用当前启用的 AI Key）</option>';
   keys.forEach(k => {
     const opt = document.createElement('option');
     opt.value = k.id;
@@ -1732,6 +1778,7 @@ function saveSummaryAiKeySetting() {
   const select = document.getElementById('settingsSummaryAiKey');
   if (!select) return;
   localStorage.setItem('study_summary_ai_key_id', select.value);
+  if (typeof checkAndUpdateSummary === 'function') checkAndUpdateSummary();
 }
 
 // ── Auto Title Settings ──
@@ -1772,6 +1819,7 @@ function getAutoTitleAiKey() {
 function saveNotesSettings() {
   const autoCb = document.getElementById('settingsAutoSummary');
   if (autoCb) localStorage.setItem('study_auto_summary', autoCb.checked);
+  if (autoCb?.checked && typeof checkAndUpdateSummary === 'function') checkAndUpdateSummary();
 }
 
 // ═══════════ Review Interval Settings ═══════════
@@ -3502,6 +3550,7 @@ async function debugTriggerReport() {
 
 
 let _pendingCheckinReportPrompt = false;
+let _dayReportPromptType = 'morning';
 function doDailyCheckin() {
   const today = getTodayStr();
   const data = loadCheckinData();
@@ -3538,16 +3587,31 @@ function doDailyCheckin() {
   _pendingCheckinReportPrompt = morningCfg.enabled !== false;
 }
 
-function openCheckinReportPrompt() {
+function openDayReportPrompt(type) {
+  _dayReportPromptType = type === 'evening' ? 'evening' : 'morning';
   const overlay = document.getElementById('checkinReportOverlay');
   const input = document.getElementById('checkinReportInput');
+  const title = document.getElementById('checkinReportTitle');
+  const hint = document.getElementById('checkinReportHint');
   if (!overlay || !input) {
-    generateDailyReport(); // Keep report generation available if the dialog markup is unavailable.
+    if (_dayReportPromptType === 'evening') generateEveningReport();
+    else generateDailyReport(true);
     return;
   }
+  if (title) title.textContent = _dayReportPromptType === 'evening' ? '生成晚间日报' : '生成晨间日报';
+  if (hint) hint.textContent = _dayReportPromptType === 'evening'
+    ? '可以补充今天的感受、收获或希望重点复盘的内容；它会和晚间日报请求一同发送给 AI。'
+    : '可以补充今天的心情、计划或希望日报重点关注的内容；它会和晨间日报请求一同发送给 AI。';
+  input.placeholder = _dayReportPromptType === 'evening'
+    ? '例如：今天效率不错，但下午有些分心，帮我复盘一下…'
+    : '例如：今天状态一般，帮我安排一个轻量但可执行的计划…';
   input.value = '';
   overlay.classList.add('open');
   setTimeout(() => input.focus(), 0);
+}
+
+function openCheckinReportPrompt() {
+  openDayReportPrompt('morning');
 }
 
 function closeCheckinReportPrompt(event) {
@@ -3564,7 +3628,8 @@ function submitCheckinDailyReport() {
   const input = document.getElementById('checkinReportInput');
   const userInstruction = input ? input.value.trim() : '';
   skipCheckinDailyReport();
-  generateDailyReport(false, userInstruction);
+  if (_dayReportPromptType === 'evening') generateEveningReport(userInstruction);
+  else generateDailyReport(true, userInstruction);
 }
 
 // Get or create the daily report conversation
@@ -3626,6 +3691,26 @@ function reportHabitLines(habitsOverview, mode) {
   if (!model) return '  （习惯状态文本模块未加载）';
   const line = mode === 'morning' ? model.morningLine : model.eveningLine;
   return `  （口径：${model.STREAK_MEANING}）\n` + habitsOverview.map(h => line(h)).join('\n');
+}
+
+function collectReportLongTermGoals() {
+  if (typeof loadGoals !== 'function') return [];
+  try {
+    return loadGoals().map(goal => ({
+      id: goal.id,
+      text: goal.text || '未命名目标',
+      done: !!goal.done,
+      dueDate: goal.dueDate || null,
+      content: String(goal.content || '').replace(/\s+/g, ' ').trim().slice(0, 500)
+    }));
+  } catch { return []; }
+}
+
+function formatReportLongTermGoals(goals) {
+  if (!goals || goals.length === 0) return '  （尚未设置长期目标）';
+  return goals.map(goal => `  - ${goal.done ? '✅' : '⬜'} ${goal.text}`
+    + (goal.dueDate ? `（截止 ${goal.dueDate}）` : '')
+    + (goal.content ? `：${goal.content}` : '')).join('\n');
 }
 
 // ── Helper: collect yesterday's data for the daily report ──
@@ -3699,6 +3784,7 @@ function collectDailyReportData() {
 
   const focusItems = getFocusItemsForDate(yesterdayStr).items || [];
   const todayFocusItems = getTodayFocusItems().items || [];
+  const longTermGoals = collectReportLongTermGoals();
 
   // Todos: yesterday's completions vs today's due items vs overdue
   const yesterdayDone = todos.filter(t => t.completedAt === yesterdayStr);
@@ -3804,6 +3890,7 @@ function collectDailyReportData() {
     focusDone: focusItems.filter(i => i.done).length,
     focusTotal: focusItems.length,
     todayFocusItems,
+    longTermGoals,
     yesterdayDoneTodos: yesterdayDone.map(t => ({ text: t.text, id: t.id })),
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
     overdueTodos: overdue.map(t => ({ text: t.text, dueDate: t.dueDate, id: t.id })),
@@ -3933,6 +4020,7 @@ async function generateDailyReport(force, userInstruction) {
   const todayFocusLines = data.todayFocusItems.length > 0
     ? data.todayFocusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
     : '  （今日未设置聚焦任务）';
+  const longTermGoalLines = formatReportLongTermGoals(data.longTermGoals);
 
   const doneTodoLines = data.yesterdayDoneTodos.length > 0
     ? data.yesterdayDoneTodos.map(t => `  - ✅ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
@@ -3978,6 +4066,8 @@ async function generateDailyReport(force, userInstruction) {
 ${focusLines}
 【今日聚焦】${data.todayFocusItems.filter(i => i.done).length}/${data.todayFocusItems.length} 完成
 ${todayFocusLines}
+【长期目标】${data.longTermGoals.filter(g => g.done).length}/${data.longTermGoals.length} 已完成
+${longTermGoalLines}
 【昨日完成待办】${data.yesterdayDoneTodos.length} 项
 ${doneTodoLines}
 【昨日计时】${data.ydayTimerStr}
@@ -4014,7 +4104,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 2. **✅ 昨日完成清单** — 列出昨天完成的待办（如有），给个简单的小总结
 3. **⚠️ 逾期提醒** — 有哪些任务逾期了？是否还在乎它们？建议优先处理还是重新规划？
 4. **📝 笔记回顾** — 昨天写的笔记有什么值得今天延续的思路？
-5. **🎯 今日方向** — 结合已设置的今日聚焦、今天截止的任务和昨日状态，今天最值得优先做什么？
+5. **🎯 今日方向** — 结合长期目标、今日聚焦、今天截止的任务和昨日状态，今天最值得优先做什么？
 6. **🧠 复习习惯** — 待复习笔记的状态如何？是否有逾期未复习的？复习频率和节奏是否健康？是否需要调整复习策略？
 7. **💡 日常习惯** — 昨天哪些习惯完成了？哪些习惯掉链子了？有没有连续坚持很棒的？是否注意到什么模式？
 8. **🗺️ 任务线推进** — 当前主线章节与激活任务进展如何？昨日完成了任务线里的哪些任务？今天建议优先推进哪个任务线目标（可生成对应待办）？
@@ -4033,11 +4123,14 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     // 裸 fetch 未显式禁用会把 max_tokens 全部耗在 reasoning 上 → content 为空）；并处理
     // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
     const apiMessages = [
-      { role: 'system', content: '你是用户的学习伙伴，在每天早上打卡后生成一份晨间日报。你的角色是：清醒、温暖、有洞察力。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾昨天（完成/未完成/模式发现），并开启今天（优先级/方向/心态）。你也关注用户的复习习惯（笔记的间隔重复复习是知识内化的关键，逾期复习会降低记忆效果）和日常习惯（坚持频率、有无掉链子、模式洞察）。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+      { role: 'system', content: resolvePromptTemplate(getPromptTemplate('morning'), { reportData: reportDataFromLegacyPrompt(reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
       ...conv.messages.slice(-20),
-      { role: 'user', content: reportPrompt }
+      { role: 'user', content: '请生成本次日报。' }
     ];
-    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null, { feature: 'morning_report' });
+    const { cleanText, reasoning, finishReason } = await callAiApiForFinalText(apiMessages, apiCfg, null, {
+      feature: 'morning_report',
+      disableTools: true
+    });
     const report = (cleanText || '').trim();
     if (report) {
       appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
@@ -4059,8 +4152,8 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       return { ok: false, error: '回复被截断（max_tokens 不足），请重试或调大 max_tokens' };
     }
     if (reasoning) {
-      showMiniToast('晨间日报生成失败：模型仅返回思考内容，请关闭深度思考后重试', 'error');
-      return { ok: false, error: '模型仅返回了思考内容（无正文），请关闭深度思考后重试' };
+      showMiniToast('晨间日报生成失败：模型重试后仍未返回正文', 'error');
+      return { ok: false, error: '模型重试后仍只返回了思考内容（无正文）' };
     }
     showMiniToast('晨间日报生成失败：AI 返回了空内容', 'error');
     return { ok: false, error: 'AI 返回了空内容，请重试' };
@@ -4138,6 +4231,7 @@ function collectEveningReportData() {
 
   const focusItems = getTodayFocusItems().items || [];
   const tomorrowFocusItems = getFocusItemsForDate(tomorrowStr).items || [];
+  const longTermGoals = collectReportLongTermGoals();
 
   // Todos: today's completions, today's due, overdue, tomorrow's due
   const todayDone = todos.filter(t => t.completedAt === todayStr);
@@ -4234,6 +4328,7 @@ function collectEveningReportData() {
     focusDone: focusItems.filter(i => i.done).length,
     focusTotal: focusItems.length,
     tomorrowFocusItems,
+    longTermGoals,
     todayDoneTodos: todayDoneList,
     todayArchived: todayArchived,
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
@@ -4305,7 +4400,7 @@ function collectEveningReportData() {
   };
 }
 
-async function generateEveningReport() {
+async function generateEveningReport(userInstruction) {
   const apiCfg = getEffectiveReportApiConfig();
   if (!apiCfg.apiKey) return { ok: false, error: '未配置日报 API Key（设置 → 更多设置 → 日报 Key）' };
 
@@ -4319,6 +4414,7 @@ async function generateEveningReport() {
   const tomorrowFocusLines = data.tomorrowFocusItems.length > 0
     ? data.tomorrowFocusItems.map(f => `  - ${f.done ? '✅' : '⬜'} ${formatDailyReportFocusPath(f)}`).join('\n')
     : '  （明日未设置聚焦任务）';
+  const longTermGoalLines = formatReportLongTermGoals(data.longTermGoals);
 
   const doneTodoLines = data.todayDoneTodos.length > 0
     ? data.todayDoneTodos.map(t => `  - ✅ ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
@@ -4355,6 +4451,10 @@ async function generateEveningReport() {
     ? `\n📋 今早晨间回顾（供上下文参考）：\n\`\`\`\n${data.prevReport.slice(0, 300)}\n\`\`\``
     : '';
 
+  const userInstructionBlock = userInstruction
+    ? `\n\n📝 **我的补充 / 日报请求**\n${userInstruction}\n\n请将以上补充作为本次日报的重要上下文，并据此调整总结和建议。`
+    : '';
+
   const reportPrompt = `🌙 晚间回顾 — ${data.todayStr}
 
 一天结束了！基于以下数据，请帮我生成一份温暖、有洞察力的晚间日报，帮我总结今天、沉淀收获。
@@ -4368,6 +4468,8 @@ async function generateEveningReport() {
 ${focusLines}
 【明日聚焦】${data.tomorrowFocusItems.filter(i => i.done).length}/${data.tomorrowFocusItems.length} 完成
 ${tomorrowFocusLines}
+【长期目标】${data.longTermGoals.filter(g => g.done).length}/${data.longTermGoals.length} 已完成
+${longTermGoalLines}
 【今日完成待办】${data.todayDoneTodos.length} 项
 ${doneTodoLines}
 ${archivedTodoLines ? `【今日归档】${data.todayArchived.length} 项
@@ -4409,10 +4511,10 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 6. **🧠 复习习惯** — 今天复习了吗？剩余待复习笔记的状态如何？
 7. **💡 日常习惯** — 今天的习惯打卡情况，有什么模式值得注意？
 8. **🗺️ 任务线推进** — 今天的任务线有哪些进展（完成任务/条件推进）？当前主线章节和激活任务的状态如何？
-9. **🔮 明天预告** — 结合已设置的明日聚焦、明天截止、全局待办和任务线激活任务，明天最值得关注的 1-3 件事是什么？
+9. **🔮 明天预告** — 结合长期目标、明日聚焦、明天截止、全局待办和任务线激活任务，明天最值得关注的 1-3 件事是什么？
 10. **💪 晚安寄语** — 一句温暖的结束语
 
-格式自由，语气自然、温暖、有沉淀感。用 Markdown 但不要太刻板。内容长度适中就好。`;
+格式自由，语气自然、温暖、有沉淀感。用 Markdown 但不要太刻板。内容长度适中就好。${userInstructionBlock}`;
 
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
   const todayStr = data.todayStr;
@@ -4426,14 +4528,17 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     // 裸 fetch 未显式禁用会把 max_tokens 全部耗在 reasoning 上 → content 为空）；并处理
     // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
     const apiMessages = [
-      { role: 'system', content: '你是用户的学习伙伴，在每天晚上生成一份晚间日报。你的角色是：温暖、有洞察力、善于总结。\n\n当前时间：' + new Date().toLocaleString('zh-CN') + '\n\n═══ 系统模块概览 ═══\n1. 📋 待办管理：多层级父子任务、截止日期、标签\n2. 🎯 今日聚焦：每天最多3个聚焦任务\n3. 📝 笔记管理：Markdown 编辑、文件夹分类、间隔复习\n4. ⏱️ 计时器：专注计时、关联待办/目标\n5. 📅 日历视图：当月日程、截止日期、完成记录\n6. 🎯 习惯追踪：每日/每周打卡、进度条、热力图\n7. 📊 统计仪表盘：待办趋势、专注时长、习惯完成率图表\n8. 🤖 AI 助手：多对话、工具调用、长期记忆、网络搜索\n9. 🗺️ 任务线：人生主线（阶段推进）+ 素质线（并行成长）双轴章节，AI 生成任务、前置依赖解锁、条件绑定待办/笔记/计时、徽章+自定义奖励池\n\n═══ 你的任务 ═══\n帮助用户回顾今天（完成了什么/有什么收获/时间花在哪里），并帮助用户沉淀心得、放松心态。你也关注复习习惯和日常习惯的状态。不要罗列所有数据，而是挑最有意义的说。用 Markdown 但语气自然，像朋友聊天一样有温度。' + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+      { role: 'system', content: resolvePromptTemplate(getPromptTemplate('evening'), { reportData: reportDataFromLegacyPrompt(reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
       ...conv.messages.slice(-20),
-      { role: 'user', content: reportPrompt }
+      { role: 'user', content: '请生成本次日报。' }
     ];
-    const { cleanText, reasoning, finishReason } = await callAiApi(apiMessages, apiCfg, null, { feature: 'evening_report' });
+    const { cleanText, reasoning, finishReason } = await callAiApiForFinalText(apiMessages, apiCfg, null, {
+      feature: 'evening_report',
+      disableTools: true
+    });
     const report = (cleanText || '').trim();
     if (report) {
-      appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' });
+      appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
       appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
       trimConvMessages(conv, 30);
       saveData('study_ai_convs', aiConvs);
@@ -4453,8 +4558,8 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
       return { ok: false, error: '回复被截断（max_tokens 不足），请重试或调大 max_tokens' };
     }
     if (reasoning) {
-      showMiniToast('晚间日报生成失败：模型仅返回思考内容，请关闭深度思考后重试', 'error');
-      return { ok: false, error: '模型仅返回了思考内容（无正文），请关闭深度思考后重试' };
+      showMiniToast('晚间日报生成失败：模型重试后仍未返回正文', 'error');
+      return { ok: false, error: '模型重试后仍只返回了思考内容（无正文）' };
     }
     showMiniToast('晚间日报生成失败：AI 返回了空内容', 'error');
     return { ok: false, error: 'AI 返回了空内容，请重试' };

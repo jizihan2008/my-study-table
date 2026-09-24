@@ -49,7 +49,7 @@
       const store = transaction.objectStore(STORE);
       let value;
       try { value = operation(store); } catch (error) { reject(error); return; }
-      transaction.oncomplete = () => resolve(value && value.result !== undefined ? value.result : value);
+      transaction.oncomplete = () => resolve(value && typeof value === 'object' && 'result' in value ? value.result : value);
       transaction.onerror = () => reject(transaction.error || new Error('IndexedDB 事务失败'));
       transaction.onabort = () => reject(transaction.error || new Error('IndexedDB 事务已中止'));
     });
@@ -99,24 +99,46 @@
     return withStore('readonly', store => store.getAll());
   }
 
+  async function putBatch(entries) {
+    if (!entries.length) return 0;
+    const updatedAt = new Date().toISOString();
+    return withStore('readwrite', store => {
+      for (const entry of entries) {
+        const request = store.get(entry.key);
+        request.onsuccess = () => {
+          const previous = request.result;
+          store.put({
+            key: entry.key,
+            value: entry.value,
+            schemaVersion: 1,
+            revision: Math.max(0, Number(previous && previous.revision) || 0) + 1,
+            contentHash: hashText(entry.value),
+            updatedAt,
+            deletedAt: null
+          });
+        };
+      }
+      return entries.length;
+    });
+  }
+
   async function initialize() {
     await open();
     const records = await list();
     const byKey = new Map(records.map(record => [record.key, record]));
-    let copied = 0;
+    const changed = [];
     let restored = 0;
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index);
-      if (!key || SECRET_KEYS.has(key)) continue;
+      if (!key || key === META_KEY || SECRET_KEYS.has(key)) continue;
       const raw = localStorage.getItem(key);
+      if (raw === null) continue;
       const existing = byKey.get(key);
-      if (!existing || existing.contentHash !== hashText(String(raw == null ? '' : raw))) {
-        await put(key, raw);
-        copied++;
-      }
+      if (!existing || existing.deletedAt || existing.value !== raw) changed.push({ key, value: raw });
     }
+    const copied = await putBatch(changed);
     for (const record of records) {
-      if (record.deletedAt || SECRET_KEYS.has(record.key) || localStorage.getItem(record.key) !== null) continue;
+      if (record.deletedAt || record.key === META_KEY || SECRET_KEYS.has(record.key) || localStorage.getItem(record.key) !== null) continue;
       localStorage.setItem(record.key, record.value);
       restored++;
     }

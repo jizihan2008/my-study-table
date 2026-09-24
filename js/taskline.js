@@ -649,6 +649,7 @@ let tlActiveLineId = null;
 let tlDragMode = true; // 拖拽模式：默认开启，可直接拖动节点（点击=打开详情，按住拖动=移动）
 let tlSuppressClick = false; // 拖动后抑制节点 click（避免误开详情）
 let tlDraggingQuestId = null; // 拖拽锁：拖拽中跳过 renderTaskLine 重绘（防同步重绘导致节点回弹）
+let tlPrerequisitePick = null; // { questId, hoverId }：为 questId 选择前置任务
 const TL_NODE_H = 66;
 const TL_GAP_X = 44;
 const TL_GAP_Y = 14;
@@ -981,8 +982,9 @@ function tlRenderGraph(store, line) {
     <div class="tl-graph-canvas" onmousedown="tlGraphCanvasDown(event)" ontouchstart="tlGraphCanvasTouchStart(event)" onwheel="tlGraphCanvasWheel(event)">
       <div class="tl-graph-inner" style="width:${layout.width}px;height:${layout.height}px;">
         <svg class="tl-graph-svg" width="${layout.width}" height="${layout.height}" viewBox="${vbX} ${vbY} ${layout.width} ${layout.height}">
-          <defs><marker id="tlArrow" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="var(--primary)"/></marker></defs>
+          <defs><marker id="tlArrow" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="var(--primary)"/></marker><marker id="tlArrowPicking" markerWidth="9" markerHeight="9" refX="7" refY="3.5" orient="auto"><path d="M0,0 L8,3.5 L0,7 Z" fill="var(--primary)"/></marker></defs>
           ${edgesHtml}
+          <path class="tl-edge-picking" id="tlPrerequisitePreview" marker-end="url(#tlArrowPicking)" style="display:none;"/>
         </svg>
         <div class="tl-graph-nodes" style="left:${shiftX}px;top:${shiftY}px;">${nodesHtml}</div>
       </div>
@@ -1112,11 +1114,90 @@ function scheduleCloseTlSidebar() {
     tlSidebarCloseTimer = null;
   }, TL_SIDEBAR_HOVER_DELAY);
 }
+function closeTlSidebar() {
+  if (tlSidebarCloseTimer) { clearTimeout(tlSidebarCloseTimer); tlSidebarCloseTimer = null; }
+  const sb = document.getElementById('tlSidebar');
+  if (sb) sb.classList.remove('open');
+}
 function tlToggleSidebar() {
   const sb = document.getElementById('tlSidebar');
   if (!sb) return;
-  if (sb.classList.contains('open')) sb.classList.remove('open');
+  if (sb.classList.contains('open')) closeTlSidebar();
   else sb.classList.add('open');
+}
+
+// ── 触屏手势：镜像左侧界面栏 ──
+// 右缘向左滑打开；侧边栏（含其左侧 40px 窄带）向右滑关闭。
+// 监听器只注册一次，但每次事件都重新查询 DOM，以兼容 renderTaskLine() 重建侧栏。
+let tlSidebarSwipeInitialized = false;
+let tlSidebarEdgeSwipe = null;
+let tlSidebarDismissSwipe = null;
+function initTlSidebarSwipe() {
+  if (tlSidebarSwipeInitialized) return;
+  const canTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
+  if (!canTouch) return;
+  tlSidebarSwipeInitialized = true;
+
+  const edgeZone = 40;
+  const minDist = 70;
+  const slope = 1.6;
+
+  document.addEventListener('touchstart', function (event) {
+    const section = document.getElementById('section-taskline');
+    const sidebar = document.getElementById('tlSidebar');
+    const touch = event.touches && event.touches[0];
+    if (!section || !section.classList.contains('active') || !sidebar || !touch
+        || document.documentElement.classList.contains('mst-fake-fullscreen')) {
+      tlSidebarEdgeSwipe = null;
+      tlSidebarDismissSwipe = null;
+      return;
+    }
+
+    if (!sidebar.classList.contains('open') && touch.clientX >= window.innerWidth - edgeZone) {
+      tlSidebarEdgeSwipe = { startX: touch.clientX, startY: touch.clientY, fired: false };
+    } else {
+      tlSidebarEdgeSwipe = null;
+    }
+
+    // 打开时的命中区为侧栏本体及其左侧 40px，便于从侧栏边缘右滑收起。
+    const rect = sidebar.getBoundingClientRect();
+    const swipeLeftEdge = rect.width > 0 ? rect.left - edgeZone : window.innerWidth - edgeZone;
+    if (sidebar.classList.contains('open') && touch.clientX >= swipeLeftEdge) {
+      tlSidebarDismissSwipe = { startX: touch.clientX, startY: touch.clientY, fired: false };
+    } else {
+      tlSidebarDismissSwipe = null;
+    }
+  }, { passive: true });
+
+  document.addEventListener('touchmove', function (event) {
+    const touch = event.touches && event.touches[0];
+    if (!touch) return;
+
+    if (tlSidebarEdgeSwipe && !tlSidebarEdgeSwipe.fired) {
+      const dx = touch.clientX - tlSidebarEdgeSwipe.startX;
+      const dy = Math.abs(touch.clientY - tlSidebarEdgeSwipe.startY);
+      if (dx <= -minDist && -dx > dy * slope) {
+        tlSidebarEdgeSwipe.fired = true;
+        openTlSidebar();
+      }
+    }
+
+    if (tlSidebarDismissSwipe && !tlSidebarDismissSwipe.fired) {
+      const dx = touch.clientX - tlSidebarDismissSwipe.startX;
+      const dy = Math.abs(touch.clientY - tlSidebarDismissSwipe.startY);
+      if (dx >= minDist && dx > dy * slope) {
+        tlSidebarDismissSwipe.fired = true;
+        closeTlSidebar();
+      }
+    }
+  }, { passive: true });
+
+  const resetSwipe = function () {
+    tlSidebarEdgeSwipe = null;
+    tlSidebarDismissSwipe = null;
+  };
+  document.addEventListener('touchend', resetSwipe);
+  document.addEventListener('touchcancel', resetSwipe);
 }
 function initTlSidebarHover() {
   const trigger = document.getElementById('tlSidebarHoverTrigger');
@@ -1125,6 +1206,7 @@ function initTlSidebarHover() {
   trigger.addEventListener('mouseenter', openTlSidebar);
   sb.addEventListener('mouseenter', openTlSidebar);
   sb.addEventListener('mouseleave', scheduleCloseTlSidebar);
+  initTlSidebarSwipe();
 }
 function tlToggleDragMode() {
   tlDragMode = !tlDragMode;
@@ -1228,6 +1310,11 @@ function tlQCtxUncomplete() {
   tlCloseQuestContextMenu();
   if (id != null) tlUncompleteQuest(id);
 }
+function tlQCtxSetPrerequisite() {
+  const id = tlQuestCtxId;
+  tlCloseQuestContextMenu();
+  if (id != null) tlStartPrerequisitePick(id);
+}
 function tlQCtxEdit() {
   const id = tlQuestCtxId;
   tlCloseQuestContextMenu();
@@ -1237,6 +1324,115 @@ function tlQCtxDelete() {
   const id = tlQuestCtxId;
   tlCloseQuestContextMenu();
   if (id != null) tlDeleteQuestAsk(id);
+}
+
+// 以“另一个任务 → 右键选中的任务”的方向预览依赖箭头。
+// 悬停时复用正式依赖线的最近边中点算法；点击目标后只设置依赖，不打开详情。
+function tlStartPrerequisitePick(questId) {
+  tlCancelPrerequisitePick();
+  const wrap = document.getElementById('tlGraphWrap');
+  const source = wrap ? wrap.querySelector('.tl-node[data-qid="' + questId + '"]:not(.tl-node-ext)') : null;
+  if (!wrap || !source || !tlGetQuest(questId)) return;
+  tlPrerequisitePick = { questId: questId, hoverId: null };
+  wrap.classList.add('tl-picking-prerequisite');
+  source.classList.add('tl-prerequisite-source');
+  document.addEventListener('mousemove', tlMovePrerequisitePreview, true);
+  document.addEventListener('click', tlChoosePrerequisite, true);
+  document.addEventListener('keydown', tlPrerequisitePickKeydown, true);
+  document.addEventListener('contextmenu', tlCancelPrerequisiteOnContextMenu, true);
+}
+function tlCancelPrerequisitePick() {
+  document.removeEventListener('mousemove', tlMovePrerequisitePreview, true);
+  document.removeEventListener('click', tlChoosePrerequisite, true);
+  document.removeEventListener('keydown', tlPrerequisitePickKeydown, true);
+  document.removeEventListener('contextmenu', tlCancelPrerequisiteOnContextMenu, true);
+  const wrap = document.getElementById('tlGraphWrap');
+  if (wrap) {
+    wrap.classList.remove('tl-picking-prerequisite');
+    wrap.querySelectorAll('.tl-prerequisite-source,.tl-prerequisite-target').forEach(function(el) {
+      el.classList.remove('tl-prerequisite-source', 'tl-prerequisite-target');
+    });
+  }
+  const preview = document.getElementById('tlPrerequisitePreview');
+  if (preview) preview.style.display = 'none';
+  tlPrerequisitePick = null;
+}
+function tlPrerequisitePickKeydown(ev) {
+  if (ev.key === 'Escape') { ev.preventDefault(); tlCancelPrerequisitePick(); }
+}
+function tlCancelPrerequisiteOnContextMenu(ev) {
+  if (!tlPrerequisitePick) return;
+  ev.preventDefault();
+  ev.stopPropagation();
+  tlCancelPrerequisitePick();
+}
+function tlQuestNodeBox(node) {
+  return { x: node.offsetLeft, y: node.offsetTop, w: node.offsetWidth, h: node.offsetHeight };
+}
+function tlDependencyCurve(pt) {
+  if (pt.vertical) {
+    const my = (pt.y1 + pt.y2) / 2;
+    return `M ${pt.x1} ${pt.y1} C ${pt.x1} ${my}, ${pt.x2} ${my}, ${pt.x2} ${pt.y2}`;
+  }
+  const mx = (pt.x1 + pt.x2) / 2;
+  return `M ${pt.x1} ${pt.y1} C ${mx} ${pt.y1}, ${mx} ${pt.y2}, ${pt.x2} ${pt.y2}`;
+}
+function tlMovePrerequisitePreview(ev) {
+  if (!tlPrerequisitePick) return;
+  const wrap = document.getElementById('tlGraphWrap');
+  const preview = document.getElementById('tlPrerequisitePreview');
+  const source = wrap ? wrap.querySelector('.tl-node[data-qid="' + tlPrerequisitePick.questId + '"]:not(.tl-node-ext)') : null;
+  if (!wrap || !preview || !source) { tlCancelPrerequisitePick(); return; }
+  wrap.querySelectorAll('.tl-prerequisite-target').forEach(function(el) { el.classList.remove('tl-prerequisite-target'); });
+  let target = ev.target.closest ? ev.target.closest('.tl-node[data-qid]:not(.tl-node-ext)') : null;
+  if (target && target.closest('#tlGraphWrap') !== wrap) target = null;
+  const targetId = target ? Number(target.dataset.qid) : null;
+  if (targetId === tlPrerequisitePick.questId) target = null;
+  if (target) target.classList.add('tl-prerequisite-target');
+  tlPrerequisitePick.hoverId = target ? Number(target.dataset.qid) : null;
+  const cursor = tlScreenToCanvasPos(ev.clientX, ev.clientY);
+  if (!cursor) return;
+  const from = target ? tlQuestNodeBox(target) : { x: cursor.x, y: cursor.y, w: 0, h: 0 };
+  const pt = tlEdgeAnchorPoints(from, tlQuestNodeBox(source));
+  preview.setAttribute('d', tlDependencyCurve(pt));
+  preview.style.display = '';
+}
+function tlQuestDependsOn(store, questId, possibleAncestorId, seen) {
+  if (questId === possibleAncestorId) return true;
+  seen = seen || new Set();
+  if (seen.has(questId)) return false;
+  seen.add(questId);
+  const q = store.quests.find(function(item) { return item.id === questId; });
+  return !!q && (q.deps || []).some(function(depId) {
+    return tlQuestDependsOn(store, depId, possibleAncestorId, seen);
+  });
+}
+function tlChoosePrerequisite(ev) {
+  if (!tlPrerequisitePick) return;
+  const node = ev.target.closest ? ev.target.closest('.tl-node[data-qid]:not(.tl-node-ext)') : null;
+  const picked = node ? Number(node.dataset.qid) : null;
+  const questId = tlPrerequisitePick.questId;
+  ev.preventDefault();
+  ev.stopPropagation();
+  if (!picked || picked === questId) { tlCancelPrerequisitePick(); return; }
+  const store = loadTaskLineStore();
+  const quest = store.quests.find(function(q) { return q.id === questId; });
+  if (!quest) { tlCancelPrerequisitePick(); return; }
+  if ((quest.deps || []).includes(picked)) {
+    tlCancelPrerequisitePick();
+    if (typeof showCustomConfirm === 'function') showCustomConfirm('该任务已是前置任务');
+    return;
+  }
+  if (tlQuestDependsOn(store, picked, questId)) {
+    tlCancelPrerequisitePick();
+    if (typeof showCustomConfirm === 'function') showCustomConfirm('不能设置会形成循环依赖的前置任务');
+    return;
+  }
+  quest.deps = (quest.deps || []).concat(picked);
+  saveTaskLineStore(store);
+  tlCancelPrerequisitePick();
+  tlRefreshAll();
+  renderTaskLine();
 }
 // 右键菜单动作
 function tlCtxToggleDrag() {
@@ -1368,6 +1564,7 @@ function tlUpdateGraphZoomUI() {
   if (el) el.textContent = Math.round(tlGraphView.scale * 100) + '%';
 }
 function tlGraphCanvasDown(ev) {
+  if (tlPrerequisitePick) { ev.preventDefault(); ev.stopPropagation(); return; }
   // 点击到节点 / 浮动图例 / 缩放指示器 / 锁定横幅上时不平移（节点有自己的拖拽逻辑）
   if (ev.target.closest('.tl-node') || ev.target.closest('.tl-graph-legend-float') || ev.target.closest('.tl-locked-banner-float') || ev.target.closest('.tl-zoom-indicator')) return;
   const canvas = ev.currentTarget;
@@ -1588,6 +1785,7 @@ function tlEnsureNodeVisible(questId) {
   tlFollowNodeInView(node);
 }
 function tlNodeDragStart(ev, questId) {
+  if (tlPrerequisitePick) { ev.preventDefault(); ev.stopPropagation(); return false; }
   // 右键（button 2）不启动节点拖拽，留给右键菜单
   if (ev.button === 2) return true;
   if (!tlDragMode) return true; // 拖拽关闭：不拦截，正常触发 onclick 打开详情

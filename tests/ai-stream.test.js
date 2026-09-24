@@ -167,3 +167,54 @@ test('an endpoint that explicitly rejects streaming falls back to one non-stream
   assert.equal('stream' in bodies[1], false);
   assert.equal(result.cleanText, 'fallback');
 });
+
+test('final-text call retries a reasoning-only response with thinking off and more output budget', async () => {
+  const bodies = [];
+  const context = loadAiApi(async (_url, options) => {
+    const body = JSON.parse(options.body);
+    bodies.push(body);
+    const message = bodies.length === 1
+      ? { content: '', reasoning_content: '正在分析日报' }
+      : { content: '# 今日日报' };
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => 'application/json' },
+      json: async () => ({ choices: [{ message, finish_reason: bodies.length === 1 ? 'length' : 'stop' }] })
+    };
+  });
+  context.buildDeepThinkParams = cfg => ({ thinking: { type: cfg.deepThink ? 'enabled' : 'disabled' } });
+
+  const result = await context.callAiApiForFinalText(
+    [{ role: 'user', content: '生成日报' }],
+    { baseUrl: 'https://example.test/v1', apiKey: 'key', model: 'deepseek-test', temperature: 0.2, deepThink: true, maxTokens: 2048 },
+    null,
+    { feature: 'morning_report', disableTools: true }
+  );
+
+  assert.equal(bodies.length, 2);
+  assert.equal(bodies[0].thinking.type, 'enabled');
+  assert.equal(bodies[1].thinking.type, 'disabled');
+  assert.equal(bodies[1].max_tokens, 8192);
+  assert.match(bodies[1].messages.at(-1).content, /直接输出完整/);
+  assert.equal(result.cleanText, '# 今日日报');
+  assert.equal(result.recoveredFromReasoningOnly, true);
+});
+
+test('final-text call does not treat the empty-response placeholder as content', async () => {
+  const context = loadAiApi(async () => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => 'application/json' },
+    json: async () => ({ choices: [{ message: { content: '' }, finish_reason: 'stop' }] })
+  }));
+
+  const result = await context.callAiApiForFinalText(
+    [{ role: 'user', content: '生成日报' }],
+    { baseUrl: 'https://example.test/v1', apiKey: 'key', model: 'model', temperature: 0.2 },
+    null,
+    { feature: 'morning_report', disableTools: true }
+  );
+
+  assert.equal(result.cleanText, '');
+});

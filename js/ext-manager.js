@@ -33,11 +33,11 @@ window.ExtManager = (function () {
   async function loadAll() {
     try {
       // 磁盘扩展（用户安装）
-      if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extList) {
-        const list = await window.electronAPI.extList();
+      if (window.ExtensionRepository && window.ExtensionRepository.list) {
+        const list = await window.ExtensionRepository.list();
         for (const item of list) {
           const enabled = item.manifest && item.manifest.enabled !== false;
-          const mainCode = item.hasMain ? await window.electronAPI.extRead({ id: item.id, file: 'main.js' }) : '';
+          const mainCode = item.hasMain ? await window.ExtensionRepository.read({ id: item.id, file: 'main.js' }) : '';
           _registry[item.id] = {
             id: item.id,
             meta: item.manifest || { id: item.id, name: item.id, type: 'plugin', version: '0.0.0', description: '', enabled: true },
@@ -158,8 +158,8 @@ window.ExtManager = (function () {
     } else if (ext.meta) {
       ext.meta.enabled = !!enabled;
       try {
-        if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extWrite) {
-          await window.electronAPI.extWrite({ id, files: { manifest: ext.meta } });
+        if (window.ExtensionRepository && window.ExtensionRepository.write) {
+          await window.ExtensionRepository.write({ id, files: { manifest: ext.meta } });
         }
       } catch (e) { /* 忽略持久化错误 */ }
     }
@@ -182,8 +182,8 @@ window.ExtManager = (function () {
       // 内置扩展：仅标记移除（不删文件，可恢复出厂）
       saveBuiltinState(id, 'removed');
     } else {
-      if (typeof window.electronAPI !== 'undefined' && window.electronAPI.extRemove) {
-        const res = await window.electronAPI.extRemove({ id });
+      if (window.ExtensionRepository && window.ExtensionRepository.remove) {
+        const res = await window.ExtensionRepository.remove({ id });
         trashed = !!(res && res.trashed);
       }
     }

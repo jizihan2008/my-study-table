@@ -99,7 +99,7 @@
 .ap-footer svg { width:13px; height:13px; }
 
 /* The expensive backdrop filter belongs to surfaces, never each row or input. */
-[data-glass="true"] :is(.sidebar, .section > .card, .today-dashboard > .today-goals-card, .today-dashboard > .today-checkin-card, .today-dashboard > .today-focus-card, .today-dashboard > .today-review-card, .today-welcome, .modal, .mobile-more-panel, .mobile-tabbar, .context-menu, .timer-float, .appearance-preview-card) {
+[data-glass="true"] :is(.sidebar, .section > .card, .today-dashboard .today-schedule-card, .today-dashboard .today-goals-card, .today-dashboard .today-checkin-card, .today-dashboard .today-focus-card, .today-dashboard .today-review-card, .today-welcome, .modal, .mobile-more-panel, .mobile-tabbar, .context-menu, .timer-float, .appearance-preview-card) {
   background:var(--glass-surface);
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
@@ -108,9 +108,9 @@
 }
 [data-glass="true"] :is(.modal, .context-menu, .mobile-more-panel) { background:var(--glass-modal); }
 [data-glass="true"] #section-today > .card { background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; box-shadow:none; border:none; }
-[data-glass="true"] :is(.today-welcome, .today-dashboard > [class$="-card"], .appearance-preview-card, .modal) { position:relative; }
-[data-material="liquid"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .appearance-preview-card) { --glass-pointer-active:0; }
-[data-material="liquid"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .appearance-preview-card)::before {
+[data-glass="true"] :is(.today-welcome, .today-dashboard [class$="-card"], .appearance-preview-card, .modal) { position:relative; }
+[data-material="liquid"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .modal, .appearance-preview-card) { --glass-pointer-active:0; }
+[data-material="liquid"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .modal, .appearance-preview-card)::before {
   content:""; position:absolute; inset:0; border-radius:inherit; pointer-events:none;
   opacity:1; z-index:0;
   background:linear-gradient(135deg,rgba(255,255,255,calc(.27 * var(--glass-glow,.55))),transparent 26%,transparent 77%,rgba(255,255,255,calc(.08 * var(--glass-glow,.55)))),
@@ -119,13 +119,13 @@
 }
 [data-material="liquid"] #section-today > .card::before { content:none; }
 [data-material="liquid"] .section > .card { position:relative; }
-[data-glass-renderer="liquid"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .appearance-preview-card) {
+[data-glass-renderer="liquid"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .appearance-preview-card) {
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
 }
 [data-glass="true"] .today-welcome { color:var(--text); }
 [data-glass="true"] .today-welcome :is(h2,p,.today-date) { color:var(--text); }
 [data-glass="true"] .today-welcome p { opacity:.8; }
-[data-glass-renderer="fallback"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .mobile-tabbar, .mobile-more-panel, .context-menu, .appearance-preview-card) {
+[data-glass-renderer="fallback"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .modal, .mobile-tabbar, .mobile-more-panel, .context-menu, .appearance-preview-card) {
   background:var(--ap-panel); backdrop-filter:none; -webkit-backdrop-filter:none;
 }
 /* Every nested card and large feature panel follows the same linear surface
@@ -138,7 +138,7 @@
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
 }
-[data-glass-renderer="liquid"] :is(.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .appearance-preview-card) {
+[data-glass-renderer="liquid"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .appearance-preview-card) {
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
 }

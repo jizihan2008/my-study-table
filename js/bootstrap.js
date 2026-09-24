@@ -30,18 +30,8 @@
 
   platform.registerInitializer('core-views', () => {
     if (typeof initChangelog === 'function') initChangelog();
-    const views = [
-      ['renderTodos', typeof renderTodos === 'function' ? renderTodos : null],
-      ['refreshRepeatTodos', typeof refreshRepeatTodos === 'function' ? refreshRepeatTodos : null],
-      ['renderNotes', typeof renderNotes === 'function' ? renderNotes : null],
-      ['renderAiChat', typeof renderAiChat === 'function' ? renderAiChat : null],
-      ['renderPromptStudio', typeof renderPromptStudio === 'function' ? renderPromptStudio : null],
-      ['renderToday', typeof renderToday === 'function' ? renderToday : null]
-    ];
-    for (const [name, render] of views) {
-      if (!render) continue;
-      try { render(); } catch (error) { console.error('[bootstrap] ' + name + ' failed:', error); }
-    }
+    // Daily repeat state must be current even when the todo page is not opened.
+    if (typeof refreshRepeatTodos === 'function') refreshRepeatTodos(false);
   }, 30);
 
   platform.registerInitializer('extensions', async () => {
@@ -52,7 +42,8 @@
   platform.registerInitializer('navigation', () => {
     if (typeof loadNavConfig === 'function' && typeof switchTab === 'function') {
       const config = loadNavConfig();
-      if (config.homeTab) switchTab(config.homeTab);
+      // switchTab renders the visible page. Hidden pages render when first opened.
+      switchTab(config.homeTab || 'today');
     }
     if (typeof updateSidebarAiBadge === 'function') updateSidebarAiBadge();
   }, 50);

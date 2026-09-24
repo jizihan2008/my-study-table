@@ -253,6 +253,9 @@ window.Store = (function () {
     let manifest;
     try { manifest = JSON.parse(manifestRaw); } catch (e) { throw new Error('manifest.json 解析失败'); }
     if (!manifest.id || !manifest.name || !manifest.type) throw new Error('manifest.json 缺少必要字段');
+    if (window.ExtensionRepository && window.ExtensionRepository.isWeb && manifest.type !== 'plugin') {
+      throw new Error('iPad/PWA 仅支持安全沙箱插件，不支持源码补丁');
+    }
     const extId = manifest.id;
     const installedManifest = {
       ...manifest,
@@ -262,9 +265,10 @@ window.Store = (function () {
       sourceSha256: item.file_sha256 || ''
     };
 
-    // 3. 写入本地扩展目录（ext:write 只接受 files: { manifest, main } 格式）
+    // 3. 写入当前平台的扩展仓库（Electron 目录 / PWA IndexedDB）
     try {
-      await window.electronAPI.extWrite({ id: extId, files: { manifest: installedManifest, main: mainRaw } });
+      if (!window.ExtensionRepository) throw new Error('扩展仓库未就绪');
+      await window.ExtensionRepository.write({ id: extId, files: { manifest: installedManifest, main: mainRaw } });
     } catch (e) {
       console.warn('[store] extWrite error', e);
       throw new Error('写入扩展文件失败: ' + e.message);
@@ -297,8 +301,9 @@ window.Store = (function () {
     // 1. 读本地扩展文件
     let manifestRaw, mainRaw;
     try {
-      manifestRaw = await window.electronAPI.extRead({ id: extId, filename: 'manifest.json' });
-      mainRaw = await window.electronAPI.extRead({ id: extId, filename: 'main.js' });
+      if (!window.ExtensionRepository) throw new Error('扩展仓库未就绪');
+      manifestRaw = await window.ExtensionRepository.read({ id: extId, filename: 'manifest.json' });
+      mainRaw = await window.ExtensionRepository.read({ id: extId, filename: 'main.js' });
     } catch (e) {
       throw new Error('读取本地扩展失败: ' + e.message);
     }
@@ -457,7 +462,7 @@ window.Store = (function () {
   // ── 用户可上传的本地扩展列表 ──
   async function listUploadableExtensions() {
     try {
-      const all = await window.electronAPI.extList();
+      const all = await window.ExtensionRepository.list();
       return (all || []).filter(e => e.type === 'plugin' || e.type === 'patch')
         .filter(e => !e.builtin && e.hasManifest);
     } catch (e) { return []; }
@@ -478,10 +483,14 @@ window.Store = (function () {
           let manifest;
           try { manifest = JSON.parse(manifestRaw); } catch (err) { throw new Error('manifest.json 解析失败'); }
           if (!manifest.id || !manifest.name || !manifest.type) throw new Error('manifest.json 字段不完整');
+          if (window.ExtensionRepository && window.ExtensionRepository.isWeb && manifest.type !== 'plugin') {
+            throw new Error('iPad/PWA 仅支持安全沙箱插件，不支持源码补丁');
+          }
 
           // 新导入代码默认禁用，用户检查后再从扩展页手动启用。
           const installedManifest = { ...manifest, enabled: false, source: 'local-zip' };
-          await window.electronAPI.extWrite({ id: manifest.id, files: { manifest: installedManifest, main: mainRaw } });
+          if (!window.ExtensionRepository) throw new Error('扩展仓库未就绪');
+          await window.ExtensionRepository.write({ id: manifest.id, files: { manifest: installedManifest, main: mainRaw } });
 
           // 重装载
           if (typeof window.ExtManager !== 'undefined') {
@@ -617,7 +626,7 @@ window.Store = (function () {
     // 隐藏的文件选择器（导入用）
     const fileInput = document.createElement('input');
     fileInput.type = 'file';
-    fileInput.accept = '.zip';
+    fileInput.accept = '.zip,.json,application/zip,application/json';
     fileInput.style.display = 'none';
     fileInput.id = 'storeImportFile';
     fileInput.onchange = async (e) => {
@@ -650,7 +659,7 @@ window.Store = (function () {
       // 本地已安装扩展 id 集合（用于显示"已安装"状态）
       let installedIds = new Set();
       try {
-        const local = await window.electronAPI.extList();
+        const local = await window.ExtensionRepository.list();
         (local || []).forEach(e => { if (e.id) installedIds.add(e.id); });
       } catch (e) { /* 忽略 */ }
       if (!plugins || plugins.length === 0) {

@@ -63,6 +63,7 @@ test('ordinary AI prompt includes yesterday, today and tomorrow focus, and the r
   Object.assign(context, {
     notes: [], links: [], automations: [], window: {},
     loadTodoCompletedLog: () => [], getAllDescendantIds: id => [id], getChildren: () => [], getTodoTimerStr: () => '',
+    loadGoals: () => [{ id: 9, text: '完成毕业设计', done: false, dueDate: '2026-12-31', content: '每周稳定推进核心模块' }],
     loadCheckinData: () => ({ streak: 0, dates: [] }), getSettings: () => ({ developerMode: false }),
     getEffectiveApiConfig: () => ({ name: 'test', model: 'test' }), getActiveConv: () => null
   });
@@ -76,6 +77,8 @@ test('ordinary AI prompt includes yesterday, today and tomorrow focus, and the r
   assert.match(prompt, new RegExp(`明日聚焦（${tomorrow}）`));
   assert.match(prompt, /✅ \[ID:1\] 甲/);
   assert.match(prompt, /备注：提前准备/);
+  assert.match(prompt, /长期目标：共 1 个，已完成 0 个/);
+  assert.match(prompt, /\[ID:9\] ⬜ 完成毕业设计 📅2026-12-31｜说明：每周稳定推进核心模块/);
   assert.equal(prompt.includes('昨日聚焦：未设置'), false);
   assert.equal(todos[0].done, false);
 
@@ -85,4 +88,37 @@ test('ordinary AI prompt includes yesterday, today and tomorrow focus, and the r
   assert.equal(report, prompt);
   assert.match(report, new RegExp(`昨日聚焦（${yesterday}）`));
   assert.match(report, new RegExp(`明日聚焦（${tomorrow}）`));
+});
+
+test('todo context menu can add a task directly to tomorrow focus', () => {
+  const html = fs.readFileSync(path.join(__dirname, '..', 'index.html'), 'utf8');
+  assert.match(html, /onclick="todoCtxAddTomorrowFocus\(\)"[^>]*>.*添加到明日聚焦/);
+
+  const todoSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'todos.js'), 'utf8');
+  const start = todoSource.indexOf('function todoCtxAddFocusForDate');
+  const end = todoSource.indexOf('function todoCtxSort', start);
+  assert.ok(start >= 0 && end > start);
+
+  const saved = [];
+  const notices = [];
+  const tomorrow = '2026-09-23';
+  const context = vm.createContext({
+    todoCtxTargetId: 2,
+    closeTodoContextMenu: () => {},
+    findTodo: id => ({ id, text: '乙', done: false }),
+    getFocusItemsForDate: date => ({ _date: date, items: [] }),
+    getMaxFocusCount: () => 3,
+    saveFocusData: data => saved.push(data),
+    sendNotification: (...args) => notices.push(args),
+    renderToday: () => {}, renderTodos: () => {},
+    getTodayStr: () => '2026-09-22',
+    getFocusDateByOffset: offset => offset === 1 ? tomorrow : 'unexpected',
+  });
+  vm.runInContext(todoSource.slice(start, end), context);
+  context.todoCtxAddTomorrowFocus();
+
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0]._date, tomorrow);
+  assert.deepEqual(JSON.parse(JSON.stringify(saved[0].items)), [{ todoId: 2, text: '乙', done: false }]);
+  assert.equal(notices[0][0], '已添加到明日聚焦');
 });

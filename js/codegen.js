@@ -336,9 +336,9 @@ window.Codegen = (function () {
     // 1. 预备份所有现有扩展（agent 可能修改任一扩展）——plan/ask/clarify 模式无需备份
     if (effectiveMode === 'craft') {
       try {
-        const exts = await window.electronAPI.extList();
+        const exts = await window.ExtensionRepository.list();
         for (const ext of exts) {
-          if (ext.hasMain) await window.electronAPI.extBackup({ id: ext.id });
+          if (ext.hasMain) await window.ExtensionRepository.backup({ id: ext.id });
         }
       } catch (e) { console.warn('[codegen] 预备份失败', e); }
     }
@@ -578,9 +578,9 @@ window.Codegen = (function () {
 
   // ── 应用：自动备份 → 写扩展 → 装载（旧 API 模式保留，CLI 模式不走此路径）──
   async function apply(generated) {
-    const existing = await window.electronAPI.extList();
+    const existing = await window.ExtensionRepository.list();
     const exists = existing.find(e => e.id === generated.id);
-    if (exists) await window.electronAPI.extBackup({ id: generated.id });
+    if (exists) await window.ExtensionRepository.backup({ id: generated.id });
 
     const manifest = Object.assign({
       id: generated.id,
@@ -593,7 +593,7 @@ window.Codegen = (function () {
       createdAt: new Date().toISOString()
     }, generated.manifest);
 
-    const writeRes = await window.electronAPI.extWrite({ id: generated.id, files: { manifest, main: generated.code } });
+    const writeRes = await window.ExtensionRepository.write({ id: generated.id, files: { manifest, main: generated.code } });
     if (!writeRes || writeRes.ok === false) {
       throw new Error('写入扩展失败: ' + ((writeRes && writeRes.reason) || '未知错误'));
     }
@@ -603,9 +603,9 @@ window.Codegen = (function () {
 
   // ── 回滚：恢复最近备份 ──
   async function rollback(id) {
-    const backups = await window.electronAPI.extListBackups({ id });
+    const backups = await window.ExtensionRepository.listBackups({ id });
     if (!backups || backups.length === 0) return { ok: false, reason: '没有可用备份' };
-    const res = await window.electronAPI.extRestore({ id, backupName: backups[0].name });
+    const res = await window.ExtensionRepository.restore({ id, backupName: backups[0].name });
     if (typeof window.ExtManager !== 'undefined') await window.ExtManager.init();
     return res;
   }

@@ -511,7 +511,7 @@ function toggleExpand(id) {
 
 // ═══════════ Repeat Todo Refresh ═══════════
 // Auto-reset completed repeating todos when their cycle has passed
-function refreshRepeatTodos() {
+function refreshRepeatTodos(render = true) {
   const today = formatDate(new Date());
   let changed = false;
   const completedLog = loadTodoCompletedLog();
@@ -543,7 +543,7 @@ function refreshRepeatTodos() {
   if (logChanged) saveTodoCompletedLog(completedLog);
   if (changed) {
     saveData('study_todos_v2', todos);
-    renderTodos();
+    if (render) renderTodos();
   }
 }
 
@@ -862,18 +862,62 @@ document.addEventListener('drop', function(e) {
 });
 
 // ═══════════ Todo: Tree Rendering ═══════════
-function renderTodoNode(t, depth, visited = new Set(), timerRecords = null) {
+function buildTodoRenderContext(records) {
+  const childrenByParent = new Map();
+  const todoById = new Map();
+  for (const todo of todos) {
+    todoById.set(todo.id, todo);
+    if (!childrenByParent.has(todo.parentId)) childrenByParent.set(todo.parentId, []);
+    childrenByParent.get(todo.parentId).push(todo);
+  }
+
+  const ownTime = new Map();
+  for (const record of records) {
+    if (record.affectsFocus === false) continue;
+    const id = record.targetId || record.todoId;
+    if (id && todoById.has(id)) ownTime.set(id, (ownTime.get(id) || 0) + record.totalMs);
+  }
+  for (const todo of todos) {
+    if (todo._timerManualMs !== undefined) ownTime.set(todo.id, todo._timerManualMs);
+  }
+
+  const descendantCounts = new Map();
+  const timerTotals = new Map();
+  const visiting = new Set();
+  function aggregate(id) {
+    if (descendantCounts.has(id)) return;
+    if (visiting.has(id)) return; // Corrupt circular parent links must not recurse forever.
+    visiting.add(id);
+    let descendants = 0;
+    let totalMs = ownTime.get(id) || 0;
+    for (const child of childrenByParent.get(id) || []) {
+      if (visiting.has(child.id)) continue;
+      aggregate(child.id);
+      descendants += 1 + (descendantCounts.get(child.id) || 0);
+      totalMs += timerTotals.get(child.id) || 0;
+    }
+    visiting.delete(id);
+    descendantCounts.set(id, descendants);
+    timerTotals.set(id, totalMs);
+  }
+  for (const todo of todos) aggregate(todo.id);
+  return { childrenByParent, descendantCounts, timerTotals };
+}
+
+function renderTodoNode(t, depth, visited = new Set(), context = null) {
   if (visited.has(t.id)) return ''; // circular reference guard
   visited.add(t.id);
-  let children = getChildren(t.id);
+  let children = context ? (context.childrenByParent.get(t.id) || []) : getChildren(t.id);
   if (todoHideDone) children = children.filter(c => !c.done);
   const hasKids = children.length > 0;
   const isExpanded = expandedTodoIds.has(t.id);
   const isSubInputActive = activeSubInputId === t.id;
   const indent = depth * 20;
 
-  let totalChildCount = 0;
-  if (hasKids) {
+  let totalChildCount = context
+    ? children.reduce((count, child) => count + 1 + (context.descendantCounts.get(child.id) || 0), 0)
+    : 0;
+  if (hasKids && !context) {
     // 单次迭代统计所有后代数量，避免对每个子节点重复递归（O(n²)→O(n)）
     const stack = [...children];
     while (stack.length) {
@@ -882,7 +926,7 @@ function renderTodoNode(t, depth, visited = new Set(), timerRecords = null) {
     }
   }
 
-  const renderedChildren = children.map(c => renderTodoNode(c, depth + 1, visited, timerRecords)).join('');
+  const renderedChildren = children.map(c => renderTodoNode(c, depth + 1, visited, context)).join('');
 
   const tagsHtml = (t.tags && t.tags.length > 0)
     ? `<div class="todo-tags">${t.tags.map(tag => `<span class="todo-tag">${escapeHtml(tag)}</span>`).join('')}</div>`
@@ -913,7 +957,7 @@ function renderTodoNode(t, depth, visited = new Set(), timerRecords = null) {
         ${t.estMinutes ? `<span class="todo-est-pill">⏳ ${t.estMinutes}分钟</span>` : ''}
         ${tagsHtml}
         ${t.repeat ? `<span class="todo-repeat-badge" title="${t.repeat === 'daily' ? '每天重复刷新' : t.repeat === 'weekly' ? '每周重复刷新' : t.repeat === 'monthly' ? '每月重复刷新' : ''}">🔄 ${t.repeat === 'daily' ? '每天' : t.repeat === 'weekly' ? '每周' : '每月'}</span>` : ''}
-        ${renderTodoTimer(t.id)}
+        ${renderTodoTimer(t.id, null, context)}
         ${hasKids ? `<span class="todo-badge">${totalChildCount}</span>` : ''}
         ${contentHtml}
       </div>
@@ -1025,10 +1069,11 @@ function renderTodos() {
   renderTodoRootInfo();
 
   const visibleRoots = getVisibleTodos();
-  // 整个渲染过程只解析一次计时记录，避免每个节点都重复 JSON.parse
+  // Parse records and aggregate tree data once for this render.
   let timerRecords = null;
   try { timerRecords = JSON.parse(localStorage.getItem('study_timer_records') || '[]'); } catch { timerRecords = []; }
-  tree.innerHTML = visibleRoots.map(t => renderTodoNode(t, 0, new Set(), timerRecords)).join('');
+  const renderContext = buildTodoRenderContext(timerRecords);
+  tree.innerHTML = visibleRoots.map(t => renderTodoNode(t, 0, new Set(), renderContext)).join('');
 
   const hasVisible = visibleRoots.length > 0;
   empty.style.display = hasVisible ? 'none' : '';
@@ -1039,7 +1084,8 @@ function renderTodos() {
     const scopeIds = currentTodoRoot === null
       ? todos.map(t => t.id)
       : getAllDescendantIds(currentTodoRoot);
-    const scopeTodos = todos.filter(t => scopeIds.includes(t.id));
+    const scopeIdSet = new Set(scopeIds);
+    const scopeTodos = todos.filter(t => scopeIdSet.has(t.id));
     if (scopeTodos.length > 0) {
       progress.style.display = '';
       const doneCount = scopeTodos.filter(t => t.done).length;
@@ -1367,7 +1413,13 @@ function closeEditModal(e) {
 
 // ═══════════ Timer display in todo list ═══════════
 // Shows total time spent on this todo and all its descendants
-function renderTodoTimer(todoId, records) {
+function renderTodoTimer(todoId, records, context) {
+  if (context) {
+    const totalMs = context.timerTotals.get(todoId) || 0;
+    if (totalMs < 10000) return '';
+    const display = formatTimerDisplay(totalMs);
+    return `<span class="todo-timer-badge" title="计时：该待办及子任务共 ${display}">⏱️ ${display}</span>`;
+  }
   if (!records) {
     try { records = JSON.parse(localStorage.getItem('study_timer_records') || '[]'); }
     catch { records = []; }
@@ -1513,30 +1565,39 @@ function todoCtxAddSub() {
   if (id != null) toggleSubInput(id);
 }
 
-// 右键：将待办添加至今日聚焦（与 AI set_focus_task 共用同一数据逻辑）
-function todoCtxAddFocus() {
+// 右键：将待办添加到指定日期的聚焦列表。
+function todoCtxAddFocusForDate(dateStr, dayLabel) {
   var id = todoCtxTargetId;
   closeTodoContextMenu();
   if (id == null) return;
   var todo = findTodo(id);
   if (!todo) return;
-  var data = getTodayFocusItems();
+  var data = getFocusItemsForDate(dateStr);
   if (!data.items) data.items = [];
   var maxFocus = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;
-  if (data.items.length >= maxFocus) {
-    if (typeof sendNotification === 'function') sendNotification('添加至聚焦失败', `今日聚焦最多 ${maxFocus} 个任务，请先在「今天」页面移除一些再添加`);
+  if (data.items.some(function (i) { return i.todoId === id; })) {
+    if (typeof sendNotification === 'function') sendNotification('添加到聚焦失败', `该待办已是${dayLabel}聚焦任务`);
     return;
   }
-  if (data.items.some(function (i) { return i.todoId === id; })) {
-    if (typeof sendNotification === 'function') sendNotification('添加至聚焦失败', '该待办已是今日聚焦任务');
+  if (data.items.length >= maxFocus) {
+    if (typeof sendNotification === 'function') sendNotification('添加到聚焦失败', `${dayLabel}聚焦最多 ${maxFocus} 个任务，请先在「今天」页面移除一些再添加`);
     return;
   }
   data.items.push({ todoId: todo.id, text: todo.text, done: todo.done });
   saveFocusData(data);
-  if (typeof sendNotification === 'function') sendNotification('已添加至今日聚焦', `「${todo.text}」（${data.items.length}/${maxFocus}）`);
-  // 刷新今日视图（聚焦列表）与待办列表
+  if (typeof sendNotification === 'function') sendNotification(`已添加到${dayLabel}聚焦`, `「${todo.text}」（${data.items.length}/${maxFocus}）`);
+  // 刷新聚焦列表与待办列表
   if (typeof renderToday === 'function') renderToday();
   if (typeof renderTodos === 'function') renderTodos();
+}
+
+// 与 AI set_focus_task 共用今日聚焦数据。
+function todoCtxAddFocus() {
+  todoCtxAddFocusForDate(getTodayStr(), '今日');
+}
+
+function todoCtxAddTomorrowFocus() {
+  todoCtxAddFocusForDate(getFocusDateByOffset(1), '明日');
 }
 
 function todoCtxSort(mode) {

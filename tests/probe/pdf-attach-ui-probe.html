@@ -1,0 +1,325 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>pdf attach ui probe</title>
+<style>
+  #aiAttachPreview { display: flex; gap: 6px; padding: 6px; }
+  .ai-attach-preview { display: inline-flex; align-items: center; gap: 6px; padding: 6px 10px;
+    background: #f3f4f6; border: 1px solid #d1d5db; border-radius: 8px; font-size: 12px; max-width: 390px; flex-wrap: wrap; }
+  .ai-attach-preview .preview-render-status { display: inline-flex; align-items: center; gap: 5px; flex-shrink: 0;
+    font-size: 10px; padding: 2px 6px; border-radius: 4px; border: 1px solid #d1d5db; color: #6b7280; }
+  .ai-attach-preview .preview-render-status .preview-render-bar { display: inline-block; width: 44px; height: 4px; border-radius: 2px; background: rgba(79,110,247,0.15); overflow: hidden; }
+  .ai-attach-preview .preview-render-status .preview-render-fill { display: block; height: 100%; background: #4f6ef7; }
+  .ai-attach-preview .preview-render-status.done { color: #059669; border-color: rgba(16,185,129,0.35); background: rgba(16,185,129,0.08); }
+  .ai-attach-preview .preview-render-status.aborted { color: #6b7280; }
+</style>
+</head>
+<body>
+<button id="aiAttachBtn" class="ai-attach-btn">📎</button>
+<div class="ai-attach-preview-wrap"><div id="aiAttachPreview" style="display:none"></div></div>
+<script>
+window.__probeErrors = [];
+window.addEventListener('error', e => window.__probeErrors.push('error: ' + (e.message || e.type)));
+window.addEventListener('unhandledrejection', e => window.__probeErrors.push('reject: ' + ((e.reason && e.reason.stack) || e.reason)));
+</script>
+<script type="module">
+import * as pdfjsLib from '/lib/pdfjs/pdf.min.mjs';
+pdfjsLib.GlobalWorkerOptions.workerSrc = '/lib/pdfjs/pdf.worker.min.mjs';
+window.pdfjsLib = pdfjsLib;
+window.ensurePdfJs = async () => pdfjsLib;
+window.escapeHtml = value => String(value == null ? '' : value).replace(/[&<>"']/g, ch => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[ch]));
+// 可切换的 API 配置：探针默认给视觉模型，端到端发送时仍用它。
+window.__apiConfig = { apiKey: 'fake', keyId: 'probe', name: '探针', model: 'deepseek-flash' };
+window.getEffectiveApiConfig = () => window.__apiConfig;
+window.isKimiModel = () => false;
+window.renderPdfAttachmentPagesForTest = null;
+
+// 加载真实的 js/ai-attach.js（与 tests/diag-caption-test.mjs 相同的 eval 方式）：
+// 只替换它在浏览器里依赖的全局，不复制它的渲染/进度/取消逻辑。
+const src = await (await fetch('/js/ai-attach.js')).text();
+(0, eval)(src);
+
+// 同样加载真实的 js/ai-send.js：端到端探针要验证"点发送 → 徽标实时更新"这条链。
+// 它依赖的会话/持久化/流式显示在这里给出最小替身，附件与 PDF 相关逻辑保持原样。
+window.initTreeOnConv = c => { c.tree = []; c.activePath = []; };
+window.getActiveConv = () => window.__probeConv;
+window.getActiveConvId = () => (window.__probeConv ? window.__probeConv.id : '');
+window.isAiLoading = () => false;
+window.setAiLoading = () => {};
+window.isAiStopRequested = () => false;
+window.setAiStopRequested = () => {};
+window.appendMessage = (c, msg) => { (c.messages = c.messages || []).push(msg); return 'n' + c.messages.length; };
+window.safeSaveAiConvs = () => {};
+window.sendAiNotification = () => {};
+window.setAiStreamingDraft = () => {};
+window.clearAiStreamingDraft = () => {};
+window.clearAiDraft = () => {};
+window.updateAiSendButton = () => {};
+window.renderAiMessages = () => {};
+window.setAiPendingRequest = () => {};
+window.scheduleAiAutoTitle = () => {};
+window.parseMemoryTags = () => {};
+window.isDebugMode = () => false;
+window.showAiToast = () => {};
+window.buildDeepThinkParams = () => ({});
+window.clearAiStreamingDraft = () => {};
+window.runToolCallLoop = async () => ({ finalCleanText: '收到', finalRawReply: '收到', stopped: false, finishReason: 'stop' });
+window.aiConvs = [];
+const sendSrc = await (await fetch('/js/ai-send.js')).text();
+(0, eval)(sendSrc);
+
+window.readFileAsArrayBuffer = file => file.arrayBuffer();
+
+async function makePdfFile(url) {
+  const buf = await (await fetch(url)).arrayBuffer();
+  return new File([buf], '教材.pdf', { type: 'application/pdf' });
+}
+
+const canvasDetail = {};
+function instrumentCanvas() {
+  const origCreate = document.createElement.bind(document);
+  document.createElement = function (tag) {
+    const el = origCreate(tag);
+    if (String(tag).toLowerCase() === 'canvas') {
+      const origGet = el.getContext.bind(el);
+      el.getContext = function (...args) {
+        const ctx = origGet(...args);
+        if (!ctx.__probeWrapped) {
+          ctx.__probeWrapped = true;
+          const origFill = ctx.fillRect.bind(ctx);
+          ctx.fillRect = function (...a) { const s = performance.now(); origFill(...a); canvasDetail.fill = (canvasDetail.fill || 0) + (performance.now() - s); };
+          const origDraw = ctx.drawImage ? ctx.drawImage.bind(ctx) : null;
+          if (origDraw) ctx.drawImage = function (...a) { const s = performance.now(); origDraw(...a); canvasDetail.drawImage = (canvasDetail.drawImage || 0) + (performance.now() - s); };
+          const origGetData = ctx.getImageData ? ctx.getImageData.bind(ctx) : null;
+          if (origGetData) ctx.getImageData = function (...a) { const s = performance.now(); const r = origGetData(...a); canvasDetail.getImageData = (canvasDetail.getImageData || 0) + (performance.now() - s); return r; };
+        }
+        return ctx;
+      };
+      const origToBlob = el.toBlob.bind(el);
+      el.toBlob = function (...a) { const s = performance.now(); return origToBlob(function (blob) { canvasDetail.toBlob = (canvasDetail.toBlob || 0) + (performance.now() - s); a[0](blob); }, a[1], a[2]); };
+      const origSetSize = Object.getOwnPropertyDescriptor(HTMLCanvasElement.prototype, 'width');
+      Object.defineProperty(el, 'width', {
+        get() { return origSetSize.get.call(el); },
+        set(v) { const s = performance.now(); origSetSize.set.call(el, v); canvasDetail.resize = (canvasDetail.resize || 0) + (performance.now() - s); }
+      });
+    }
+    return el;
+  };
+}
+
+// 对照：同样的 pdf.js 渲染调用，但不经过 ai-attach 的任何包装。
+// 用来区分"耗时来自我的代码"还是"来自环境/窗口状态"。
+window.probeRawRender = async function probeRawRender(pdfUrl, pages) {
+  const buf = await (await fetch(pdfUrl)).arrayBuffer();
+  const t0 = performance.now();
+  const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buf) });
+  const pdf = await loadingTask.promise;
+  const openMs = Math.round(performance.now() - t0);
+  const perPage = [];
+  for (let p = 1; p <= pages; p++) {
+    const s = performance.now();
+    const page = await pdf.getPage(p);
+    const viewport = page.getViewport({ scale: 1 });
+    const scale = Math.min(2, 1600 / Math.max(1, viewport.width));
+    const vp = page.getViewport({ scale });
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.ceil(vp.width);
+    canvas.height = Math.ceil(vp.height);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#fff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    await page.render({ canvasContext: ctx, viewport: vp }).promise;
+    const blob = await new Promise(r => canvas.toBlob(r, 'image/jpeg', 0.86));
+    await new Promise(r => { const fr = new FileReader(); fr.onload = () => r(); fr.readAsDataURL(blob); });
+    perPage.push({ page: p, ms: Math.round(performance.now() - s), w: canvas.width, h: canvas.height });
+  }
+  const destroyErr = [];
+  try {
+    if (typeof pdf.destroy === 'function') await pdf.destroy();
+    else if (typeof loadingTask.destroy === 'function') await loadingTask.destroy();
+    else destroyErr.push('no destroy on pdf/' + typeof loadingTask.destroy + ' keys=' + Object.keys(pdf).slice(0, 12).join(','));
+  } catch (e) { destroyErr.push(String(e && e.message || e)); }
+  return { openMs, perPage, totalMs: Math.round(performance.now() - t0), destroyErr };
+};
+window.probeRender = async function probeRender(pdfUrl, maxPages) {
+  const file = await makePdfFile(pdfUrl);
+  for (const k of Object.keys(canvasDetail)) delete canvasDetail[k];
+  instrumentCanvas();
+  const events = [];
+  const started = performance.now();
+  const result = await window.renderPdfAttachmentPages(file, {
+    maxPages,
+    onPage: info => { events.push(`${info.done}/${info.total}@${info.pageNo}`); }
+  });
+  return {
+    events,
+    wallMs: Math.round(performance.now() - started),
+    internalMs: result.ms,
+    canvasDetail: Object.fromEntries(Object.entries(canvasDetail).map(([k, v]) => [k, Math.round(v)])),
+    renderedPages: result.renderedPages,
+    bytes: result.bytes,
+    aborted: result.aborted
+  };
+};
+
+window.probeAbort = async function probeAbort(pdfUrl, stopAfter) {
+  const file = await makePdfFile(pdfUrl);
+  let done = 0;
+  const result = await window.renderPdfAttachmentPages(file, {
+    maxPages: 12,
+    onPage: info => { done = info.done; },
+    isAborted: () => done >= stopAfter
+  });
+  return { aborted: result.aborted, renderedPages: result.renderedPages, pageNumbers: Array.from(result.pageNumbers) };
+};
+
+// UI：把一个 PDF 附件挂进真实 aiAttachments，走真实 renderAttachPreview + 实时徽标更新
+window.probeBadge = async function probeBadge(pdfUrl) {
+  const file = await makePdfFile(pdfUrl);
+  // ES module 是严格模式，无法给 eval 建立的全局词法绑定 aiAttachments 赋值；
+  // 用 window.eval（非严格）在同一个全局词法环境里操作它，才是在测真实全局状态。
+  window.__probeFile = file;
+  window.eval('aiAttachments = [{ name: "教材.pdf", file: window.__probeFile, size: window.__probeFile.size, pdfMode: "image", pdfStartPage: null, pdfEndPage: null }]');
+  const renderError = [];
+  let renderReturn;
+  try { renderReturn = renderAttachPreview(); } catch (e) { renderError.push(String(e && e.stack || e)); }
+  const wrapAfter = document.getElementById('aiAttachPreview');
+  const previewErrors = [];
+  const visible = wrapAfter.style.display;
+  const innerRaw = wrapAfter.innerHTML;
+  const before = wrapAfter.textContent.trim();
+
+  window.eval('aiAttachments[0]._pdfRender = { rendering: true, done: 1, total: 3 }');
+  const beforeUpdater = !!document.getElementById('aiPdfRenderStatus0');
+  updatePdfRenderStatus(0, { rendering: true, done: 2, total: 3 });
+  const afterUpdater = !!document.getElementById('aiPdfRenderStatus0');
+  const wrapHtmlAfterUpdater = document.getElementById('aiAttachPreview').innerHTML.includes('preview-render-status');
+
+  const seen = [];
+  const rendered = await renderPdfAttachmentPages(file, {
+    maxPages: 3,
+    onPage: info => {
+      updatePdfRenderStatus(0, { rendering: true, done: info.done, total: info.total });
+      const el = document.getElementById('aiPdfRenderStatus0');
+      const fill = el && el.querySelector('.preview-render-fill');
+      const badgeHtml = window.eval('formatPdfAttachStatus(aiAttachments[0], 0)');
+      seen.push(`#${info.done} info.total=${info.total} el=${!!el} fill=${fill ? fill.style.width : 'none'} badgeLen=${badgeHtml.length} cached=${JSON.stringify(window.eval('aiAttachments[0]._pdfRender'))}`);
+    }
+  });
+  updatePdfRenderStatus(0, { rendering: false, aborted: !!rendered.aborted });
+  const statusDone = document.getElementById('aiPdfRenderStatus0').textContent.trim();
+  const doneEl = document.getElementById('aiPdfRenderStatus0');
+  const doneColor = doneEl ? getComputedStyle(doneEl).color : '';
+  const idleHidden = getComputedStyle(document.getElementById('aiPdfRenderStatus9') || document.body).display;
+  const idleBadge = formatPdfAttachStatus({ _pdfRender: null }, 7);
+  const idleDisplay = (() => {
+    const host = document.createElement('div');
+    host.innerHTML = idleBadge;
+    document.body.appendChild(host);
+    const d = getComputedStyle(host.firstElementChild).display;
+    host.remove();
+    return d;
+  })();
+
+  const abortedState = formatPdfAttachStatus({ _pdfRender: { rendering: false, aborted: true, done: 2, total: 12 } }, 0);
+  const debug = {
+    typeofRender: typeof renderAttachPreview,
+    attachCount: window.eval('aiAttachments.length'),
+    firstIsPdf: window.eval('isPdfFile(aiAttachments[0].file)'),
+    firstMode: window.eval('aiAttachments[0].pdfMode'),
+    wrapExists: !!document.getElementById('aiAttachPreview'),
+    innerRaw: innerRaw.slice(0, 300),
+    renderError,
+    renderReturn: String(renderReturn),
+    modeFromSnapshot: (() => { try { return String(getAiAttachmentsSnapshot().length); } catch (e) { return 'err:' + e.message; } })(),
+    attachCountAfter: window.eval('aiAttachments.length')
+  };
+  return {
+    debug,
+    beforeUpdater, afterUpdater, wrapHtmlAfterUpdater,
+    visible, before, seen, statusDone,
+    doneColor,
+    hasProgressBar: !!(doneEl && doneEl.querySelector('.preview-render-bar')),
+    idleBadgeDisplay: idleDisplay,
+    idleBadgeText: idleBadge.replace(/<[^>]*>/g, '').trim(),
+    abortedMarkup: /已取消（2\/12 页）/.test(abortedState),
+    errors: window.__probeErrors
+  };
+};
+
+// 端到端：走真实 sendAiMessage（只把模型调用和 API 配置换成假货），
+// 验证"点发送 → 预览徽标实时更新 → 消息里带上页面图片"这条链。
+window.probeSend = async function probeSend(pdfUrl) {
+  const file = await makePdfFile(pdfUrl);
+  window.__probeFile = file;
+  window.eval('aiAttachments = [{ name: "教材.pdf", file: window.__probeFile, size: window.__probeFile.size, pdfMode: "image", pdfStartPage: 3, pdfEndPage: 5 }]');
+  renderAttachPreview();
+  document.getElementById('aiAttachPreview').style.display = 'flex';
+
+  const conv = { id: 'probe-conv', title: '探针', systemPrompt: '' };
+  window.eval('var __probeConv = null;');
+  window.__probeConv = conv;
+  const savedConv = window.getActiveConv;
+  const savedId = window.getActiveConvId;
+  const savedCfg = window.getEffectiveApiConfig;
+  const savedLoop = window.runToolCallLoop;
+  const savedInput = document.getElementById('aiInput');
+  const savedNotify = window.sendAiNotification;
+  const savedSave = window.safeSaveAiConvs;
+
+  const badgeFrames = [];
+  window.__probeConv = conv;
+  const observer = new MutationObserver(() => {
+    const el = document.getElementById('aiPdfRenderStatus0');
+    if (!el) return;
+    const text = el.textContent.trim();
+    const fill = el.querySelector('.preview-render-fill');
+    const frame = text + (fill ? '|' + fill.style.width : '');
+    if (badgeFrames[badgeFrames.length - 1] !== frame) badgeFrames.push(frame);
+  });
+  observer.observe(document.getElementById('aiAttachPreview'), { childList: true, subtree: true, characterData: true });
+
+  try {
+    window.getActiveConv = () => conv;
+    window.getActiveConvId = () => conv.id;
+    window.getEffectiveApiConfig = () => ({ apiKey: 'fake', keyId: 'probe', name: '探针', model: 'deepseek-flash' });
+    window.runToolCallLoop = async () => ({ finalCleanText: '收到', finalRawReply: '收到', stopped: false, finishReason: 'stop' });
+    window.sendAiNotification = () => {};
+    if (!savedInput) {
+      const input = document.createElement('textarea');
+      input.id = 'aiInput';
+      document.body.appendChild(input);
+    }
+    document.getElementById('aiInput').value = '看看这三页';
+    window.initTreeOnConv(conv);
+    // sendAiMessage 由 eval 建立的全局词法绑定提供（不是 window 属性）
+    await sendAiMessage();
+  } catch (err) {
+    return { error: String(err && err.stack || err), badgeFrames };
+  } finally {
+    observer.disconnect();
+    window.getActiveConv = savedConv;
+    window.getActiveConvId = savedId;
+    window.getEffectiveApiConfig = savedCfg;
+    window.runToolCallLoop = savedLoop;
+    window.sendAiNotification = savedNotify;
+    window.safeSaveAiConvs = savedSave;
+  }
+
+  const userMsg = (conv.messages || []).find(m => m.role === 'user');
+  return {
+    badgeFrames,
+    previewVisible: document.getElementById('aiAttachPreview').style.display,
+    finalBadge: (document.getElementById('aiPdfRenderStatus0') || {}).textContent,
+    hasVisionFiles: !!(userMsg && userMsg.visionFiles && userMsg.visionFiles.length),
+    visionCount: userMsg && userMsg.visionFiles ? userMsg.visionFiles.length : 0,
+    visionName: userMsg && userMsg.visionFiles && userMsg.visionFiles[0] ? userMsg.visionFiles[0].name : ''
+  };
+};
+
+window.__probeReady = true;
+</script>
+<script>
+// 统计 rAF 次数：用于确认逐页渲染之间确实让出了帧
+window.__rafCount = 0;
+(function loop() { window.__rafCount++; requestAnimationFrame(loop); })();
+</script>
+</body></html>
