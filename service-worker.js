@@ -6,14 +6,14 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v177';
+const VERSION = 'mst-v178';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
 const PRECACHE_URLS = [
   './',
   './index.html',
-  './manifest.webmanifest',
+  './manifest.webmanifest?v=20260926-icon-v3',
   './css/style.css?v=20260924-r4',
   './css/workspace.css?v=20260926-r4',
   './css/appearance.css?v=20260913-r6',
@@ -70,8 +70,9 @@ const PRECACHE_URLS = [
   './js/calendar.js?v=20260825-r10',
   './js/bootstrap.js?v=20260911-r1',
   './js/translation.js?v=20260922-r4',
-  './icons/icon-192.png',
-  './icons/icon-512.png'
+  './icons/apple-touch-icon-v3.png',
+  './icons/icon-192-v3.png',
+  './icons/icon-512-v3.png'
 ];
 
 // 安装：预缓存静态资源
