@@ -51,6 +51,7 @@ function cloud() {
           if (q.operation === 'read') {
             const result = [...rows.values()].filter(row => q.filters.every(filter => filter(row)));
             const data = result.map(row => pick(row, q.fields));
+            if (q.isPrefixQuery) device.prefixReads = (device.prefixReads || 0) + 1;
             if (device.pauseCollectionRead && q.isPrefixQuery) {
               device.pauseCollectionRead = false;
               if (beforeVersionRead) await beforeVersionRead();
@@ -71,6 +72,7 @@ function cloud() {
             }
             q.input = [input];
           }
+          device.writeRequests = (device.writeRequests || 0) + 1;
           const written = q.input.map(input => {
             const row = { user_id: input.user_id, key: input.key, value: copy(input.value),
               updated_at: new Date(Date.UTC(2026, 8, 23, 0, 0, ++sequence)).toISOString() };
@@ -96,6 +98,10 @@ function cloud() {
       if (!records.length) return null;
       return records.filter(row => row.value && !row.value.deleted).map(row => row.value)
         .sort((a, b) => a.index - b.index).map(value => copy(value.item));
+    },
+    raw(userId, key) {
+      const row = rows.get(userId + '/' + key);
+      return row ? copy(row.value) : null;
     }
   };
 }
@@ -106,7 +112,7 @@ function pick(row, fields) {
 }
 
 function device(name, backend, userId = 'u1') {
-  const state = { name, userId, pauseCollectionRead: false };
+  const state = { name, userId, pauseCollectionRead: false, prefixReads: 0, writeRequests: 0 };
   const values = new Map([['study_sync_config', JSON.stringify({ enabled: true, autoSync: false })]]);
   const localStorage = {
     getItem: key => values.has(key) ? values.get(key) : null,
@@ -127,6 +133,7 @@ function device(name, backend, userId = 'u1') {
     state, sync: window.Sync,
     get() { return JSON.parse(localStorage.getItem(KEY)); },
     getKey(key) { return JSON.parse(localStorage.getItem(key)); },
+    setKeyRaw(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
     editKey(key, value) { localStorage.setItem(key, JSON.stringify(value)); window.Sync.onLocalChange(key); },
     edit(value) { localStorage.setItem(KEY, JSON.stringify(value)); window.Sync.onLocalChange(KEY); },
     async syncNow() { await window.Sync.getStatus(); return window.Sync.manualSync(); },
@@ -268,6 +275,57 @@ async function run() {
     check('record-conflict-resolution', { resolved, localB: b.get() },
       () => resolved.ok && b.get()[0].text === 'A online edit' &&
         b.sync.getPendingConflicts().length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);
+    await b.syncNow();
+    a.edit([{ id: 1, text: 'A one' }, { id: 2, text: 'A two' }]);
+    b.edit([{ id: 1, text: 'B one' }, { id: 2, text: 'B two' }]);
+    await a.syncNow();
+    await b.syncNow();
+    const keys = b.sync.getPendingConflicts().filter(item => item.id).map(item => item.key);
+    const readsBefore = b.state.prefixReads;
+    const resolved = await b.sync.resolveConflicts(keys, 'remote');
+    const actual = { resolved, local: b.get(), prefixReads: b.state.prefixReads - readsBefore };
+    check('record-conflict-batch-single-read', actual, () => resolved.ok && resolved.resolved === 2 &&
+      actual.local[0].text === 'A one' && actual.local[1].text === 'A two' && actual.prefixReads === 1 &&
+      b.sync.getPendingConflicts().length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db);
+    const timers = [{ id: 'timer-1', duration: 60 }, { id: 'timer-2', duration: 120 }];
+    const stale = {
+      'mst:item:v1:study_timer_records:timer-1': {
+        key: 'mst:item:v1:study_timer_records:timer-1', collection: 'study_timer_records', id: 'timer-1'
+      },
+      'mst:item:v1:study_timer_records:timer-2': {
+        key: 'mst:item:v1:study_timer_records:timer-2', collection: 'study_timer_records', id: 'timer-2'
+      }
+    };
+    a.setKeyRaw('study_timer_records', timers);
+    a.setKeyRaw('study_sync_collection_conflicts_v1', stale);
+    const keys = a.sync.getPendingConflicts().map(item => item.key);
+    const resolved = await a.sync.resolveConflicts(keys, 'local');
+    const actual = { resolved, cloud: db.raw('u1', 'study_timer_records'), pending: a.sync.getPendingConflicts() };
+    check('legacy-timer-conflicts-migrate-as-one-group', actual, () => resolved.ok && resolved.resolved === 2 &&
+      JSON.stringify(actual.cloud) === JSON.stringify(timers) && actual.pending.length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);
+    await b.syncNow();
+    a.edit([{ id: 1, text: 'A one' }, { id: 2, text: 'A two' }]);
+    b.edit([{ id: 1, text: 'B one' }, { id: 2, text: 'B two' }]);
+    await a.syncNow();
+    await b.syncNow();
+    const keys = b.sync.getPendingConflicts().filter(item => item.id).map(item => item.key);
+    const writesBefore = b.state.writeRequests;
+    const resolved = await b.sync.resolveConflicts(keys, 'local');
+    const actual = { resolved, cloud: db.value('u1'), writeRequests: b.state.writeRequests - writesBefore };
+    check('record-conflict-local-batch-single-write', actual, () => resolved.ok && resolved.resolved === 2 &&
+      actual.cloud[0].text === 'B one' && actual.cloud[1].text === 'B two' && actual.writeRequests === 1 &&
+      b.sync.getPendingConflicts().length === 0);
   }
   {
     const db = cloud(), a = device('A', db), b = device('B', db);

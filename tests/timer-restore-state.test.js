@@ -206,6 +206,32 @@ test('很久以前忘了停的计时器：只找回时长，不会自己跑起�
   assert.ok(state.sessions.length >= 1);
 });
 
+test('恢复计时提示可以关闭，且关闭后状态不会在重绘时恢复', () => {
+  const now = Date.now();
+  const harness = restore({
+    savedState: {
+      running: true, elapsed: 0, displayMs: 5 * 60 * 1000,
+      sessionStart: now - 5 * 60 * 1000, sessions: [], name: '',
+      linkedTodoId: null, linkedGoalId: null, savedAt: now - 1000, lastActiveAt: now - 1000
+    }
+  });
+  assert.equal(timerState(harness).resumed, true);
+  vm.runInContext('dismissTimerResumeNotice();', harness.ctx);
+  const state = timerState(harness);
+  assert.equal(state.resumed, false);
+  assert.equal(state.staleNotice, null);
+});
+
+test('今日累计包含当天所有记录，不受当前关联项影响', () => {
+  const { ctx } = createContext();
+  const total = vm.runInContext(`getTodayTimerTotalMs([
+    { date: '2026-09-24', totalMs: 60000, todoId: 1 },
+    { date: '2026-09-24', totalMs: 120000, todoId: 2 },
+    { date: '2026-09-23', totalMs: 999000, todoId: 1 }
+  ], '2026-09-24')`, ctx);
+  assert.equal(total, 180000);
+});
+
 test('找回的陈旧时长可以继续计时（点开始后正常累加）', () => {
   const now = Date.now();
   const lastActiveAt = now - 3 * 24 * HOUR;

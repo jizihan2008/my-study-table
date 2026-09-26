@@ -445,6 +445,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '14. 写操作会先整轮预检；任一写入失败时，本轮已执行的写入会回滚。看到 status=rolled_back 时必须明确告知用户未保留该修改。\n';
   prompt += '15. 📅 日历事件：weekdays 用 0=周日、1=周一 … 6=周六 表示「每周哪几天」，例如每周一三五就是 [1,3,5]，不传 weekdays 就是只在那一天的单次事件。改/删重复事件前先用 list_calendar_events 拿到事件 ID；用户说「这天不去了/这周取消」时用 delete_calendar_event 带 date（只删那一天），说「以后都不去了/删掉这个安排」时才删整个事件。不要凭空编造日程，也不要把待办当成日历事件。\n';
   prompt += '16. 🧠 思维导图格式：只有在确实要输出思维导图时，才使用语言标记明确的 Markdown 围栏：```mindmap。围栏内每行一个节点，用 2 个空格或 Tab 表示层级，并用 ``` 结束。禁止用无语言标记的 ``` 代码块冒充思维导图；普通代码块不会被识别为思维导图。\n';
+  prompt += '17. 【数学公式格式】所有数学表达式都必须使用 LaTeX 定界符：行内公式用 $...$，独立公式用 $$...$$。不要在普通文本中输出 a\\_n、x\\^2 或 \\frac{a}{b} 这类裸露、转义的 LaTeX；应分别写成 $a_n$、$x^2$ 和 $\\frac{a}{b}$。普通代码标识符则使用反引号，不要误当公式。\n';
 
   // ── 注入当前 AI 身份 ──
   const currentCfg = apiCfg;

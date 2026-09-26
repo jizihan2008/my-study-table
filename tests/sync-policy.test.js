@@ -383,3 +383,59 @@ test('choosing the cloud version resolves and records a pending conflict', async
   assert.equal(window.Sync.getPendingConflicts().length, 0);
   assert.equal(JSON.parse(values.get('study_sync_conflict_history'))[0].choice, 'remote');
 });
+
+test('a conflict category can resolve multiple cloud versions in one operation', async () => {
+  const pending = {
+    study_taskline_v1: { key: 'study_taskline_v1', reason: 'both-changed' },
+    study_today_focus: { key: 'study_today_focus', reason: 'both-changed' }
+  };
+  const remoteValues = {
+    study_taskline_v1: { lines: [{ id: 'cloud-line' }] },
+    study_today_focus: ['cloud-focus']
+  };
+  const values = new Map([
+    ['study_sync_config', JSON.stringify({ enabled: true, autoSync: false })],
+    ['study_sync_pending_conflicts_v1', JSON.stringify(pending)]
+  ]);
+  const localStorage = {
+    getItem: key => values.has(key) ? values.get(key) : null,
+    setItem: (key, value) => values.set(key, String(value)),
+    removeItem: key => values.delete(key)
+  };
+  const client = {
+    auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+    from() {
+      let selectedKey = '';
+      return {
+        select() { return this; },
+        eq(column, value) { if (column === 'key') selectedKey = value; return this; },
+        maybeSingle() {
+          return Promise.resolve({
+            data: { key: selectedKey, value: remoteValues[selectedKey], updated_at: '2026-09-24T08:00:00.000Z' },
+            error: null
+          });
+        }
+      };
+    }
+  };
+  const window = { SyncPolicy: policy };
+  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'sync.js'), 'utf8');
+  vm.runInNewContext(code, {
+    window,
+    localStorage,
+    getSupabaseClient: () => client,
+    saveData: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
+    setTimeout() { return 1; },
+    clearTimeout() {},
+    console: { log() {}, warn() {}, error() {} }
+  });
+
+  window.Sync.init();
+  const result = await window.Sync.resolveConflicts(Object.keys(pending), 'remote');
+  assert.equal(result.ok, true);
+  assert.equal(result.resolved, 2);
+  assert.equal(result.failed.length, 0);
+  assert.deepEqual(JSON.parse(values.get('study_taskline_v1')), remoteValues.study_taskline_v1);
+  assert.deepEqual(JSON.parse(values.get('study_today_focus')), remoteValues.study_today_focus);
+  assert.equal(window.Sync.getPendingConflicts().length, 0);
+});

@@ -548,7 +548,7 @@ do $$ begin alter publication supabase_realtime add table public.user_data; exce
 -- 日志类数据独立云存储（v0.6 增量同步）
 -- 存 AI 对话、教材章节讲解日志、全书问答日志，与普通同步（user_data）分离，
 -- 按 item 粒度分片增量上传，每行一个 item（data 为 gzip 压缩串包装 {v,c,d}），
--- bytes 记录压缩后字节数供每用户配额聚合（默认 50MB，可配置）。
+-- bytes 记录压缩后字节数供每用户配额聚合（客户端上限默认 100MB）。
 -- 说明：kind = 'ai_conv' | 'bk_explain' | 'bk_qa'；item_id 分片时追加 _p0/_p1 后缀。
 -- ═══════════════════════════════════════════════════════════════════
 create table if not exists public.user_sync_items (

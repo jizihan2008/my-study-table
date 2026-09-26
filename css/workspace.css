@@ -452,6 +452,22 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
 #section-notes.notes-immersive.notes-split .notes-immersive-toc { display: none !important; }
 
 @media (max-width: 800px) {
+  /* Touch screens have no hover edge, so keep the essential immersive controls
+     reachable while leaving the document itself uncluttered. */
+  #section-notes.notes-immersive .notes-immersive-exit,
+  #section-notes.notes-immersive .notes-immersive-toc,
+  #section-notes.notes-immersive .notes-immersive-zoom {
+    opacity: .86;
+  }
+  #section-notes.notes-immersive .notes-immersive-exit { top: max(12px, env(safe-area-inset-top)); right: 12px; }
+  #section-notes.notes-immersive[data-note-mode="preview"] .notes-immersive-toc,
+  #section-notes.notes-immersive[data-note-mode="rich"] .notes-immersive-toc {
+    top: max(12px, env(safe-area-inset-top)); right: 54px;
+  }
+  #section-notes.notes-immersive .notes-immersive-zoom {
+    top: max(12px, env(safe-area-inset-top)); left: 12px;
+  }
+  #section-notes.notes-immersive .notes-immersive-split-toggle { display: none; }
   #section-notes.notes-immersive.notes-split .notes-editor { flex-direction: column; }
   #section-notes.notes-immersive.notes-split .notes-document-workspace {
     flex-basis: 50%; width: 100%; border-right: 0; border-bottom: 1px solid var(--border);

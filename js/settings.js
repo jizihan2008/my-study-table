@@ -621,6 +621,8 @@ const SYNC_EVENT_LABELS = {
   'conflict-resolution-start': '开始处理冲突',
   'conflict-resolved': '冲突已处理',
   'conflict-resolution-failed': '冲突处理失败',
+  'conflict-batch-failed': '分类冲突处理失败',
+  'legacy-conflicts-migrated': '旧版冲突已迁移',
   'manual-sync-requested': '手动立即同步',
   'force-upload-all-requested': '强制上传全部',
   'realtime-status': '实时连接状态',
@@ -693,6 +695,67 @@ function _syncConflictReasonText(reason) {
   return descriptions[reason] || '本机与云端版本无法安全自动合并。';
 }
 
+const SYNC_CONFLICT_CATEGORIES = {
+  study_todos_v2: { id: 'todos', label: '待办事项' },
+  study_todos: { id: 'todos', label: '待办事项' },
+  study_todo_completed_log: { id: 'todos', label: '待办事项' },
+  study_notes_v2: { id: 'notes', label: '笔记' },
+  study_notes: { id: 'notes', label: '笔记' },
+  study_notes_folders: { id: 'notes', label: '笔记' },
+  study_habits: { id: 'habits', label: '习惯与打卡' },
+  study_habits_v2: { id: 'habits', label: '习惯与打卡' },
+  study_habits_v1: { id: 'habits', label: '习惯与打卡' },
+  study_checkin: { id: 'habits', label: '习惯与打卡' },
+  study_books_v1: { id: 'books', label: '教材' },
+  study_books_meta: { id: 'books', label: '教材' },
+  study_bk_quiz_state_v1: { id: 'books', label: '教材' },
+  study_calendar_events: { id: 'calendar', label: '日历事件' },
+  study_links_v3: { id: 'links', label: '快捷链接' },
+  study_quick_access: { id: 'links', label: '快捷链接' },
+  study_taskline_v1: { id: 'planning', label: '学习规划' },
+  study_today_focus: { id: 'planning', label: '学习规划' },
+  study_longterm_goals: { id: 'planning', label: '学习规划' },
+  study_timer_records: { id: 'records', label: '学习记录' },
+  study_stats: { id: 'records', label: '学习记录' },
+  study_ai_memory: { id: 'ai', label: 'AI 配置与记忆' },
+  study_ai_skills_v1: { id: 'ai', label: 'AI 配置与记忆' },
+  study_prompt_templates_v1: { id: 'ai', label: 'AI 配置与记忆' }
+};
+const _syncConflictGroupOpen = new Map();
+const _syncConflictResolvingCategories = new Set();
+
+function _syncConflictCategory(item) {
+  const sourceKey = item.collection || item.key || 'other';
+  const known = SYNC_CONFLICT_CATEGORIES[sourceKey];
+  if (known) return known;
+  return { id: sourceKey, label: item.collection ? String(item.collection) : (item.label || item.key || '其他数据') };
+}
+
+function syncRememberConflictGroup(category, open) {
+  _syncConflictGroupOpen.set(category, !!open);
+}
+
+function _renderSyncConflictItem(item, canResolve, groupResolving) {
+  const disabled = item.resolving || groupResolving || !canResolve;
+  const disabledAttr = disabled ? ' disabled' : '';
+  const buttonTitle = !canResolve ? '请先登录同步账号' : ((item.resolving || groupResolving) ? '正在处理' : '');
+  return '<article class="sync-conflict-item">' +
+    '<div class="sync-conflict-item-head"><div><strong>' + escapeHtml(item.label || item.key) + '</strong>' +
+    '<code>' + escapeHtml(item.key) + '</code></div><span class="sync-conflict-state">需要选择</span></div>' +
+    '<p class="sync-conflict-reason">' + escapeHtml(_syncConflictReasonText(item.reason)) + '</p>' +
+    '<dl class="sync-conflict-meta">' +
+    '<div><dt>本机同步基准</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.baseTimestamp, '无（首次同步）')) + '</dd></div>' +
+    '<div><dt>云端更新时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.remoteTimestamp, '未知')) + '</dd></div>' +
+    '<div><dt>检测时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.detectedAt, '未知')) + '</dd></div>' +
+    '</dl>' +
+    '<div class="sync-conflict-actions">' +
+    '<button class="sync-conflict-btn sync-conflict-btn-local" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'local\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="upload"></i> 保留本地并上传</button>' +
+    '<button class="sync-conflict-btn sync-conflict-btn-remote" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'remote\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="cloud-download"></i> 使用云端并覆盖本地</button>' +
+    '</div>' +
+    (!canResolve ? '<p class="sync-conflict-login-hint">请先在“好友”页面登录，再处理此冲突。</p>' : '') +
+    '</article>';
+}
+
 function renderSyncConflicts(status) {
   const panel = document.getElementById('syncConflictPanel');
   const list = document.getElementById('syncConflictList');
@@ -710,25 +773,32 @@ function renderSyncConflicts(status) {
   panel.style.display = 'block';
   if (count) count.textContent = conflicts.length + ' 项';
   const canResolve = !!(status && status.loggedIn);
-  list.innerHTML = conflicts.map(item => {
-    const disabled = item.resolving || !canResolve;
-    const disabledAttr = disabled ? ' disabled' : '';
-    const buttonTitle = !canResolve ? '请先登录同步账号' : (item.resolving ? '正在处理' : '');
-    return '<article class="sync-conflict-item">' +
-      '<div class="sync-conflict-item-head"><div><strong>' + escapeHtml(item.label || item.key) + '</strong>' +
-      '<code>' + escapeHtml(item.key) + '</code></div><span class="sync-conflict-state">需要选择</span></div>' +
-      '<p class="sync-conflict-reason">' + escapeHtml(_syncConflictReasonText(item.reason)) + '</p>' +
-      '<dl class="sync-conflict-meta">' +
-      '<div><dt>本机同步基准</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.baseTimestamp, '无（首次同步）')) + '</dd></div>' +
-      '<div><dt>云端更新时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.remoteTimestamp, '未知')) + '</dd></div>' +
-      '<div><dt>检测时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.detectedAt, '未知')) + '</dd></div>' +
-      '</dl>' +
-      '<div class="sync-conflict-actions">' +
-      '<button class="sync-conflict-btn sync-conflict-btn-local" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'local\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="upload"></i> 保留本地并上传</button>' +
-      '<button class="sync-conflict-btn sync-conflict-btn-remote" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'remote\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="cloud-download"></i> 使用云端并覆盖本地</button>' +
-      '</div>' +
-      (!canResolve ? '<p class="sync-conflict-login-hint">请先在“好友”页面登录，再处理此冲突。</p>' : '') +
-      '</article>';
+  const groups = [];
+  const groupMap = new Map();
+  conflicts.forEach(item => {
+    const category = _syncConflictCategory(item);
+    let group = groupMap.get(category.id);
+    if (!group) {
+      group = { id: category.id, label: category.label, items: [] };
+      groupMap.set(category.id, group);
+      groups.push(group);
+    }
+    group.items.push(item);
+  });
+  list.innerHTML = groups.map((group, index) => {
+    const resolving = _syncConflictResolvingCategories.has(group.id);
+    const disabledAttr = (!canResolve || resolving) ? ' disabled' : '';
+    const remembered = _syncConflictGroupOpen.get(group.id);
+    const openAttr = (remembered === undefined ? index === 0 : remembered) ? ' open' : '';
+    return '<details class="sync-conflict-group" data-category="' + escapeHtml(group.id) + '" ontoggle="syncRememberConflictGroup(this.dataset.category,this.open)"' + openAttr + '>' +
+      '<summary><span class="sync-conflict-group-name"><i data-lucide="chevron-right"></i><strong>' + escapeHtml(group.label) + '</strong></span>' +
+      '<span class="sync-conflict-group-count">' + group.items.length + ' 项</span></summary>' +
+      '<div class="sync-conflict-group-body">' +
+      '<div class="sync-conflict-group-actions"><span>统一处理该分类</span>' +
+      '<button class="sync-conflict-group-btn sync-conflict-btn-local" data-category="' + escapeHtml(group.id) + '" onclick="syncResolveConflictGroup(this.dataset.category,\'local\')"' + disabledAttr + '><i data-lucide="upload"></i> 全部保留本地</button>' +
+      '<button class="sync-conflict-group-btn sync-conflict-btn-remote" data-category="' + escapeHtml(group.id) + '" onclick="syncResolveConflictGroup(this.dataset.category,\'remote\')"' + disabledAttr + '><i data-lucide="cloud-download"></i> 全部使用云端</button></div>' +
+      '<div class="sync-conflict-group-items">' + group.items.map(item => _renderSyncConflictItem(item, canResolve, resolving)).join('') + '</div>' +
+      '</div></details>';
   }).join('');
   if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
 }
@@ -753,6 +823,38 @@ async function syncResolveConflict(key, choice) {
   await renderSyncPanel();
   if (!result.ok && statusEl) {
     statusEl.textContent = '冲突处理失败：' + (result.reason || '未知错误') + '。冲突仍保留，可稍后重试。';
+    statusEl.className = 'settings-status error';
+  }
+}
+
+async function syncResolveConflictGroup(category, choice) {
+  const statusEl = document.getElementById('syncStatus');
+  if (typeof window.Sync === 'undefined') return;
+  const conflicts = typeof window.Sync.getPendingConflicts === 'function' ? window.Sync.getPendingConflicts() : [];
+  const keys = conflicts.filter(item => _syncConflictCategory(item).id === category).map(item => item.key);
+  if (!keys.length || _syncConflictResolvingCategories.has(category)) return;
+  _syncConflictResolvingCategories.add(category);
+  if (statusEl) statusEl.textContent = choice === 'local' ? '正在批量上传该分类的本地版本…' : '正在批量使用该分类的云端版本…';
+  renderSyncConflicts(await window.Sync.getStatus());
+  let result;
+  try {
+    if (typeof window.Sync.resolveConflicts === 'function') result = await window.Sync.resolveConflicts(keys, choice);
+    else {
+      const results = [];
+      for (const key of keys) results.push(await window.Sync.resolveConflict(key, choice));
+      const failed = results.filter(item => !item.ok);
+      result = { ok: failed.length === 0, resolved: results.length - failed.length, failed };
+    }
+  } catch (e) {
+    result = { ok: false, resolved: 0, failed: [{ reason: String(e && e.message || e || '处理失败') }] };
+  } finally {
+    _syncConflictResolvingCategories.delete(category);
+  }
+  await renderSyncPanel();
+  if (result && !result.ok && statusEl) {
+    const firstFailure = result.failed && result.failed.find(item => item && item.reason);
+    const reason = result.reason || (firstFailure && firstFailure.reason) || '未知错误';
+    statusEl.textContent = '分类处理完成：成功 ' + (result.resolved || 0) + ' 项，失败 ' + ((result.failed && result.failed.length) || 0) + ' 项。原因：' + reason + '。失败项已保留，可稍后重试。';
     statusEl.className = 'settings-status error';
   }
 }

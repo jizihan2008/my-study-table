@@ -61,6 +61,30 @@ test('conversation changes remain dirty while automatic cloud storage is off', (
   assert.deepEqual(JSON.parse(values.get('study_sync_logs_dirty_v2')), { 'ai_conv/*': true });
 });
 
+test('legacy 50MB quota is upgraded and each log kind has an independent automatic switch', () => {
+  const { SyncLogs, values } = loadSyncLogs({
+    study_sync_logs_cfg: { quotaMB: 50, autoSync: true }
+  });
+  SyncLogs.setKindAutoSync('bk_explain', false);
+  const config = JSON.parse(values.get('study_sync_logs_cfg'));
+  assert.equal(config.quotaMB, 100);
+  assert.equal(config.autoKinds.ai_conv, true);
+  assert.equal(config.autoKinds.bk_explain, false);
+  assert.equal(config.autoKinds.bk_qa, true);
+});
+
+test('AI cloud payload does not duplicate messages already stored in the tree', async () => {
+  const conv = { id: 7, title: 'tree', messages: [{ role: 'user', content: 'only once' }] };
+  const { SyncLogs, context, values } = loadSyncLogs({ study_ai_convs: [conv] }, { aiConvs: [conv] });
+  context.ensureTree(conv);
+  values.set('study_ai_convs', JSON.stringify([conv]));
+  const state = await SyncLogs.__test.refreshLocalState(true);
+  const item = state.items.find(candidate => candidate.kind === 'ai_conv');
+  assert.ok(item.tree);
+  assert.deepEqual(Array.from(item.items), []);
+  assert.equal(SyncLogs.__test.itemSizeText(item), '9 字');
+});
+
 test('local deletion creates a persistent cloud tombstone', () => {
   const { SyncLogs, values } = loadSyncLogs();
   SyncLogs.markItemDeleted('ai_conv', 42);
@@ -417,6 +441,22 @@ test('cloud inventory pagination reads beyond the first server page', async () =
   }));
   assert.equal(rows.length, 1001);
   assert.deepEqual(requests, [[0, 499], [500, 999], [1000, 1499]]);
+});
+
+test('timed out batch deletion falls back to indexed one-row deletes', async () => {
+  const calls = { batch: 0, single: [] };
+  const client = { from() { return {
+    delete() { return this; },
+    in() { calls.batch++; return Promise.resolve({ error: { message: 'canceling statement due to statement timeout' } }); },
+    eq(column, value) { calls.single.push([column, value]); return Promise.resolve({ error: null }); }
+  }; } };
+  const { SyncLogs } = loadSyncLogs();
+  const progress = [];
+  const deleted = await SyncLogs.__test.deleteRowsById(client, [{ id: 'a' }, { id: 'b' }], done => progress.push(done));
+  assert.equal(deleted, 2);
+  assert.equal(calls.batch, 1);
+  assert.deepEqual(calls.single, [['id', 'a'], ['id', 'b']]);
+  assert.deepEqual(progress, [1, 2]);
 });
 
 test('a conversation write detects a cloud change between inventory and update', async () => {

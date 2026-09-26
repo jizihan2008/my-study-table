@@ -39,7 +39,7 @@
   // item 压缩后 base64 长度上限（约 525K 二进制 → 1.5MB 原始文本量级），
   // 超过则按 items 数组二分分片（_p0/_p1 后缀），避免单行 jsonb / 请求体过大。
   const MAX_ITEM_CHAR = 700 * 1024;
-  const CFG_KEY = 'study_sync_logs_cfg';       // { quotaMB, autoSync }
+  const CFG_KEY = 'study_sync_logs_cfg';       // { quotaMB, autoSync, autoKinds }
   const TS_KEY = 'study_sync_logs_ts';         // { [kind/itemId]: ISO }
   const HASH_KEY = 'study_sync_logs_hash';     // { [kind/itemId]: base64 哈希 }
   const CONTENT_HASH_KEY = 'study_sync_logs_content_hash_v2'; // { [kind/itemId]: 内容哈希 }
@@ -60,10 +60,11 @@
   const USAGE_CACHE_KEY = 'study_sync_logs_usage_cache_v1';
   const BK_TTL_MS = 90 * 24 * 3600 * 1000;     // 教材日志云端保留 3 个月
   const AI_MAX_CONVS = 20;                     // AI 会话云端保留最近 20 个
-  const DEFAULT_QUOTA_MB = 50;
+  const DEFAULT_QUOTA_MB = 100;
+  const DEFAULT_AUTO_KINDS = { ai_conv: true, bk_explain: true, bk_qa: true };
 
   let client = null;
-  let cfg = { quotaMB: DEFAULT_QUOTA_MB, autoSync: true };
+  let cfg = { quotaMB: DEFAULT_QUOTA_MB, autoSync: true, autoKinds: Object.assign({}, DEFAULT_AUTO_KINDS) };
   let loggedIn = false;
   let applyingRemote = false;
   let uploadTimer = null;
@@ -73,7 +74,7 @@
   let listeners = new Set();
   let progressListeners = new Set();
   const pullScheduler = policy.createRecurringTask(
-    () => _enqueue(() => _flushLogs({ pullMode: 'incremental', maintenance: true })),
+    () => _enqueue(() => _flushLogs({ pullMode: 'incremental', maintenance: true, automatic: true })),
     PULL_INTERVAL
   );
   let pullLifecycleBound = false;
@@ -194,8 +195,11 @@
   }
 
   function _loadCfg() {
-    cfg = Object.assign({ quotaMB: DEFAULT_QUOTA_MB, autoSync: true }, _getLocal(CFG_KEY, {}));
+    const saved = _getLocal(CFG_KEY, {});
+    cfg = Object.assign({ quotaMB: DEFAULT_QUOTA_MB, autoSync: true }, saved);
+    cfg.autoKinds = Object.assign({}, DEFAULT_AUTO_KINDS, saved && saved.autoKinds);
     if (typeof cfg.quotaMB !== 'number' || !(cfg.quotaMB > 0)) cfg.quotaMB = DEFAULT_QUOTA_MB;
+    if (!saved || saved.quotaMB == null || saved.quotaMB === 50) cfg.quotaMB = DEFAULT_QUOTA_MB;
   }
   // ── Supabase 会话与客户端 ─────────────────────────────
   async function _session() {
@@ -242,6 +246,9 @@
   function _autoSyncOn() {
     return !!cfg.autoSync && _enabled() && !!(global.Sync && global.Sync.autoSync);
   }
+  function _autoKindOn(kind) {
+    return !cfg.autoKinds || cfg.autoKinds[kind] !== false;
+  }
 
   // ── 变更上报（写点 / saveData 转发调用）────────────────
   function onLocalChange(key) {
@@ -252,7 +259,7 @@
     // 真正同步前再按 item 内容哈希细化，避免高频写点压缩整份对话造成卡顿。
     _markKindDirty(kind);
     _emitProgress({ dirtyHint: true });
-    if (!_autoSyncOn() || !loggedIn || !_client()) return;
+    if (!_autoSyncOn() || !_autoKindOn(kind) || !loggedIn || !_client()) return;
     scheduleUpload();
   }
 
@@ -263,7 +270,7 @@
     clearTimeout(uploadTimer);
     uploadTimer = setTimeout(() => {
       scheduled = false;
-      _enqueue(() => _flushLogs({ pullMode: 'none', maintenance: false }));
+      _enqueue(() => _flushLogs({ pullMode: 'none', maintenance: false, automatic: true }));
     }, UPLOAD_DEBOUNCE);
   }
 
@@ -398,7 +405,8 @@
         },
         tree: conv.tree || null,
         activePath: conv.activePath || null,
-        items: Array.isArray(conv.messages) ? conv.messages : []
+        // tree 已完整包含消息；不再同时上传 messages 缓存，避免同一聊天正文存两份。
+        items: conv.tree ? [] : (Array.isArray(conv.messages) ? conv.messages : [])
       });
     }
     return out;
@@ -672,12 +680,33 @@
       _getTs(_baseKey(kind, row.item_id)) !== row.updated_at);
   }
 
-  async function _deleteRowsById(c, rows) {
+  async function _deleteRowsById(c, rows, onProgress) {
     const ids = (rows || []).map(row => row && row.id).filter(Boolean);
-    for (let i = 0; i < ids.length; i += 300) {
-      const { error } = await c.from('user_sync_items').delete().in('id', ids.slice(i, i + 300));
-      if (error) throw new Error(error.message || '清理旧云端分片失败');
+    let deleted = 0;
+    for (let i = 0; i < ids.length; i += 10) {
+      const chunk = ids.slice(i, i + 10);
+      let result = await c.from('user_sync_items').delete().in('id', chunk);
+      if (result.error) {
+        // 某些托管数据库在 RLS + 批量 IN 删除时会产生很慢的执行计划。
+        // 自动退化为主键逐条删除，确保每条语句只锁定一行。
+        for (const id of chunk) {
+          result = await c.from('user_sync_items').delete().eq('id', id);
+          if (result.error) {
+            const error = new Error(result.error.message || '清理旧云端分片失败');
+            error.deletedCount = deleted;
+            throw error;
+          }
+          deleted++;
+          localStorage.removeItem(USAGE_CACHE_KEY);
+          if (onProgress) onProgress(deleted, ids.length);
+        }
+      } else {
+        deleted += chunk.length;
+        localStorage.removeItem(USAGE_CACHE_KEY);
+        if (onProgress) onProgress(deleted, ids.length);
+      }
     }
+    return deleted;
   }
 
   async function _removeOutboxForBase(kind, itemId) {
@@ -812,6 +841,7 @@
   let logUploadChain = Promise.resolve();
   async function _flushLogs(options = {}) {
     const pullMode = options.pullMode || 'none'; // none | incremental | full
+    const automatic = options.automatic === true;
     if (!_enabled()) return { ok: false, reason: '同步未开启' };
     const session = await _session();
     loggedIn = !!session;
@@ -854,6 +884,7 @@
       const items = localState.items;
       const queue = [];   // [{ kind, name, pieces }]
       for (const item of items) {
+        if (automatic && !_autoKindOn(item.kind)) continue;
         if (!_isItemOn(item.kind, item.itemId)) continue;   // 用户关闭 → 本地保留、跳过上传
         const baseKey = _baseKey(item.kind, item.itemId);
         if (!_isItemDirty(item.kind, item.itemId)) continue;
@@ -1537,6 +1568,12 @@
           : '超出后新日志自动停止上传（本地数据不受影响）。'}</div>
         <div class="storage-quota-ttl">保留策略：教材讲解/问答日志云端仅保留最近 3 个月；AI 对话仅保留最近 20 个会话（本地始终保留全部）。</div>
       </div>
+      <div class="storage-auto-kinds">
+        <div class="storage-auto-kinds-title">自动同步新内容</div>
+        ${[['ai_conv','message-square','新的 AI 对话'],['bk_explain','book-open','章节讲解'],['bk_qa','search','全书对话']]
+          .map(([kind, icon, label]) => `<label class="storage-auto-kind"><span><i data-lucide="${icon}"></i>${label}</span><span class="toggle-switch"><input type="checkbox" ${_autoKindOn(kind) ? 'checked' : ''} onchange="SyncLogs.setKindAutoSync('${kind}',this.checked)"><span class="toggle-slider"></span></span></label>`).join('')}
+        <div class="storage-quota-hint">关闭后，新内容仍保留在本地，也可点击“立即同步”手动上传。</div>
+      </div>
       <div class="storage-actions">
         <button class="storage-btn storage-btn-primary" onclick="SyncLogs.manualSync()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:13px;height:13px;"></i> 立即同步</button>
         <button class="storage-btn" onclick="SyncLogs.uploadAll()"><i data-lucide="upload-cloud" class="lucide-icon" style="width:13px;height:13px;"></i> 上传全部</button>
@@ -1660,7 +1697,14 @@
   }
   function _itemSizeText(item) {
     let n = 0;
-    for (const m of item.items || []) n += String(m && m.content || '').length;
+    if (item && item.tree && typeof item.tree === 'object') {
+      for (const node of Object.values(item.tree)) {
+        if (!node || node.role === 'root') continue;
+        n += String(node.content || '').length;
+      }
+    } else {
+      for (const m of item.items || []) n += String(m && m.content || '').length;
+    }
     return n > 1024 ? (n / 1024).toFixed(1) + 'K 字' : n + ' 字';
   }
   function _formatTime(value, fallback) {
@@ -1675,17 +1719,42 @@
     renderPanel();
   }
 
+  function setKindAutoSync(kind, on) {
+    if (!KIND_LABELS[kind]) return;
+    cfg.autoKinds = Object.assign({}, DEFAULT_AUTO_KINDS, cfg.autoKinds);
+    cfg.autoKinds[kind] = !!on;
+    _setLocal(CFG_KEY, cfg);
+    if (on && _autoSyncOn() && loggedIn && client) scheduleUpload();
+    renderPanel();
+  }
+
   async function deleteAllRemote() {
     if (!confirm('确定从云端删除全部日志数据？本地数据不受影响，同时会暂停这些项目的云上传；需要时可在列表中逐项重新开启。')) return;
     const session = await _session();
     if (!session) return;
     const c = _client();
     if (!c) return;
-    const { error } = await c.from('user_sync_items').delete().eq('user_id', session.user.id);
-    if (error) {
-      const st = document.getElementById('storageStatus');
-      if (st) st.textContent = '删除失败：' + (error.message || '未知错误');
-      return { ok: false, reason: error.message || '删除失败' };
+    let deleteError = null;
+    let deletedCount = 0;
+    let totalRows = 0;
+    const st = document.getElementById('storageStatus');
+    try {
+      const rows = await _queryAll(() => c.from('user_sync_items').select('id').eq('user_id', session.user.id));
+      totalRows = rows.length;
+      if (st) st.textContent = totalRows ? '正在删除云端数据：0 / ' + totalRows : '云端没有日志数据。';
+      deletedCount = await _deleteRowsById(c, rows, (done, total) => {
+        if (st) st.textContent = '正在删除云端数据：' + done + ' / ' + total;
+      });
+    } catch (error) {
+      deletedCount = Number(error && error.deletedCount || deletedCount);
+      deleteError = error;
+    }
+    if (deleteError) {
+      localStorage.removeItem(USAGE_CACHE_KEY);
+      const usage = await getUsage();
+      if (st) st.textContent = '已删除 ' + deletedCount + ' / ' + totalRows + ' 条；剩余删除失败：' +
+        (deleteError.message || '未知错误') + '。当前实际用量 ' + usage.usedMB.toFixed(2) + ' MB，可重试继续。';
+      return { ok: false, deleted: deletedCount, total: totalRows, reason: deleteError.message || '删除失败' };
     }
     // 明确关闭当前本地 item 的云上传，防止下一轮“云端缺失自愈”把刚删除的数据重新传回去。
     for (const item of _extractAll()) _setItemEnabled(item.kind, item.itemId, false);
@@ -1697,7 +1766,6 @@
     for (const entry of outbox) {
       if (entry && typeof entry.key === 'string' && entry.key.indexOf('log:') === 0) await _outboxRemove(entry.key);
     }
-    const st = document.getElementById('storageStatus');
     if (st) st.textContent = '已删除云端全部日志数据并暂停这些项目的上传（本地保留）。';
     renderPanel();
     return { ok: true };
@@ -1887,7 +1955,7 @@
     try { await _refreshLocalState(true); } catch (e) { console.warn('[SyncLogs] 本地同步状态初始化失败:', e); }
     _subscribe();
     if (_autoSyncOn()) {
-      await _enqueue(() => _flushLogs({ pullMode: 'full', maintenance: true }));
+      await _enqueue(() => _flushLogs({ pullMode: 'full', maintenance: true, automatic: true }));
       if (_canRunScheduledPull()) pullScheduler.start();
     }
     _emitStatus();
@@ -1930,7 +1998,7 @@
           clearTimeout(realtimeRetryTimer);
           realtimeRetryTimer = null;
           // 补拉订阅建立前可能漏掉的日志变更。
-          void _enqueue(() => _flushLogs({ pullMode: 'incremental' }));
+          void _enqueue(() => _flushLogs({ pullMode: 'incremental', automatic: true }));
         } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
           _scheduleRealtimeRetry();
         }
@@ -2070,6 +2138,7 @@
     markItemDeleted,
     renderPanel: renderPanelSafe,
     setItemEnabled,
+    setKindAutoSync,
     deleteAllRemote,
     pruneRemote,
     migrateLegacy,
@@ -2088,10 +2157,12 @@
       hasRemoteAdvanced: _hasRemoteAdvanced,
       refreshLocalState: _refreshLocalState,
       contentHash: _contentHash,
+      itemSizeText: _itemSizeText,
       flushLogs: _flushLogs,
       pullItems: _pullItems,
       uploadPreparedItem: _uploadPreparedItem,
       processTombstone: _processTombstone,
+      deleteRowsById: _deleteRowsById,
       queryAll: _queryAll,
       normalizeTargets: _normalizeTargets
     };

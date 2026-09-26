@@ -438,12 +438,19 @@ test('rendering an unchanged task line does not mark it dirty', async () => {
 test('sync conflicts render inside settings without a popup', async () => {
   const result = await page.evaluate(async () => {
     localStorage.setItem('study_sync_pending_conflicts_v1', JSON.stringify({
-      study_notes_v2: {
-        key: 'study_notes_v2',
+      study_notes: {
+        key: 'study_notes',
         reason: 'both-changed',
         baseTimestamp: '2026-08-25T08:00:00.000Z',
         remoteTimestamp: '2026-08-25T08:05:00.000Z',
         detectedAt: '2026-08-25T08:06:00.000Z'
+      },
+      study_notes_folders: {
+        key: 'study_notes_folders',
+        reason: 'cloud-newer-than-base',
+        baseTimestamp: '2026-08-25T08:01:00.000Z',
+        remoteTimestamp: '2026-08-25T08:07:00.000Z',
+        detectedAt: '2026-08-25T08:08:00.000Z'
       }
     }));
     localStorage.setItem('study_sync_logs_conflicts_v2', JSON.stringify({
@@ -463,6 +470,10 @@ test('sync conflicts render inside settings without a popup', async () => {
       panelDisplay: panel.style.display,
       panelText: panel.textContent,
       actionCount: panel.querySelectorAll('.sync-conflict-btn').length,
+      groupCount: panel.querySelectorAll('.sync-conflict-group').length,
+      groupActionCount: panel.querySelectorAll('.sync-conflict-group-btn').length,
+      groupItemCount: panel.querySelectorAll('.sync-conflict-group-items .sync-conflict-item').length,
+      firstGroupOpen: panel.querySelector('.sync-conflict-group').open,
       pendingCount: window.Sync.getPendingConflicts().length,
       storageText: storagePanel.textContent,
       storageConflictActions: storagePanel.querySelectorAll('.sync-conflict-btn').length
@@ -471,10 +482,17 @@ test('sync conflicts render inside settings without a popup', async () => {
   expect(result.legacyPopupCount).toBe(0);
   expect(result.panelDisplay).toBe('block');
   expect(result.panelText).toContain('笔记');
+  expect(result.panelText).toContain('统一处理该分类');
   expect(result.panelText).toContain('保留本地并上传');
   expect(result.panelText).toContain('使用云端并覆盖本地');
-  expect(result.actionCount).toBe(2);
-  expect(result.pendingCount).toBe(1);
+  expect(result.actionCount).toBe(4);
+  expect(result.groupCount).toBe(1);
+  expect(result.groupActionCount).toBe(2);
+  expect(result.groupItemCount).toBe(2);
+  expect(result.firstGroupOpen).toBe(true);
+  expect(result.pendingCount).toBe(2);
+  await page.locator('#syncConflictPanel .sync-conflict-group > summary').evaluate(el => el.click());
+  expect(await page.locator('#syncConflictPanel .sync-conflict-group').evaluate(el => el.open)).toBe(false);
   expect(result.storageText).toContain('对话云存储冲突');
   expect(result.storageText).toContain('云端对话测试');
   expect(result.storageConflictActions).toBe(2);
@@ -516,6 +534,11 @@ test('prompt studio edits shared templates and resolves app data at request time
   await page.locator('[data-insert-token="待办信息"]').click();
   await expect(page.locator('#promptTemplateText')).toHaveValue(/\{\{待办信息\}\}/);
   await expect(page.locator('#promptHighlightLayer .prompt-token-highlight')).toContainText('{{待办信息}}');
+  await page.locator('[data-prompt-view="preview"]').click();
+  await expect(page.locator('#promptPreviewText')).toBeVisible();
+  await expect(page.locator('#promptPreviewText')).not.toContainText('{{待办信息}}');
+  await expect(page.locator('.prompt-preview-panel #promptPreviewText')).toHaveCount(0);
+  await page.locator('[data-prompt-view="source"]').click();
   const result = await page.evaluate(() => {
     const conv = getActiveConv();
     return { stored: getPromptTemplate('chat'), sent: buildConversationSystemPrompt(conv), perConversation: conv.systemPrompt };
@@ -525,6 +548,14 @@ test('prompt studio edits shared templates and resolves app data at request time
   expect(result.perConversation).toBe('');
   await page.locator('[data-template-id="morning"]').click();
   await expect(page.locator('#promptTemplateText')).toContainText('{{日报数据}}');
+  await page.locator('[data-prompt-view="preview"]').click();
+  await expect(page.locator('#promptPreviewText')).toContainText('当前完整数据（预览示例）');
+  await expect(page.locator('#promptPreviewText')).not.toContainText('（仅在生成日报时插入）');
+  await page.locator('[data-prompt-view="data"]').click();
+  await expect(page.locator('#promptDataOverview')).toBeVisible();
+  await expect(page.locator('#promptDataOverview')).toContainText('晨间日报当前数据');
+  await expect(page.locator('#promptDataOverview')).not.toContainText('```json');
+  await page.locator('[data-prompt-view="source"]').click();
   await page.locator('[data-template-id="evening"]').click();
   await expect(page.locator('#promptTemplateText')).toContainText('{{日报数据}}');
   const custom = await page.evaluate(() => {

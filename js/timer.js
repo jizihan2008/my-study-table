@@ -286,6 +286,12 @@ function _formatTimerStaleMoment(ts) {
   return `${d.getMonth() + 1}月${d.getDate()}日 ${pad(d.getHours())}:${pad(d.getMinutes())}`;
 }
 
+function dismissTimerResumeNotice() {
+  timerResumedFromRestart = false;
+  timerStaleNotice = null;
+  renderTimer();
+}
+
 // Save state on every tick + on visibility/page unload
 window.addEventListener('beforeunload', function() {
   saveTimerState();
@@ -319,6 +325,14 @@ function getTimerTask(taskId) {
   return tlGetQuests().find(task => task.id === taskId) || null;
 }
 
+function getTodayTimerTotalMs(records, todayStr) {
+  return (Array.isArray(records) ? records : []).reduce((total, record) => {
+    if (!record || record.date !== todayStr) return total;
+    const duration = Number(record.totalMs);
+    return total + (Number.isFinite(duration) && duration > 0 ? duration : 0);
+  }, 0);
+}
+
 function renderTimer() {
   const container = document.getElementById('timerContainer');
   const linkedTodo = timerLinkedTodoId ? findTodo(timerLinkedTodoId) : null;
@@ -330,7 +344,8 @@ function renderTimer() {
 
   const todayStr = formatDate(new Date());
   const records = loadTimerRecords();
-  let todayMs = 0;
+  // 「今日累计」始终表示当天所有计时记录，不受当前关联项筛选影响。
+  const todayMs = getTodayTimerTotalMs(records, todayStr);
   const todaySessions = [];
   for (const rec of records) {
     if (rec.date === todayStr) {
@@ -348,7 +363,6 @@ function renderTimer() {
       // If nothing linked, show all records
       if (!timerLinkedTodoId && !timerLinkedGoalId && !timerLinkedTaskId) match = true;
       if (match) {
-        todayMs += rec.totalMs;
         if (rec.sessions) todaySessions.push(...rec.sessions);
       }
     }
@@ -412,9 +426,9 @@ function renderTimer() {
   // 上次未结束的计时：刚关掉就重开 → 自动接着计（提前说明一下）；太久以前 → 只提示找回
   let resumeNoticeHtml = '';
   if (timerStaleNotice) {
-    resumeNoticeHtml = `<div class="timer-resume-notice">${escapeHtml(timerStaleNotice)}</div>`;
+    resumeNoticeHtml = `<div class="timer-resume-notice"><span>${escapeHtml(timerStaleNotice)}</span><button type="button" class="timer-resume-close" onclick="dismissTimerResumeNotice()" title="关闭提示" aria-label="关闭恢复计时提示">✕</button></div>`;
   } else if (timerResumedFromRestart && !timerStartedThisSession) {
-    resumeNoticeHtml = `<div class="timer-resume-notice">已恢复上次未结束的计时，可继续计时或「停止并保存」。</div>`;
+    resumeNoticeHtml = `<div class="timer-resume-notice"><span>已恢复上次未结束的计时，可继续计时或「停止并保存」。</span><button type="button" class="timer-resume-close" onclick="dismissTimerResumeNotice()" title="关闭提示" aria-label="关闭恢复计时提示">✕</button></div>`;
   }
 
   container.innerHTML = `

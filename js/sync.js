@@ -102,7 +102,7 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260923-r22';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20260924-r28';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const EVENT_LOG_KEY = 'study_sync_event_log_v1';
   const EVENT_LOG_LIMIT = 300;
@@ -130,6 +130,7 @@
   let remoteApplyDepth = 0;                   // 仅抑制远端写回产生的本地变更通知
   let _lastPushAt = 0;                        // 上次主动上传完成时间（抑制自己变更的 realtime 回显）
   let _lastPullError = '';                    // 最近一次手动同步的失败原因（诊断用）
+  let _lastCollectionError = '';              // 集合同步恢复后用于清除已过期错误
   let listeners = new Set();                  // 状态监听器（settings 面板刷新用）
   const syncSessionId = 'sync_' + Date.now().toString(36) + '_' + Math.random().toString(36).slice(2, 8);
   const pullScheduler = policy.createRecurringTask(
@@ -170,7 +171,7 @@
         'key', 'trigger', 'action', 'reason', 'choice', 'error', 'localDirty',
         'localEmpty', 'baseTimestamp', 'remoteTimestamp', 'remoteHasData',
         'forceUpload', 'unchanged', 'count', 'targeted', 'fullReconcile',
-        'realtimeStatus', 'online', 'visible'
+        'realtimeStatus', 'online', 'visible', 'total', 'resolved', 'failed', 'reasons'
       ];
       for (const name of allowed) {
         if (details[name] !== undefined) entry[name] = details[name];
@@ -518,7 +519,11 @@
         });
         if (itemResult && itemResult.applied) _refreshUI();
         if (itemResult && itemResult.errors && itemResult.errors.length) {
-          _lastPullError = itemResult.errors.join('；');
+          _lastCollectionError = itemResult.errors.join('；');
+          _lastPullError = _lastCollectionError;
+        } else if (itemResult && _lastCollectionError && _lastPullError === _lastCollectionError) {
+          _lastCollectionError = '';
+          _lastPullError = '';
         }
       }
       // 持久化 dirty/outbox 是事实来源，应用重启后也必须恢复到运行时队列。
@@ -982,6 +987,100 @@
     }
   }
 
+  async function resolveConflicts(keys, choice) {
+    if (choice !== 'local' && choice !== 'remote') {
+      return { ok: false, choice, total: 0, resolved: 0, failed: [], reason: '无效的冲突处理方式' };
+    }
+    const pending = new Set(getPendingConflicts().map(item => item.key));
+    const selected = Array.from(new Set(Array.isArray(keys) ? keys : []))
+      .filter(key => pending.has(key));
+    if (!selected.length) {
+      return { ok: false, choice, total: 0, resolved: 0, failed: [], reason: '该分类已没有待处理冲突' };
+    }
+
+    const failed = [];
+    let resolved = 0;
+    const orphanGroups = new Map();
+    if (global.SyncCollections && typeof global.SyncCollections.orphanConflictCollection === 'function') {
+      selected.forEach(key => {
+        const collection = global.SyncCollections.orphanConflictCollection(key);
+        if (!collection) return;
+        const group = orphanGroups.get(collection) || [];
+        group.push(key);
+        orphanGroups.set(collection, group);
+      });
+    }
+    const orphanKeys = new Set(Array.from(orphanGroups.values()).flat());
+    const collectionKeys = global.SyncCollections && typeof global.SyncCollections.resolveConflicts === 'function'
+      ? selected.filter(key => global.SyncCollections.isCloudKey(key) && !orphanKeys.has(key)) : [];
+    const ordinaryKeys = collectionKeys.length
+      ? selected.filter(key => !global.SyncCollections.isCloudKey(key) && !orphanKeys.has(key))
+      : selected.filter(key => !orphanKeys.has(key));
+
+    for (const [collection, keysInGroup] of orphanGroups) {
+      if (choice !== 'local' || !isSyncKey(collection)) {
+        keysInGroup.forEach(key => failed.push({
+          key,
+          reason: '该冲突来自旧版逐记录同步；请选择保留本地，以当前整组数据覆盖云端'
+        }));
+        continue;
+      }
+      const uploaded = await _uploadKey(collection, true);
+      if (uploaded && uploaded.ok && !uploaded.skipped) {
+        global.SyncCollections.clearPendingConflicts(keysInGroup);
+        resolved += keysInGroup.length;
+        _logSync('legacy-conflicts-migrated', { key: collection, choice, count: keysInGroup.length });
+      } else {
+        const reason = uploaded && uploaded.skipped
+          ? '该类本地数据过大，无法上传覆盖云端'
+          : (uploaded && uploaded.reason || '上传本地版本失败');
+        keysInGroup.forEach(key => failed.push({ key, reason }));
+      }
+    }
+
+    if (collectionKeys.length) {
+      const collectionResults = await global.SyncCollections.resolveConflicts(
+        collectionKeys, choice, await getSession(), _client()
+      );
+      for (const result of collectionResults) {
+        if (result && result.ok) resolved++;
+        else failed.push({ key: result && result.key || '', reason: result && result.reason || '处理失败' });
+      }
+      if (collectionResults.some(result => result && result.applied)) _refreshUI();
+      _emitStatus();
+    }
+    for (const key of ordinaryKeys) {
+      if (!getPendingConflicts().some(item => item.key === key)) {
+        resolved++;
+        continue;
+      }
+      const result = await resolveConflict(key, choice);
+      if (result && (result.ok || /(?:冲突不存在|冲突已不存在)/.test(result.reason || ''))) resolved++;
+      else failed.push({ key, reason: result && result.reason || '处理失败' });
+    }
+    const failureReasons = Array.from(new Set(failed.map(item => item.reason).filter(Boolean)));
+    if (failed.length) {
+      const failureSummary = failureReasons.length === 1
+        ? failureReasons[0]
+        : ('首个原因：' + (failureReasons[0] || '未知错误'));
+      _logSync('conflict-batch-failed', {
+        level: 'error', choice, total: selected.length, resolved,
+        failed: failed.length,
+        reasons: failureReasons.slice(0, 5), error: failureSummary
+      });
+    }
+    return {
+      ok: failed.length === 0,
+      choice,
+      total: selected.length,
+      resolved,
+      failed,
+      reason: failed.length
+        ? (failureReasons.length === 1 ? failureReasons[0] : ('有 ' + failed.length + ' 项处理失败；首个原因：' + (failureReasons[0] || '未知错误')))
+        : ''
+    };
+  }
+
   // ── 变更上报（saveData 钩子调用）─────────────────────
   function onLocalChange(key) {
     if (global.SyncCollections && global.SyncCollections.isCollection(key)) {
@@ -1415,6 +1514,7 @@
     getPendingConflicts,
     canSyncAccount: _accountMatches,
     resolveConflict,
+    resolveConflicts,
     getEventLog: _getEventLog,
     clearEventLog,
     getConflictHistory: _getConflictHistory,

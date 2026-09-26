@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v171';
+const VERSION = 'mst-v177';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -14,8 +14,8 @@ const PRECACHE_URLS = [
   './',
   './index.html',
   './manifest.webmanifest',
-  './css/style.css?v=20260923-r1',
-  './css/workspace.css?v=20260915-r3',
+  './css/style.css?v=20260924-r4',
+  './css/workspace.css?v=20260926-r4',
   './css/appearance.css?v=20260913-r6',
   './js/theme-model.js?v=20260914-r5',
   './js/liquid-glass.js?v=20260906-r2',
@@ -57,11 +57,11 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20260923-r3',
+  './js/settings.js?v=20260924-r6',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20260923-r2',
-  './js/sync-collections.js?v=20260923-r4',
-  './js/sync.js?v=20260923-r22',
+  './js/sync-collections.js?v=20260924-r8',
+  './js/sync.js?v=20260924-r28',
   './js/sync-logs.js?v=20260923-r2',
   './js/ai-utils.js?v=20260826-r2',
   './js/bg-media-idb.js?v=20260906-r2',

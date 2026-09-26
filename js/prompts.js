@@ -22,6 +22,7 @@ const REPORT_DEFAULTS = {
   evening: '你是用户的学习伙伴。请生成一份晚间日报，帮助用户总结今天、沉淀收获，并为明天指出方向。语气温暖、具体、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、专注时间、笔记、复习、习惯和遗留事项。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}'
 };
 let selectedPromptTemplate = 'chat';
+let selectedPromptView = 'source';
 let promptSelection = { start: 0, end: 0 };
 let promptEditorResizeObserver = null;
 
@@ -149,6 +150,63 @@ function reportDataFromLegacyPrompt(reportPrompt) {
   return start >= 0 ? text.slice(start, end >= 0 ? end : undefined).trim() : text;
 }
 
+function promptPreviewContext(templateId) {
+  const conv = typeof getActiveConv === 'function' ? getActiveConv() : null;
+  const apiCfg = typeof getEffectiveApiConfig === 'function' ? getEffectiveApiConfig() : {};
+  const context = { conv, apiCfg };
+  try {
+    const data = templateId === 'morning' && typeof collectDailyReportData === 'function'
+      ? collectDailyReportData()
+      : templateId === 'evening' && typeof collectEveningReportData === 'function'
+        ? collectEveningReportData()
+        : null;
+    if (data) {
+      context.previewData = data;
+      context.reportData = `📊 **当前完整数据（预览示例）**\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+      context.userInstruction = '（此处将在生成日报时替换为你当次填写的补充要求）';
+    }
+  } catch (_) { /* Preview remains usable if a data collector is unavailable. */ }
+  return context;
+}
+
+const PROMPT_DATA_LABELS = {
+  todayStr: '日期', yesterdayStr: '昨日日期', focusItems: '昨日聚焦', todayFocusItems: '今日聚焦', tomorrowFocusItems: '明日聚焦',
+  focusDone: '已完成聚焦', focusTotal: '聚焦总数', longTermGoals: '长期目标', yesterdayDoneTodos: '昨日完成待办', todayDoneTodos: '今日完成待办',
+  todayArchived: '今日归档', overdueTodos: '逾期待办', todayDueTodos: '今日截止', tomorrowDueTodos: '明日截止', undoneTodos: '未完成待办',
+  totalDone: '已完成待办总数', totalTodos: '待办总数', ydayTimerStr: '昨日专注时长', todayTimerStr: '今日专注时长',
+  ydayTimerSessions: '昨日专注记录', todayTimerSessions: '今日专注记录', ydayNotes: '昨日笔记', todayNotes: '今日笔记',
+  totalNotes: '笔记总数', reviewDueNotes: '待复习笔记', overdueReviewCount: '逾期复习数', reviewDisabled: '复习功能已关闭',
+  habitsOverview: '习惯详情', habitsCount: '习惯总数', habitsDoneYesterday: '昨日完成习惯', habitsDoneToday: '今日完成习惯',
+  taskline: '任务线', prevReport: '上一份日报', text: '内容', title: '标题', name: '名称', done: '已完成', dueDate: '截止日期',
+  tags: '标签', timeRange: '时间段', duration: '时长', targetName: '专注目标', activeCount: '激活任务数', activeNames: '激活任务',
+  doneCount: '已完成任务数', currentMain: '当前主线', mainProgress: '主线进度', ydayDone: '近期完成任务'
+};
+
+function friendlyPromptLabel(key) {
+  return PROMPT_DATA_LABELS[key] || String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2');
+}
+
+function friendlyPromptValue(value, depth = 0) {
+  if (value === null || value === undefined || value === '') return '<span class="prompt-data-empty">暂无</span>';
+  if (typeof value === 'boolean') return `<span class="prompt-data-badge ${value ? 'yes' : 'no'}">${value ? '是' : '否'}</span>`;
+  if (typeof value !== 'object') return `<span class="prompt-data-value">${promptEsc(value)}</span>`;
+  if (Array.isArray(value)) {
+    if (!value.length) return '<span class="prompt-data-empty">暂无数据</span>';
+    return `<div class="prompt-data-list">${value.map((item, index) => `<div class="prompt-data-list-item"><span class="prompt-data-index">${index + 1}</span><div>${friendlyPromptValue(item, depth + 1)}</div></div>`).join('')}</div>`;
+  }
+  return `<div class="prompt-data-fields">${Object.entries(value).map(([key, item]) => `<div class="prompt-data-field"><strong>${promptEsc(friendlyPromptLabel(key))}</strong><div>${friendlyPromptValue(item, depth + 1)}</div></div>`).join('')}</div>`;
+}
+
+function friendlyPromptDataHtml(template, templateId, context) {
+  if (context.previewData) return `<section class="prompt-data-card"><h4>${templateId === 'morning' ? '晨间日报' : '晚间日报'}当前数据</h4>${friendlyPromptValue(context.previewData)}</section>`;
+  const used = PROMPT_INSERTIONS.filter(item => new RegExp(`\\{\\{\\s*${item.token}\\s*\\}\\}`).test(template));
+  if (!used.length) return '<div class="prompt-data-empty-state">这个模板没有使用应用数据标记。</div>';
+  return used.map(item => {
+    const value = resolvePromptTemplate(`{{${item.token}}}`, context);
+    return `<section class="prompt-data-card"><h4>${promptEsc(item.token)}</h4><p>${promptEsc(item.hint)}</p><pre>${promptEsc(value || '暂无')}</pre></section>`;
+  }).join('');
+}
+
 function renderPromptStudio() {
   const root = document.getElementById('promptStudio');
   if (!root) return;
@@ -156,6 +214,7 @@ function renderPromptStudio() {
   const defs = getPromptTemplateDefs();
   const def = defs.find(item => item.id === selectedPromptTemplate) || defs[0];
   const value = getPromptTemplate(def.id);
+  const previewContext = promptPreviewContext(def.id);
   root.innerHTML = `
     <aside class="prompt-library" aria-label="提示词模板">
       <div class="prompt-library-head"><div><span class="prompt-eyebrow">TEMPLATES</span><h2>提示词模板</h2></div><button class="prompt-icon-btn primary" id="promptAddBtn" type="button" title="新建模板" aria-label="新建模板"><i data-lucide="plus"></i></button></div>
@@ -165,8 +224,14 @@ function renderPromptStudio() {
     <main class="prompt-editor-shell">
       <header class="prompt-editor-header"><div class="prompt-title-fields"><span class="prompt-current-label">正在编辑模板</span><strong class="prompt-name-input">${promptEsc(def.name)}</strong></div><div class="prompt-editor-actions"><span class="prompt-save-state" id="promptSaveState">已保存</span>${def.id.startsWith('custom-') ? '<button class="prompt-copy-btn" type="button" id="promptDeleteBtn"><i data-lucide="trash-2"></i>删除模板</button>' : '<button class="prompt-copy-btn" type="button" id="promptResetBtn"><i data-lucide="rotate-ccw"></i>恢复默认</button>'}</div></header>
       <div class="prompt-workspace prompt-template-workspace">
-        <section class="prompt-builder prompt-full-editor"><div class="prompt-builder-intro"><div><h3>提示词全文</h3><p>直接编辑完整文本。点击右侧的信息项，可将标记插入光标处。</p></div><span id="promptLength">${value.length} 字符</span></div><div class="prompt-text-editor"><pre class="prompt-highlight-layer" id="promptHighlightLayer" aria-hidden="true"></pre><textarea id="promptTemplateText" aria-label="${def.name}提示词全文" spellcheck="false">${promptEsc(value)}</textarea></div></section>
-        <aside class="prompt-preview-panel"><div class="prompt-preview-head"><div><span class="prompt-eyebrow">APP DATA</span><h3>插入应用信息</h3></div></div><p class="prompt-insert-help">标记在编辑时保持原样；每次发送时读取当时的信息并替换。</p><div class="prompt-insertion-list">${PROMPT_INSERTIONS.map(item => `<button type="button" data-insert-token="${item.token}"><span><strong>${item.token}</strong><small>${item.hint}</small></span><code>{{${item.token}}}</code></button>`).join('')}</div><div class="prompt-preview-head prompt-live-head"><div><span class="prompt-eyebrow">PREVIEW</span><h3>当前数据预览</h3></div><button type="button" class="prompt-copy-btn" id="promptCopyBtn"><i data-lucide="copy"></i>复制</button></div><pre class="prompt-preview-text" id="promptPreviewText"></pre><p class="prompt-insert-help">实际发送时会重新获取数据。</p></aside>
+        <section class="prompt-builder prompt-full-editor">
+          <div class="prompt-builder-intro prompt-view-header"><div class="prompt-view-tabs" role="tablist" aria-label="提示词视图"><button type="button" class="${selectedPromptView === 'source' ? 'active' : ''}" data-prompt-view="source" role="tab" aria-selected="${selectedPromptView === 'source'}">提示词全文</button><button type="button" class="${selectedPromptView === 'preview' ? 'active' : ''}" data-prompt-view="preview" role="tab" aria-selected="${selectedPromptView === 'preview'}">当前数据预览</button><button type="button" class="${selectedPromptView === 'data' ? 'active' : ''}" data-prompt-view="data" role="tab" aria-selected="${selectedPromptView === 'data'}">数据概览</button></div><div class="prompt-view-meta"><span id="promptLength">${value.length} 字符</span><button type="button" class="prompt-copy-btn" id="promptCopyBtn" ${selectedPromptView === 'preview' ? '' : 'hidden'}><i data-lucide="copy"></i>复制示例</button></div></div>
+          <p class="prompt-view-help" id="promptViewHelp">${selectedPromptView === 'source' ? '直接编辑完整文本。点击右侧的信息项，可将标记插入光标处。' : selectedPromptView === 'preview' ? '已根据当前应用数据完整替换标记；实际发送时会重新获取最新数据。' : '将模板使用的当前数据整理成便于阅读的分组和列表。'}</p>
+          <div class="prompt-text-editor" ${selectedPromptView === 'source' ? '' : 'hidden'}><pre class="prompt-highlight-layer" id="promptHighlightLayer" aria-hidden="true"></pre><textarea id="promptTemplateText" aria-label="${def.name}提示词全文" spellcheck="false">${promptEsc(value)}</textarea></div>
+          <pre class="prompt-preview-text prompt-full-preview" id="promptPreviewText" ${selectedPromptView === 'preview' ? '' : 'hidden'}></pre>
+          <div class="prompt-data-overview" id="promptDataOverview" ${selectedPromptView === 'data' ? '' : 'hidden'}>${friendlyPromptDataHtml(value, def.id, previewContext)}</div>
+        </section>
+        <aside class="prompt-preview-panel"><div class="prompt-preview-head"><div><span class="prompt-eyebrow">APP DATA</span><h3>插入应用信息</h3></div></div><p class="prompt-insert-help">标记在编辑时保持原样；每次发送时读取当时的信息并替换。</p><div class="prompt-insertion-list">${PROMPT_INSERTIONS.map(item => `<button type="button" data-insert-token="${item.token}"><span><strong>${item.token}</strong><small>${item.hint}</small></span><code>{{${item.token}}}</code></button>`).join('')}</div></aside>
       </div>
     </main>`;
   const area = root.querySelector('#promptTemplateText');
@@ -190,6 +255,10 @@ function renderPromptStudio() {
     renderPromptStudio();
   }));
   root.querySelector('#promptAddBtn').addEventListener('click', createPromptTemplate);
+  root.querySelectorAll('[data-prompt-view]').forEach(button => button.addEventListener('click', () => {
+    selectedPromptView = button.dataset.promptView;
+    renderPromptStudio();
+  }));
   root.querySelectorAll('[data-insert-token]').forEach(button => button.addEventListener('click', () => {
     const token = `{{${button.dataset.insertToken}}}`;
     area.setRangeText(token, Math.min(promptSelection.start, area.value.length), Math.min(promptSelection.end, area.value.length), 'end');
@@ -276,5 +345,5 @@ async function deletePromptTemplate(id) {
 function refreshPromptTemplatePreview() {
   const area = document.getElementById('promptTemplateText');
   const preview = document.getElementById('promptPreviewText');
-  if (area && preview) preview.textContent = resolvePromptTemplate(area.value);
+  if (area && preview) preview.textContent = resolvePromptTemplate(area.value, promptPreviewContext(selectedPromptTemplate));
 }

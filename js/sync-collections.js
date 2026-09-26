@@ -45,6 +45,15 @@
       return isCollection(collection) ? collection : null;
     } catch (_) { return null; }
   }
+  function orphanConflictCollection(key) {
+    if (typeof key !== 'string' || !key.startsWith(PREFIX) || !conflicts()[key]) return null;
+    const parts = key.slice(PREFIX.length).split(':');
+    if (parts.length !== 2) return null;
+    try {
+      const collection = decodeURIComponent(parts[0]);
+      return isCollection(collection) ? null : collection;
+    } catch (_) { return null; }
+  }
   function readJson(key, fallback) {
     try { return JSON.parse(localStorage.getItem(key)) || fallback; }
     catch (_) { return fallback; }
@@ -119,6 +128,14 @@
     const all = conflicts();
     if (key in all) { delete all[key]; writeJson(CONFLICT_KEY, all); }
   }
+  function clearPendingConflicts(keys) {
+    const all = conflicts();
+    let changed = false;
+    for (const key of keys || []) {
+      if (key in all) { delete all[key]; changed = true; }
+    }
+    if (changed) writeJson(CONFLICT_KEY, all);
+  }
   function getPendingConflicts() { return Object.values(conflicts()); }
   function pendingCount() {
     const pending = new Set(getPendingConflicts().map(item => item.key));
@@ -160,6 +177,27 @@
     }
   }
 
+  function transientError(error) {
+    const code = String(error && error.code || '');
+    const message = String(error && error.message || error || '');
+    return code === 'PGRST002' || /(?:502|503|schema cache|transport failure|fetch failed|network error|socket closed)/i.test(message);
+  }
+  function retryDelay(attempt) {
+    return new Promise(resolve => setTimeout(resolve, 700 * Math.pow(2, attempt)));
+  }
+  async function withTransientRetry(operation) {
+    let lastError;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try { return await operation(); }
+      catch (e) {
+        lastError = e;
+        if (!transientError(e) || attempt === 2) throw e;
+        await retryDelay(attempt);
+      }
+    }
+    throw lastError;
+  }
+
   async function queryAll(makeQuery) {
     const size = 500;
     const rows = [];
@@ -171,8 +209,17 @@
         return data || [];
       }
       if (typeof query.order === 'function') query = query.order('key', { ascending: true });
-      const { data, error } = await query.range(start, start + size - 1);
-      if (error) throw new Error(error.message || '读取云端记录失败');
+      const { data, error } = await withTransientRetry(async () => {
+        let page = makeQuery();
+        if (typeof page.order === 'function') page = page.order('key', { ascending: true });
+        const response = await page.range(start, start + size - 1);
+        if (response.error) {
+          const failure = new Error(response.error.message || '读取云端记录失败');
+          failure.code = response.error.code;
+          throw failure;
+        }
+        return response;
+      });
       rows.push(...(data || []));
       if (!data || data.length < size) return rows;
     }
@@ -303,6 +350,50 @@
     if (result && result.error) throw new Error(result.error.message || '上传记录失败');
     if (!result || !result.data || !result.data.updated_at) return { conflict: true };
     return { timestamp: result.data.updated_at };
+  }
+  async function writeItemsForced(c, userId, collection, targets) {
+    const current = localMap(collection);
+    const prepared = targets.map(target => ({
+      target,
+      value: current.get(target.id) || deletedValue()
+    }));
+    const results = [];
+    const chunkSize = 100;
+    for (let start = 0; start < prepared.length; start += chunkSize) {
+      const chunk = prepared.slice(start, start + chunkSize);
+      try {
+        const rows = chunk.map(item => ({
+          user_id: userId,
+          key: cloudKey(collection, item.target.id),
+          value: item.value
+        }));
+        const response = await withTransientRetry(async () => {
+          const written = await c.from('user_data').upsert(rows, { onConflict: 'user_id,key' })
+            .select('key,updated_at');
+          if (written.error) {
+            const failure = new Error(written.error.message || '批量上传记录失败');
+            failure.code = written.error.code;
+            throw failure;
+          }
+          return written;
+        });
+        const timestamps = new Map((response.data || []).map(row => [row.key, row.updated_at]));
+        for (const item of chunk) {
+          const timestamp = timestamps.get(item.target.key);
+          if (!timestamp) {
+            results.push({ ok: false, key: item.target.key, reason: '上传后未返回云端版本' });
+            continue;
+          }
+          recordState(collection, item.target.id, item.value, timestamp);
+          clearConflict(item.target.key);
+          results.push({ ok: true, key: item.target.key, applied: false });
+        }
+      } catch (e) {
+        const reason = String(e && e.message || e || '批量上传记录失败');
+        chunk.forEach(item => results.push({ ok: false, key: item.target.key, reason }));
+      }
+    }
+    return results;
   }
   async function syncCollection(c, userId, collection, legacy, force) {
     const known = state()[collection] || {};
@@ -456,7 +547,98 @@
     } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
   }
 
+  async function resolveConflicts(keys, choice, session, client) {
+    const selected = Array.from(new Set(Array.isArray(keys) ? keys : []))
+      .filter(key => conflicts()[key] && isCloudKey(key));
+    if (!selected.length) return [];
+    if (choice !== 'local' && choice !== 'remote') {
+      return selected.map(key => ({ ok: false, key, reason: '无效的处理方式' }));
+    }
+    if (!session || !session.user || !client || !global.Sync.canSyncAccount(session.user.id)) {
+      return selected.map(key => ({ ok: false, key, reason: '账号不可用' }));
+    }
+
+    const results = [];
+    const recordGroups = new Map();
+    const orderKeys = [];
+    selected.forEach(key => {
+      const parsed = parseCloudKey(key);
+      if (!parsed) { orderKeys.push(key); return; }
+      const group = recordGroups.get(parsed.collection) || [];
+      group.push({ key, id: parsed.id });
+      recordGroups.set(parsed.collection, group);
+    });
+
+    let legacy = null;
+    if (choice === 'remote' && selected.some(key => {
+      const conflict = conflicts()[key];
+      return conflict && conflict.reason === 'legacy-device-change';
+    })) {
+      try { legacy = await legacyRows(client, session.user.id); }
+      catch (e) {
+        const reason = String(e && e.message || e);
+        return selected.map(key => ({ ok: false, key, reason }));
+      }
+    }
+
+    for (const [collection, group] of recordGroups) {
+      let cloud = null;
+      try {
+        if (choice === 'local') {
+          results.push(...await writeItemsForced(client, session.user.id, collection, group));
+          continue;
+        }
+        // A category batch reads its remote rows once. Previously every record
+        // repeated this full collection query, overwhelming the Data API.
+        cloud = await remoteRows(client, session.user.id, collection);
+        const old = legacy ? legacyMap(legacy.get(collection)) : new Map();
+        for (const target of group) {
+          try {
+            const conflict = conflicts()[target.key];
+            if (!conflict) {
+              results.push({ ok: true, key: target.key, alreadyResolved: true, applied: false });
+              continue;
+            }
+            let remote = cloud.get(target.id);
+            if (!remote || conflict.reason === 'legacy-device-change') {
+              remote = old.get(target.id);
+              if (!remote && conflict.reason === 'legacy-device-change') {
+                remote = { value: deletedValue(), legacy: true };
+              }
+            }
+            if (!remote) throw new Error('云端记录不存在');
+            if (remote.legacy) {
+              const written = await writeItem(client, session.user.id, collection, target.id, remote.value, null, true);
+              if (written.conflict) throw new Error('云端记录已变化，请重试');
+              applyRemote(collection, target.id, remote.value);
+              recordState(collection, target.id, remote.value, written.timestamp);
+            } else {
+              applyRemote(collection, target.id, remote.value);
+              recordState(collection, target.id, remote.value, remote.updated_at);
+            }
+            clearConflict(target.key);
+            results.push({ ok: true, key: target.key, applied: true });
+          } catch (e) {
+            results.push({ ok: false, key: target.key, reason: String(e && e.message || e || '处理失败') });
+          }
+        }
+      } catch (e) {
+        const reason = String(e && e.message || e || '读取云端记录失败');
+        group.forEach(target => results.push({ ok: false, key: target.key, reason }));
+      }
+    }
+
+    for (const key of orderKeys) {
+      const result = await resolveConflict(key, choice, session, client);
+      if (!result.ok && /(?:冲突不存在|冲突已不存在)/.test(result.reason || '')) {
+        results.push({ ok: true, key, alreadyResolved: true, applied: false });
+      } else results.push(Object.assign({ key }, result));
+    }
+    return results;
+  }
+
   global.SyncCollections = { isCollection, isCloudKey, onLocalChange, onRemoteChange, sync,
-    pendingCount, getPendingConflicts, resolveConflict };
+    pendingCount, getPendingConflicts, resolveConflict, resolveConflicts,
+    orphanConflictCollection, clearPendingConflicts };
   if (global.__MST_TEST__) global.SyncCollections.__test = { cloudKey, parseCloudKey, localMap };
 })(typeof window !== 'undefined' ? window : globalThis);

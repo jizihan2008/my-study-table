@@ -562,6 +562,37 @@ test('immersive note editing fills the app window and reveals edge controls', as
   await expect(page.locator('body')).not.toHaveClass(/notes-immersive/);
 });
 
+test('mobile notes expose an immersive entry and keep touch controls reachable', async () => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.evaluate(() => {
+    window.switchTab('notes');
+    window.notesGoMain();
+    window.switchNoteView('rich');
+  });
+
+  await page.locator('.notes-mv-fab').click();
+  const entry = page.locator('#notesMobileImmersiveBtn');
+  await expect(entry).toBeVisible();
+  await entry.click();
+
+  const section = page.locator('#section-notes');
+  await expect(section).toHaveClass(/notes-immersive/);
+  await expect(page.locator('#notesImmersiveExit')).toBeVisible();
+  await expect(page.locator('#notesImmersiveZoom')).toBeVisible();
+  await expect(page.locator('#notesImmersiveSplit')).not.toBeVisible();
+  await expect(page.locator('.mobile-tabbar')).toHaveCSS('visibility', 'hidden');
+
+  const bounds = await section.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    return [rect.x, rect.y, rect.width, rect.height].map(Math.round);
+  });
+  expect(bounds).toEqual([0, 0, 390, 844]);
+
+  await page.locator('#notesImmersiveExit').click();
+  await expect(section).not.toHaveClass(/notes-immersive/);
+  await expect(page.locator('.mobile-tabbar')).not.toHaveCSS('visibility', 'hidden');
+});
+
 test('immersive split opens two independent notes for reading and editing', async () => {
   await page.setViewportSize({ width: 1186, height: 720 });
   const ids = await page.evaluate(() => {
