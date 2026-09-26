@@ -417,12 +417,17 @@ test('calendar and task-line writes enter the persistent sync queue', async () =
     return {
       calendar: JSON.parse(localStorage.getItem('study_calendar_events') || '[]'),
       taskLine: JSON.parse(localStorage.getItem('study_taskline_v1') || '{}'),
-      dirtyKeys: status.dirtyKeys
+      dirtyKeys: status.dirtyKeys,
+      pendingCount: status.pendingCount
     };
   });
   expect(result.calendar.some(item => item.title === '同步回归测试')).toBe(true);
   expect(result.taskLine.lines.some(item => item.name === '同步测试任务线')).toBe(true);
-  expect(result.dirtyKeys).toEqual(expect.arrayContaining(['study_calendar_events', 'study_taskline_v1']));
+  // Calendar uses record-level collection sync, while task lines still use the
+  // ordinary persistent dirty-key queue. Both contribute to pendingCount.
+  expect(result.dirtyKeys).toContain('study_taskline_v1');
+  expect(result.dirtyKeys).not.toContain('study_calendar_events');
+  expect(result.pendingCount).toBeGreaterThanOrEqual(2);
 });
 
 test('rendering an unchanged task line does not mark it dirty', async () => {
