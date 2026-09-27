@@ -155,6 +155,7 @@ function saveTimerRecords(records) {
   } else {
     localStorage.setItem('study_timer_records', JSON.stringify(records));
   }
+  if (typeof renderTodayTimerRecords === 'function') renderTodayTimerRecords(records);
 }
 
 // ═══════════ Global state ═══════════
@@ -537,7 +538,7 @@ function getTimerTodoFullPath(todo) {
   return [...ancestors, todo.text || ''].filter(Boolean).join(' › ');
 }
 
-function renderTimerHistory(records) {
+function renderTimerHistory(records, options = {}) {
   const todayStr = formatDate(new Date());
   const dateMap = {};
   for (const rec of records) {
@@ -592,10 +593,10 @@ function renderTimerHistory(records) {
             ${rec.auto ? '<span class="timer-auto-badge" title="由日历事件自动计入（删除日历事件不会删除此记录）">📅</span>' : ''}
           </span>
           <span class="timer-history-time">
-            <span class="timer-history-actions">
+            ${options.readOnly ? '' : `<span class="timer-history-actions">
               <button class="timer-hist-btn" onclick="editTimerRecord(${rec.id})" title="编辑">✎</button>
               <button class="timer-hist-btn danger" onclick="deleteTimerRecord(${rec.id})" title="删除">✕</button>
-            </span>
+            </span>`}
             ${formatTimerTime(rec.totalMs)}
           </span>
         </div>`);
@@ -614,6 +615,7 @@ function renderTimerHistory(records) {
     </div>`;
   }
 
+  if (options.readOnly) return bodyHtml;
   const arrow = timerHistoryExpanded ? '▼' : '▶';
   const count = sortedDates.length;
   return `<div class="timer-history-title" onclick="toggleTimerHistory()">

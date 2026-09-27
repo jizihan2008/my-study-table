@@ -1221,18 +1221,28 @@
   // 此处用 try/catch 逐个调用，避免单个模块异常影响整体刷新。
   function _refreshUI() {
     // ── 正在编辑的笔记保护：刷新会重渲染 DOM 并用 localStorage 覆盖内存，
-    //    若用户正在编辑笔记标题/正文，先把输入框当前值保存，刷新后写回内存并恢复输入框与焦点，避免回退。──
+    //    若用户正在编辑笔记标题/正文，先保存草稿；刷新后仅恢复原本真正聚焦的编辑区。──
     let editSnap = null;
     try {
       if (typeof getActiveNote === 'function') {
         const n = getActiveNote();
         const t = document.getElementById('noteTitleInput');
         const a = document.getElementById('notesTextarea');
-        const dirty = !!(n && (n._dirtyTitle || n._dirtyContent));
+        const r = document.getElementById('notesRichEditor');
+        const dirtyContent = !!(n && n._dirtyContent);
         const focusT = !!t && document.activeElement === t;
         const focusA = !!a && document.activeElement === a;
-        if (n && n.id && (dirty || focusT || focusA)) {
-          editSnap = { id: n.id, title: t ? t.value : n.title, content: a ? a.value : n.content };
+        const focusR = !!r && document.activeElement === r;
+        if (n && n.id && (dirtyContent || focusT || focusA || focusR)) {
+          editSnap = {
+            id: n.id,
+            title: t ? t.value : n.title,
+            content: a ? a.value : n.content,
+            dirtyContent,
+            focusField: focusT ? 'title' : (focusA ? 'source' : (focusR ? 'rich' : null)),
+            selectionStart: (focusT || focusA) ? document.activeElement.selectionStart : null,
+            selectionEnd: (focusT || focusA) ? document.activeElement.selectionEnd : null
+          };
         }
       }
     } catch (e) {}
@@ -1244,26 +1254,43 @@
       if (typeof todos !== 'undefined') todos = loadData('study_todos_v2');
       if (typeof links !== 'undefined') links = loadData('study_links_v3');
     } catch (e) { /* 忽略 */ }
+    // 在任何界面重绘之前把尚未落盘的正文并回新加载的数据。编辑期间不重绘
+    // 笔记编辑器本身，避免旧内容短暂覆盖草稿，也避免富文本光标被重置。
+    if (editSnap && editSnap.dirtyContent) {
+      try {
+        if (typeof notes !== 'undefined' && Array.isArray(notes)) {
+          const n = notes.find(x => String(x.id) === String(editSnap.id));
+          if (n) {
+            n.content = editSnap.content;
+            n._dirtyContent = true;
+          }
+        }
+      } catch (e) {}
+    }
     const calls = [
       'renderNotes', 'renderTodos', 'renderToday', 'renderLinks', 'renderCalendar',
       'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats'
     ];
     for (const fn of calls) {
+      if (fn === 'renderNotes' && editSnap) continue;
       try { if (typeof window[fn] === 'function') window[fn](); } catch (e) { /* 忽略单个模块失败 */ }
     }
-    // 恢复正在编辑的笔记输入（值 + 焦点），避免同步刷新打断标题/正文编辑
+    // 编辑器 DOM 未被重绘，草稿、焦点和选区会原样保留。这里只在其他模块
+    // 意外移动焦点时恢复原编辑区；标题草稿始终不写入 notes。
     if (editSnap) {
       try {
-        if (typeof notes !== 'undefined' && Array.isArray(notes)) {
-          const n = notes.find(x => String(x.id) === String(editSnap.id));
-          if (n) { n.title = editSnap.title; n.content = editSnap.content; }
-        }
         setTimeout(() => {
           const t = document.getElementById('noteTitleInput');
           const a = document.getElementById('notesTextarea');
-          if (t) t.value = editSnap.title;
-          if (a) a.value = editSnap.content;
-          if (t) t.focus();
+          const r = document.getElementById('notesRichEditor');
+          const focusEl = editSnap.focusField === 'title' ? t
+            : (editSnap.focusField === 'source' ? a : (editSnap.focusField === 'rich' ? r : null));
+          if (focusEl && document.activeElement !== focusEl) {
+            focusEl.focus({ preventScroll: true });
+            if (editSnap.selectionStart != null && typeof focusEl.setSelectionRange === 'function') {
+              focusEl.setSelectionRange(editSnap.selectionStart, editSnap.selectionEnd);
+            }
+          }
         }, 0);
       } catch (e) {}
     }

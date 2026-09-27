@@ -135,6 +135,34 @@ test('normal chat API requests stream by default when an incremental callback is
   assert.deepEqual(deltas, ['A', 'AB']);
 });
 
+test('background final-text tasks can force streaming when chat streaming is disabled', async () => {
+  const payload = 'data: {"choices":[{"delta":{"reasoning_content":"思考"}}]}\n\n'
+    + 'data: {"choices":[{"delta":{"content":"日报"},"finish_reason":"stop"}]}\n\n'
+    + 'data: [DONE]\n\n';
+  let sentBody;
+  const response = responseFromBytes(new TextEncoder().encode(payload), [7, 13, 5]);
+  response.ok = true;
+  response.status = 200;
+  response.headers = { get: () => 'text/event-stream' };
+  const context = loadAiApi(async (_url, options) => {
+    sentBody = JSON.parse(options.body);
+    return response;
+  });
+  context.localStorage.getItem = key => key === 'study_ai_streaming' ? 'false' : null;
+
+  const result = await context.callAiApiForFinalText(
+    [{ role: 'user', content: '生成日报' }],
+    { baseUrl: 'https://example.test/v1', apiKey: 'key', model: 'model', temperature: 0.2, deepThink: true },
+    null,
+    { feature: 'morning_report', disableTools: true, forceStream: true, onDelta() {} }
+  );
+
+  assert.equal(sentBody.stream, true);
+  assert.equal('tools' in sentBody, false);
+  assert.equal(result.cleanText, '日报');
+  assert.equal(result.reasoning, '思考');
+});
+
 test('an endpoint that explicitly rejects streaming falls back to one non-stream request', async () => {
   const bodies = [];
   const context = loadAiApi(async (_url, options) => {

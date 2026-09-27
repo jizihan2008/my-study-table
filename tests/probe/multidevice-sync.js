@@ -23,6 +23,7 @@ function cloud() {
   const rows = new Map();
   let sequence = 0;
   let beforeVersionRead = null;
+  let beforeOrderRead = null;
   function client(device) {
     return {
       auth: { getSession: () => ({ data: { session: { user: { id: device.userId } } } }) },
@@ -31,7 +32,10 @@ function cloud() {
         const q = { operation: 'read', fields: '*', filters: [], input: null };
         const builder = {
           select(fields) { q.fields = fields; return this; },
-          eq(field, value) { q.filters.push(row => row[field] === value); return this; },
+          eq(field, value) {
+            if (field === 'key' && String(value).startsWith('mst:order:v1:')) q.isOrderQuery = true;
+            q.filters.push(row => row[field] === value); return this;
+          },
           in(field, values) { q.filters.push(row => values.includes(row[field])); return this; },
           like(field, pattern) {
             q.isPrefixQuery = true;
@@ -55,6 +59,10 @@ function cloud() {
             if (device.pauseCollectionRead && q.isPrefixQuery) {
               device.pauseCollectionRead = false;
               if (beforeVersionRead) await beforeVersionRead();
+            }
+            if (device.pauseOrderRead && q.isOrderQuery) {
+              device.pauseOrderRead = false;
+              if (beforeOrderRead) await beforeOrderRead();
             }
             return { data: single ? (data[0] || null) : data, error: null };
           }
@@ -92,6 +100,7 @@ function cloud() {
         updated_at: new Date(Date.UTC(2026, 8, 23, 0, 0, ++sequence)).toISOString() });
     },
     onVersionRead(fn) { beforeVersionRead = fn; },
+    onOrderRead(fn) { beforeOrderRead = fn; },
     value(userId, collection = KEY) {
       const prefix = 'mst:item:v1:' + encodeURIComponent(collection) + ':';
       const records = [...rows.values()].filter(row => row.user_id === userId && row.key.startsWith(prefix));
@@ -112,7 +121,7 @@ function pick(row, fields) {
 }
 
 function device(name, backend, userId = 'u1') {
-  const state = { name, userId, pauseCollectionRead: false, prefixReads: 0, writeRequests: 0 };
+  const state = { name, userId, pauseCollectionRead: false, pauseOrderRead: false, prefixReads: 0, writeRequests: 0 };
   const values = new Map([['study_sync_config', JSON.stringify({ enabled: true, autoSync: false })]]);
   const localStorage = {
     getItem: key => values.has(key) ? values.get(key) : null,
@@ -351,6 +360,26 @@ async function run() {
       bConflicts: b.sync.getPendingConflicts().length };
     check('concurrent-edit', actual, () => actual.cloud[0].text === 'B edit' && actual.aConflicts === 1,
       { expected: 'conflict, no overwrite' });
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    const original = [{ id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }];
+    await a.seed(original);
+    await b.syncNow();
+    a.edit([{ id: 1, text: 'edited' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }]);
+    a.state.pauseOrderRead = true;
+    db.onOrderRead(async () => {
+      a.edit([{ id: 3, text: 'three' }, { id: 1, text: 'edited' }, { id: 2, text: 'two' }]);
+    });
+    await a.syncNow();
+    const afterInflight = a.get().map(item => item.id);
+    await a.syncNow();
+    await b.syncNow();
+    const actual = { afterInflight, cloudOrder: db.raw('u1', 'mst:order:v1:' + encodeURIComponent(KEY)),
+      other: b.get().map(item => item.id) };
+    check('inflight-local-reorder-does-not-snap-back', actual,
+      () => actual.afterInflight.join(',') === '3,1,2' && actual.cloudOrder.join(',') === '3,1,2' &&
+        actual.other.join(',') === '3,1,2');
   }
   {
     const db = cloud(), a = device('A', db, 'account-A');

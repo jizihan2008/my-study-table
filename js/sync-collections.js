@@ -297,6 +297,14 @@
     const all = readJson(ORDER_STATE_KEY, {});
     const baseline = all[collection];
     const current = readItems(collection).map(item => String(item.id));
+    // The cloud read is asynchronous. A drag/drop can commit a new local order
+    // while that request is in flight; applying the response would visibly snap
+    // the list back to its previous order. Leave the collection pending so the
+    // next pass uploads/merges the just-committed local order instead.
+    if (initialIds.join('\u0000') !== current.join('\u0000')) {
+      pendingCollections.add(collection);
+      return false;
+    }
     const remoteIds = remote && Array.isArray(remote.value) ? remote.value.map(String) : null;
     const localChanged = !!baseline && baseline.ids.join('\u0000') !== current.join('\u0000');
     const remoteChanged = !!baseline && remote && remote.updated_at !== baseline.timestamp;

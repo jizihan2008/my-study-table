@@ -770,8 +770,21 @@ test('calendar opens on today and a weekly event can drop a single day', async (
   await page.evaluate(dateStr => selectCalendarDay(dateStr), today);
   await expect(page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' })).toHaveCount(1);
 
+  // 直接点 × 会先询问删除当天还是整个重复事件
+  const recurringEventRow = page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' });
+  await recurringEventRow.locator('.cal-event-del').dispatchEvent('click');
+  await expect(page.locator('#calDeleteChoiceModal')).toHaveClass(/open/);
+  await expect(page.locator('#calDeleteChoiceModal')).toContainText('仅删除这一天');
+  await expect(page.locator('#calDeleteChoiceModal')).toContainText('删除整个重复事件');
+  await page.locator('#calDeleteChoiceModal .cal-delete-one-btn').click();
+  const skippedViaDeleteButton = await page.evaluate(() => JSON.parse(localStorage.getItem('study_calendar_events') || '[]')[0]);
+  expect(skippedViaDeleteButton.skippedDates).toEqual([today]);
+  await expect(page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' })).toHaveCount(0);
+  await page.locator('#calendarTodoList .cal-event-restore').dispatchEvent('click');
+  await expect(page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' })).toHaveCount(1);
+
   // 右键 → 仅删除这一天
-  await page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' }).first().click({ button: 'right' });
+  await page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' }).first().dispatchEvent('contextmenu');
   await expect(page.locator('#calEventContextMenu')).toHaveClass(/visible/);
   await expect(page.locator('#calCtxDeleteOne')).toBeVisible();
   await page.locator('#calCtxDeleteOne').click();
@@ -782,7 +795,7 @@ test('calendar opens on today and a weekly event can drop a single day', async (
   await expect(page.locator('#calendarTodoList .cal-event-skipped')).toHaveCount(1);
 
   // 恢复这一天
-  await page.locator('#calendarTodoList .cal-event-restore').click();
+  await page.locator('#calendarTodoList .cal-event-restore').dispatchEvent('click');
   const restored = await page.evaluate(() => JSON.parse(localStorage.getItem('study_calendar_events') || '[]')[0]);
   expect(restored.skippedDates).toEqual([]);
   await expect(page.locator('#calendarTodoList .cal-event-item', { hasText: 'E2E 每周重复事件' })).toHaveCount(1);

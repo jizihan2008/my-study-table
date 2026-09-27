@@ -407,6 +407,36 @@
     return true;
   }
 
+  function getEditableFoldSummary(event) {
+    const summary = event.target?.closest?.('summary');
+    const fold = summary?.parentElement;
+    if (!summary || !fold?.matches('details.note-fold') || !host.contains(fold)) return null;
+    return summary;
+  }
+
+  function isFoldToggleClick(event, summary) {
+    // The disclosure marker is a pseudo-element, so it cannot be targeted
+    // directly. Treat the marker and its surrounding padding as one control.
+    const rect = summary.getBoundingClientRect();
+    return event.clientX <= rect.left + 36;
+  }
+
+  function placeEditingCaretAtPoint(x, y) {
+    const point = document.caretPositionFromPoint?.(x, y);
+    const range = document.createRange();
+    if (point) range.setStart(point.offsetNode, point.offset);
+    else {
+      const legacyRange = document.caretRangeFromPoint?.(x, y);
+      if (!legacyRange) return;
+      range.setStart(legacyRange.startContainer, legacyRange.startOffset);
+    }
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+    host.focus({ preventScroll: true });
+  }
+
   function init() {
     host = document.getElementById(options.hostId || 'notesRichEditor');
     if (!host || host.dataset.ready === 'true') return;
@@ -419,7 +449,22 @@
     if (host.id === 'notesRichEditor' && typeof root.onNotePreviewScroll === 'function') {
       host.addEventListener('scroll', root.onNotePreviewScroll);
     }
+    host.addEventListener('pointerdown', event => {
+      const summary = getEditableFoldSummary(event);
+      if (summary && isFoldToggleClick(event, summary)) {
+        // Keep clicking the disclosure control from moving the editing caret
+        // into the title. The following click still performs the native toggle.
+        event.preventDefault();
+      }
+    });
     host.addEventListener('click', event => {
+      const summary = getEditableFoldSummary(event);
+      if (summary && !isFoldToggleClick(event, summary)) {
+        // In editing mode the title is editable text. Cancel the native
+        // <summary> activation everywhere except around the disclosure marker.
+        event.preventDefault();
+        placeEditingCaretAtPoint(event.clientX, event.clientY);
+      }
       const link = event.target.closest('a');
       if (link && !event.ctrlKey && !event.metaKey) event.preventDefault();
     });

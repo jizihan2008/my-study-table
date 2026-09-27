@@ -79,10 +79,12 @@ test('AI skill tools support create, list, read, edit and explicit deletion', as
   assert.equal(ctx.checkAiDeletePolicy('delete_skill', { skillId: skill.id }, { _deletePolicy: 'allow' }).needsConfirm, false);
   assert.equal(ctx.checkAiDeletePolicy('list_skills', {}, { _deletePolicy: 'block' }).ok, true);
   const snapshot = ctx.beginAiToolTransaction('delete_skill');
+  ctx.localStorage.setItem('study_notes_v2', JSON.stringify([{ id: 99, content: '用户刚输入的内容' }]));
   assert.equal((await ctx.executeToolCallStructured('delete_skill', { skillId: skill.id })).ok, true);
   assert.equal(ctx.loadAiSkills().length, 0);
   ctx.rollbackAiToolTransaction(snapshot);
   assert.equal(ctx.loadAiSkills().length, 1);
+  assert.match(ctx.localStorage.getItem('study_notes_v2'), /用户刚输入的内容/);
 });
 
 test('note tag tools: create with tags, edit tags, and batch tag by mode', async () => {
@@ -785,7 +787,7 @@ test('DSML response is corrected automatically before the tool chain continues',
   assert.equal(output.outcomes[0].status, 'failed');
 });
 
-test('repeated malformed tool output uses the ordinary tool-loop limit', async () => {
+test('repeated malformed tool output stops through protocol-failure detection', async () => {
   const ctx = harness();
   let calls = 0;
   ctx.callAiApi = async () => {
@@ -794,7 +796,7 @@ test('repeated malformed tool output uses the ordinary tool-loop limit', async (
   };
   const output = await ctx.runToolCallLoop({}, conversation(ctx));
   assert.equal(calls, 3);
-  assert.match(output.finalCleanText, /已达到工具调用轮次上限/);
+  assert.match(output.finalCleanText, /连续收到无法解析的工具指令/);
   assert.equal(output.outcomes.filter(item => item.action === 'tool_protocol' && item.status === 'failed').length, 3);
 });
 
@@ -1005,14 +1007,19 @@ test('write ledger prevents the same request from writing again after resume', a
   assert.match(resumed.allToolResults[0], /跨刷新重复操作/);
 });
 
-test('loop exhaustion never claims all operations completed', async () => {
+test('tool chains can continue beyond the former three-round limit', async () => {
   const ctx = harness();
   let call = 0;
-  ctx.callAiApi = async () => result([{ action: 'list_todos', params: { page: ++call } }]);
+  ctx.callAiApi = async () => {
+    call++;
+    return call <= 5
+      ? result([{ action: 'list_todos', params: { page: call } }])
+      : result([], '已完成所有查询。');
+  };
   ctx.executeToolCall = async () => 'tasks';
   const output = await ctx.runToolCallLoop({}, conversation(ctx));
-  assert.match(output.finalCleanText, /上限/);
-  assert.doesNotMatch(output.finalCleanText, /已执行所有操作/);
+  assert.equal(call, 6);
+  assert.match(output.finalCleanText, /已完成所有查询/);
 });
 
 test('stop between writes skips the rest of the batch', async () => {

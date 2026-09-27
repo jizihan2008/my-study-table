@@ -1095,7 +1095,17 @@ function renderToday() {
   renderReviewCard();
   renderGoals();
   renderTodaySchedule();
+  renderTodayTimerRecords();
   updateDebugPanel();
+}
+
+function renderTodayTimerRecords(records) {
+  const list = document.getElementById('todayTimerRecords');
+  if (!list || typeof loadTimerRecords !== 'function' || typeof renderTimerHistory !== 'function') return;
+  const today = getTodayStr();
+  const items = (records || loadTimerRecords()).filter(record => record.date === today);
+  list.innerHTML = renderTimerHistory(items, { readOnly: true })
+    || '<div class="today-goals-empty">今天还没有计时记录，完成计时或手动补记后会显示在这里。</div>';
 }
 
 function renderTodaySchedule() {

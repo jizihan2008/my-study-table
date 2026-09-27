@@ -33,10 +33,10 @@
         if (global.StudyData) global.StudyData.put(key, raw);
         return { ok: true, changed: true };
       } catch (error) {
-        if (global.StudyData) {
-          global.StudyData.put(key, raw);
-          return { ok: true, durable: 'indexeddb', warning: error };
-        }
+        // localStorage is the synchronous compatibility cache read by the UI and
+        // sync layer. Writing only IndexedDB would create two different truths:
+        // callers would report success, while reload/sync could still read and
+        // upload the stale cache value. Fail the whole commit instead.
         return { ok: false, error };
       }
     },
@@ -49,10 +49,7 @@
         if (global.StudyData) global.StudyData.put(key, raw);
         return { ok: true, changed: true };
       } catch (error) {
-        if (raw !== undefined && global.StudyData) {
-          global.StudyData.put(key, raw);
-          return { ok: true, durable: 'indexeddb', warning: error };
-        }
+        // Never acknowledge a split-brain write. See setRaw above.
         return { ok: false, error };
       }
     },

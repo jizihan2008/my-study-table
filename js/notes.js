@@ -30,6 +30,7 @@
     if (n.parentId === undefined) n.parentId = null;
     if (n._summaryFresh === undefined) n._summaryFresh = false;
     if (n.type === 'note' && !n._reviewHistory) n._reviewHistory = [];
+    if (n.type === 'note' && !n._reviewAnchorAt) n._reviewAnchorAt = n.createdAt || n.updatedAt || new Date().toISOString();
     if (n.type === 'note' && n._skipReview === undefined) n._skipReview = false;
     if (n.type === 'note' && !Array.isArray(n.tags)) n.tags = [];
     if (n.type === 'note' && !Array.isArray(n.keywords)) n.keywords = [];
@@ -97,7 +98,8 @@ function findNoteItem(id) { return notes.find(n => n.id === id); }
 function getNoteItemChildren(parentId) { return notes.filter(n => n.parentId === parentId); }
 
 function createNewNote(parentId) {
-  const newNote = { id: genId(), type: 'note', title: '', content: '', summary: '', _summaryFresh: false, parentId: parentId || null, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(), _reviewHistory: [], _skipReview: false, tags: [], keywords: [] };
+  const now = new Date().toISOString();
+  const newNote = { id: genId(), type: 'note', title: '', content: '', summary: '', _summaryFresh: false, parentId: parentId || null, createdAt: now, updatedAt: now, _reviewAnchorAt: now, _reviewHistory: [], _skipReview: false, tags: [], keywords: [] };
   notes.push(newNote);
   activeNoteId = newNote.id;
   localStorage.setItem('study_active_note', activeNoteId);
@@ -110,7 +112,20 @@ function createNoteFolder(name, parentId) {
   if (!name || !name.trim()) return null;
   const folder = { id: genId(), type: 'folder', title: name.trim(), parentId: parentId || null, summary: '', _summaryFresh: true };
   notes.push(folder);
-  saveData('study_notes_v2', notes);
+  if (saveData('study_notes_v2', notes) !== true) {
+    notes.splice(notes.indexOf(folder), 1);
+    const status = document.getElementById('notesStatus');
+    if (status) status.textContent = '新建文件夹失败';
+    return null;
+  }
+  // A nested folder must be visible immediately: expand its parent and enter
+  // inline rename mode instead of leaving a successfully-created item hidden.
+  if (folder.parentId != null) {
+    const expanded = getNotesExpandedFolders();
+    expanded.set(Number(folder.parentId), true);
+    _saveNotesExpandedFolders();
+  }
+  renamingFolderId = folder.id;
   renderNoteList();
   return folder;
 }
@@ -210,22 +225,41 @@ function onNoteTitleChange() {
   const note = getActiveNote();
   if (!note) return;
   const titleInput = document.getElementById('noteTitleInput');
+  if (!titleInput) return;
+  // 标题输入期间只保留在输入框中，不写入 notes。否则正文的自动保存或
+  // 标题自身的防抖保存会把半截标题同步到云端，远端回写后造成输入回弹。
+  const status = document.getElementById('notesStatus');
+  if (status && titleInput.value !== (note.title || '')) status.textContent = '编辑标题中…';
+}
+
+function commitNoteTitleChange() {
+  const note = getActiveNote();
+  const titleInput = document.getElementById('noteTitleInput');
+  if (!note || !titleInput) return;
+  const nextTitle = titleInput.value;
   const previousTitle = note.title || '';
-  if (!note._dirtyTitle) {
-    pushNotesUndo(note.id, note.content, previousTitle);
-    note._dirtyTitle = true;
-    notesRedoStack = [];
+  if (nextTitle === previousTitle) {
+    const status = document.getElementById('notesStatus');
+    if (status) status.textContent = '已保存';
+    return;
   }
-  note.title = titleInput.value;
+  pushNotesUndo(note.id, note.content, previousTitle);
+  notesRedoStack = [];
+  note.title = nextTitle;
   note.updatedAt = new Date().toISOString();
+  note._summaryFresh = false;
   updateLastEditedDisplay(note);
-  if (notesDebounceId) clearTimeout(notesDebounceId);
-  notesDebounceId = setTimeout(() => {
-    note._summaryFresh = false;
-    saveData('study_notes_v2', notes);
-    note._dirtyTitle = false;
-    renderNoteList();
-  }, 400);
+  if (saveData('study_notes_v2', notes) !== true) {
+    note.title = previousTitle;
+    titleInput.value = previousTitle;
+    const status = document.getElementById('notesStatus');
+    if (status) status.textContent = '保存失败，请先备份内容';
+    return;
+  }
+  const status = document.getElementById('notesStatus');
+  if (status) status.textContent = '已保存';
+  // 失焦通常由点击另一篇笔记触发；延后一拍重绘，避免替换掉尚未收到 click 的目标节点。
+  setTimeout(renderNoteList, 0);
 }
 
 function onNotesChange() {
@@ -249,10 +283,13 @@ function onNotesChange() {
   notesDebounceId = setTimeout(() => {
     note._summaryFresh = false;
     // 编辑笔记不再重置复习周期（改为右键菜单手动「重置复习周期」）
-    saveData('study_notes_v2', notes);
-    document.getElementById('notesStatus').textContent = '已保存';
-    note._dirtyContent = false;
-    renderNoteList();
+    if (saveData('study_notes_v2', notes) === true) {
+      document.getElementById('notesStatus').textContent = '已保存';
+      note._dirtyContent = false;
+      renderNoteList();
+    } else {
+      document.getElementById('notesStatus').textContent = '保存失败，内容仍保留在当前页';
+    }
   }, 500);
 }
 
@@ -279,10 +316,13 @@ function onRichNotesChange(markdown, previousMarkdown) {
   if (notesDebounceId) clearTimeout(notesDebounceId);
   notesDebounceId = setTimeout(() => {
     note._summaryFresh = false;
-    saveData('study_notes_v2', notes);
-    if (status) status.textContent = '已保存';
-    note._dirtyContent = false;
-    renderNoteList();
+    if (saveData('study_notes_v2', notes) === true) {
+      if (status) status.textContent = '已保存';
+      note._dirtyContent = false;
+      renderNoteList();
+    } else if (status) {
+      status.textContent = '保存失败，内容仍保留在当前页';
+    }
   }, 500);
 }
 
@@ -535,7 +575,14 @@ function renderNoteList() {
     if (item.type === 'folder') {
       const ownFolderMatch = !notesTagFilter && notesSearchQuery && normalizeNoteSearch(item.title).includes(notesSearchQuery);
       const showAllChildren = !!includeAll || !!ownFolderMatch;
-      const children = sortNoteItems(childrenByParent.get(item.id) || []).filter(child => showAllChildren ? (!notesTagFilter || matchesTree(child)) : matchesTree(child));
+      const filtering = !!(notesSearchQuery || notesTagFilter);
+      const children = sortNoteItems(childrenByParent.get(item.id) || []).filter(child => {
+        // Without an active filter every child belongs in the tree, including an
+        // empty folder. Previously matchesTree(emptyFolder) returned false, so a
+        // newly-created nested folder silently disappeared.
+        if (!filtering) return true;
+        return showAllChildren ? (!notesTagFilter || matchesTree(child)) : matchesTree(child);
+      });
       if ((notesSearchQuery || notesTagFilter) && !ownFolderMatch && children.length === 0) return '';
       const expandId = 'ns-exp-' + item.id;
       const isRenaming = item.id === renamingFolderId;
@@ -814,13 +861,14 @@ function isDescendantOf(itemId,childId){
 }
 
 function reorderItem(draggedId,targetId,zone){
+  const previousNotes=notes.map(item=>({...item}));
   const dragged=findNoteItem(draggedId),target=findNoteItem(targetId);
-  if(!dragged||!target)return;
+  if(!dragged||!target)return false;
   // Remove dragged first
   notes=notes.filter(n=>n.id!==draggedId);
   const targetIdx=notes.findIndex(n=>n.id===targetId);
-  if(targetIdx===-1){notes.push(dragged);saveData('study_notes_v2',notes);return;}
-  if(zone==='child'){
+  if(targetIdx===-1){notes.push(dragged);}
+  else if(zone==='child'){
     dragged.parentId=targetId;
     const firstChildIdx=notes.findIndex(n=>n.parentId===targetId);
     if(firstChildIdx>=0)notes.splice(firstChildIdx,0,dragged);
@@ -829,7 +877,13 @@ function reorderItem(draggedId,targetId,zone){
     dragged.parentId=target.parentId;
     notes.splice(zone==='before'?targetIdx:targetIdx+1,0,dragged);
   }
-  saveData('study_notes_v2',notes);
+  if(saveData('study_notes_v2',notes)!==true){
+    notes=previousNotes;
+    const status=document.getElementById('notesStatus');
+    if(status)status.textContent='排序保存失败，已恢复原位置';
+    return false;
+  }
+  return true;
 }
 
 document.addEventListener('dragstart',function(e){
@@ -913,6 +967,7 @@ document.addEventListener('drop',function(e){
   if(!li){
     // Drop on empty area — move to root level
     e.preventDefault();
+    const previousNotes=notes.map(item=>({...item}));
     notes=notes.filter(n=>n.id!==_dragId);
     dragged.parentId=null;
     if(_dropZone==='before'){
@@ -920,7 +975,11 @@ document.addEventListener('drop',function(e){
     }else{
       notes.push(dragged);
     }
-    saveData('study_notes_v2',notes);
+    if(saveData('study_notes_v2',notes)!==true){
+      notes=previousNotes;
+      const status=document.getElementById('notesStatus');
+      if(status)status.textContent='排序保存失败，已恢复原位置';
+    }
     clearInd();_dragId=null;renderNoteList();
     return;
   }
@@ -931,10 +990,13 @@ document.addEventListener('drop',function(e){
   if(dragged.type==='folder'&&target.type==='folder'&&isDescendantOf(_dragId,targetId))return;
   e.preventDefault();
   const zone=_dropZone||(target.type==='folder'?'child':'after');
-  reorderItem(_dragId,targetId,zone);
+  const reordered=reorderItem(_dragId,targetId,zone);
   clearInd();_dragId=null;
   renderNoteList();
-  if(zone==='child'&&target.type==='folder'){
+  if(reordered&&zone==='child'&&target.type==='folder'){
+    const expanded=getNotesExpandedFolders();
+    expanded.set(Number(targetId),true);
+    _saveNotesExpandedFolders();
     const eid='ns-exp-'+targetId;const el=document.getElementById(eid);
     if(el)el.style.display='block';
   }
@@ -1471,7 +1533,7 @@ function contextResetReview(){
   if(!id)return;
   const note=findNoteItem(id);
   if(!note)return;
-  resetReviewOnEdit(note);
+  resetNoteReviewCycle(note);
   saveData('study_notes_v2',notes);
   renderNoteList();
   if(typeof renderReviewCard==='function')renderReviewCard();
@@ -2318,6 +2380,231 @@ function renderNoteSummary(){
 function isAutoSummaryEnabled(){return localStorage.getItem('study_auto_summary')!=='false';}
 function checkAndUpdateSummary(){if(!isAutoSummaryEnabled())return;const n=getActiveNote();if(n&&!n._summaryFresh&&!n._summaryUpdating&&(n.content||'').trim().length>0)generateNoteSummary(n);}
 function refreshNoteSummary(){const n=getActiveNote();if(!n||n._summaryUpdating)return;generateNoteSummary(n);}
+
+// ═══════════ Notes: AI Quiz ═══════════
+function openNoteQuiz(){
+  const note=getActiveNote();
+  if(!note)return;
+  const modal=document.getElementById('noteQuizModal');
+  if(!modal)return;
+  modal.dataset.noteId=String(note.id);
+  modal.classList.add('open');
+  renderNoteQuiz();
+  if(typeof lucide!=='undefined')lucide.createIcons();
+}
+function closeNoteQuiz(event){
+  if(event&&event.target!==event.currentTarget)return;
+  const modal=document.getElementById('noteQuizModal');
+  if(modal)modal.classList.remove('open');
+}
+document.addEventListener('keydown',function(event){
+  if(event.key==='Escape'&&document.getElementById('noteQuizModal')?.classList.contains('open'))closeNoteQuiz();
+});
+function getNoteQuizTarget(){
+  const modal=document.getElementById('noteQuizModal');
+  const id=modal?.dataset.noteId;
+  return notes.find(n=>n.type==='note'&&String(n.id)===String(id))||null;
+}
+function renderNoteQuiz(){
+  const body=document.getElementById('noteQuizBody');
+  const note=getNoteQuizTarget();
+  if(!body||!note)return;
+  const quiz=note._aiQuiz;
+  const hasContent=Boolean((note.content||'').trim());
+  const stale=quiz&&quiz.sourceUpdatedAt!==note.updatedAt;
+  const type=quiz?.requestedType||'both';
+  const count=quiz?.requestedCount||5;
+  let result='';
+  if(note._quizUpdating)result='<div class="note-quiz-status">⏳ AI 正在阅读笔记并生成题目，请稍候…</div>';
+  else if(note._quizError)result=`<div class="note-quiz-status error">⚠️ ${escapeHtml(note._quizError)}</div>`;
+  else if(Array.isArray(quiz?.questions)&&quiz.questions.length){
+    const staleNotice=stale?'<div class="note-quiz-status stale">笔记内容已更新，这组题目可能不是最新的。点击“重新出题”即可更新。</div>':'';
+    result=staleNotice+renderNoteQuizQuestions(note);
+  }else result='<div class="note-quiz-status">选择题型和数量，让 AI 把这篇笔记变成一组自测题。</div>';
+  body.innerHTML=`
+    <div class="note-quiz-source">出题范围：<strong>${escapeHtml(note.title||'未命名笔记')}</strong> · ${String((note.content||'').length)} 字</div>
+    <div class="note-quiz-controls">
+      <div class="note-quiz-field"><label for="noteQuizType">题型</label><select id="noteQuizType">
+        <option value="choice" ${type==='choice'?'selected':''}>选择题</option>
+        <option value="short" ${type==='short'?'selected':''}>简答题</option>
+        <option value="both" ${type==='both'?'selected':''}>选择题 + 简答题</option>
+      </select></div>
+      <div class="note-quiz-field"><label for="noteQuizCount">题目数量</label><select id="noteQuizCount">
+        ${[3,5,8,10].map(n=>`<option value="${n}" ${Number(count)===n?'selected':''}>${n} 题</option>`).join('')}
+      </select></div>
+      <button class="note-quiz-generate" onclick="generateNoteQuiz()" ${!hasContent||note._quizUpdating?'disabled':''}>${quiz?'重新出题':'开始出题'}</button>
+    </div>${!hasContent?'<div class="note-quiz-status error">当前笔记没有正文内容，暂时无法出题。</div>':result}${renderNoteQuizHistory(note)}`;
+  if(typeof lucide!=='undefined')lucide.createIcons();
+}
+function noteQuizOptionParts(option,index){
+  const text=String(option||'').trim();
+  const match=text.match(/^([A-Za-z])[.、．，,:：)）]\s*(.*)$/);
+  return match?{letter:match[1].toUpperCase(),label:match[2].trim()||text}:{letter:String.fromCharCode(65+index),label:text};
+}
+function noteQuizAnswerLetter(answer){
+  const match=String(answer||'').trim().toUpperCase().match(/^([A-Z])/);
+  return match?match[1]:String(answer||'').trim().toUpperCase();
+}
+function renderNoteQuizQuestions(note){
+  const questions=note._aiQuiz?.questions||[];
+  const cards=questions.map((q,index)=>{
+    const graded=Boolean(q._graded);
+    const cardClass=graded?(q._correct?' correct':' wrong'):'';
+    let answerArea='';
+    if(q.type==='choice'){
+      answerArea=`<div style="margin-bottom:8px;">${q.options.map((option,optionIndex)=>{
+        const parts=noteQuizOptionParts(option,optionIndex);
+        let cls='bk-quiz-opt';
+        if(graded){
+          if(parts.letter===noteQuizAnswerLetter(q.answer))cls+=' correct-opt';
+          else if(q._userChoice===optionIndex)cls+=' wrong-opt';
+        }else if(q._userChoice===optionIndex)cls+=' selected';
+        return `<div class="${cls}" onclick="selectNoteQuizChoice(${index},${optionIndex})" ${graded?'style="pointer-events:none;"':''}><span class="bk-quiz-opt-letter">${parts.letter}</span><span>${escapeHtml(parts.label)}</span></div>`;
+      }).join('')}</div>`;
+    }else{
+      answerArea=`<textarea class="bk-quiz-short-text" id="noteQuizShort${index}" placeholder="写下你的答案…" oninput="inputNoteQuizShort(${index},this.value)" ${graded?'readonly':''}>${escapeHtml(q._userAnswer||'')}</textarea>`;
+    }
+    let feedback='';
+    if(graded){
+      const cls=q._gradeNote?'note':(q._correct?'grade-ok':'grade-wrong');
+      const lead=q._gradeNote?'参考答案：'+escapeHtml(q.answer):(q._correct?(q.type==='choice'?'✅ 回答正确':'✅ 回答合理'):(q.type==='choice'?'❌ 正确答案：'+escapeHtml(q.answer):'⚠️ 需要补充'));
+      const comment=q._comment?` — ${escapeHtml(q._comment)}`:'';
+      const reference=q.type==='short'&&!q._gradeNote?`<br><small>参考答案：${escapeHtml(q.answer)}</small>`:'';
+      feedback=`<div class="bk-quiz-result show ${cls}">${lead}${comment}${reference}</div>`;
+    }
+    return `<div class="bk-quiz-card${cardClass}"><div class="bk-quiz-qhead"><span class="bk-quiz-qnum">Q${index+1}</span><span class="bk-quiz-qtype">${q.type==='choice'?'单选题':'简答题'}</span></div><div class="bk-quiz-qtext">${escapeHtml(q.question)}</div>${answerArea}${feedback}</div>`;
+  }).join('');
+  const hasGraded=questions.some(q=>q._graded);
+  const allGraded=questions.length>0&&questions.every(q=>q._graded);
+  const score=hasGraded?questions.filter(q=>q._graded&&q._correct).length:null;
+  const summary=hasGraded?`<div class="note-quiz-score"><strong>本次得分 ${score}/${questions.length}</strong><span>${Math.round(score/questions.length*100)}%</span></div>`:'';
+  return `${summary}<div class="note-quiz-list">${cards}</div><div class="bk-quiz-actions note-quiz-submit-row"><button class="bk-quiz-btn" onclick="clearNoteQuizAnswers()">清空答案</button><button class="bk-quiz-btn primary" id="noteQuizSubmitBtn" onclick="submitNoteQuiz()" ${allGraded?'disabled':''}><i data-lucide="check-check" class="lucide-icon"></i> ${allGraded?'已批改':'提交批改'}</button></div>`;
+}
+function selectNoteQuizChoice(questionIndex,optionIndex){
+  const note=getNoteQuizTarget(),question=note?._aiQuiz?.questions?.[questionIndex];
+  if(!question||question.type!=='choice'||question._graded)return;
+  question._userChoice=optionIndex;
+  saveData('study_notes_v2',notes);
+  renderNoteQuiz();
+}
+function inputNoteQuizShort(questionIndex,value){
+  const note=getNoteQuizTarget(),question=note?._aiQuiz?.questions?.[questionIndex];
+  if(!question||question.type!=='short'||question._graded)return;
+  question._userAnswer=value;
+  saveData('study_notes_v2',notes);
+}
+function clearNoteQuizAnswers(){
+  const note=getNoteQuizTarget();
+  if(!note?._aiQuiz?.questions)return;
+  note._aiQuiz.questions.forEach(q=>{delete q._userChoice;delete q._userAnswer;delete q._graded;delete q._correct;delete q._comment;delete q._gradeNote;});
+  saveData('study_notes_v2',notes);
+  renderNoteQuiz();
+}
+function renderNoteQuizHistory(note){
+  const records=Array.isArray(note._quizRecords)?note._quizRecords:[];
+  if(!records.length)return'';
+  return `<div class="bk-quiz-history"><div class="bk-quiz-history-title"><i data-lucide="history" class="lucide-icon"></i> 这篇笔记的测验记录</div>${records.slice().reverse().map((record,reverseIndex)=>{
+    const originalIndex=records.length-1-reverseIndex;
+    const percent=record.total?Math.round(record.score/record.total*100):0;
+    return `<div class="bk-quiz-record ${record.wrongCount?'wrong-rec':''}"><span class="bk-quiz-record-score ${percent>=60?'good':'bad'}">${record.score}/${record.total} (${percent}%)</span>${record.wrongCount?`<span class="bk-quiz-record-wrong">错 ${record.wrongCount} 题</span>`:''}<span class="bk-quiz-record-date">${escapeHtml(String(record.date||'').slice(0,16).replace('T',' '))}</span><button class="bk-quiz-record-del" onclick="deleteNoteQuizRecord(${originalIndex})" title="删除这条测验记录"><i data-lucide="trash-2" class="lucide-icon"></i></button></div>`;
+  }).join('')}</div>`;
+}
+function deleteNoteQuizRecord(index){
+  const note=getNoteQuizTarget();
+  if(!note||!Array.isArray(note._quizRecords)||!note._quizRecords[index])return;
+  const remove=()=>{note._quizRecords.splice(index,1);saveData('study_notes_v2',notes);renderNoteQuiz();};
+  if(typeof showCustomConfirm==='function')showCustomConfirm('确定删除这条测验记录吗？').then(ok=>{if(ok)remove();});
+  else remove();
+}
+async function submitNoteQuiz(){
+  const note=getNoteQuizTarget(),questions=note?._aiQuiz?.questions;
+  if(!note||!Array.isArray(questions)||note._quizGrading||questions.every(q=>q._graded))return;
+  questions.forEach((q,index)=>{if(q.type==='short'){const field=document.getElementById('noteQuizShort'+index);q._userAnswer=(field?.value||q._userAnswer||'').trim();}});
+  const unanswered=questions.some(q=>q.type==='choice'?q._userChoice===undefined:!q._userAnswer);
+  if(unanswered&&typeof showCustomConfirm==='function'&&!await showCustomConfirm('还有题目未作答，确定提交吗？'))return;
+  note._quizGrading=true;
+  const button=document.getElementById('noteQuizSubmitBtn');
+  if(button){button.disabled=true;button.textContent='批改中…';}
+  questions.filter(q=>q.type==='choice').forEach(q=>{
+    const selected=q._userChoice===undefined?'':noteQuizOptionParts(q.options[q._userChoice],q._userChoice).letter;
+    q._graded=true;q._correct=selected===noteQuizAnswerLetter(q.answer);q._comment=q.explanation||'';
+  });
+  const shortQuestions=questions.map((q,index)=>({q,index})).filter(item=>item.q.type==='short');
+  if(shortQuestions.length){
+    try{
+      const aiKey=getSummaryAiKey();
+      if(!aiKey)throw new Error('未配置 AI Key');
+      const apiCfg=typeof getEffectiveApiConfig==='function'?getEffectiveApiConfig(aiKey.id):{apiKey:aiKey.key,baseUrl:aiKey.baseUrl,model:aiKey.model};
+      const gradeText=shortQuestions.map(({q,index})=>`Q${index+1}: ${q.question}\n我的答案: ${q._userAnswer||'（未作答）'}\n参考答案: ${q.answer}\n评分要点: ${q.explanation||'无'}`).join('\n\n');
+      const response=await callAiApi([{role:'system',content:'你是严谨的批改老师。逐题判断学生答案是否覆盖核心要点。只输出 JSON：{"grades":[{"index":题目在整份测验中的序号（从0开始）,"score":0或1,"comment":"简短具体的点评"}]}'},{role:'user',content:gradeText}],{...apiCfg,temperature:0.2,deepThink:false,maxTokens:1200},null,{feature:'note_quiz_grade',disableTools:true});
+      const grades=parseNoteQuizGrades(response?.cleanText||'');
+      shortQuestions.forEach(({q,index})=>{const grade=grades.find(item=>item.index===index);q._graded=true;q._correct=Boolean(grade&&grade.score>=1);q._comment=grade?.comment||'';});
+    }catch{
+      shortQuestions.forEach(({q})=>{q._graded=true;q._correct=false;q._gradeNote=true;q._comment='AI 批改失败，请自行对照';});
+    }
+  }
+  const score=questions.filter(q=>q._graded&&q._correct).length;
+  note._quizRecords=Array.isArray(note._quizRecords)?note._quizRecords:[];
+  note._quizRecords.push({score,total:questions.length,wrongCount:questions.length-score,date:new Date().toISOString()});
+  if(note._quizRecords.length>50)note._quizRecords.splice(0,note._quizRecords.length-50);
+  note._quizGrading=false;
+  saveData('study_notes_v2',notes);
+  renderNoteQuiz();
+  if(score===questions.length&&typeof showCustomConfirm==='function')showCustomConfirm('<div style="font-size:15px;font-weight:600;">🎉 全部答对，太棒了！你已经很好地掌握了这篇笔记。</div>');
+}
+function parseNoteQuizGrades(text){
+  try{
+    const raw=String(text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+    const start=raw.indexOf('{'),end=raw.lastIndexOf('}');
+    const parsed=JSON.parse(start>=0&&end>start?raw.slice(start,end+1):raw);
+    return Array.isArray(parsed.grades)?parsed.grades.map(g=>({index:Number(g.index),score:Number(g.score)>=1?1:0,comment:String(g.comment||'')})).filter(g=>Number.isFinite(g.index)):[];
+  }catch{return[];}
+}
+function parseNoteQuizJson(text){
+  const raw=String(text||'').trim().replace(/^```(?:json)?\s*/i,'').replace(/\s*```$/,'');
+  let parsed;
+  try{parsed=JSON.parse(raw);}catch{
+    const start=raw.indexOf('{'),end=raw.lastIndexOf('}');
+    if(start<0||end<=start)throw new Error('AI 返回的题目格式无法识别，请重试');
+    parsed=JSON.parse(raw.slice(start,end+1));
+  }
+  const items=Array.isArray(parsed)?parsed:parsed.questions;
+  if(!Array.isArray(items)||!items.length)throw new Error('AI 没有生成有效题目，请重试');
+  return items.map(item=>({
+    type:item?.type==='choice'?'choice':'short',
+    question:String(item?.question||item?.text||'').trim(),
+    options:Array.isArray(item?.options)?item.options.map(v=>String(v).trim()).filter(Boolean).slice(0,6):[],
+    answer:String(item?.answer||'').trim(),
+    explanation:String(item?.explanation||item?.explain||'').trim()
+  })).filter(item=>item.question&&item.answer);
+}
+async function generateNoteQuiz(){
+  const note=getNoteQuizTarget();
+  if(!note||note._quizUpdating||!(note.content||'').trim())return;
+  const type=document.getElementById('noteQuizType')?.value||'both';
+  const count=Math.min(10,Math.max(3,Number(document.getElementById('noteQuizCount')?.value)||5));
+  note._quizUpdating=true;note._quizError='';renderNoteQuiz();
+  try{
+    const aiKey=getSummaryAiKey();
+    if(!aiKey)throw new Error('未配置 AI Key，请先在设置中配置');
+    if(typeof callAiApi!=='function')throw new Error('AI 请求模块尚未加载，请刷新应用后重试');
+    const apiCfg=typeof getEffectiveApiConfig==='function'?getEffectiveApiConfig(aiKey.id):{apiKey:aiKey.key,baseUrl:aiKey.baseUrl,model:aiKey.model};
+    const typeInstruction=type==='choice'?'全部为选择题，每题提供 4 个选项':type==='short'?'全部为简答题':'选择题和简答题都要，数量尽量均衡';
+    const response=await callAiApi([
+      {role:'system',content:`你是严谨的学习测验出题老师。必须只输出合法 JSON，不要 Markdown，不要代码块。格式为 {"questions":[{"type":"choice或short","question":"题干","options":["A. 选项一","B. 选项二","C. 选项三","D. 选项四"],"answer":"A","explanation":"简短解析或评分要点"}]}。选择题 options 必须恰好 4 项且答案唯一，answer 只填正确选项字母；简答题 options 必须是空数组，answer 填参考答案。题目只能依据笔记内容，难度循序渐进，覆盖核心概念并避免重复。`},
+      {role:'user',content:`请根据下面的笔记生成 ${count} 道题。要求：${typeInstruction}。\n\n笔记标题：${note.title||'未命名笔记'}\n\n笔记内容：\n${note.content.slice(0,12000)}`}
+    ],{...apiCfg,temperature:0.45,deepThink:false,maxTokens:3000},null,{feature:'note_quiz',disableTools:true});
+    let questions=parseNoteQuizJson(response?.cleanText||'');
+    if(type==='choice')questions=questions.filter(question=>question.type==='choice');
+    if(type==='short')questions=questions.filter(question=>question.type==='short');
+    if(!questions.length)throw new Error('AI 没有生成有效题目，请重试');
+    note._aiQuiz={questions:questions.slice(0,count),requestedType:type,requestedCount:count,sourceUpdatedAt:note.updatedAt,generatedAt:new Date().toISOString()};
+  }catch(error){note._quizError=formatNoteSummaryError(error);}
+  note._quizUpdating=false;
+  saveData('study_notes_v2',notes);
+  renderNoteQuiz();
+  if(typeof lucide!=='undefined')lucide.createIcons();
+}
 function autoResizeAiInput(){const i=document.getElementById('aiInput');if(!i)return;i.style.height='auto';i.style.height=Math.min(i.scrollHeight,120)+'px';}
 function handleAiInputKey(e){if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();sendAiMessage();}}
 document.addEventListener('visibilitychange',function(){if(document.hidden&&typeof checkAndUpdateSummary==='function')checkAndUpdateSummary();});
@@ -2627,11 +2914,12 @@ function ensureReviewHistory(note) {
 function calcNextReviewDate(note) {
   ensureReviewHistory(note);
   if (note._reviewHistory.length === 0) {
-    // Never reviewed: due after the FIRST interval from creation (or last update).
+    // Never reviewed: due after the FIRST interval from its dedicated review anchor.
+    // Editing title/body only changes updatedAt and must not move the review schedule.
     // Must use getReviewIntervals()[0] (e.g. relaxed=2, custom=user-defined) —
     // hardcoding +1 ignored the review mode and made fresh notes inconsistent
     // with edited ones (which take the intervals branch below).
-    const base = new Date(note.updatedAt || note.createdAt || Date.now());
+    const base = new Date(note._reviewAnchorAt || note.createdAt || note.updatedAt || Date.now());
     const intervals = getReviewIntervals();
     base.setDate(base.getDate() + (intervals.length > 0 ? intervals[0] : 1));
     return base;
@@ -2788,18 +3076,11 @@ function getReviewNotesForDate(dateStr) {
   return result;
 }
 
-// Mark note updatedAt → resets review cycle (note was edited, treat as "reviewed")
-function resetReviewOnEdit(note) {
+// Explicit right-click action only: restart from round one beginning now.
+function resetNoteReviewCycle(note) {
   if (!note || note.type !== 'note') return;
-  ensureReviewHistory(note);
-  // Push a review record for today so the 1-day countdown restarts
-  const lastReview = note._reviewHistory.length > 0
-    ? note._reviewHistory[note._reviewHistory.length - 1]
-    : null;
-  const todayStr = getTodayStr();
-  // Only reset if the last review wasn't already today (avoid duplicate entries)
-  if (lastReview && lastReview.startsWith(todayStr)) return;
-  note._reviewHistory.push(new Date().toISOString());
+  note._reviewHistory = [];
+  note._reviewAnchorAt = new Date().toISOString();
 }
 
 // ═══════════ 笔记浮窗（类似教材节点浮窗：右下角可拖拽/缩放卡片）

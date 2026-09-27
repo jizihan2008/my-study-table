@@ -1211,16 +1211,58 @@ const AI_TOOL_TRANSACTION_KEYS = [
   'study_calendar_events','study_translation_history_v1'
 ];
 
+const AI_TOOL_TRANSACTION_SCOPES = {
+  todo: {
+    actions: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','batch_update_todos','set_focus_task'],
+    globals: ['todos'],
+    keys: ['study_todos_v2','study_todo_completed_log','study_todos_trash','study_today_focus']
+  },
+  note: {
+    actions: ['add_note','update_note','set_note_review','batch_set_note_tags','move_note','delete_note'],
+    globals: ['notes'],
+    keys: ['study_notes_v2','study_notes_trash']
+  },
+  link: {
+    actions: ['add_link','delete_link'], globals: ['links'],
+    keys: ['study_links_v3','study_links_trash']
+  },
+  automation: {
+    actions: ['schedule_automation','delete_automation'], globals: ['automations'], keys: ['study_automations']
+  },
+  skill: {
+    actions: ['create_skill','update_skill','delete_skill'], globals: [], keys: ['study_ai_skills_v1']
+  },
+  translation: {
+    actions: ['set_translation_vocabulary','review_translation_flashcard'], globals: [], keys: ['study_translation_history_v1']
+  },
+  quest: {
+    actions: ['quest_create_line','quest_update_line','quest_create','quest_update','quest_edit_condition','quest_complete','quest_skip'],
+    globals: [], keys: ['study_taskline_v1']
+  },
+  calendar: {
+    actions: ['create_calendar_event','update_calendar_event','delete_calendar_event','restore_calendar_event_date'],
+    globals: [], keys: ['study_calendar_events']
+  }
+};
+
+function getAiToolTransactionScope(action) {
+  for (const scope of Object.values(AI_TOOL_TRANSACTION_SCOPES)) {
+    if (scope.actions.includes(action)) return scope;
+  }
+  return { globals: [], keys: AI_TOOL_TRANSACTION_KEYS };
+}
+
 function beginAiToolTransaction(action) {
   if (getAiToolMetadata(action).effect === 'read') return null;
+  const scope = getAiToolTransactionScope(action);
   const clone = value => JSON.parse(JSON.stringify(value));
   const globals = {};
-  if (typeof todos !== 'undefined') globals.todos = clone(todos);
-  if (typeof notes !== 'undefined') globals.notes = clone(notes);
-  if (typeof links !== 'undefined') globals.links = clone(links);
-  if (typeof automations !== 'undefined') globals.automations = clone(automations);
+  if (scope.globals.includes('todos') && typeof todos !== 'undefined') globals.todos = clone(todos);
+  if (scope.globals.includes('notes') && typeof notes !== 'undefined') globals.notes = clone(notes);
+  if (scope.globals.includes('links') && typeof links !== 'undefined') globals.links = clone(links);
+  if (scope.globals.includes('automations') && typeof automations !== 'undefined') globals.automations = clone(automations);
   const storage = {};
-  for (const key of AI_TOOL_TRANSACTION_KEYS) {
+  for (const key of scope.keys) {
     try { storage[key] = localStorage.getItem(key); }
     catch (_) { storage[key] = null; }
   }

@@ -188,12 +188,13 @@
               <i data-lucide="chevron-left" class="lucide-icon"></i>
             </button>
             <input type="text" class="notes-editor-title-input" id="noteTitleInput"
-                   placeholder="笔记标题..." oninput="onNoteTitleChange()">
+                   placeholder="笔记标题..." oninput="onNoteTitleChange()" onblur="commitNoteTitleChange()">
             <div class="notes-view-toggle">
               <button class="notes-view-btn" id="notesPreviewBtn" onclick="switchNoteView('preview')">阅读</button>
               <button class="notes-view-btn" id="notesRichBtn" onclick="switchNoteView('rich')">编辑</button>
               <button class="notes-view-btn" id="notesEditBtn" onclick="switchNoteView('edit')">源码</button>
               <button class="notes-view-btn" id="notesSummaryBtn" onclick="switchNoteView('summary')">摘要</button>
+              <button class="notes-view-btn notes-quiz-open-btn" id="notesQuizBtn" onclick="openNoteQuiz()" title="让 AI 根据当前笔记出题"><i data-lucide="brain-circuit" class="lucide-icon"></i>出题</button>
               <button class="notes-view-btn notes-toc-toggle" id="notesTocToggleBtn" onclick="toggleNoteToc()" title="显示或隐藏智能目录">目录</button>
               <button class="notes-view-btn notes-ann-btn" id="notesAnnBtn" onclick="toggleNoteAnnPanel()" title="批注列表">批注<span id="notesAnnCount"></span></button>
               <button class="notes-view-btn notes-immersive-toggle" id="notesImmersiveBtn" onclick="toggleNotesImmersive()" title="沉浸编辑" aria-pressed="false"><i data-lucide="maximize-2" class="lucide-icon"></i>沉浸</button>
@@ -311,6 +312,7 @@
             <button onclick="switchNoteView('rich');hideNotesMobileViewMenu()"><i data-lucide="square-pen" class="lucide-icon"></i>编辑</button>
             <button onclick="switchNoteView('edit');hideNotesMobileViewMenu()"><i data-lucide="code-2" class="lucide-icon"></i>源码</button>
             <button onclick="switchNoteView('summary');hideNotesMobileViewMenu()"><i data-lucide="sparkles" class="lucide-icon"></i>摘要</button>
+          <button onclick="openNoteQuiz();hideNotesMobileViewMenu()"><i data-lucide="brain-circuit" class="lucide-icon"></i>AI 出题</button>
           <button onclick="toggleNoteToc(true);hideNotesMobileViewMenu()"><i data-lucide="list-tree" class="lucide-icon"></i>目录</button>
           <button onclick="toggleNoteAnnPanel();hideNotesMobileViewMenu()"><i data-lucide="message-square" class="lucide-icon"></i>批注<span id="notesAnnCountMobile"></span></button>
           <button id="notesMobileImmersiveBtn" onclick="toggleNotesImmersive(true);hideNotesMobileViewMenu()"><i data-lucide="maximize-2" class="lucide-icon"></i>沉浸</button>
@@ -424,6 +426,13 @@
           </div>
         </div>
         <!-- Focus Card -->
+        <div class="today-timer-card">
+          <div class="today-checkin-header">
+            <span class="today-section-title"><i data-lucide="timer" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 今日计时记录</span>
+            <button type="button" class="today-timer-link" onclick="switchTab('timer')">查看全部 →</button>
+          </div>
+          <div id="todayTimerRecords" class="today-timer-records"></div>
+        </div>
         <div class="today-focus-card" id="todayFocusCard">
           <div class="today-focus-header">
             <span class="today-section-title"><i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 每日聚焦</span>
@@ -777,6 +786,24 @@
   </div>
 </div>
 
+<!-- Repeating calendar event delete scope -->
+<div class="modal-overlay" id="calDeleteChoiceModal" onclick="closeCalDeleteChoiceModal(event)">
+  <div class="modal cal-delete-choice-modal" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title">删除重复事件</span>
+      <button class="modal-close" onclick="closeCalDeleteChoiceModal()"><i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i></button>
+    </div>
+    <div class="modal-body">
+      <p class="cal-delete-choice-copy">“<span id="calDeleteChoiceEventTitle"></span>”是重复事件，请选择删除范围：</p>
+      <div class="cal-delete-choice-actions">
+        <button class="confirm-btn confirm-btn-cancel" onclick="closeCalDeleteChoiceModal()">取消</button>
+        <button class="confirm-btn cal-delete-one-btn" onclick="confirmCalDeleteChoice('one')">仅删除这一天</button>
+        <button class="confirm-btn confirm-btn-ok" onclick="confirmCalDeleteChoice('series')">删除整个重复事件</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- Changelog Modal -->
 <div class="modal-overlay" id="changelogModal" onclick="closeChangelogModal(event)">
   <div class="modal" onclick="event.stopPropagation()">
@@ -881,11 +908,6 @@
             <label>最大输出 Token</label>
             <input type="number" id="apiKeyFormMaxTokens" value="" min="256" max="32768" step="1" placeholder="留空则自动适配">
             <span class="hint">DeepSeek 默认 2048，Kimi 默认 8192。数值越大 AI 输出越长但消耗也越大。</span>
-          </div>
-          <div class="settings-field" style="margin-bottom:8px;">
-            <label>最大循环次数（至少 3 次）</label>
-            <input type="number" id="settingsMaxToolLoops" value="3" min="3" max="50" step="1" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;" onchange="saveSettings()">
-            <span class="hint">AI 调用工具后自动重试的最大次数，防止无限循环。数值越大 AI 可做更多步骤但消耗也越大。</span>
           </div>
           <div class="settings-field" style="margin-bottom:8px;">
             <label>上下文消息条数</label>
@@ -1815,6 +1837,17 @@
       <button class="na-btn" onclick="closeNoteAnnModal()">取消</button>
       <button class="na-btn primary" onclick="saveNoteAnnModal()"><i data-lucide="check" class="lucide-icon"></i> 保存批注</button>
     </div>
+  </div>
+</div>
+
+<!-- AI 笔记出题 -->
+<div class="modal-overlay note-quiz-overlay" id="noteQuizModal" onclick="closeNoteQuiz(event)">
+  <div class="modal note-quiz-modal" role="dialog" aria-modal="true" aria-labelledby="noteQuizTitle" onclick="event.stopPropagation()">
+    <div class="modal-header">
+      <span class="modal-title" id="noteQuizTitle"><i data-lucide="brain-circuit" class="lucide-icon"></i> AI 笔记出题</span>
+      <button class="modal-close" onclick="closeNoteQuiz()" title="关闭"><i data-lucide="x" class="lucide-icon"></i></button>
+    </div>
+    <div class="modal-body note-quiz-body" id="noteQuizBody"></div>
   </div>
 </div>
 

@@ -6,14 +6,17 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadPlatform(initial = {}) {
+function loadPlatform(initial = {}, options = {}) {
   const values = new Map(Object.entries(initial));
   const localStorage = {
     getItem: key => values.has(key) ? values.get(key) : null,
-    setItem: (key, value) => values.set(key, String(value)),
+    setItem: (key, value) => {
+      if (options.failWrites) throw new Error('quota exceeded');
+      values.set(key, String(value));
+    },
     removeItem: key => values.delete(key)
   };
-  const window = {};
+  const window = options.studyData ? { StudyData: options.studyData } : {};
   const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'platform.js'), 'utf8');
   vm.runInNewContext(code, { window, localStorage, console: { log() {}, warn() {}, error() {} } });
   return { platform: window.StudyPlatform, values };
@@ -32,6 +35,18 @@ test('renderer storage skips byte-identical writes', () => {
   assert.equal(unchanged.changed, false);
   assert.equal(changed.changed, true);
   assert.equal(values.get('same'), '{"value":2}');
+});
+
+test('renderer storage never reports success when the compatibility cache write fails', () => {
+  let indexedDbWrites = 0;
+  const { platform, values } = loadPlatform({ note: '{"content":"old"}' }, {
+    failWrites: true,
+    studyData: { put() { indexedDbWrites++; } }
+  });
+  const result = platform.storage.setJson('note', { content: 'new' });
+  assert.equal(result.ok, false);
+  assert.equal(values.get('note'), '{"content":"old"}');
+  assert.equal(indexedDbWrites, 0);
 });
 
 test('renderer initialization is ordered and isolates failures', async () => {

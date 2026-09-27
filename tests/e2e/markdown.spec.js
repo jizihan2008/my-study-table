@@ -275,6 +275,49 @@ test('Ctrl+A in a rich-text fold selects only its title or body', async () => {
   expect(result.body).toEqual({ selected: '折叠正文', prevented: true });
 });
 
+test('rich-text fold toggles only from its disclosure control', async () => {
+  await page.evaluate(() => {
+    window.switchTab('notes');
+    const note = window.getActiveNote();
+    note.content = ':::fold 可编辑标题\n折叠正文\n:::\n\n块外文字';
+    note._foldStates = { 0: false };
+    window.renderNotes();
+    window.notesGoMain();
+    window.switchNoteView('rich');
+    window.RichNoteEditor.setMarkdown(note.content, note.id);
+  });
+
+  const fold = page.locator('#notesRichEditor details.note-fold');
+  const summary = fold.locator(':scope > summary');
+  await expect(fold).not.toHaveAttribute('open', '');
+
+  const box = await summary.boundingBox();
+  expect(box).not.toBeNull();
+  await summary.click({ position: { x: Math.max(50, box.width / 2), y: box.height / 2 } });
+  await expect(fold).not.toHaveAttribute('open', '');
+  expect(await page.evaluate(() => {
+    const summary = document.querySelector('#notesRichEditor details.note-fold > summary');
+    return summary.contains(window.getSelection()?.anchorNode);
+  })).toBe(true);
+
+  await page.evaluate(() => {
+    const outside = document.querySelector('#notesRichEditor details.note-fold + p');
+    const range = document.createRange();
+    range.selectNodeContents(outside);
+    range.collapse(true);
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(range);
+  });
+
+  await summary.click({ position: { x: 16, y: box.height / 2 } });
+  await expect(fold).toHaveAttribute('open', '');
+  expect(await page.evaluate(() => {
+    const summary = document.querySelector('#notesRichEditor details.note-fold > summary');
+    return summary.contains(window.getSelection()?.anchorNode);
+  })).toBe(false);
+});
+
 test('Ctrl+Enter at the end of a rich-text fold creates a line below the fold', async () => {
   const result = await page.evaluate(() => {
     window.switchTab('notes');

@@ -723,7 +723,7 @@ function renderCalendarTodoList() {
           oncontextmenu="showCalEventContextMenu(event, ${ev.id}, '${calendarSelectedDate}')">
         <span class="cal-event-bar" style="background:${c.dot}"></span>
         <span class="cal-event-title">${timeLabel ? `<span class="cal-event-time">${escapeHtml(timeLabel)}</span>` : ''}${escapeHtml(ev.title)}${recurring ? `<span class="cal-event-repeat" title="${escapeHtml(calEventRepeatLabel(ev) + '重复')}">🔁</span>` : ''}${ev.autoRecord === true ? '<span class="cal-event-auto" title="结束后自动计入当天计时记录">⏱</span>' : ''}</span>
-        <button class="cal-event-btn" onclick="event.stopPropagation();openCalEventModal('${calendarSelectedDate}', ${ev.id})" title="编辑">✎</button>        <button class="cal-event-btn cal-event-del" onclick="event.stopPropagation();deleteCalendarEvent(${ev.id});renderCalendar();" title="${recurring ? '删除整个重复事件' : '删除'}">✕</button>
+        <button class="cal-event-btn" onclick="event.stopPropagation();openCalEventModal('${calendarSelectedDate}', ${ev.id})" title="编辑">✎</button>        <button class="cal-event-btn cal-event-del" onclick="event.stopPropagation();requestDeleteCalendarEvent(${ev.id}, '${calendarSelectedDate}')" title="${recurring ? '选择删除范围' : '删除'}">✕</button>
       </div>`;
     }
     html += `</div>`;
@@ -1071,6 +1071,49 @@ function deleteCalEventFromModal() {
     renderCalendar();
   }
   closeCalEventModal();
+}
+
+// 列表中的 ×：普通事件直接删除，重复事件先让用户选择删除范围。
+let calendarDeleteChoiceEventId = null;
+let calendarDeleteChoiceDate = null;
+
+function requestDeleteCalendarEvent(eventId, dateStr) {
+  const ev = loadCalendarEvents().find(item => item.id === eventId);
+  if (!ev) return;
+  if (!isCalEventRecurring(ev)) {
+    deleteCalendarEvent(eventId);
+    renderCalendar();
+    return;
+  }
+  calendarDeleteChoiceEventId = eventId;
+  calendarDeleteChoiceDate = normalizeCalDate(dateStr) || calendarSelectedDate;
+  const title = document.getElementById('calDeleteChoiceEventTitle');
+  if (title) title.textContent = ev.title || '这个重复事件';
+  const modal = document.getElementById('calDeleteChoiceModal');
+  if (modal) modal.classList.add('open');
+}
+
+function closeCalDeleteChoiceModal(e) {
+  if (e && e.target !== e.currentTarget) return;
+  const modal = document.getElementById('calDeleteChoiceModal');
+  if (modal) modal.classList.remove('open');
+  calendarDeleteChoiceEventId = null;
+  calendarDeleteChoiceDate = null;
+}
+
+function confirmCalDeleteChoice(scope) {
+  const id = calendarDeleteChoiceEventId;
+  const dateStr = calendarDeleteChoiceDate;
+  closeCalDeleteChoiceModal();
+  if (id === null) return;
+  if (scope === 'one') {
+    if (dateStr) skipCalendarEventDate(id, dateStr);
+    return;
+  }
+  if (scope === 'series') {
+    deleteCalendarEvent(id);
+    renderCalendar();
+  }
 }
 
 function submitCalEvent() {

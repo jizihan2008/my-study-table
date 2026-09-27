@@ -364,7 +364,7 @@ async function callAiApiNonStream(apiMessages, apiCfg, conv, options = {}) {
   return { cleanText: extracted.cleanText || reply || (toolCalls.length ? '' : '（未收到回复）'), toolCalls, reasoning, rawReply, finishReason: data.choices?.[0]?.finish_reason || '' };
 }
 
-function buildStreamingRequestBody(apiMessages, apiCfg, conv = null) {
+function buildStreamingRequestBody(apiMessages, apiCfg, conv = null, options = {}) {
   const maxTokens = apiCfg.maxTokens || (isKimiModel(apiCfg) ? 8192 : 2048);
   const modelLower = String(apiCfg.model || '').toLowerCase();
   const body = {
@@ -383,7 +383,7 @@ function buildStreamingRequestBody(apiMessages, apiCfg, conv = null) {
   if (modelLower.includes('k3') || modelLower.includes('k2.7')) body.max_completion_tokens = maxTokens;
   else body.max_tokens = maxTokens;
   if (!isKimiModel(apiCfg)) body.temperature = apiCfg.temperature;
-  const localNativeTools = selectedNativeLocalTools(conv, apiCfg);
+  const localNativeTools = options.disableTools ? [] : selectedNativeLocalTools(conv, apiCfg);
   if (localNativeTools.length > 0) body.tools = localNativeTools;
   return { body, maxTokens };
 }
@@ -456,9 +456,9 @@ function isStreamingUnsupported(status, message) {
 }
 
 async function callAiApiStream(apiMessages, apiCfg, conv, options) {
-  if (typeof AIStream === 'undefined') return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
+  if (typeof AIStream === 'undefined') return callAiApiNonStream(apiMessages, apiCfg, conv, { ...options, skipSensitiveCheck: true });
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
-  const { body, maxTokens } = buildStreamingRequestBody(apiMessages, apiCfg, conv);
+  const { body, maxTokens } = buildStreamingRequestBody(apiMessages, apiCfg, conv, options);
   const requestTime = new Date().toISOString();
   let response;
   let latest = { content: '', reasoning: '' };
@@ -480,7 +480,7 @@ async function callAiApiStream(apiMessages, apiCfg, conv, options) {
       const errorData = await readAiResponseJson(response).catch(() => ({}));
       const errorMsg = errorData.error?.message || `请求失败 (HTTP ${response.status})`;
       if (isStreamingUnsupported(response.status, errorMsg)) {
-        return callAiApiNonStream(apiMessages, apiCfg, conv, { skipSensitiveCheck: true });
+        return callAiApiNonStream(apiMessages, apiCfg, conv, { ...options, skipSensitiveCheck: true });
       }
       appendStreamingRawLog(conv, apiMessages, apiCfg, maxTokens, requestTime, { error: errorMsg, httpStatus: response.status, stream: true });
       throw new Error(errorMsg);
@@ -557,7 +557,7 @@ async function callAiApi(apiMessages, apiCfg, conv, options = {}) {
   }
   const activeConv = apiCfg.conversationSettings || conv;
   const kimiNativeSearch = isKimiModel(apiCfg) && activeConv && activeConv._webSearchMode === 'native';
-  const streamEnabled = localStorage.getItem('study_ai_streaming') !== 'false';
+  const streamEnabled = options.forceStream === true || localStorage.getItem('study_ai_streaming') !== 'false';
   if (streamEnabled && !kimiNativeSearch && typeof options.onDelta === 'function') {
     return callAiApiStream(apiMessages, apiCfg, conv, options);
   }
@@ -833,9 +833,6 @@ async function confirmAiDestructiveCalls(calls, conv) {
 async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   const settings = apiCfg.conversationSettings || conv;
   apiCfg = { ...apiCfg, conversationSettings: { id: conv.id, _webSearchMode: settings._webSearchMode, _webSearchEnabled: settings._webSearchEnabled } };
-  // Bound both the minimum and maximum number of tool rounds.
-  const userMax = parseInt(localStorage.getItem('study_max_tool_loops')) || 0;
-  const MAX_LOOPS = Math.min(50, Math.max(3, userMax));
   let finalCleanText = '';
   let finalRawReply = ''; // Keep original AI reply for memory parsing
   let finalReasoning = '';
@@ -853,10 +850,11 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   // the same tool with the same params across multiple loop iterations
   let prevToolCallMap = {}; // { action+'|'+paramSig: count }
   let repeatCount = 0;
+  let malformedProtocolCount = 0;
 
   let apiMessages = buildApiMessages(conv, null, apiCfg);
 
-  for (let loop = 0; loop < MAX_LOOPS; loop++) {
+  for (let loop = 0; ; loop++) {
     if (loop > 0) {
       // Rebuild messages with the latest conversation state (including tool results)
       apiMessages = buildApiMessages(conv, null, apiCfg);
@@ -913,6 +911,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
         ? detectMalformedToolProtocol(rawReply)
         : null;
       if (protocolIssue) {
+        malformedProtocolCount++;
         if (typeof onStreamDelta === 'function') onStreamDelta({ reset: true, loop });
         const protocolResult = '❌ 工具指令格式错误：' + protocolIssue.message + '，上一轮操作未执行。' +
           '请继续处理用户当前请求；禁止输出 DSML、Markdown 代码块、裸 JSON 或带反斜杠的标签。' +
@@ -940,14 +939,20 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
         if (typeof safeSaveAiConvs === 'function') safeSaveAiConvs();
         if (onIntermediate) onIntermediate(protocolResult);
         else renderAiMessages();
+        if (malformedProtocolCount >= 3) {
+          incompleteReason = '连续收到无法解析的工具指令，已结束本次生成；任务尚未确认完成。';
+          break;
+        }
         continue;
       }
+      malformedProtocolCount = 0;
       // No more tool calls — this is the final reply
       finalCleanText = cleanText;
       finalRawReply = rawReply; // Keep original for memory parsing
       finalReasoning = reasoning || '';
       break;
     }
+    malformedProtocolCount = 0;
 
     // Tool tags are an internal protocol. Remove the transient draft before
     // showing the persisted tool-call/result messages for this round.
@@ -1137,11 +1142,9 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       break;
     }
 
-    // Check safety limit (repeatCount was already incremented above)
+    // Stop only a demonstrably stuck loop; there is no overall tool-round limit.
     if (anyRepeated) {
-      // Only break if the same tool call has repeated for more than half of MAX_LOOPS
-      // This gives the AI enough chances to eventually produce a final reply
-      if (repeatCount >= Math.ceil(MAX_LOOPS / 2)) {
+      if (repeatCount >= 2) {
         incompleteReason = '检测到重复工具调用，已结束本次生成；任务尚未确认完成。';
         finalReasoning = reasoning || '';
         break;
@@ -1162,9 +1165,9 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     // the AI might be doing "talk + act" pattern, so let it finish
   }
 
-  // If we hit max loops without a final reply, use last cleanText or a fallback
+  // If an error or safety detector ended the chain without a final reply, provide a clear fallback.
   if (!finalCleanText && allToolResults.length > 0) {
-    incompleteReason = incompleteReason || '已达到工具调用轮次上限，任务尚未确认完成。';
+    incompleteReason = incompleteReason || '工具链未能生成最终答复，任务尚未确认完成。';
     finalCleanText = '⚠️ ' + incompleteReason;
   }
   const failedCount = outcomes.filter(item => item.status === 'failed' || item.status === 'rolled_back').length;

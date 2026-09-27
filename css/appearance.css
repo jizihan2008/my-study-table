@@ -99,7 +99,7 @@
 .ap-footer svg { width:13px; height:13px; }
 
 /* The expensive backdrop filter belongs to surfaces, never each row or input. */
-[data-glass="true"] :is(.sidebar, .section > .card, .today-dashboard .today-schedule-card, .today-dashboard .today-goals-card, .today-dashboard .today-checkin-card, .today-dashboard .today-focus-card, .today-dashboard .today-review-card, .today-welcome, .modal, .mobile-more-panel, .mobile-tabbar, .context-menu, .timer-float, .appearance-preview-card) {
+[data-glass="true"] :is(.sidebar, .section > .card, .today-dashboard .today-schedule-card, .today-dashboard .today-timer-card, .today-dashboard .today-goals-card, .today-dashboard .today-checkin-card, .today-dashboard .today-focus-card, .today-dashboard .today-review-card, .today-welcome, .modal, .mobile-more-panel, .mobile-tabbar, .context-menu, .timer-float, .appearance-preview-card) {
   background:var(--glass-surface);
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));

@@ -1416,10 +1416,6 @@ function openSettingsModal() {
   const maxBackupFiles = localStorage.getItem('study_max_backup_files') || '30';
   const maxBackupInput = document.getElementById('settingsMaxBackupFiles');
   if (maxBackupInput) maxBackupInput.value = maxBackupFiles;
-  // Load max tool loops setting
-  const maxLoops = parseInt(localStorage.getItem('study_max_tool_loops')) || 3;
-  const maxLoopsInput = document.getElementById('settingsMaxToolLoops');
-  if (maxLoopsInput) maxLoopsInput.value = maxLoops;
   document.getElementById('settingsStatus').className = 'settings-status';
   document.getElementById('settingsStatus').textContent = '';
   switchSettingsTab('api');
@@ -2006,13 +2002,6 @@ function saveSettings() {
 
   localStorage.setItem('study_developer_mode', developerMode);
   localStorage.setItem('study_debug_mode', debugMode);
-
-  // Save max tool loops setting
-  const maxLoopsInput = document.getElementById('settingsMaxToolLoops');
-  if (maxLoopsInput) {
-    const val = parseInt(maxLoopsInput.value) || 5;
-    localStorage.setItem('study_max_tool_loops', Math.max(3, val));
-  }
 
   // Refresh today to show/hide debug panel immediately
   if (typeof renderToday === 'function') renderToday();
@@ -4215,6 +4204,16 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 格式自由，语气自然、清醒、有方向感。用 Markdown 但不要太刻板。${userInstructionBlock}`;
 
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
+  const showStreamingDraft = localStorage.getItem('study_ai_streaming') !== 'false'
+    && typeof setAiStreamingDraft === 'function';
+  const reportStreamDelta = snapshot => {
+    if (!showStreamingDraft) return;
+    setAiStreamingDraft(conv.id, {
+      content: snapshot.content,
+      reasoning: snapshot.reasoning,
+      keyName: apiCfg.name || apiCfg.model || 'AI'
+    });
+  };
   showMiniToast('☀️ 正在生成晨间日报…', 'info', true);
   try {
     if (typeof callAiApi !== 'function') {
@@ -4231,12 +4230,16 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     ];
     const { cleanText, reasoning, finishReason } = await callAiApiForFinalText(apiMessages, apiCfg, null, {
       feature: 'morning_report',
-      disableTools: true
+      disableTools: true,
+      forceStream: true,
+      // 全局流式开启时实时展示；关闭时仍静默消费分片，以刷新长思考请求的超时。
+      onDelta: reportStreamDelta
     });
+    if (showStreamingDraft && typeof clearAiStreamingDraft === 'function') clearAiStreamingDraft(conv.id);
     const report = (cleanText || '').trim();
     if (report) {
       appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
-      appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
+      appendMessage(conv, { role: 'assistant', content: report, reasoning: reasoning || undefined, keyName: getActiveKeyDisplayName() });
       // Keep only last 30 messages to avoid bloating
       trimConvMessages(conv, 30);
       saveData('study_ai_convs', aiConvs);
@@ -4260,6 +4263,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     showMiniToast('晨间日报生成失败：AI 返回了空内容', 'error');
     return { ok: false, error: 'AI 返回了空内容，请重试' };
   } catch (e) {
+    if (showStreamingDraft && typeof clearAiStreamingDraft === 'function') clearAiStreamingDraft(conv.id);
     console.error('[日报] 生成失败:', e);
     // Show a non-intrusive status update if possible
     try {
@@ -4620,6 +4624,16 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 
   const baseUrl = apiCfg.baseUrl.replace(/\/+$/, '');
   const todayStr = data.todayStr;
+  const showStreamingDraft = localStorage.getItem('study_ai_streaming') !== 'false'
+    && typeof setAiStreamingDraft === 'function';
+  const reportStreamDelta = snapshot => {
+    if (!showStreamingDraft) return;
+    setAiStreamingDraft(conv.id, {
+      content: snapshot.content,
+      reasoning: snapshot.reasoning,
+      keyName: apiCfg.name || apiCfg.model || 'AI'
+    });
+  };
   showMiniToast('🌙 正在生成晚间日报…', 'info', true);
   try {
     if (typeof callAiApi !== 'function') {
@@ -4636,12 +4650,16 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     ];
     const { cleanText, reasoning, finishReason } = await callAiApiForFinalText(apiMessages, apiCfg, null, {
       feature: 'evening_report',
-      disableTools: true
+      disableTools: true,
+      forceStream: true,
+      // 与晨间日报一致：按全局流式设置决定是否把分片展示到日报对话。
+      onDelta: reportStreamDelta
     });
+    if (showStreamingDraft && typeof clearAiStreamingDraft === 'function') clearAiStreamingDraft(conv.id);
     const report = (cleanText || '').trim();
     if (report) {
       appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
-      appendMessage(conv, { role: 'assistant', content: report, keyName: getActiveKeyDisplayName() });
+      appendMessage(conv, { role: 'assistant', content: report, reasoning: reasoning || undefined, keyName: getActiveKeyDisplayName() });
       trimConvMessages(conv, 30);
       saveData('study_ai_convs', aiConvs);
       // Send Windows notification (before render/mark to ensure delivery)
@@ -4666,6 +4684,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     showMiniToast('晚间日报生成失败：AI 返回了空内容', 'error');
     return { ok: false, error: 'AI 返回了空内容，请重试' };
   } catch (e) {
+    if (showStreamingDraft && typeof clearAiStreamingDraft === 'function') clearAiStreamingDraft(conv.id);
     console.error('[日报] 晚间报告生成失败:', e);
     showMiniToast('晚间日报生成失败：' + ((e && e.message) || String(e)), 'error');
     return { ok: false, error: (e && e.message) || String(e) };
