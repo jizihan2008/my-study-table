@@ -6,17 +6,68 @@ let _aiForceScrollBottom = false; // 强制滚动到底部标志（发送/切换
 const _aiStreamingDrafts = new Map(); // convId -> transient assistant output (never persisted)
 const _aiStreamingPaintTimers = new Map();
 const AI_STREAM_PAINT_INTERVAL_MS = 32;
-const AI_HISTORY_BATCH_SIZE = 80;
+// Keep the synchronous first paint small. Markdown, KaTeX, highlighting and
+// sanitizing all run on the main thread, so rendering dozens of off-screen
+// messages here makes merely opening the AI page feel unresponsive.
+const AI_HISTORY_INITIAL_MAX = 20;
+const AI_HISTORY_INITIAL_MIN = 6;
+const AI_HISTORY_INITIAL_SOURCE_BUDGET = 40000;
+const AI_HISTORY_BATCH_SIZE = 40;
 const _aiVisibleMessageCounts = new Map();
 let _aiPrependingHistory = false;
+const AI_FORMAT_CACHE_LIMIT = 160;
+const AI_FORMAT_CACHE_MAX_SOURCE_LENGTH = 50000;
+const _aiFormattedContentCache = new Map();
+
+function createAiLucideIcons(root) {
+  if (!root || typeof lucide === 'undefined') return;
+  // lucide.createIcons() searches the entire document. The chat only adds a
+  // handful of icons, so convert that subtree directly and avoid walking all
+  // hidden pages whenever the conversation shell is rebuilt.
+  if (typeof lucide.createElement !== 'function' || !lucide.icons) {
+    lucide.createIcons();
+    return;
+  }
+  root.querySelectorAll('[data-lucide]').forEach(element => {
+    const name = element.getAttribute('data-lucide') || '';
+    const exportName = name.split('-').filter(Boolean)
+      .map(part => part.charAt(0).toUpperCase() + part.slice(1)).join('');
+    const iconNode = lucide.icons[exportName];
+    if (!iconNode) return;
+    const attrs = {};
+    for (const attr of element.attributes) {
+      if (attr.name !== 'data-lucide') attrs[attr.name] = attr.value;
+    }
+    const svg = lucide.createElement(iconNode, attrs);
+    svg.setAttribute('data-lucide', name);
+    element.replaceWith(svg);
+  });
+}
 
 function showEarlierAiMessages() {
   const conv = getActiveConv();
   if (!conv) return;
   const key = String(conv.id);
-  _aiVisibleMessageCounts.set(key, (_aiVisibleMessageCounts.get(key) || AI_HISTORY_BATCH_SIZE) + AI_HISTORY_BATCH_SIZE);
+  const renderedCount = document.querySelectorAll('#aiMessages .ai-chat-msg').length;
+  _aiVisibleMessageCounts.set(key, (_aiVisibleMessageCounts.get(key) || renderedCount || AI_HISTORY_INITIAL_MAX) + AI_HISTORY_BATCH_SIZE);
   _aiPrependingHistory = true;
   renderAiMessages();
+}
+
+function getInitialAiVisibleCount(items) {
+  let count = 0;
+  let sourceLength = 0;
+  for (let index = items.length - 1; index >= 0 && count < AI_HISTORY_INITIAL_MAX; index--) {
+    const message = items[index] && items[index].msg;
+    const contentLength = typeof message?.content === 'string'
+      ? message.content.length
+      : JSON.stringify(message?.content || '').length;
+    const nextLength = sourceLength + contentLength + String(message?.reasoning || '').length;
+    if (count >= AI_HISTORY_INITIAL_MIN && nextLength > AI_HISTORY_INITIAL_SOURCE_BUDGET) break;
+    sourceLength = nextLength;
+    count++;
+  }
+  return Math.max(1, count);
 }
 
 function stripHallucinatedToolTranscriptForDisplay(value) {
@@ -119,6 +170,27 @@ function clearAiStreamingDraft(convId, shouldRender = true) {
 function renderAiChat(options) {
   const layout = document.getElementById('aiChatLayout');
   if (!layout) return;
+  const conv = getActiveConv();
+  if (!conv) return;
+  const hasApiKey = !!(loadApiKeys().length > 0);
+
+  // The AI DOM is intentionally kept when navigating to another page. On a
+  // return visit it is already current (streaming/sync paths update it in
+  // place), so rebuilding the shell and reparsing every visible Markdown
+  // message only creates a noticeable main-thread stall.
+  const canReuseExisting = options && options.reuseExisting
+    && layout.dataset.aiConvId === String(conv.id)
+    && layout.dataset.aiHasApiKey === (hasApiKey ? '1' : '0')
+    && !!layout.querySelector('#aiMessages')
+    && !!layout.querySelector('#aiInput');
+  if (canReuseExisting) {
+    updateAiSendButton();
+    if (typeof updateAiQueueIndicator === 'function') updateAiQueueIndicator();
+    updateSidebarAiBadge();
+    initAiToolbar();
+    return;
+  }
+
   // 切换/重建对话视图：强制滚动到底部展示最新消息
   _aiForceScrollBottom = true;
   // 重建前：记录输入框焦点 + 实时保存草稿。避免重渲染（自动标题生成 / 日报完成 / 首次发送命名等
@@ -128,8 +200,6 @@ function renderAiChat(options) {
   if (!options || !options.skipDraftSave) {
     if (typeof saveAiDraft === 'function') { try { saveAiDraft(); } catch (e) {} }
   }
-  const hasApiKey = !!(loadApiKeys().length > 0);
-
   // 无 API Key 时也正常渲染界面（可查看历史聊天记录），仅禁用发送并在顶部提示。
   // 不再整页替换为「未配置 Key」提示页，避免看不到已有对话。
   const noKey = !hasApiKey;
@@ -141,9 +211,6 @@ function renderAiChat(options) {
       <span>尚未配置 AI API Key，当前仅可查看历史聊天记录。发送消息需先在设置中配置。</span>
       <button class="ai-no-key-setup" onclick="openSettingsModal()">去设置</button>
     </div>` : '';
-
-  const conv = getActiveConv();
-  if (!conv) return;
 
   // Build tabs HTML with drag-and-drop attributes
   const tabsHtml = aiConvs.map((c, i) => {
@@ -248,6 +315,8 @@ function renderAiChat(options) {
       </button>
     </div>
   `;
+  layout.dataset.aiConvId = String(conv.id);
+  layout.dataset.aiHasApiKey = hasApiKey ? '1' : '0';
   renderAiMessages();
   renderAttachPreview(); // Restore attachment preview after DOM rebuild
   if (typeof renderAiContextPreview === 'function') renderAiContextPreview();
@@ -299,7 +368,7 @@ function renderAiChat(options) {
   updateSidebarAiBadge();
   // Initialize toolbar state
   initAiToolbar();
-  if (typeof lucide !== 'undefined') lucide.createIcons();
+  createAiLucideIcons(layout);
   // Restore tree float open state after DOM rebuild
   if (_aiTreePanelOpen) {
     const overlay = document.getElementById('aiTreeFloatOverlay');
@@ -599,7 +668,11 @@ function renderAiMessages() {
     });
   }
 
-  const visibleCount = _aiVisibleMessageCounts.get(String(conv.id)) || AI_HISTORY_BATCH_SIZE;
+  const visibilityKey = String(conv.id);
+  let visibleCount = _aiVisibleMessageCounts.get(visibilityKey);
+  if (!visibleCount) {
+    visibleCount = getInitialAiVisibleCount(renderItems);
+  }
   const hiddenCount = Math.max(0, renderItems.length - visibleCount);
   const visibleItems = hiddenCount ? renderItems.slice(hiddenCount) : renderItems;
   container.innerHTML = (hiddenCount
@@ -1341,7 +1414,20 @@ function formatAiContent(text) {
   }
   if (typeof text !== 'string') return '';
 
-  return formatMarkdownBase(text, (html) => {
+  // Most chat messages have no live todo links, so their formatted output is
+  // deterministic. Reuse it across tab switches and incidental re-renders;
+  // messages containing [ID:n] deliberately bypass the cache because their
+  // label/completion state depends on current todo data.
+  const cacheable = text.length <= AI_FORMAT_CACHE_MAX_SOURCE_LENGTH && !/\[ID:\d+\]/.test(text);
+  if (cacheable && _aiFormattedContentCache.has(text)) {
+    const cached = _aiFormattedContentCache.get(text);
+    // Refresh insertion order so frequently visible messages stay cached.
+    _aiFormattedContentCache.delete(text);
+    _aiFormattedContentCache.set(text, cached);
+    return cached;
+  }
+
+  const rendered = formatMarkdownBase(text, (html) => {
     // Convert [ID:数字] patterns into clickable action links
     return html.replace(/\[ID:(\d+)\]/g, (match, id) => {
       const t = findTodo(Number(id));
@@ -1351,6 +1437,13 @@ function formatAiContent(text) {
       return `<span class="ai-action-link" data-todo-id="${escapedId}" role="button" tabindex="0" title="去目录查看"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>${escapeHtml(t.text.length > 15 ? t.text.slice(0,15)+'…' : t.text)}</span>` + (isDone ? ' ✅' : '');
     });
   });
+  if (cacheable) {
+    _aiFormattedContentCache.set(text, rendered);
+    if (_aiFormattedContentCache.size > AI_FORMAT_CACHE_LIMIT) {
+      _aiFormattedContentCache.delete(_aiFormattedContentCache.keys().next().value);
+    }
+  }
+  return rendered;
 }
 
 // 把笔记批注锚点注入为 ⟦id⟧ 标记（formatMarkdownBase 渲染后再替换为 <mark class="note-ann">）

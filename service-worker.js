@@ -6,13 +6,14 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v178';
+const VERSION = 'mst-v179';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
 const PRECACHE_URLS = [
   './',
   './index.html',
+  './reset-site-data.html',
   './manifest.webmanifest?v=20260926-icon-v3',
   './css/style.css?v=20260924-r4',
   './css/workspace.css?v=20260926-r4',
@@ -57,7 +58,8 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20260924-r6',
+  './js/settings.js?v=20260929-r1',
+  './js/site-data-reset.js?v=20260929-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20260923-r2',
   './js/sync-collections.js?v=20260924-r8',

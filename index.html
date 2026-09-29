@@ -1409,6 +1409,11 @@
         <div id="syncAccountInfo" style="font-size:13px;color:var(--text);margin-bottom:8px;">未检测到登录状态。</div>
         <div class="settings-status" id="syncPanelStatus"></div>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title"><i data-lucide="smartphone" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 此设备上的网站数据</div>
+        <span class="hint" style="display:block;margin-bottom:10px;">仅清除此网站在当前设备和浏览器中的本地数据，不影响 Edge 中的其他网站，也不会删除云端副本。未成功上传的内容将无法恢复，请先在其他设备确认同步完成或导出备份。</span>
+        <button id="clearCurrentSiteDataBtn" class="btn-save-settings" onclick="clearCurrentSiteData()" style="background:var(--danger);padding:7px 16px;width:auto;margin-top:0;"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 仅清除此网站数据</button>
+        <div class="settings-status" id="clearCurrentSiteDataStatus" aria-live="polite"></div>
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="cloud" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 日志类数据云存储</div>
         <span class="hint" style="display:block;margin-bottom:12px;">AI 对话、教材讲解/问答日志通过独立通道上传（gzip 压缩 + 分片增量），与待办/笔记同步互不阻塞。配额上限 100MB，超出后新日志自动停止上传，本地数据始终保留。</span>
         <div id="storagePanelRoot"></div>
@@ -1714,7 +1719,7 @@
 <script src="js/core.js?v=20260916-r1"></script>
 <script src="js/trash.js?v=20260923-r1"></script>
 <script src="js/todos.js?v=20260922-r1"></script>
-<script src="js/notes.js?v=20260922-r2"></script>
+<script src="js/notes.js?v=20260928-r1"></script>
 <script src="js/file-library.js?v=20260923-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20260922-r1"></script>
@@ -1722,7 +1727,7 @@
 <script src="js/ai-utils.js?v=20260826-r2"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260923-r1"></script>
-<script src="js/ai-attach.js?v=20260922-r2"></script>
+<script src="js/ai-attach.js?v=20260928-r3"></script>
 <script src="js/ai-render.js?v=20260922-r2"></script>
 <script src="js/ai-tools.js?v=20260924-r1"></script>
 <script src="js/ai-search.js"></script>
@@ -1738,7 +1743,7 @@
 <script src="js/appearance.js?v=20260914-r6"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
-<script src="js/settings.js?v=20260924-r6"></script>
+<script src="js/settings.js?v=20260929-r1"></script>
 <script src="js/utils.js?v=20260914-r2"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>

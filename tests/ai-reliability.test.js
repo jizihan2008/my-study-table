@@ -1271,7 +1271,7 @@ test('PDF text mode extracts page-labelled text and reports truncation', async (
   assert.equal(selected.endPage, 3);
 });
 
-test('PDF image mode renders ordered JPEG pages and caps oversized documents', async () => {
+test('PDF image mode renders every page by default and honors an explicit diagnostic cap', async () => {
   const ctx = harness();
   let destroyed = false;
   const rendered = [];
@@ -1294,6 +1294,14 @@ test('PDF image mode renders ordered JPEG pages and caps oversized documents', a
   ctx.canvasToBlob = async canvas => ({ width: canvas.width, height: canvas.height });
   let imageNo = 0;
   ctx.blobToDataUrl = async () => `data:image/jpeg;base64,page-${++imageNo}`;
+
+  const allPages = await ctx.renderPdfAttachmentPages({}, { maxWidth: 1600 });
+  assert.deepEqual(rendered, [1, 2, 3, 4]);
+  assert.equal(allPages.dataUrls.length, 4);
+  assert.equal(allPages.renderedPages, 4);
+  assert.equal(allPages.truncated, false);
+
+  rendered.length = 0;
   const output = await ctx.renderPdfAttachmentPages({}, { maxPages: 2, maxWidth: 1600 });
   assert.deepEqual(rendered, [1, 2]);
   assert.equal(output.dataUrls.length, 2);
@@ -1379,7 +1387,7 @@ test('PDF attachment preview badge reports rendering progress, size and cancella
   assert.match(badges.done, /本次发 3 页/);
   assert.match(badges.done, /2\.0MB/);
   assert.match(badges.done, /2\.4s/);
-  assert.match(badges.capped, /所选 40 页超出单次上限/);
+  assert.match(badges.capped, /本次仅发送所选 40 页中的 12 页/);
   assert.match(badges.aborted, /已取消（2\/12 页）/);
   // 无状态时返回一个隐藏的空容器：它是实时更新的挂载点，不能整个省掉。
   assert.match(badges.none, /id="aiPdfRenderStatus0"/);

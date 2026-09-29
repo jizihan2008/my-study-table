@@ -695,6 +695,30 @@ function _syncConflictReasonText(reason) {
   return descriptions[reason] || '本机与云端版本无法安全自动合并。';
 }
 
+// 清理必须在一个不打开业务 IndexedDB 的轻量页面中完成，否则当前页面持有的
+// 数据库连接会让 Safari / iPadOS Edge 的 deleteDatabase 请求一直处于 blocked。
+async function clearCurrentSiteData() {
+  const statusEl = document.getElementById('clearCurrentSiteDataStatus');
+  const button = document.getElementById('clearCurrentSiteDataBtn');
+  const message = [
+    '<b>确定仅清除此网站在当前设备上的数据吗？</b>',
+    '<br><br>将删除本地待办、笔记、AI 对话、教材文件、登录状态、离线缓存和本地备份。',
+    '<br><b>云端已有的数据不会被删除</b>，但尚未上传的内容将无法恢复。请先确认同步或导出备份。'
+  ].join('');
+  const confirmed = typeof showCustomConfirm === 'function'
+    ? await showCustomConfirm(message, { showIcon: true })
+    : window.confirm('确定仅清除此网站在当前设备上的数据吗？未同步内容将无法恢复。');
+  if (!confirmed) return;
+
+  if (button) button.disabled = true;
+  if (statusEl) {
+    statusEl.className = 'settings-status';
+    statusEl.textContent = '正在打开安全清理页…';
+  }
+  // 使用 replace，避免清理完成后后退到仍持有旧内存数据的页面。
+  window.location.replace('reset-site-data.html');
+}
+
 const SYNC_CONFLICT_CATEGORIES = {
   study_todos_v2: { id: 'todos', label: '待办事项' },
   study_todos: { id: 'todos', label: '待办事项' },

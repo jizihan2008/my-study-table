@@ -716,13 +716,12 @@ function renderAttachPreview() {
     let pdfRender = '';
     if (isPdf) {
       const total = a.pdfInfo && Number(a.pdfInfo.pageCount) > 0 ? Number(a.pdfInfo.pageCount) : '';
-      // 留空 = 从第 1 页开始。文字模式会在 PDF_TEXT_MAX_CHARS 处截断，
-      // 图片模式最多渲染 PDF_IMAGE_MAX_PAGES 页——把上限写进提示，
-      // 用户才能明白"留空"为什么会渲染这么多页、填页码又为什么更快。
+      // 留空 = 从第 1 页开始。文字模式会在 PDF_TEXT_MAX_CHARS 处截断；
+      // 图片模式发送全部页面。长 PDF 仍建议选择页码范围以缩短渲染和上传时间。
       const rangeTitle = isKimiModel()
         ? '设置后仅发送所选页；留空则使用 Kimi 原生整文件解析'
         : (a.pdfMode === 'image'
-          ? `留空表示从第一页开始（最多渲染 ${PDF_IMAGE_MAX_PAGES} 页，超出部分不发送；只发几页时请填页码，会快很多）`
+          ? '留空表示发送全部页面；只发几页时请填页码，会快很多'
           : `留空表示从第一页开始（提取到约 ${PDF_TEXT_MAX_CHARS} 字为止）`);
       pdfRange = `<span class="preview-pdf-range" title="${rangeTitle}">
         <span>页</span>
@@ -739,7 +738,7 @@ function renderAttachPreview() {
       const modeLabel = imageMode ? '🖼️ 页面图片' : '📄 提取文字';
       const title = imageMode
         ? '切换到提取 PDF 文本层（所有模型可用）'
-        : (multimodal ? `切换到逐页渲染图片（每次最多 ${PDF_IMAGE_MAX_PAGES} 页）` : '当前模型不支持图片；切换视觉模型后可用页面图片');
+        : (multimodal ? '切换到逐页渲染图片（发送全部所选页面）' : '当前模型不支持图片；切换视觉模型后可用页面图片');
       modeToggle = `<button class="preview-mode-btn" onclick="toggleAttachPdfMode(${i})" title="${title}">${modeLabel}</button>`;
     } else if (isImage && a.ocrMode !== undefined) {
       const modeLabel = a.ocrMode ? '📄 OCR' : '🖼️ 内联';
@@ -774,10 +773,6 @@ function renderAttachPreview() {
 
 // ═══════════ 通用 PDF 兼容层：文本提取 / 页面图片 ═══════════
 const PDF_TEXT_MAX_CHARS = 80000;
-// 页面图片模式每次最多渲染多少页（只约束"没填范围时从第 1 页开始渲染几页"）。
-// 逐页渲染是主线程重活，实测密集教材约 0.35–0.55 秒/页，24 页 ≈ 8–13 秒；
-// 用户显式填了页码范围就按所选页数渲染，不受这个上限"补足"。
-const PDF_IMAGE_MAX_PAGES = 24;
 const PDF_IMAGE_MAX_WIDTH = 1600;
 const PDF_IMAGE_JPEG_QUALITY = 0.86;
 
@@ -810,7 +805,7 @@ function resolvePdfAttachmentRange(pageCount, opts = {}) {
 }
 
 // 附件预览里的 PDF 状态徽标：渲染进度 / 本次实际发出的页数。
-// 逐页渲染是主线程上的重活（实测密集教材约 0.35–0.55 秒/页，上限 24 页可达十几秒），
+// 逐页渲染是主线程上的重活（实测密集教材约 0.35–0.55 秒/页），
 // 没有这个反馈时用户只能看到"点了发送就没反应"。
 // 始终返回一个带固定 id 的空容器：渲染开始前它也在 DOM 里，
 // updatePdfRenderStatus 才有稳定的挂载点可替换。
@@ -838,7 +833,7 @@ function formatPdfAttachStatus(a, index) {
     : (state === 'aborted'
       ? '已取消本次页面渲染'
       : (r && r.truncated
-        ? `已完成页面渲染；所选 ${r.selectedPages} 页超出单次上限，其余未发送`
+        ? `已完成页面渲染；本次仅发送所选 ${r.selectedPages} 页中的 ${r.done} 页`
         : '渲染成图片后随消息一起发送'));
   return `<span class="preview-render-status ${state}" id="aiPdfRenderStatus${idx}" title="${escapeHtml(title)}">${inner}</span>`;
 }
@@ -894,7 +889,8 @@ async function extractPdfAttachmentText(file, opts = {}) {
 }
 
 async function renderPdfAttachmentPages(file, opts = {}) {
-  const maxPages = Number(opts.maxPages) > 0 ? Math.floor(Number(opts.maxPages)) : PDF_IMAGE_MAX_PAGES;
+  // 默认不限制页数；maxPages 仅作为诊断/调用方显式要求的可选参数保留。
+  const maxPages = Number(opts.maxPages) > 0 ? Math.floor(Number(opts.maxPages)) : null;
   const maxWidth = Number(opts.maxWidth) > 0 ? Number(opts.maxWidth) : PDF_IMAGE_MAX_WIDTH;
   const onPage = typeof opts.onPage === 'function' ? opts.onPage : null;
   const isAborted = typeof opts.isAborted === 'function' ? opts.isAborted : null;
@@ -902,9 +898,7 @@ async function renderPdfAttachmentPages(file, opts = {}) {
   const pdf = opened.pdf;
   const dataUrls = [];
   const range = resolvePdfAttachmentRange(pdf.numPages, opts);
-  // 逐页渲染：上限只约束"没填范围时从第 1 页开始能渲染多少页"，
-  // 用户显式选定的页码范围始终优先，不被上限补足或改写。
-  const renderCount = Math.min(range.selectedPages, maxPages);
+  const renderCount = maxPages === null ? range.selectedPages : Math.min(range.selectedPages, maxPages);
   const pageNumbers = [];
   let aborted = false;
   let reusedCanvas = null;

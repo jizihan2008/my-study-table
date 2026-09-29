@@ -398,7 +398,7 @@ function switchTab(tab) {
   if (tab === 'books') { if (typeof renderBooks === 'function') renderBooks(); }
   if (tab === 'keywords') { if (typeof renderKeywords === 'function') renderKeywords(); }
   if (tab === 'translation') { if (typeof window.GlobalTranslation?.renderPage === 'function') window.GlobalTranslation.renderPage(); }
-  if (tab === 'ai') renderAiChat();
+  if (tab === 'ai') renderAiChat({ reuseExisting: true });
   if (tab === 'prompts' && typeof renderPromptStudio === 'function') renderPromptStudio();
   if (tab === 'skills' && typeof renderSkillsStudio === 'function') renderSkillsStudio();
   if (tab === 'today') renderToday();
@@ -422,7 +422,9 @@ function switchTab(tab) {
   if (tab === 'extensions') { if (typeof renderExtensionsPanel === 'function') renderExtensionsPanel(); }
   if (tab === 'store') { if (typeof window.Store !== 'undefined' && window.Store.renderStore) window.Store.renderStore(); }
   // Initialize Lucide icons for dynamically rendered content
-  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+  // AI performs its own icon pass when it actually rebuilds. Skipping the
+  // second document-wide scan also keeps return navigation effectively free.
+  if (tab !== 'ai' && typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
   // 同步移动端底部导航激活态
   updateMobileTabbar(tab);
   // 桌面导航后保持侧栏展开，由移出或点击外部收起；移动端仍关闭抽屉。

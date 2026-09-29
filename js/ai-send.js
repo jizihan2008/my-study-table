@@ -71,7 +71,7 @@ function updateAiQueueIndicator() {
   if (!el) return;
   const n = _aiSendQueue.length;
   if (n > 0) {
-    el.innerHTML = '<i data-lucide="list-ordered" style="width:13px;height:13px;vertical-align:middle;"></i> 发送队列：' + n + ' 条消息等待中' + (_aiQueuePanelOpen ? '（点击收起）' : '（点击查看）');
+    el.innerHTML = '<svg style="width:13px;height:13px;vertical-align:middle;" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="8" x2="21" y1="6" y2="6"/><line x1="8" x2="21" y1="12" y2="12"/><line x1="8" x2="21" y1="18" y2="18"/><path d="M3 6h.01M3 12h.01M3 18h.01"/></svg> 发送队列：' + n + ' 条消息等待中' + (_aiQueuePanelOpen ? '（点击收起）' : '（点击查看）');
     el.style.display = '';
   } else {
     el.style.display = 'none';
@@ -80,7 +80,6 @@ function updateAiQueueIndicator() {
     if (panel) panel.style.display = 'none';
   }
   renderAiQueuePanel();
-  if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 // 渲染预览面板（播放列表风格：每条消息预览 + 删除按钮，底部清空）
@@ -110,7 +109,6 @@ function renderAiQueuePanel() {
     </div>
     ${rows}`;
   panel.style.display = '';
-  if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 // 切换预览面板展开/折叠
@@ -820,8 +818,9 @@ function initAiToolbar() {
   // Reset quick action dropdown
   const quickSelect = document.getElementById('aiToolbarQuick');
   if (quickSelect) quickSelect.value = '';
-  // Re-render Lucide icons (the toolbar was just created/updated in DOM)
-  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
+  // The toolbar shell owns icon creation. Re-initializing state only changes
+  // labels/classes and must not trigger a document-wide Lucide scan every
+  // time the user returns to the AI page.
 }
 
 // ═══════════ 图片上传方式：内联 base64 ↔ DeepSeek Files API ═══════════

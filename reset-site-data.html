@@ -1,0 +1,60 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="color-scheme" content="light dark">
+  <title>清理本地数据 · My Study Table</title>
+  <style>
+    :root { font-family: system-ui,-apple-system,"Segoe UI",sans-serif; color-scheme:light dark; }
+    body { min-height:100vh; margin:0; display:grid; place-items:center; background:#f5f7fb; color:#172033; }
+    main { width:min(430px,calc(100vw - 32px)); box-sizing:border-box; padding:28px; border:1px solid #dfe5ef; border-radius:18px; background:#fff; box-shadow:0 16px 50px rgba(23,32,51,.12); text-align:center; }
+    h1 { margin:0 0 12px; font-size:21px; } p { margin:8px 0; color:#647084; line-height:1.6; font-size:14px; }
+    .spinner { width:28px; height:28px; margin:20px auto; border:3px solid #dfe5ef; border-top-color:#4f6ef7; border-radius:50%; animation:spin .8s linear infinite; }
+    .actions { display:none; gap:10px; margin-top:18px; } button { flex:1; padding:10px 12px; border-radius:9px; border:1px solid #cfd7e5; background:#fff; color:inherit; font:inherit; }
+    button.primary { border-color:#4f6ef7; background:#4f6ef7; color:#fff; }
+    @keyframes spin { to { transform:rotate(360deg); } }
+    @media (prefers-color-scheme:dark) { body{background:#111827;color:#eef2ff} main{background:#1f2937;border-color:#374151} p{color:#aab5c8} button{background:#273449;border-color:#46536a}.spinner{border-color:#46536a;border-top-color:#7c9cff} }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 id="title">正在清理此网站的数据</h1>
+    <div class="spinner" id="spinner" aria-hidden="true"></div>
+    <p id="status" role="status">请保持此页面打开。此操作不会影响 Edge 中的其他网站。</p>
+    <div class="actions" id="actions">
+      <button type="button" onclick="location.reload()">重试</button>
+      <button type="button" class="primary" onclick="location.replace('./')">返回应用</button>
+    </div>
+  </main>
+  <script src="js/site-data-reset.js?v=20260929-r1"></script>
+  <script>
+    (async function () {
+      const title = document.getElementById('title');
+      const status = document.getElementById('status');
+      const spinner = document.getElementById('spinner');
+      const actions = document.getElementById('actions');
+      try {
+        const report = await SiteDataReset.run();
+        spinner.style.display = 'none';
+        if (report.ok) {
+          title.textContent = '此网站的本地数据已清除';
+          status.textContent = '云端数据未被删除。即将返回应用，请重新登录并同步。';
+          setTimeout(function () { location.replace('./?siteDataReset=1'); }, 1200);
+          return;
+        }
+        const blocked = report.databases.some(item => item.blocked);
+        title.textContent = '还有部分数据未能清除';
+        status.textContent = blocked
+          ? '请关闭 Edge 中这个网站的其他标签页，然后点“重试”。'
+          : '浏览器拒绝了部分清理操作。请重试，或完全关闭 Edge 后再次打开此页面。';
+      } catch (error) {
+        spinner.style.display = 'none';
+        title.textContent = '清理没有完成';
+        status.textContent = '请关闭这个网站的其他标签页后重试。';
+      }
+      actions.style.display = 'flex';
+    })();
+  </script>
+</body>
+</html>

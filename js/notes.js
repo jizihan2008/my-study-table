@@ -7,6 +7,7 @@
 
 // Migration: merge old notesFolders into notes
 (function migrateNoteData() {
+  let repairedInterruptedSummary = false;
   const oldFolders = loadData('study_notes_folders');
   if (oldFolders && Array.isArray(oldFolders) && oldFolders.length > 0) {
     for (const f of oldFolders) {
@@ -36,7 +37,20 @@
     if (n.type === 'note' && !Array.isArray(n.keywords)) n.keywords = [];
     if (n.type === 'note' && !Array.isArray(n._annotations)) n._annotations = [];
     if (n.type === 'note' && (!n._foldStates || typeof n._foldStates !== 'object' || Array.isArray(n._foldStates))) n._foldStates = {};
+    // `_summaryUpdating` only describes an in-flight request in this renderer.
+    // Older versions persisted it with the note, so an app reload during a
+    // request could leave the summary UI permanently disabled and "loading".
+    if (Object.prototype.hasOwnProperty.call(n, '_summaryUpdating')) {
+      if (n.type === 'note' && n._summaryUpdating) {
+        n._summaryFailed = true;
+        n._summaryFresh = false;
+        n._summaryError = '上次摘要生成意外中断，请重试';
+      }
+      delete n._summaryUpdating;
+      repairedInterruptedSummary = true;
+    }
   }
+  if (repairedInterruptedSummary) saveData('study_notes_v2', notes);
 })();
 
 // Computed
@@ -2311,7 +2325,10 @@ function getSummaryAiKey(){
 async function generateNoteSummary(note){
   if(!note||note._summaryUpdating)return false;
   if(!note.content){note.summary='';note._summaryFresh=true;note._summaryFailed=false;saveData('study_notes_v2',notes);renderNoteSummary();return true;}
-  note._summaryUpdating=true;
+  // Keep request state in memory only. Notes may be auto-saved while the
+  // request is running, and persisting this flag makes a reload look busy
+  // forever with no Promise left to settle it.
+  Object.defineProperty(note,'_summaryUpdating',{value:true,writable:true,configurable:true,enumerable:false});
   note._summaryFailed=false;
   note._summaryError='';
   renderNoteSummary();
