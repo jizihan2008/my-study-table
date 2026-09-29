@@ -152,9 +152,25 @@ html[data-mobile-webkit="true"] *::after {
   backdrop-filter:none !important;
 }
 html[data-mobile-webkit="true"] :is(.app-bg-layer, .app-bg-video) {
+  position:absolute !important;
   background-attachment:scroll !important;
   filter:none !important;
   transform:none !important;
+  transition:none !important;
+}
+html[data-mobile-webkit="true"] :is(body, .app) {
+  height:100dvh;
+  min-height:100dvh;
+}
+html[data-mobile-webkit="true"] :is(.app, #timerFloat, #mobileMorePanel) {
+  zoom:normal !important;
+}
+/* Safe rendering mode deliberately trades decorative motion for reliable
+   repainting on iPadOS. Interactive state changes remain immediate. */
+html[data-mobile-webkit="true"] *,
+html[data-mobile-webkit="true"] *::before,
+html[data-mobile-webkit="true"] *::after {
+  animation:none !important;
   transition:none !important;
 }
 /* One foreground color is derived from accent luminance for custom colors. */

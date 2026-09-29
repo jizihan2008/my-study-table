@@ -29,3 +29,13 @@ test('early detector marks ordinary and desktop-mode iPads before styles load', 
 test('early detector leaves desktop Edge on the full renderer', () => {
   assert.equal(runEarlyDetector({ userAgent: 'Mozilla/5.0 Edg/140.0', platform: 'Win32', maxTouchPoints: 0 })['data-mobile-webkit'], undefined);
 });
+
+test('iPad safe mode removes whole-app CSS zoom and compositor-heavy effects', () => {
+  const appearanceJs = fs.readFileSync(path.join(__dirname, '..', 'js', 'appearance.js'), 'utf8');
+  const appearanceCss = fs.readFileSync(path.join(__dirname, '..', 'css', 'appearance.css'), 'utf8');
+  assert.match(appearanceJs, /dataset\.mobileWebkit==='true'/);
+  assert.match(appearanceJs, /removeProperty\('zoom'\)/);
+  assert.match(appearanceCss, /zoom:normal !important/);
+  assert.match(appearanceCss, /height:100dvh/);
+  assert.match(appearanceCss, /animation:none !important/);
+});

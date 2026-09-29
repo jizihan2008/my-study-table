@@ -192,6 +192,13 @@ const UI_ZOOM_KEY='study_ui_zoom';
 function getUiZoom(){try{return ThemeModel.clamp(parseFloat(localStorage.getItem(UI_ZOOM_KEY)),.7,1.5,1);}catch{return 1;}}
 function setUiZoom(v){localStorage.setItem(UI_ZOOM_KEY,String(ThemeModel.clamp(v,.7,1.5,1)));applyUiZoom();}
 function applyUiZoom(el){
+  // CSS zoom 会让 iPadOS WebKit 把整个应用提升为缩放合成层，即使值为 1
+  // 也可能在滚动或局部重绘时留下大片旧纹理。移动 WebKit 固定使用原生 100%。
+  if(document.documentElement.dataset.mobileWebkit==='true'){
+    if(el?.style){el.style.removeProperty('zoom');return;}
+    for(const selector of ['.app','#timerFloat','#mobileMorePanel'])document.querySelector(selector)?.style.removeProperty('zoom');
+    return;
+  }
   const zoom=String(getUiZoom());
   if(el?.style){el.style.zoom=zoom;return;}
   for(const selector of ['.app','#timerFloat','#mobileMorePanel']){const node=document.querySelector(selector);if(node)node.style.zoom=zoom;}
