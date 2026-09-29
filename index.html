@@ -10,11 +10,20 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="default">
 <meta name="apple-mobile-web-app-title" content="Study Table">
+<script>
+// iPadOS 上所有浏览器都使用 WebKit。必须在 CSS 加载前标记设备，避免首屏先创建
+// 大量 backdrop-filter 合成层，再在运行期降级时出现黑块、残影和屏闪。
+(function () {
+  var ua = navigator.userAgent || '';
+  var iPadLike = /iPad|iPhone|iPod/.test(ua) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  if (iPadLike) document.documentElement.setAttribute('data-mobile-webkit', 'true');
+})();
+</script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
 <link rel="stylesheet" href="css/style.css?v=20260924-r4">
 <link rel="stylesheet" href="css/workspace.css?v=20260926-r4">
-<link rel="stylesheet" href="css/appearance.css?v=20260913-r6">
+<link rel="stylesheet" href="css/appearance.css?v=20260929-r1">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
 <script src="lib/lucide/lucide.min.js"></script>
@@ -1714,7 +1723,7 @@
 <script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260911-r2"></script>
 <script src="js/theme-model.js?v=20260914-r5"></script>
-<script src="js/liquid-glass.js?v=20260906-r2"></script>
+<script src="js/liquid-glass.js?v=20260929-r1"></script>
 <script src="js/nav-shortcuts.js?v=20260920-r1"></script>
 <script src="js/core.js?v=20260916-r1"></script>
 <script src="js/trash.js?v=20260923-r1"></script>

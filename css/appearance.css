@@ -142,6 +142,21 @@
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%)) url("#liquid-glass-filter");
 }
+/* iPadOS Edge/Safari share WebKit's tiled compositor. Large and nested
+   backdrop-filter layers can leave stale tiles or black rectangles while
+   scrolling. Preserve the selected palette, but render ordinary surfaces. */
+html[data-mobile-webkit="true"] *,
+html[data-mobile-webkit="true"] *::before,
+html[data-mobile-webkit="true"] *::after {
+  -webkit-backdrop-filter:none !important;
+  backdrop-filter:none !important;
+}
+html[data-mobile-webkit="true"] :is(.app-bg-layer, .app-bg-video) {
+  background-attachment:scroll !important;
+  filter:none !important;
+  transform:none !important;
+  transition:none !important;
+}
 /* One foreground color is derived from accent luminance for custom colors. */
 :is(.welcome-focus-btn, #btnTodoToggle, #habitAddBtn, .btn-add, .btn-new-note, .today-checkin-btn:not(.done), .today-goals-add-btn) { color:var(--on-primary,#fff); }
 .btn-new-note svg { color:inherit !important; }

@@ -4,6 +4,7 @@
   'use strict';
   const root = document.documentElement;
   const FILTER_ID = 'liquid-glass-filter';
+  const mobileWebKit = root.dataset.mobileWebkit === 'true';
   const reduced = window.matchMedia('(prefers-reduced-motion: reduce)');
   const compact = window.matchMedia('(max-width: 800px)');
   const coarse = window.matchMedia('(pointer: coarse)');
@@ -58,7 +59,7 @@
     const lite=config.glassQuality==='low' || (config.glassQuality==='auto' && (compact.matches || coarse.matches));
     const refract=enabled && config.material==='liquid' && !lite && !reduced.matches && blurSupported && urlSupported && config.glassCurve>0 && config.glassDeflect>0;
     return { enabled, lite, refract, blurSupported, motion: refract && config.glassMotion && !document.hidden,
-      renderer: !enabled?'solid':!blurSupported?'fallback':refract?'liquid':'frosted' };
+      renderer: !enabled?'solid':(mobileWebKit || !blurSupported)?'fallback':refract?'liquid':'frosted' };
   }
   function render() {
     frame=0;

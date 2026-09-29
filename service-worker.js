@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v179';
+const VERSION = 'mst-v180';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -17,9 +17,9 @@ const PRECACHE_URLS = [
   './manifest.webmanifest?v=20260926-icon-v3',
   './css/style.css?v=20260924-r4',
   './css/workspace.css?v=20260926-r4',
-  './css/appearance.css?v=20260913-r6',
+  './css/appearance.css?v=20260929-r1',
   './js/theme-model.js?v=20260914-r5',
-  './js/liquid-glass.js?v=20260906-r2',
+  './js/liquid-glass.js?v=20260929-r1',
   './js/appearance.js?v=20260914-r6',
   './js/today.js?v=20260922-r1',
   './lib/lucide/lucide.min.js',
