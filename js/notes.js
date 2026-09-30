@@ -300,6 +300,8 @@ function onNotesChange() {
     if (saveData('study_notes_v2', notes) === true) {
       document.getElementById('notesStatus').textContent = '已保存';
       note._dirtyContent = false;
+      const current = notes.find(n => n.id === note.id);
+      if (current) current._dirtyContent = false;
       renderNoteList();
     } else {
       document.getElementById('notesStatus').textContent = '保存失败，内容仍保留在当前页';
@@ -333,6 +335,8 @@ function onRichNotesChange(markdown, previousMarkdown) {
     if (saveData('study_notes_v2', notes) === true) {
       if (status) status.textContent = '已保存';
       note._dirtyContent = false;
+      const current = notes.find(n => n.id === note.id);
+      if (current) current._dirtyContent = false;
       renderNoteList();
     } else if (status) {
       status.textContent = '保存失败，内容仍保留在当前页';

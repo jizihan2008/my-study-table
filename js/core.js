@@ -4,6 +4,10 @@ function loadData(key) {
   const value = (typeof StudyPlatform !== 'undefined')
     ? StudyPlatform.storage.getJson(key, [])
     : (() => { try { return JSON.parse(localStorage.getItem(key)) || []; } catch { return []; } })();
+  if (key === 'study_notes_v2' && Array.isArray(value)) {
+    // Editing state belongs to this renderer, never to a persisted/cloud note.
+    for (const note of value) if (note && typeof note === 'object') delete note._dirtyContent;
+  }
   return Array.isArray(value) ? value : [];
 }
 // Generate a globally-unique numeric ID. Monotonic (newest = largest value) so any
@@ -57,7 +61,12 @@ function compactStoredAiConversations() {
 compactStoredAiConversations();
 function saveData(key, data) {
   try {
-    const persistedData = key === 'study_ai_convs' ? compactAiConversationsForStorage(data) : data;
+    const persistedData = key === 'study_ai_convs' ? compactAiConversationsForStorage(data)
+      : key === 'study_notes_v2' && Array.isArray(data) ? data.map(note => {
+        if (!note || typeof note !== 'object') return note;
+        const { _dirtyContent, ...persistedNote } = note;
+        return persistedNote;
+      }) : data;
     const result = (typeof StudyPlatform !== 'undefined')
       ? StudyPlatform.storage.setJson(key, persistedData)
       : (() => {

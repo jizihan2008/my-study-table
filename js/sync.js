@@ -1247,6 +1247,7 @@
             title: t ? t.value : n.title,
             content: a ? a.value : n.content,
             dirtyContent,
+            dirtyTitle: focusT && t.value !== (n.title || ''),
             focusField: focusT ? 'title' : (focusA ? 'source' : (focusR ? 'rich' : null)),
             selectionStart: (focusT || focusA) ? document.activeElement.selectionStart : null,
             selectionEnd: (focusT || focusA) ? document.activeElement.selectionEnd : null
@@ -1279,8 +1280,14 @@
       'renderNotes', 'renderTodos', 'renderToday', 'renderLinks', 'renderCalendar',
       'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats'
     ];
+    const syncedNote = editSnap && typeof notes !== 'undefined'
+      ? notes.find(n => String(n.id) === String(editSnap.id)) : null;
+    // Focus alone is not a draft. A clean, focused editor must receive cloud
+    // body changes too, otherwise it can remain blank until another interaction.
+    const preserveNoteEditor = editSnap && (editSnap.dirtyContent || editSnap.dirtyTitle ||
+      syncedNote && (syncedNote.content || '') === (editSnap.content || ''));
     for (const fn of calls) {
-      if (fn === 'renderNotes' && editSnap) continue;
+      if (fn === 'renderNotes' && editSnap && preserveNoteEditor) continue;
       try {
         if (typeof window[fn] === 'function') {
           if (global.SyncDOM) global.SyncDOM.run(() => window[fn]());
