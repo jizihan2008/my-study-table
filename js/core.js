@@ -22,12 +22,46 @@ function loadExpandedTodoIds() {
 function saveExpandedTodoIds() {
   try { localStorage.setItem('study_todo_expanded', JSON.stringify([...expandedTodoIds])); } catch {}
 }
+// tree + activePath 已完整包含当前对话及所有分支；messages 只是可重建的当前路径缓存。
+// 两者同时落盘会把 AI 正文保存两遍，很快耗尽 localStorage 的站点配额。
+function compactAiConversationsForStorage(data) {
+  if (!Array.isArray(data)) return data;
+  const KEEP_UNDERSCORE = new Set(['_dailyReport', '_hasUnread', '_hasUnreadAuto', '_toolGroups', '_deletePolicy']);
+  return data.map(conv => {
+    if (!conv || typeof conv !== 'object') return conv;
+    const compact = {};
+    for (const [name, value] of Object.entries(conv)) {
+      if (name.startsWith('_') && !KEEP_UNDERSCORE.has(name)) continue;
+      if (name === 'messages' && conv.tree && Array.isArray(conv.activePath)) continue;
+      compact[name] = value;
+    }
+    return compact;
+  });
+}
+function compactStoredAiConversations() {
+  try {
+    const key = 'study_ai_convs';
+    const raw = localStorage.getItem(key);
+    if (!raw) return 0;
+    const compactRaw = JSON.stringify(compactAiConversationsForStorage(JSON.parse(raw)));
+    if (!compactRaw || compactRaw.length >= raw.length) return 0;
+    localStorage.setItem(key, compactRaw);
+    return raw.length - compactRaw.length;
+  } catch (e) {
+    console.warn('[storage] 启动时压缩 AI 对话失败:', e);
+    return 0;
+  }
+}
+// 旧版本已经写入的重复消息不会等到下一次聊天保存才释放空间。
+// 在同步模块启动前立即原位压缩，确保冲突处理有空间写入必要的状态。
+compactStoredAiConversations();
 function saveData(key, data) {
   try {
+    const persistedData = key === 'study_ai_convs' ? compactAiConversationsForStorage(data) : data;
     const result = (typeof StudyPlatform !== 'undefined')
-      ? StudyPlatform.storage.setJson(key, data)
+      ? StudyPlatform.storage.setJson(key, persistedData)
       : (() => {
-          const raw = JSON.stringify(data);
+          const raw = JSON.stringify(persistedData);
           if (localStorage.getItem(key) === raw) return { ok: true, changed: false };
           localStorage.setItem(key, raw);
           return { ok: true, changed: true };
@@ -44,27 +78,15 @@ function saveData(key, data) {
     }
     return true;
   } catch (e) {
-    console.error('[saveData] 序列化失败 (' + key + '):', e.message);
+    console.error('[saveData] 保存失败 (' + key + '):', e.message);
     // Fallback: try removing problematic _rawLogs and _ prefixed fields before retry
     // 注意：必须保留 _dailyReport/_hasUnread/_hasUnreadAuto 等关键标记字段，否则日报对话标记会丢失导致重复新建
     // 同理保留对话级 AI 设置 _toolGroups（接口组勾选）/_deletePolicy（删除策略）
     if (key === 'study_ai_convs' && Array.isArray(data)) {
       try {
-        const KEEP_UNDERSCORE = new Set(['_dailyReport', '_hasUnread', '_hasUnreadAuto', '_toolGroups', '_deletePolicy']);
-        const cleaned = data.map(c => {
-          if (c && typeof c === 'object') {
-            const copy = {};
-            for (const [k, v] of Object.entries(c)) {
-              if (!k.startsWith('_') || KEEP_UNDERSCORE.has(k)) {
-                copy[k] = v;
-              }
-            }
-            return copy;
-          }
-          return c;
-        });
+        const cleaned = compactAiConversationsForStorage(data);
         localStorage.setItem(key, JSON.stringify(cleaned));
-        console.warn('[saveData] 已清理 _ 前缀字段后重试成功');
+        console.warn('[saveData] 已压缩 AI 对话后重试成功');
         return true;
       } catch (e2) {
         console.error('[saveData] 清理后重试仍然失败:', e2.message);

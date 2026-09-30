@@ -73,6 +73,31 @@ test('legacy 50MB quota is upgraded and each log kind has an independent automat
   assert.equal(config.autoKinds.bk_qa, true);
 });
 
+test('new conversations inherit the default sync switch without changing older per-item choices', () => {
+  const { SyncLogs, values, context } = loadSyncLogs({
+    study_sync_logs_cfg: { autoKinds: { ai_conv: false } },
+    study_sync_logs_marks: { 'ai_conv/5': true }
+  }, { aiConvs: [] });
+  context.window.SyncLogs = SyncLogs;
+  context.getActiveConv = () => null;
+  context.initTreeOnConv = conv => { conv.tree = { root: {} }; };
+  const source = fs.readFileSync(path.join(__dirname, '..', 'js', 'ai-conv.js'), 'utf8');
+  const start = source.indexOf('function createNewConv()');
+  const end = source.indexOf('function switchConv(', start);
+  vm.runInNewContext(source.slice(start, end), context);
+
+  context.createNewConv();
+  const firstId = context.aiConvs[0].id;
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/' + firstId], false);
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/5'], true);
+
+  SyncLogs.setKindAutoSync('ai_conv', true);
+  context.createNewConv();
+  const secondId = context.aiConvs[1].id;
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/' + secondId], true);
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/' + firstId], false);
+});
+
 test('AI cloud payload does not duplicate messages already stored in the tree', async () => {
   const conv = { id: 7, title: 'tree', messages: [{ role: 'user', content: 'only once' }] };
   const { SyncLogs, context, values } = loadSyncLogs({ study_ai_convs: [conv] }, { aiConvs: [conv] });

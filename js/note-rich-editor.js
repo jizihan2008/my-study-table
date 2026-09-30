@@ -52,6 +52,22 @@
     }
   }
 
+  function getLatexSource(node) {
+    if (!node) return '';
+    const stored = node.dataset?.latex
+      || node.querySelector?.('annotation[encoding="application/x-tex"]')?.textContent;
+    if (stored) return stored.trim();
+
+    // DOMPurify keeps MathML but flattens KaTeX's <semantics>/<annotation>
+    // wrapper. The TeX source then survives as a direct text node of <math>.
+    const math = node.matches?.('math') ? node : node.querySelector?.('math');
+    return Array.from(math?.childNodes || [])
+      .filter(child => child.nodeType === Node.TEXT_NODE)
+      .map(child => child.textContent || '')
+      .join('')
+      .trim();
+  }
+
   function normalizeRenderedDom(container) {
     container.querySelectorAll('pre code').forEach(code => {
       const languageClass = Array.from(code.classList).find(name => name.startsWith('language-')) || '';
@@ -65,8 +81,8 @@
       input.setAttribute('aria-label', '任务状态');
     });
     container.querySelectorAll('.katex').forEach(math => {
-      const annotation = math.querySelector('annotation[encoding="application/x-tex"]');
-      if (annotation) math.dataset.latex = annotation.textContent || '';
+      const latex = getLatexSource(math);
+      if (latex) math.dataset.latex = latex;
       math.setAttribute('contenteditable', 'false');
     });
     container.querySelectorAll('.footnotes').forEach(section => section.setAttribute('contenteditable', 'false'));
@@ -121,7 +137,7 @@
       return '[^' + (footnoteLabels[index] || String(index + 1)) + ']';
     }
     if (node.classList.contains('katex')) {
-      const latex = node.dataset.latex || node.querySelector('annotation[encoding="application/x-tex"]')?.textContent || '';
+      const latex = getLatexSource(node);
       return latex ? '$' + latex.trim() + '$' : '';
     }
     if (blockTags.has(node.tagName)) return block(node).trim();
@@ -201,7 +217,7 @@
     if (tag === 'hr') return node.classList.contains('footnotes-sep') ? '' : '---';
     if (node.classList.contains('markdown-math-display')) {
       const math = node.querySelector('.katex');
-      const latex = math?.dataset.latex || math?.querySelector('annotation[encoding="application/x-tex"]')?.textContent || '';
+      const latex = getLatexSource(math);
       return latex ? '$$\n' + latex.trim() + '\n$$' : '';
     }
     if (node.classList.contains('footnotes')) return '';

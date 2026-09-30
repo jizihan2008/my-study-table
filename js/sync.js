@@ -915,24 +915,32 @@
   }
 
   function _recordConflict(key, choice, conflict) {
-    const raw = localStorage.getItem(key) || '';
-    let deviceId = localStorage.getItem('study_device_id');
-    if (!deviceId) {
-      deviceId = 'device_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem('study_device_id', deviceId);
+    try {
+      const raw = localStorage.getItem(key) || '';
+      let deviceId = localStorage.getItem('study_device_id');
+      if (!deviceId) {
+        deviceId = 'device_' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+        localStorage.setItem('study_device_id', deviceId);
+      }
+      const history = _getConflictHistory();
+      history.unshift({
+        key,
+        label: SYNC_LABELS[key] || key,
+        choice,
+        deviceId,
+        localUpdatedAt: (conflict && conflict.baseTimestamp) || _getLocalTs()[key] || null,
+        remoteUpdatedAt: (conflict && conflict.remoteTimestamp) || _getRemoteTs()[key] || null,
+        localHash: (conflict && conflict.localHash) || (global.StudyData ? global.StudyData.hashText(raw) : null),
+        resolvedAt: new Date().toISOString()
+      });
+      localStorage.setItem(CONFLICT_HISTORY_KEY, JSON.stringify(history.slice(0, 100)));
+      return true;
+    } catch (e) {
+      // History is diagnostic only. A full localStorage must not leave an already
+      // resolved cloud conflict stuck in the pending list forever.
+      console.warn('[sync] 冲突已处理，但历史记录保存失败:', e);
+      return false;
     }
-    const history = _getConflictHistory();
-    history.unshift({
-      key,
-      label: SYNC_LABELS[key] || key,
-      choice,
-      deviceId,
-      localUpdatedAt: (conflict && conflict.baseTimestamp) || _getLocalTs()[key] || null,
-      remoteUpdatedAt: (conflict && conflict.remoteTimestamp) || _getRemoteTs()[key] || null,
-      localHash: (conflict && conflict.localHash) || (global.StudyData ? global.StudyData.hashText(raw) : null),
-      resolvedAt: new Date().toISOString()
-    });
-    localStorage.setItem(CONFLICT_HISTORY_KEY, JSON.stringify(history.slice(0, 100)));
   }
 
   async function resolveConflict(key, choice) {
@@ -971,8 +979,8 @@
         await _applyRemoteValue(data.key, data.value, data.updated_at);
       }
 
-      _recordConflict(key, choice, conflict);
       _clearPendingConflict(key);
+      _recordConflict(key, choice, conflict);
       _lastPullError = '';
       _logSync('conflict-resolved', { key, choice });
       return { ok: true, key, choice };

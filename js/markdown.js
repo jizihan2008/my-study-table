@@ -15,8 +15,27 @@
   const BARE_LATEX_RE = /\\(?:sin|cos|tan|log|ln|exp|lim|sup|inf|min|max|frac|sqrt|theta|Theta|Delta|alpha|beta|gamma|delta|lambda|pi|to|cdot|infty|partial|bar|hat|vec|dot|ddot|tilde|overline|underbrace|mathbb)(?![A-Za-z])(?:\[[^\]\n]*\])?(?:\{[^{}\n]*\}){0,2}(?:[_^](?:\{[^{}\n]*\}|[A-Za-z0-9]))?/g;
   let singleton = null;
 
+  const LATEX_ROW_ENV_RE = /\\begin\{(matrix|pmatrix|bmatrix|Bmatrix|vmatrix|Vmatrix|smallmatrix|array|aligned|alignedat|gathered|cases|split)\}([\s\S]*?)\\end\{\1\}/g;
+  const LATEX_ROW_COMMANDS = 'alpha|beta|gamma|delta|epsilon|varepsilon|zeta|eta|theta|vartheta|iota|kappa|lambda|mu|nu|xi|pi|varpi|rho|varrho|sigma|varsigma|tau|upsilon|phi|varphi|chi|psi|omega|Gamma|Delta|Theta|Lambda|Xi|Pi|Sigma|Upsilon|Phi|Psi|Omega|frac|dfrac|tfrac|sqrt|text|mathrm|mathbf|mathit|mathsf|mathtt|mathbb|mathcal|mathfrak|boldsymbol|vec|bar|hat|dot|ddot|tilde|overline|underline|sum|prod|int|lim|vdots|cdots|ddots|dots';
+  const LATEX_ROW_COMMAND_RE = new RegExp('(^|[^\\\\])\\\\\\\\(?=(?:' + LATEX_ROW_COMMANDS + ')\\b)', 'g');
+
+  function repairLatexRows(body) {
+    return String(body || '')
+      // Common copy/typing mistake: a_{11}\a_{21} (one slash missing).
+      .replace(/(^|[^\\])\\(?=[A-Za-z]\s*[_^])/g, (_, prefix) => prefix + '\\'.repeat(2))
+      .replace(/(^|[^\\])\\(?=\s*[0-9])/g, (_, prefix) => prefix + '\\'.repeat(2))
+      // Recover row breaks before commands that lost one slash in older builds,
+      // e.g. "\\vdots" should be "\\\\vdots" inside a matrix.
+      .replace(LATEX_ROW_COMMAND_RE, (_, prefix) => prefix + '\\'.repeat(3));
+  }
+
   function normalizeLatex(formula) {
-    return String(formula || '').replace(/\\\\(?=[A-Za-z])/g, '\\');
+    // Never collapse every "\\command" globally: in arrays and matrices the
+    // first two slashes are a real row break. Only repair high-confidence row
+    // mistakes inside environments where \\ has structural meaning.
+    return String(formula || '').replace(LATEX_ROW_ENV_RE, (_, env, body) =>
+      '\\begin{' + env + '}' + repairLatexRows(body) + '\\end{' + env + '}'
+    );
   }
 
   function isSafeUrl(value, kind) {
@@ -412,6 +431,7 @@
     render,
     renderInline,
     createRenderer,
+    normalizeLatex,
     isSafeUrl,
     slugifyHeading,
     installExternalLinkHandler

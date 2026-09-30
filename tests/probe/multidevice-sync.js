@@ -169,6 +169,22 @@ async function run() {
   }
   {
     const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }]);
+    await b.syncNow();
+    a.edit([{ id: 2, text: 'two' }, { id: 1, text: 'one' }, { id: 3, text: 'three' }]);
+    b.edit([{ id: 3, text: 'three' }, { id: 1, text: 'one' }, { id: 2, text: 'two' }]);
+    await a.syncNow();
+    await b.syncNow();
+    const conflict = b.sync.getPendingConflicts().find(item => item.reason === 'both-changed-order');
+    const latest = db.raw('u1', conflict.key);
+    db.seedLegacy('u1', conflict.key, latest.slice().reverse());
+    const resolved = await b.sync.resolveConflict(conflict.key, 'local');
+    const actual = { resolved, cloudOrder: db.raw('u1', conflict.key), pending: b.sync.getPendingConflicts() };
+    check('stale-order-conflict-resolves-against-latest-remote-version', actual,
+      () => resolved.ok && actual.cloudOrder.join(',') === '3,1,2' && actual.pending.length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
     await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);
     await b.syncNow();
     a.edit([{ id: 2, text: 'two' }, { id: 1, text: 'one' }]);

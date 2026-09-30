@@ -566,6 +566,10 @@ async function renderSyncPanel() {
     const errorTxt = st.lastError ? '，最近错误：' + st.lastError : '';
     statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + conflictTxt + autoTxt + errorTxt : '已关闭');
     statusEl.className = st.lastError ? 'settings-status error' : 'settings-status';
+    if (statusEl.dataset.conflictError) {
+      statusEl.textContent += '。' + statusEl.dataset.conflictError;
+      statusEl.className = 'settings-status error';
+    }
     // 诊断行：版本 + 远端记录数 + dirty 残留（排查 iPad 不同步）
     let diagEl = document.getElementById('syncDiagLine');
     if (!diagEl) {
@@ -841,18 +845,21 @@ function ensureSyncStatusListener() {
 
 async function syncResolveConflict(key, choice) {
   const statusEl = document.getElementById('syncStatus');
+  if (statusEl) delete statusEl.dataset.conflictError;
   if (typeof window.Sync === 'undefined' || typeof window.Sync.resolveConflict !== 'function') return;
   if (statusEl) statusEl.textContent = choice === 'local' ? '正在用本地版本覆盖云端…' : '正在用云端版本覆盖本机…';
   const result = await window.Sync.resolveConflict(key, choice);
   await renderSyncPanel();
   if (!result.ok && statusEl) {
     statusEl.textContent = '冲突处理失败：' + (result.reason || '未知错误') + '。冲突仍保留，可稍后重试。';
+    statusEl.dataset.conflictError = statusEl.textContent;
     statusEl.className = 'settings-status error';
   }
 }
 
 async function syncResolveConflictGroup(category, choice) {
   const statusEl = document.getElementById('syncStatus');
+  if (statusEl) delete statusEl.dataset.conflictError;
   if (typeof window.Sync === 'undefined') return;
   const conflicts = typeof window.Sync.getPendingConflicts === 'function' ? window.Sync.getPendingConflicts() : [];
   const keys = conflicts.filter(item => _syncConflictCategory(item).id === category).map(item => item.key);
@@ -879,6 +886,7 @@ async function syncResolveConflictGroup(category, choice) {
     const firstFailure = result.failed && result.failed.find(item => item && item.reason);
     const reason = result.reason || (firstFailure && firstFailure.reason) || '未知错误';
     statusEl.textContent = '分类处理完成：成功 ' + (result.resolved || 0) + ' 项，失败 ' + ((result.failed && result.failed.length) || 0) + ' 项。原因：' + reason + '。失败项已保留，可稍后重试。';
+    statusEl.dataset.conflictError = statusEl.textContent;
     statusEl.className = 'settings-status error';
   }
 }
@@ -3762,6 +3770,9 @@ function getDailyReportConv() {
       _dailyReport: true
     };
     if (typeof initTreeOnConv === 'function') initTreeOnConv(conv);
+    if (window.SyncLogs && typeof window.SyncLogs.registerNewItem === 'function') {
+      window.SyncLogs.registerNewItem('ai_conv', conv.id);
+    }
     aiConvs.push(conv);
     saveData('study_ai_convs', aiConvs);
   } else {

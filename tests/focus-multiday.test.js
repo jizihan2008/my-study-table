@@ -52,6 +52,51 @@ test('yesterday completion stays independent from the current todo', () => {
   assert.equal(context.getFocusItemsForDate(yesterday).items[0].done, true);
 });
 
+test('completing a todo from today focus uses the canonical todo completion path', () => {
+  const { context, todos } = focusContext();
+  const today = context.getTodayStr();
+  context.saveFocusData({ _date: today, items: [{ todoId: 1, text: '甲', done: false }] });
+
+  let toggledId = null;
+  context.toggleTodo = id => {
+    toggledId = id;
+    const todo = todos.find(item => item.id === id);
+    todo.done = !todo.done;
+    if (todo.done) todo.completedAt = today;
+    else delete todo.completedAt;
+  };
+  context.renderFocusList = () => {};
+  context.renderTodos = () => {};
+
+  context.toggleTodayFocus(0);
+
+  assert.equal(toggledId, 1);
+  assert.equal(todos[0].done, true);
+  assert.equal(todos[0].completedAt, today);
+  assert.equal(context.getTodayFocusItems().items[0].done, true);
+});
+
+test('completing a child from today focus also uses the canonical todo completion path', () => {
+  const { context, todos } = focusContext();
+  const today = context.getTodayStr();
+  context.saveFocusData({ _date: today, items: [{ todoId: 1, text: '甲', done: false }] });
+
+  let toggledId = null;
+  context.toggleTodo = id => {
+    toggledId = id;
+    const todo = todos.find(item => item.id === id);
+    todo.done = true;
+    todo.completedAt = today;
+  };
+  context.findTodo = id => todos.find(item => item.id === id);
+  context.renderFocusList = () => {};
+
+  context.toggleTodayFocusById(2);
+
+  assert.equal(toggledId, 2);
+  assert.equal(todos[1].completedAt, today);
+});
+
 test('ordinary AI prompt includes yesterday, today and tomorrow focus, and the report chat is identical', () => {
   const { context, todos } = focusContext();
   const yesterday = context.getFocusDateByOffset(-1);

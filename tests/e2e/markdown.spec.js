@@ -473,6 +473,45 @@ test('rich and source modes round-trip common structured Markdown', async () => 
   expect(result.richVisible).toBe('none');
 });
 
+test('rich note editor preserves LaTeX after editing and switching pages', async () => {
+  const result = await page.evaluate(async () => {
+    window.switchTab('notes');
+    const note = window.getActiveNote();
+    note.content = [
+      '公式前 \\(E=mc^2\\) 公式后',
+      '',
+      '\\[\\frac{a}{b}=c\\]',
+      '',
+      '继续编辑这一段'
+    ].join('\n');
+    window.renderNotes();
+    window.switchNoteView('rich');
+    const editor = document.getElementById('notesRichEditor');
+    const paragraph = Array.from(editor.querySelectorAll('p')).at(-1);
+    paragraph.appendChild(document.createTextNode('，新内容'));
+    editor.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertText', data: '，新内容' }));
+    await new Promise(resolve => setTimeout(resolve, 650));
+    const afterEdit = note.content;
+    window.switchTab('todo');
+    window.switchTab('notes');
+    window.switchNoteView('preview');
+    return {
+      afterEdit,
+      afterReturn: note.content,
+      source: document.getElementById('notesTextarea').value,
+      mathCount: document.querySelectorAll('#notesPreview .katex').length,
+      previewText: document.getElementById('notesPreview').textContent
+    };
+  });
+
+  expect(result.afterEdit).toContain('E=mc^2');
+  expect(result.afterEdit).toContain('\\frac{a}{b}=c');
+  expect(result.afterReturn).toBe(result.afterEdit);
+  expect(result.source).toBe(result.afterEdit);
+  expect(result.mathCount).toBe(2);
+  expect(result.previewText).toContain('新内容');
+});
+
 test('formatted AI selections round-trip back to markdown without losing structure', async () => {
   const markdown = await page.evaluate(() => {
     const host = document.createElement('div');

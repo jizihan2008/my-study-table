@@ -105,6 +105,23 @@ test('math parsing skips code and no longer uses collidable placeholders', () =>
   assert.match(html, /\\frac\{1\}\{2\}/);
 });
 
+test('LaTeX correction restores missing matrix row slashes without damaging valid rows', () => {
+  const damaged = String.raw`\boldsymbol{\beta}_1=\begin{pmatrix}a_{11}\a_{21}\\vdots\a_{m1}\end{pmatrix}`;
+  const corrected = StudyMarkdown.normalizeLatex(damaged);
+  assert.equal(
+    corrected,
+    String.raw`\boldsymbol{\beta}_1=\begin{pmatrix}a_{11}\\a_{21}\\\vdots\\a_{m1}\end{pmatrix}`
+  );
+
+  const valid = String.raw`\begin{pmatrix}a_{11}\\a_{21}\\\vdots\\a_{m1}\end{pmatrix}`;
+  assert.equal(StudyMarkdown.normalizeLatex(valid), valid);
+
+  const html = createRenderer().render('$$' + damaged + '$$');
+  assert.doesNotMatch(html, /katex-error|color:#cc0000/);
+  assert.match(html, /a_\{21\}/);
+  assert.match(html, /\\vdots/);
+});
+
 test('raw HTML and dangerous URL schemes never become executable markup', () => {
   const html = createRenderer().render([
     '<img src=x onerror=alert(1)>',

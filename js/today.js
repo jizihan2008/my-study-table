@@ -366,10 +366,10 @@ function toggleTodayFocusById(todoId) {
   if (selectedFocusDate !== getTodayStr()) return;
   const todo = findTodo(todoId);
   if (todo) {
-    todo.done = !todo.done;
-    saveData('study_todos_v2', todos);
+    // Reuse the canonical todo completion path so completedAt, descendant
+    // cascading, undo history and task-line updates stay consistent.
+    toggleTodo(todoId);
     renderFocusList();
-    renderTodos();
   }
 }
 
@@ -494,24 +494,18 @@ function toggleTodayFocus(idx) {
   let data = getSelectedFocusItems();
   if (!data.items || !data.items[idx]) return;
   const item = data.items[idx];
-  const newDone = !item.done;
-  item.done = newDone;
-  // Sync back to todo: cascade to children when completing, leave children alone when unchecking
+  // Today's focus is a second view of the real todo. Delegate to the todo
+  // toggle so completion dates are recorded for calendar/report statistics.
   const todo = todos.find(t => t.id === item.todoId);
   if (todo && selectedFocusDate === getTodayStr()) {
-    todo.done = newDone;
-    if (newDone) {
-      const descendantIds = getAllDescendantIds(item.todoId).filter(did => did !== item.todoId);
-      for (const did of descendantIds) {
-        const d = findTodo(did);
-        if (d) d.done = true;
-      }
-    }
-    saveData('study_todos_v2', todos);
+    toggleTodo(item.todoId);
+    item.done = todo.done;
+  } else {
+    // Yesterday/tomorrow focus snapshots remain independent of the live todo.
+    item.done = !item.done;
   }
   saveFocusData(data);
   renderFocusList();
-  renderTodos();
 }
 
 function deleteTodayFocus(idx) {

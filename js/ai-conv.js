@@ -206,6 +206,9 @@ function createNewConv() {
     autoTitled: false
   };
   if (typeof initTreeOnConv === 'function') initTreeOnConv(conv);
+  if (window.SyncLogs && typeof window.SyncLogs.registerNewItem === 'function') {
+    window.SyncLogs.registerNewItem('ai_conv', conv.id);
+  }
   aiConvs.push(conv);
   activeConvId = conv.id;
   localStorage.setItem('study_active_conv', activeConvId);

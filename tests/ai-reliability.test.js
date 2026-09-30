@@ -485,6 +485,55 @@ test('last save fallback retains every tree branch without the redundant message
   assert.equal(restored.messages.at(-1).content, 'second answer');
 });
 
+test('normal AI saves omit the reconstructable message cache before quota pressure', () => {
+  const ctx = harness();
+  const conv = { id: 'compact', title: 'compact' };
+  ctx.initTreeOnConv(conv);
+  ctx.appendMessage(conv, { role: 'user', content: 'question' });
+  ctx.appendMessage(conv, { role: 'assistant', content: 'answer' });
+  const coreSource = source('core');
+  const compactStart = coreSource.indexOf('function compactAiConversationsForStorage');
+  const compactEnd = coreSource.indexOf('function saveData', compactStart);
+  vm.runInContext(coreSource.slice(compactStart, compactEnd), ctx);
+  vm.runInContext(source('ai-utils'), ctx);
+  ctx.aiConvs = [conv];
+  const saved = storage();
+  ctx.localStorage = saved;
+
+  assert.equal(ctx.safeSaveAiConvs(), true);
+  const restored = JSON.parse(saved.getItem('study_ai_convs'))[0];
+  assert.equal(restored.messages, undefined);
+  assert.ok(restored.tree);
+  assert.ok(Array.isArray(restored.activePath));
+  ctx.ensureTree(restored);
+  assert.equal(restored.messages.at(-1).content, 'answer');
+});
+
+test('startup compacts AI conversations already written by an older version', () => {
+  const ctx = harness();
+  const conv = { id: 'legacy-large', title: 'legacy-large' };
+  ctx.initTreeOnConv(conv);
+  ctx.appendMessage(conv, { role: 'user', content: 'question'.repeat(200) });
+  ctx.appendMessage(conv, { role: 'assistant', content: 'answer'.repeat(200) });
+  const saved = storage();
+  saved.setItem('study_ai_convs', JSON.stringify([conv]));
+  ctx.localStorage = saved;
+  const before = saved.getItem('study_ai_convs').length;
+  const coreSource = source('core');
+  const compactStart = coreSource.indexOf('function compactAiConversationsForStorage');
+  const compactEnd = coreSource.indexOf('function saveData', compactStart);
+
+  vm.runInContext(coreSource.slice(compactStart, compactEnd), ctx);
+
+  const afterRaw = saved.getItem('study_ai_convs');
+  const restored = JSON.parse(afterRaw)[0];
+  assert.ok(afterRaw.length < before);
+  assert.equal(restored.messages, undefined);
+  ctx.ensureTree(restored);
+  assert.equal(restored.messages.length, 2);
+  assert.equal(restored.messages[1].content, 'answer'.repeat(200));
+});
+
 test('missing policy settings use 60 seconds, two retries and exponential backoff', async () => {
   const delays = [];
   const window = {};

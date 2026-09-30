@@ -384,6 +384,69 @@ test('choosing the cloud version resolves and records a pending conflict', async
   assert.equal(JSON.parse(values.get('study_sync_conflict_history'))[0].choice, 'remote');
 });
 
+test('a full conflict-history store cannot keep an already resolved conflict pending', async () => {
+  const remoteValue = [{ id: 2, text: 'cloud copy' }];
+  const values = new Map([
+    ['study_sync_config', JSON.stringify({ enabled: true, autoSync: false })],
+    ['study_notes_v2', JSON.stringify([{ id: 1, text: 'local copy' }])],
+    ['study_sync_dirty_v1', JSON.stringify({ study_notes_v2: true })],
+    ['study_device_id', 'device_existing'],
+    ['study_sync_pending_conflicts_v1', JSON.stringify({
+      study_notes_v2: {
+        key: 'study_notes_v2', reason: 'both-changed',
+        baseTimestamp: '2026-08-25T08:00:00.000Z',
+        remoteTimestamp: '2026-08-25T08:05:00.000Z'
+      }
+    })]
+  ]);
+  const localStorage = {
+    getItem: key => values.has(key) ? values.get(key) : null,
+    setItem(key, value) {
+      if (key === 'study_sync_conflict_history') {
+        const error = new Error('Setting the value exceeded the quota');
+        error.name = 'QuotaExceededError';
+        throw error;
+      }
+      values.set(key, String(value));
+    },
+    removeItem: key => values.delete(key)
+  };
+  const client = {
+    auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+    from() {
+      return {
+        select() { return this; },
+        eq() { return this; },
+        maybeSingle() {
+          return Promise.resolve({
+            data: { key: 'study_notes_v2', value: remoteValue, updated_at: '2026-08-25T08:05:00.000Z' },
+            error: null
+          });
+        }
+      };
+    }
+  };
+  const warnings = [];
+  const window = { SyncPolicy: policy };
+  const code = fs.readFileSync(path.join(__dirname, '..', 'js', 'sync.js'), 'utf8');
+  vm.runInNewContext(code, {
+    window, localStorage,
+    getSupabaseClient: () => client,
+    saveData: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
+    setTimeout() { return 1; }, clearTimeout() {},
+    console: { log() {}, warn(...args) { warnings.push(args.join(' ')); }, error() {} }
+  });
+
+  window.Sync.init();
+  const result = await window.Sync.resolveConflict('study_notes_v2', 'remote');
+
+  assert.equal(result.ok, true);
+  assert.deepEqual(JSON.parse(values.get('study_notes_v2')), remoteValue);
+  assert.equal(window.Sync.getPendingConflicts().length, 0);
+  assert.equal(values.has('study_sync_conflict_history'), false);
+  assert.ok(warnings.some(message => message.includes('历史记录保存失败')));
+});
+
 test('a conflict category can resolve multiple cloud versions in one operation', async () => {
   const pending = {
     study_taskline_v1: { key: 'study_taskline_v1', reason: 'both-changed' },

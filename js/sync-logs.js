@@ -141,6 +141,15 @@
     m[kind + '/' + itemId] = !!on;
     _setLocal(MARKS_KEY, m);
   }
+  function registerNewItem(kind, itemId) {
+    if (!KIND_LABELS[kind] || itemId == null) return;
+    const key = _baseKey(kind, itemId);
+    const marks = _getMarks();
+    if (Object.prototype.hasOwnProperty.call(marks, key)) return;
+    _loadCfg();
+    marks[key] = _autoKindOn(kind);
+    _setLocal(MARKS_KEY, marks);
+  }
 
   function _baseKey(kind, itemId) { return kind + '/' + String(itemId); }
   function _getDirtyMap() { return _getLocal(DIRTY_KEY, {}); }
@@ -1572,7 +1581,7 @@
         <div class="storage-auto-kinds-title">自动同步新内容</div>
         ${[['ai_conv','message-square','新的 AI 对话'],['bk_explain','book-open','章节讲解'],['bk_qa','search','全书对话']]
           .map(([kind, icon, label]) => `<label class="storage-auto-kind"><span><i data-lucide="${icon}"></i>${label}</span><span class="toggle-switch"><input type="checkbox" ${_autoKindOn(kind) ? 'checked' : ''} onchange="SyncLogs.setKindAutoSync('${kind}',this.checked)"><span class="toggle-slider"></span></span></label>`).join('')}
-        <div class="storage-quota-hint">关闭后，新内容仍保留在本地，也可点击“立即同步”手动上传。</div>
+        <div class="storage-quota-hint">关闭后，新内容默认不上传并保留在本地；如需同步，可在下方逐项开启。</div>
       </div>
       <div class="storage-actions">
         <button class="storage-btn storage-btn-primary" onclick="SyncLogs.manualSync()"><i data-lucide="refresh-cw" class="lucide-icon" style="width:13px;height:13px;"></i> 立即同步</button>
@@ -2138,6 +2147,7 @@
     markItemDeleted,
     renderPanel: renderPanelSafe,
     setItemEnabled,
+    registerNewItem,
     setKindAutoSync,
     deleteAllRemote,
     pruneRemote,

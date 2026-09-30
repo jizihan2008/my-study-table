@@ -22,7 +22,10 @@ function safeJsonStringify(obj, space) {
 function safeSaveAiConvs() {
   let changed = false;
   try {
-    const json = JSON.stringify(aiConvs);
+    const persisted = typeof compactAiConversationsForStorage === 'function'
+      ? compactAiConversationsForStorage(aiConvs)
+      : aiConvs;
+    const json = JSON.stringify(persisted);
     if (localStorage.getItem('study_ai_convs') !== json) {
       localStorage.setItem('study_ai_convs', json);
       changed = true;

@@ -497,8 +497,9 @@
         const { data: remote, error } = await client.from('user_data')
           .select('value,updated_at').eq('user_id', session.user.id).eq('key', key).maybeSingle();
         if (error || !remote || !Array.isArray(remote.value)) throw new Error('云端排序不可用');
-        const previous = conflicts()[key];
-        if (previous.remoteTimestamp !== remote.updated_at) throw new Error('云端排序已变化，请重新同步');
+        // Resolve against the version just read, not the stale version captured
+        // when the conflict first appeared. The conditional update below still
+        // protects a concurrent change made after this read.
         let ids;
         let timestamp = remote.updated_at;
         if (choice === 'remote') {
