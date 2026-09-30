@@ -924,9 +924,9 @@
             <span class="hint">优先保留最近的完整问答和工具链；较早内容压缩为摘录，实际条数可能因轮次边界调整。</span>
           </div>
           <div class="settings-field" style="margin-bottom:8px;">
-            <label>上下文预算（估算 Token）</label>
+            <label>输入 Token 预算（估算）</label>
             <input type="number" id="apiKeyFormContextBudget" value="32768" min="2048" max="2000000" step="1024">
-            <span class="hint">包含系统提示、历史和回复预留；请按模型容量设置。按字符保守估算，图片单独预留。</span>
+            <span class="hint">包含系统提示、历史、当前问题和附件，不扣除最大输出 Token。按字符保守估算，图片单独预留；请为模型输出另留容量。</span>
           </div>
           <div class="settings-field" style="margin-bottom:8px;">
             <label>标题生成上下文条数</label>
@@ -1719,7 +1719,7 @@
 <script src="js/note-rich-editor.js?v=20260929-r1"></script>
 <script src="js/platform.js?v=20260826-r2"></script>
 <script src="js/secrets.js?v=20260827-r2"></script>
-<script src="js/data-store.js?v=20260825-r1"></script>
+<script src="js/data-store.js?v=20260930-r1"></script>
 <script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260911-r2"></script>
 <script src="js/theme-model.js?v=20260914-r5"></script>
@@ -1795,8 +1795,9 @@
 <script src="js/store.js?v=20260913-r2"></script>
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20260923-r2"></script>
-<script src="js/sync-collections.js?v=20260929-r1"></script>
-<script src="js/sync.js?v=20260929-r1"></script>
+<script src="js/sync-collections.js?v=20260930-r1"></script>
+<script src="js/sync-dom.js?v=20260930-r1"></script>
+<script src="js/sync.js?v=20260930-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260929-r1"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>

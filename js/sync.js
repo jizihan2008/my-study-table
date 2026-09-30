@@ -1281,7 +1281,12 @@
     ];
     for (const fn of calls) {
       if (fn === 'renderNotes' && editSnap) continue;
-      try { if (typeof window[fn] === 'function') window[fn](); } catch (e) { /* 忽略单个模块失败 */ }
+      try {
+        if (typeof window[fn] === 'function') {
+          if (global.SyncDOM) global.SyncDOM.run(() => window[fn]());
+          else window[fn]();
+        }
+      } catch (e) { /* 忽略单个模块失败 */ }
     }
     // 编辑器 DOM 未被重绘，草稿、焦点和选区会原样保留。这里只在其他模块
     // 意外移动焦点时恢复原编辑区；标题草稿始终不写入 notes。

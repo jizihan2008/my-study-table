@@ -257,7 +257,10 @@
     if (existingIndex >= 0) items.splice(existingIndex, 1);
     if (value && !value.deleted) {
       if (!value.item || String(value.item.id) !== String(id)) throw new Error('云端记录 ID 不匹配');
-      const index = Math.max(0, Math.min(items.length, Number(value.index) || 0));
+      // 已有记录的内容更新不能改变位置。index 可能来自另一台设备的旧数组，
+      // 真正的排序由独立的 order 行同步；新记录才使用 index 作为插入提示。
+      const index = existingIndex >= 0 ? existingIndex
+        : Math.max(0, Math.min(items.length, Number(value.index) || 0));
       items.splice(index, 0, value.item);
     }
     applyingRemote = true;
@@ -286,9 +289,21 @@
     } finally { applyingRemote = false; }
     return true;
   }
+  function orderChanged(before, after) {
+    // 增删条目只是成员变化。只比较两边都存在的条目的相对次序。
+    const beforeIds = (before || []).map(String);
+    const afterIds = (after || []).map(String);
+    const beforeSet = new Set(beforeIds);
+    const afterSet = new Set(afterIds);
+    return beforeIds.filter(id => afterSet.has(id)).join('\u0000') !==
+      afterIds.filter(id => beforeSet.has(id)).join('\u0000');
+  }
+  function retryOrder(collection) {
+    pendingCollections.add(collection);
+    changeVersions.set(collection, (changeVersions.get(collection) || 0) + 1);
+  }
   async function syncOrder(c, userId, collection) {
     const key = orderKey(collection);
-    if (conflicts()[key]) return false;
     const initialIds = readItems(collection).map(item => String(item.id));
     if (!initialIds.length && !readJson(ORDER_STATE_KEY, {})[collection]) return false;
     const { data: remote, error } = await c.from('user_data')
@@ -306,13 +321,15 @@
       return false;
     }
     const remoteIds = remote && Array.isArray(remote.value) ? remote.value.map(String) : null;
-    const localChanged = !!baseline && baseline.ids.join('\u0000') !== current.join('\u0000');
-    const remoteChanged = !!baseline && remote && remote.updated_at !== baseline.timestamp;
+    const localChanged = !!baseline && orderChanged(baseline.ids, current);
+    const remoteChanged = !!baseline && remoteIds && orderChanged(baseline.ids, remoteIds);
     if (localChanged && remoteChanged && remoteIds &&
-        current.join('\u0000') !== remoteIds.join('\u0000')) {
+        orderChanged(current, remoteIds)) {
       queueOrderConflict(collection, remote, baseline);
       return false;
     }
+    // 旧算法留下的成员增删误报也重新核对；真正的双端排序冲突仍保留。
+    clearConflict(key);
     let applied = false;
     if (remoteIds && (!baseline || !localChanged || remoteChanged)) {
       applied = applyOrder(collection, remoteIds);
@@ -333,7 +350,9 @@
         const { data: latest, error: readError } = await c.from('user_data')
           .select('value,updated_at').eq('user_id', userId).eq('key', key).maybeSingle();
         if (readError || !latest) throw new Error('上传排序后无法读取云端版本');
-        queueOrderConflict(collection, latest, baseline);
+        // 条件写入失败只表示云端版本刚被更新，可能只是另一台设备新增了条目。
+        // 重新同步后再按相对次序判断，不能把一次写入竞争直接标成排序冲突。
+        retryOrder(collection);
       }
     } else {
       all[collection] = { ids: desired, timestamp: remote.updated_at };

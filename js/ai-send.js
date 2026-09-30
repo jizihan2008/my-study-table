@@ -58,7 +58,7 @@ function formatAiRequestError(error) {
   if (/unsupported image|image.+(?:format|invalid|unsupported)|图片.+(?:格式|不支持|无效)/i.test(message)) {
     return '❌ 图片发送失败：' + message + '\n\n该图片可能来自旧对话记录，或尺寸/编码不被当前模型接受。请刷新应用后重新上传；应用会自动跳过历史中的不兼容原图。';
   }
-  if (/上下文预算|系统提示词|Max Tokens/.test(message)) {
+  if (/输入 Token 预算|系统提示词|Max Tokens/.test(message)) {
     return '❌ 出错了：' + message + '\n\n可在“设置 → AI 设置 → 编辑当前 Key → 更多设置”中调整。';
   }
   if (/已取消|手动停止/.test(message)) return '⏹️ ' + message;

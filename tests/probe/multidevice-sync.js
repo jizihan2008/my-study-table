@@ -153,6 +153,90 @@ function device(name, backend, userId = 'u1') {
 async function run() {
   {
     const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);
+    await b.syncNow();
+    a.edit([...a.get(), { id: 3, text: 'added' }]);
+    await a.syncNow();
+    const key = 'mst:order:v1:' + encodeURIComponent(KEY);
+    b.setKeyRaw('study_sync_collection_conflicts_v1', { [key]: {
+      key, collection: KEY, label: '待办：排序', reason: 'both-changed-order'
+    } });
+    await b.syncNow();
+    const actual = { local: b.get(), conflicts: b.sync.getPendingConflicts() };
+    check('old-membership-order-conflict-clears-on-sync', actual,
+      () => actual.local.length === 3 && actual.conflicts.length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }]);
+    await b.syncNow();
+    a.edit([a.get()[2], a.get()[0], a.get()[1]]);
+    // 同样的排序被另一台设备重写，只更新时间戳，没有改变相对次序。
+    db.seedLegacy('u1', 'mst:order:v1:' + encodeURIComponent(KEY), ['1', '2', '3']);
+    await a.syncNow();
+    await b.syncNow();
+    const actual = { other: b.get().map(x => x.id), conflicts: a.sync.getPendingConflicts() };
+    check('order-timestamp-only-change-is-not-a-conflict', actual,
+      () => actual.other.join(',') === '3,1,2' && actual.conflicts.length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);
+    await b.syncNow();
+    a.edit([...a.get(), { id: 3, text: 'A added' }]);
+    b.edit([...b.get(), { id: 4, text: 'B added' }]);
+    a.state.pauseOrderRead = true;
+    db.onOrderRead(async () => { await b.syncNow(); });
+    await a.syncNow();
+    await a.syncNow();
+    await b.syncNow();
+    const actual = { a: a.get(), b: b.get(), conflicts: a.sync.getPendingConflicts() };
+    check('order-upload-race-retries-without-false-conflict', actual,
+      () => actual.a.length === 4 && actual.b.length === 4 && actual.conflicts.length === 0 &&
+        actual.a.map(x => x.id).join(',') === actual.b.map(x => x.id).join(','));
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);
+    await b.syncNow();
+    a.edit([...a.get(), { id: 3, text: 'A added' }]);
+    b.edit([{ id: 4, text: 'B added' }, ...b.get()]);
+    await a.syncNow();
+    await b.syncNow();
+    await a.syncNow();
+    const actual = { a: a.get(), b: b.get(), conflicts: b.sync.getPendingConflicts() };
+    check('concurrent-inserts-are-not-order-conflicts', actual,
+      () => actual.conflicts.length === 0 && actual.a.length === 4 && actual.b.length === 4);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }]);
+    await b.syncNow();
+    a.edit(a.get().filter(item => item.id !== 1));
+    b.edit(b.get().filter(item => item.id !== 3));
+    await a.syncNow();
+    await b.syncNow();
+    await a.syncNow();
+    const actual = { a: a.get(), b: b.get(), conflicts: b.sync.getPendingConflicts() };
+    check('concurrent-deletes-are-not-order-conflicts', actual,
+      () => actual.conflicts.length === 0 && actual.a.map(x => x.id).join(',') === '2' && actual.b.map(x => x.id).join(',') === '2');
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }]);
+    await b.syncNow();
+    b.edit(b.get().map(item => item.id === 2 ? { ...item, text: 'edited only' } : item));
+    a.edit([a.get()[2], a.get()[0], a.get()[1]]);
+    await a.syncNow();
+    // B 上传文字时仍携带旧 index=1，然后才接收 A 的排序。
+    await b.syncNow();
+    await a.syncNow();
+    const actual = { a: a.get().map(x => x.id), b: b.get().map(x => x.id), conflicts: a.sync.getPendingConflicts() };
+    check('remote-content-edit-does-not-reorder-records', actual,
+      () => actual.a.join(',') === '3,1,2' && actual.b.join(',') === '3,1,2' && actual.conflicts.length === 0);
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
     await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }, { id: 3, text: 'three' }]);
     await b.syncNow();
     a.edit([{ id: 2, text: 'two' }, { id: 1, text: 'one' }, { id: 3, text: 'three' }]);

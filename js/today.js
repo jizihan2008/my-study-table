@@ -249,7 +249,7 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const renderedChildren = children.map(c => renderFocusTodoNode(c.id, depth + 1, false)).join('');
 
   return `
-    <div>
+    <div data-sync-id="focus-${todoId}">
       <div class="today-focus-item${isDirectFocus ? '' : ' child'}" style="padding-left:${14 + indent}px;">
         <div class="today-focus-main">
         ${hasKids ? `<button class="focus-expand${isExpanded ? ' expanded' : ''}" onclick="toggleFocusExpand(${todoId}, event)" title="展开/折叠">▶</button>` : '<span class="focus-expand-spacer"></span>'}
@@ -282,6 +282,18 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
 }
 
 function renderFocusList() {
+  // 不替换正在编辑的备注，否则草稿、选区和输入法组合态都会丢失。
+  const activeInput = document.activeElement;
+  if (!(window.SyncDOM && window.SyncDOM.active) && activeInput && focusNoteEditingId != null && activeInput.id === 'todayFocusNoteInput-' + focusNoteEditingId) {
+    if (!activeInput._focusRefreshPending) {
+      activeInput._focusRefreshPending = true;
+      activeInput.addEventListener('blur', () => {
+        activeInput._focusRefreshPending = false;
+        setTimeout(() => renderFocusList(), 0);
+      }, { once: true });
+    }
+    return;
+  }
   const list = document.getElementById('todayFocusList');
   const count = document.getElementById('todayFocusCount');
   const addBtn = document.getElementById('todayFocusAddBtn');
@@ -1064,7 +1076,7 @@ function renderGoals() {
       timerHtml = `<span class="today-goal-timer" title="计时：共 ${formatTimerDisplay(timerMs)}">⏱️ ${formatTimerDisplay(timerMs)}</span>`;
     }
     return `
-      <div class="today-goal-item${g.done ? ' done' : ''}">
+      <div data-sync-id="goal-${g.id}" class="today-goal-item${g.done ? ' done' : ''}">
         <div class="today-goal-check${g.done ? ' done' : ''}" onclick="toggleGoal(${g.id})" title="标记完成"></div>
         <div class="today-goal-body" onclick="openEditGoalModal(${g.id})" title="编辑">
           <span class="today-goal-text${g.done ? ' completed' : ''}">${escapeHtml(g.text)}</span>
@@ -1083,7 +1095,7 @@ function renderGoals() {
 function renderToday() {
   const welcomeDate = document.getElementById('todayWelcomeDate');
   if (welcomeDate) welcomeDate.textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
-  closeTodoPicker();
+  if (!(window.SyncDOM && window.SyncDOM.active)) closeTodoPicker();
   renderCheckinCalendar();
   renderFocusList();
   renderReviewCard();

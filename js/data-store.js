@@ -7,6 +7,8 @@
   const STORE = 'records';
   const META_KEY = '__study_data_migrated_v1';
   const SECRET_KEYS = new Set(global.SecretVault ? global.SecretVault.keys : []);
+  // 计时器是实时会话状态，localStorage 是唯一存档。旧快照不能在清零后补回。
+  const LOCAL_ONLY_KEYS = new Set(['study_timer_state']);
   let dbPromise = null;
   let lastError = '';
 
@@ -61,7 +63,7 @@
 
   async function put(key, rawValue, options = {}) {
     const safeKey = String(key || '');
-    if (!safeKey || SECRET_KEYS.has(safeKey)) return { ok: false, skipped: true };
+    if (!safeKey || SECRET_KEYS.has(safeKey) || LOCAL_ONLY_KEYS.has(safeKey)) return { ok: false, skipped: true };
     const raw = String(rawValue == null ? '' : rawValue);
     const previous = await getRecord(safeKey).catch(() => null);
     const record = {
@@ -124,13 +126,17 @@
 
   async function initialize() {
     await open();
+    // 清除旧版本迁移过来的会话快照；不改动 localStorage 中真实的当前计时。
+    await withStore('readwrite', store => {
+      for (const key of LOCAL_ONLY_KEYS) store.delete(key);
+    });
     const records = await list();
     const byKey = new Map(records.map(record => [record.key, record]));
     const changed = [];
     let restored = 0;
     for (let index = 0; index < localStorage.length; index++) {
       const key = localStorage.key(index);
-      if (!key || key === META_KEY || SECRET_KEYS.has(key)) continue;
+      if (!key || key === META_KEY || SECRET_KEYS.has(key) || LOCAL_ONLY_KEYS.has(key)) continue;
       const raw = localStorage.getItem(key);
       if (raw === null) continue;
       const existing = byKey.get(key);
@@ -138,7 +144,7 @@
     }
     const copied = await putBatch(changed);
     for (const record of records) {
-      if (record.deletedAt || record.key === META_KEY || SECRET_KEYS.has(record.key) || localStorage.getItem(record.key) !== null) continue;
+      if (record.deletedAt || record.key === META_KEY || SECRET_KEYS.has(record.key) || LOCAL_ONLY_KEYS.has(record.key) || localStorage.getItem(record.key) !== null) continue;
       localStorage.setItem(record.key, record.value);
       restored++;
     }

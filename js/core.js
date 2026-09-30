@@ -774,7 +774,7 @@ function openNavSettings() {
     `<option value="${n.id}" ${cfg.homeTab === n.id ? 'selected' : ''}>${n.label}</option>`
   ).join('');
   body.innerHTML = `
-    <p class="hint" style="margin-bottom:10px;">拖拽排序，勾选控制显示/隐藏。点击右侧按键框可自定义 <b>Ctrl+按键</b> 快捷键。</p>
+    <p class="hint" style="margin-bottom:10px;">拖拽排序（触屏可拖动左侧手柄或长按名称），勾选控制显示/隐藏。点击右侧按键框可自定义 <b>Ctrl+按键</b> 快捷键。</p>
     <div class="modal-field" style="margin-bottom:10px;">
       <label>🏠 启动时默认进入</label>
       <select id="navHomeSelect" onchange="onNavHomeChange()">${homeOptions}</select>
@@ -955,46 +955,7 @@ function initNavBottomSort(onChange) {
       }
     });
   });
-  // 触屏：长按拖动
-  list.querySelectorAll('.nav-bottom-sort-item').forEach(function(el) {
-    let longPress = false, touchId = null, startY = 0;
-    el.addEventListener('touchstart', function(e) {
-      if (e.target.closest('.nav-bottom-remove')) return;
-      const t = e.changedTouches[0];
-      touchId = t.identifier; startY = t.clientY; longPress = false;
-      clearTimeout(_navTouchTimer);
-      _navTouchTimer = setTimeout(function() {
-        longPress = true; _navDragId = el.dataset.id;
-        el.classList.add('touch-dragging');
-      }, 250);
-    });
-    el.addEventListener('touchmove', function(e) {
-      if (!longPress) return;
-      e.preventDefault();
-      const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
-      if (!t) return;
-      const y = t.clientY;
-      Array.from(list.children).forEach(function(i) {
-        if (i === el) return;
-        const r = i.getBoundingClientRect();
-        const before = y < (r.top + r.height / 2);
-        if (before) { if (el.previousElementSibling !== i) list.insertBefore(el, i); }
-        else { if (el.nextElementSibling !== i) list.insertBefore(el, i.nextElementSibling); }
-      });
-    }, { passive: false });
-    el.addEventListener('touchend', function() {
-      clearTimeout(_navTouchTimer);
-      if (longPress) {
-        longPress = false; el.classList.remove('touch-dragging'); _navDragId = null;
-        if (onChange) onChange();
-        renderSidebarNav();
-      }
-      touchId = null;
-    });
-    el.addEventListener('touchcancel', function() {
-      clearTimeout(_navTouchTimer); longPress = false; el.classList.remove('touch-dragging'); _navDragId = null; touchId = null;
-    });
-  });
+  initNavSortTouch(list, '.nav-bottom-sort-item', onChange);
 }
 
 function addNavBottomTab(tabId) {
@@ -1074,77 +1035,84 @@ function initNavSortDrag() {
   initNavSortTouch(list);
 }
 
-// ── 触屏拖拽排序（手机长按 + 拖动）──
-let _navTouchTimer = null;
-function initNavSortTouch(list) {
+// 触屏排序：手柄直接拖动，其他非交互区域长按；滚动手势取消长按。
+function initNavSortTouch(list, selector = '.nav-sort-item', onChange) {
   if (!list) return;
-  list.querySelectorAll('.nav-sort-item').forEach(el => {
-    let longPress = false;
-    let startY = 0;
-    let touchId = null;
-
-    el.addEventListener('touchstart', function(e) {
-      // 点击上移/下移按钮时不触发拖拽
-      if (e.target.closest('.nav-sort-arrow') || e.target.closest('.nav-sort-toggle')) return;
-      const t = e.changedTouches[0];
-      touchId = t.identifier;
-      startY = t.clientY;
-      longPress = false;
-      clearTimeout(_navTouchTimer);
-      _navTouchTimer = setTimeout(function() {
-        longPress = true;
-        _navDragId = el.dataset.id;
-        el.classList.add('dragging');
-        el.classList.add('touch-dragging');
-        // 通知列表项让出空间
-        document.querySelectorAll('.nav-sort-item').forEach(function(i) { if (i !== el) i.classList.add('drag-over'); });
-        try { el.scrollIntoView({ block: 'nearest' }); } catch (err) {}
-      }, 250);
-    });
-
-    el.addEventListener('touchmove', function(e) {
-      if (!longPress) return;
-      e.preventDefault();
-      const t = Array.from(e.changedTouches).find(function(x) { return x.identifier === touchId; });
-      if (!t) return;
-      const y = t.clientY;
-      const items = Array.from(list.children);
-      const self = el;
-      items.forEach(function(i) {
-        if (i === self) return;
-        const r = i.getBoundingClientRect();
-        const before = y < (r.top + r.height / 2);
-        const already = (self.nextElementSibling === i && !before) || (self.previousElementSibling === i && before);
-        if (already) return;
-        if (before) { if (self.previousElementSibling !== i) list.insertBefore(self, i); }
-        else { if (self.nextElementSibling !== i) list.insertBefore(self, i.nextElementSibling); }
-      });
-    }, { passive: false });
-
-    el.addEventListener('touchend', function(e) {
-      clearTimeout(_navTouchTimer);
-      const changed = e.changedTouches;
-      const t = Array.from(changed).find(function(x) { return x.identifier === touchId; });
-      if (longPress) {
-        longPress = false;
-        el.classList.remove('dragging');
-        el.classList.remove('touch-dragging');
-        document.querySelectorAll('.nav-sort-item').forEach(function(i) { i.classList.remove('drag-over'); });
-        _navDragId = null;
-        if (t && Math.abs(t.clientY - startY) < 5) {
-          // 长按但没移动：视为普通点击，不排序
+  list.querySelectorAll(selector).forEach(el => {
+    let timer = null, active = false, moved = false, touchId = null;
+    let startX = 0, startY = 0, originalOrder = [];
+    const touchFor = e => Array.from(e.changedTouches).find(t => t.identifier === touchId);
+    const activate = () => {
+      if (!el.isConnected || touchId === null) return;
+      active = true;
+      el.classList.add('touch-dragging');
+    };
+    const finish = cancelled => {
+      clearTimeout(timer);
+      timer = null;
+      if (active) {
+        if (cancelled) originalOrder.forEach(item => list.appendChild(item));
+        else if (onChange && originalOrder.some((item, i) => list.children[i] !== item)) {
+          onChange();
+          renderSidebarNav();
         }
       }
+      active = false;
       touchId = null;
-    });
-    el.addEventListener('touchcancel', function() {
-      clearTimeout(_navTouchTimer);
-      longPress = false;
-      el.classList.remove('dragging');
       el.classList.remove('touch-dragging');
-      document.querySelectorAll('.nav-sort-item').forEach(function(i) { i.classList.remove('drag-over'); });
-      _navDragId = null;
-      touchId = null;
+    };
+    el.addEventListener('touchstart', e => {
+      if (e.touches.length !== 1) { finish(true); return; }
+      if (e.target.closest('button, input, label, select, a')) return;
+      const t = e.changedTouches[0];
+      touchId = t.identifier;
+      startX = t.clientX;
+      startY = t.clientY;
+      originalOrder = Array.from(list.children);
+      moved = false;
+      clearTimeout(timer);
+      if (e.target.closest('.nav-sort-grip')) {
+        e.preventDefault();
+        activate();
+      } else {
+        timer = setTimeout(activate, 250);
+      }
+    }, { passive: false });
+    el.addEventListener('touchmove', e => {
+      const t = touchFor(e);
+      if (!t) return;
+      if (e.touches.length !== 1) { finish(true); return; }
+      if (!active) {
+        if (Math.hypot(t.clientX - startX, t.clientY - startY) > 8) finish(true);
+        return;
+      }
+      e.preventDefault();
+      // 未实际移动时保持原位置；先找唯一插入点，再更改 DOM。
+      if (!moved && Math.abs(t.clientY - startY) < 5) return;
+      moved = true;
+      const siblings = Array.from(list.children).filter(item => item !== el);
+      const before = siblings.find(item => {
+        const rect = item.getBoundingClientRect();
+        return t.clientY <= rect.top + rect.height / 2;
+      }) || null;
+      if (el.nextElementSibling !== before) list.insertBefore(el, before);
+    }, { passive: false });
+    el.addEventListener('touchend', e => {
+      if (!touchFor(e)) return;
+      if (active) e.preventDefault();
+      finish(false);
+    }, { passive: false });
+    el.addEventListener('touchcancel', () => finish(true));
+    // 防止浏览器原生拖拽和长按菜单抢走触摸排序。
+    el.addEventListener('dragstart', e => {
+      if (touchId !== null) {
+        e.preventDefault();
+        el.classList.remove('dragging');
+        _navDragId = null;
+      }
+    });
+    el.addEventListener('contextmenu', e => {
+      if (touchId !== null) e.preventDefault();
     });
   });
 }

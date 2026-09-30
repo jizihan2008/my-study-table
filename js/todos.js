@@ -1046,6 +1046,18 @@ function renderSearchResults() {
 }
 
 function renderTodos() {
+  // 保留正在输入的 DOM（包括输入法组合态），同步数据仍正常更新内存。
+  const activeInput = document.activeElement;
+  if (!(window.SyncDOM && window.SyncDOM.active) && activeInput && activeSubInputId != null && activeInput.id === 'subInput-' + activeSubInputId) {
+    if (!activeInput._todoRefreshPending) {
+      activeInput._todoRefreshPending = true;
+      activeInput.addEventListener('blur', () => {
+        activeInput._todoRefreshPending = false;
+        setTimeout(() => renderTodos(), 0);
+      }, { once: true });
+    }
+    return;
+  }
   const tree = document.getElementById('todoTree');
   const resultsContainer = document.getElementById('searchResults');
   const empty = document.getElementById('todoEmpty');

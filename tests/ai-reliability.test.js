@@ -1105,8 +1105,31 @@ test('context budget keeps latest input intact and rejects oversized input with 
   assert.equal(selected.messages.length, 1);
   assert.equal(selected.messages[0].content, 'latest question');
   assert.ok(ctx.estimateAiTokens(selected.summary) <= 1200);
-  assert.throws(() => ctx.selectAiContext([{ role: 'user', content: '长'.repeat(5000) }], cfg, 'system'), /上下文预算/);
-  assert.throws(() => ctx.selectAiContext([], cfg, '长'.repeat(5000)), /上下文预算/);
+  assert.throws(() => ctx.selectAiContext([{ role: 'user', content: '长'.repeat(5000) }], cfg, 'system'), /输入 Token 预算/);
+  assert.throws(() => ctx.selectAiContext([], cfg, '长'.repeat(5000)), /输入 Token 预算/);
+});
+
+test('PDF image mode depends on the model rather than API key display name', () => {
+  const ctx = harness();
+  ctx.alert = message => assert.fail(message);
+  for (const name of ['Deepseek', 'deepseek', 'DeepSeek']) {
+    ctx.getEffectiveApiConfig = () => ({ name, model: 'deepseek-flash' });
+    ctx.setAiAttachments([{ file: { name: 'test.pdf', type: 'application/pdf' }, pdfMode: 'text' }]);
+    ctx.toggleAttachPdfMode(0);
+    assert.equal(ctx.getAiAttachments()[0].pdfMode, 'image');
+  }
+});
+
+test('input budget is independent of the maximum output tokens', () => {
+  const ctx = harness();
+  const history = [{ role: 'user', content: '问题'.repeat(1200) }];
+  const cfg = { contextBudget: 4096, maxTokens: 32768 };
+  const selected = ctx.selectAiContext(history, cfg, 'system');
+  assert.equal(selected.messages.length, 1);
+  assert.equal(selected.messages[0], history[0]);
+  assert.equal(ctx.fitAiSystemPrompt('system', cfg), 'system');
+  const prompt = '规则\n═══ 当前数据快照（只读参考） ═══\n' + '数据'.repeat(5000);
+  assert.equal(ctx.fitAiSystemPrompt(prompt, cfg), ctx.fitAiSystemPrompt(prompt, { ...cfg, maxTokens: 256 }));
 });
 
 test('oversized live data snapshot is trimmed before a new conversation is rejected', () => {
@@ -1115,8 +1138,8 @@ test('oversized live data snapshot is trimmed before a new conversation is rejec
   const conv = { messages: [{ role: 'user', content: '你好' }], systemPrompt: '' };
   const messages = ctx.buildApiMessages(conv, null, { model: 'test', contextBudget: 32768, maxTokens: 2048 });
   assert.equal(messages.at(-1).content, '你好');
-  assert.match(messages[0].content, /数据快照已按上下文预算精简/);
-  assert.ok(ctx.estimateAiTokens(messages[0].content) <= 32768 - 2048 - 1536);
+  assert.match(messages[0].content, /数据快照已按输入 Token 预算精简/);
+  assert.ok(ctx.estimateAiTokens(messages[0].content) <= 32768 - 1536);
 });
 
 test('a full conversation system prompt override replaces the built-in prompt', () => {
@@ -1136,7 +1159,7 @@ test('a legacy custom role is still appended to the built-in prompt', () => {
 
 test('context errors do not incorrectly blame API keys or network', () => {
   const ctx = harness();
-  const text = ctx.formatAiRequestError(new Error('当前问题超过上下文预算'));
+  const text = ctx.formatAiRequestError(new Error('当前问题超过输入 Token 预算'));
   assert.match(text, /更多设置/);
   assert.doesNotMatch(text, /API Key|网络连接/);
 });

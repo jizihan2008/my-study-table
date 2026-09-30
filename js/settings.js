@@ -2196,10 +2196,11 @@ function submitApiKeyForm() {
   saveApiKeys(keys);
   document.getElementById('apiKeyForm').style.display = 'none';
   renderApiKeyList();
+  switchActiveKey(getActiveApiKeyId());
 }
 
 function setActiveApiKey(id) {
-  localStorage.setItem('study_active_api_key_id', id);
+  switchActiveKey(id);
   renderApiKeyList();
   showSettingsStatus('✅ 已切换当前 Key');
 }
@@ -2276,6 +2277,8 @@ function switchActiveKey(id) {
   if (typeof updateAiFileInput === 'function') updateAiFileInput();
   // 换 Key 后 Files API 可用性与上传方式提示都要跟着变
   if (typeof updateAiImageUploadBtn === 'function') updateAiImageUploadBtn();
+  if (typeof renderAttachPreview === 'function') renderAttachPreview();
+  if (typeof renderImageUploadSetting === 'function') renderImageUploadSetting();
 }
 
 // Refresh just the key bar without full re-render

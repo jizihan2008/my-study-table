@@ -417,7 +417,7 @@ function renderHabits() {
     const yesterdayMet = isDayMet(habit, yesterdayStr);
 
     return `
-      <div class="habit-card" style="border-top: 3px solid ${habit.color}">
+      <div data-sync-id="habit-${habit.id}" class="habit-card" style="border-top: 3px solid ${habit.color}">
         <!-- Header -->
         <div class="habit-card-header">
           <div class="habit-card-title" onclick="openEditHabitModal(${habit.id})" title="点击编辑">

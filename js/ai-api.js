@@ -29,10 +29,6 @@ function getAiContextBudget(apiCfg) {
   return Math.max(2048, Number(apiCfg.contextBudget) || 32768);
 }
 
-function getAiOutputReserve(apiCfg) {
-  return Number(apiCfg.maxTokens) || (isKimiModel(apiCfg) ? 8192 : 2048);
-}
-
 function truncateAiTextToTokens(text, maxTokens) {
   if (estimateAiTokens(text) <= maxTokens) return text;
   let low = 0;
@@ -47,22 +43,21 @@ function truncateAiTextToTokens(text, maxTokens) {
 
 function fitAiSystemPrompt(systemPrompt, apiCfg) {
   const budget = getAiContextBudget(apiCfg);
-  const outputReserve = getAiOutputReserve(apiCfg);
-  const maxSystemTokens = budget - outputReserve - 1536;
+  const maxSystemTokens = budget - 1536;
   if (maxSystemTokens < 1024) {
-    throw new Error('模型的上下文预算小于回复预留，请调大上下文预算或调低 Max Tokens。');
+    throw new Error('输入 Token 预算不足以容纳系统提示和当前输入，请调大输入 Token 预算。');
   }
   if (estimateAiTokens(systemPrompt) <= maxSystemTokens) return systemPrompt;
   const marker = '═══ 当前数据快照（只读参考） ═══';
   const markerIndex = systemPrompt.indexOf(marker);
   if (markerIndex < 0) {
-    throw new Error('系统提示词超过上下文预算，请调大上下文预算或精简自定义角色提示词。');
+    throw new Error('系统提示词超过输入 Token 预算，请调大输入 Token 预算或精简自定义角色提示词。');
   }
   const core = systemPrompt.slice(0, markerIndex);
-  const notice = marker + '\n⚠️ 数据快照已按上下文预算精简；需要具体数据时请调用对应查询工具。\n';
+  const notice = marker + '\n⚠️ 数据快照已按输入 Token 预算精简；需要具体数据时请调用对应查询工具。\n';
   const fixedTokens = estimateAiTokens(core + notice);
   if (fixedTokens >= maxSystemTokens) {
-    throw new Error('系统说明和自定义角色提示词超过上下文预算，请调大上下文预算或精简自定义角色提示词。');
+    throw new Error('系统说明和自定义角色提示词超过输入 Token 预算，请调大输入 Token 预算或精简自定义角色提示词。');
   }
   const snapshot = systemPrompt.slice(markerIndex + marker.length).trimStart();
   return core + notice + truncateAiTextToTokens(snapshot, maxSystemTokens - fixedTokens);
@@ -75,12 +70,11 @@ function selectAiContext(history, apiCfg, systemPrompt) {
     turns[turns.length - 1].push(message);
   }
   const budget = getAiContextBudget(apiCfg);
-  const outputReserve = getAiOutputReserve(apiCfg);
-  const available = budget - estimateAiTokens(systemPrompt) - outputReserve - 256;
+  const available = budget - estimateAiTokens(systemPrompt) - 256;
   const cost = turn => turn.reduce((sum, m) => sum + 12 + estimateAiTokens(m.content)
     + (m.tool_calls ? estimateAiTokens(m.tool_calls) : 0) + (m.visionFiles?.length || 0) * 2048, 0);
   if (available < 0 || (turns.length && cost(turns[turns.length - 1]) > available)) {
-    throw new Error('当前问题、附件或工具结果超过上下文预算，请减少附件内容、开启新对话，或在模型设置中调大上下文预算。');
+    throw new Error('当前问题、附件或工具结果超过输入 Token 预算，请减少附件内容、开启新对话，或在模型设置中调大输入 Token 预算。');
   }
   const selected = [];
   let used = 0;

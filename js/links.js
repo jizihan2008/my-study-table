@@ -79,7 +79,7 @@ function renderLinkCards(linkList) {
     }
     const isApp = l.type === 'app';
     return `
-      <div class="link-card" onclick="openLink('${escapeJs(l.url || '')}', '${escapeJs(l.type)}')">
+      <div data-sync-id="link-${l.id}" class="link-card" onclick="openLink('${escapeJs(l.url || '')}', '${escapeJs(l.type)}')">
         <div class="link-card-icon${isApp ? ' app-icon' : ''}">${letter}</div>
         <div class="link-card-name">${escapeHtml(l.name)}</div>
         ${l.url ? `<div class="link-card-url">${escapeHtml(l.url)}</div>` : ''}
@@ -105,7 +105,7 @@ function renderLinks() {
     : Object.keys(groups).sort();
   const colors = ['#4f6ef7','#10b981','#f59e0b','#ef4444','#8b5cf6','#ec4899','#06b6d4','#f97316'];
   pc.innerHTML = cats.map((cat, idx) => `
-    <div class="cat-section">
+    <div data-sync-id="category-${escapeAttr(cat)}" class="cat-section">
       <div class="cat-section-header">
         <div class="cat-section-icon" style="background:${colors[idx%8]}15; color:${colors[idx%8]};">
           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
