@@ -300,6 +300,31 @@ test('rich-text fold toggles only from its disclosure control', async () => {
     return summary.contains(window.getSelection()?.anchorNode);
   })).toBe(true);
 
+  await summary.click({ position: { x: box.width - 8, y: box.height / 2 } });
+  expect(await page.evaluate(() => {
+    const summary = document.querySelector('#notesRichEditor details.note-fold > summary');
+    const selection = window.getSelection();
+    const tail = selection.getRangeAt(0).cloneRange();
+    tail.setEnd(summary, summary.childNodes.length);
+    return summary.contains(selection.anchorNode) && selection.isCollapsed && tail.toString() === '';
+  })).toBe(true);
+
+  const textBox = await summary.evaluate(el => {
+    const range = document.createRange();
+    range.selectNodeContents(el);
+    const rect = range.getBoundingClientRect();
+    return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+  });
+  await page.mouse.move(textBox.x + 2, textBox.y + textBox.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(textBox.x + textBox.width - 2, textBox.y + textBox.height / 2, { steps: 12 });
+  await page.mouse.up();
+  expect(await page.evaluate(() => window.getSelection().toString())).toBe('可编辑标题');
+  await expect(fold).not.toHaveAttribute('open', '');
+
+  await summary.dblclick({ position: { x: textBox.x - box.x + 10, y: box.height / 2 } });
+  expect(await page.evaluate(() => window.getSelection().isCollapsed)).toBe(false);
+
   await page.evaluate(() => {
     const outside = document.querySelector('#notesRichEditor details.note-fold + p');
     const range = document.createRange();

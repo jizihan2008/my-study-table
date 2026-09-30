@@ -434,23 +434,37 @@
     // The disclosure marker is a pseudo-element, so it cannot be targeted
     // directly. Treat the marker and its surrounding padding as one control.
     const rect = summary.getBoundingClientRect();
-    return event.clientX <= rect.left + 36;
+    const titleRange = document.createRange();
+    titleRange.selectNodeContents(summary);
+    const textRect = Array.from(titleRange.getClientRects()).find(rect => rect.width > 0);
+    return event.clientX < Math.min(rect.left + 36, textRect?.left ?? rect.left + 36);
   }
 
-  function placeEditingCaretAtPoint(x, y) {
+  function placeEditingCaretAtPoint(x, y, summary) {
+    host.focus({ preventScroll: true });
     const point = document.caretPositionFromPoint?.(x, y);
     const range = document.createRange();
     if (point) range.setStart(point.offsetNode, point.offset);
     else {
       const legacyRange = document.caretRangeFromPoint?.(x, y);
-      if (!legacyRange) return;
-      range.setStart(legacyRange.startContainer, legacyRange.startOffset);
+      if (legacyRange) range.setStart(legacyRange.startContainer, legacyRange.startOffset);
+      else range.selectNodeContents(summary);
+    }
+    // Flex summary hit testing can return the summary's start in the blank
+    // space after its text. Resolve that space to the visible title's end.
+    const titleRange = document.createRange();
+    titleRange.selectNodeContents(summary);
+    const textRects = Array.from(titleRange.getClientRects());
+    const lineRects = textRects.filter(rect => y >= rect.top && y <= rect.bottom);
+    if (!summary.contains(range.startContainer)
+      || (lineRects.length && x >= Math.max(...lineRects.map(rect => rect.right)))) {
+      range.selectNodeContents(summary);
+      range.collapse(false);
     }
     range.collapse(true);
     const selection = window.getSelection();
     selection.removeAllRanges();
     selection.addRange(range);
-    host.focus({ preventScroll: true });
   }
 
   function init() {
@@ -479,7 +493,12 @@
         // In editing mode the title is editable text. Cancel the native
         // <summary> activation everywhere except around the disclosure marker.
         event.preventDefault();
-        placeEditingCaretAtPoint(event.clientX, event.clientY);
+        // Mouseup has already established drag, Shift-click and multi-click
+        // selections. Do not replace those selections with a collapsed caret.
+        const selection = window.getSelection();
+        if (event.detail === 1 && !event.shiftKey && selection?.isCollapsed) {
+          placeEditingCaretAtPoint(event.clientX, event.clientY, summary);
+        }
       }
       const link = event.target.closest('a');
       if (link && !event.ctrlKey && !event.metaKey) event.preventDefault();
