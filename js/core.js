@@ -981,15 +981,22 @@ function removeNavBottomTab(tabId) {
   renderSidebarNav();
 }
 
-function saveNavSettings() {
+// 排序完成即回写配置，后续显示开关/快捷键重绘使用最新顺序。
+function listifyNavOrder() {
+  if (!document.getElementById('navSortList')) return;
   const items = document.querySelectorAll('#navSortList .nav-sort-item');
   const order = [];
   for (const item of items) {
     order.push(item.dataset.id);
   }
   const cfg = loadNavConfig();
+  if (cfg.order.length === order.length && cfg.order.every((id, i) => id === order[i])) return;
   cfg.order = order;
   saveNavConfig(cfg);
+}
+
+function saveNavSettings() {
+  listifyNavOrder();
   closeEditModal();
   renderSidebarNav();
 }
@@ -1028,11 +1035,13 @@ function initNavSortDrag() {
           if (from.parentNode) from.parentNode.removeChild(from);
           if (idx >= parent.children.length) parent.appendChild(from);
           else parent.insertBefore(from, parent.children[idx]);
+          listifyNavOrder();
+          renderSidebarNav();
         }
       }
     });
   });
-  initNavSortTouch(list);
+  initNavSortTouch(list, '.nav-sort-item', listifyNavOrder);
 }
 
 // 触屏排序：手柄直接拖动，其他非交互区域长按；滚动手势取消长按。

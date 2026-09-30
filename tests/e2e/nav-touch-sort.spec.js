@@ -63,7 +63,6 @@ for (const list of ['#navSortList', '#navBottomSortList']) {
     const final = [initial[1], initial[2], initial[0], ...initial.slice(3)];
     expect(await order(list)).toEqual(final);
     await touch(target, 'touchend', third.y + third.height + 2);
-    if (list === '#navSortList') await page.evaluate(() => saveNavSettings());
     const cfg = await navConfig();
     expect(list === '#navSortList' ? cfg.order : cfg.bottomTabs).toEqual(final);
     await page.evaluate(() => openNavSettings());
@@ -125,3 +124,38 @@ test('浏览器真实触摸事件可从手柄拖动，且列表不被滚动抢�
     await cdp.detach();
   }
 });
+
+for (const method of ['touch', 'mouse']) {
+  test(`${method} 排序立即保存，勾选/取消勾选和快捷键重绘保留顺序`, async () => {
+    await page.evaluate(() => openNavSettings());
+    const initial = await order('#navSortList');
+    const row = id => `#navSortList [data-id="${id}"]`;
+    if (method === 'touch') {
+      const grip = `${row(initial[0])} .nav-sort-grip`;
+      const start = await page.locator(grip).boundingBox();
+      const third = await page.locator(row(initial[2])).boundingBox();
+      await touch(grip, 'touchstart', start.y + start.height / 2);
+      await touch(grip, 'touchmove', third.y + third.height + 2);
+      await touch(grip, 'touchend', third.y + third.height + 2);
+    } else {
+      await page.locator(`${row(initial[0])} .nav-sort-grip`).dragTo(page.locator(row(initial[2])));
+    }
+    const reordered = await order('#navSortList');
+    expect(reordered).not.toEqual(initial);
+    expect((await navConfig()).order).toEqual(reordered);
+    const checkbox = page.locator(`${row(initial[1])} input[type="checkbox"]`);
+    const wasChecked = await checkbox.isChecked();
+    await page.locator(`${row(initial[1])} .nav-sort-toggle`).click();
+    expect(await checkbox.isChecked()).toBe(!wasChecked);
+    expect(await order('#navSortList')).toEqual(reordered);
+    expect((await navConfig()).order).toEqual(reordered);
+    await page.locator(`${row(initial[1])} .nav-sort-toggle`).click();
+    expect(await checkbox.isChecked()).toBe(wasChecked);
+    expect(await order('#navSortList')).toEqual(reordered);
+    await page.locator(`${row(initial[1])} .nav-sort-key`).click();
+    await page.keyboard.press('Escape');
+    expect(await order('#navSortList')).toEqual(reordered);
+    await page.evaluate(() => { closeEditModal(); openNavSettings(); });
+    expect(await order('#navSortList')).toEqual(reordered);
+  });
+}
