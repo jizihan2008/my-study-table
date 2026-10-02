@@ -307,7 +307,15 @@ AI 可通过 `<tool_call>` 标签直接操作应用数据：
 
 **待办管理**: add_todo、batch_add_todos、update_todo、delete_todo、set_todo_completed、move_todo、list_todos、get_todo_detail、batch_update_todos、get_todo_stats
 **聚焦与状态**: get_today_status、get_focus_tasks、set_focus_task、get_stats  
-**笔记管理**: add_note、update_note、move_note、delete_note、list_notes、search_notes、get_note_detail、get_note_changes  
+**笔记管理**: add_note、update_note、patch_note、append_note、move_note、delete_note、list_notes、search_notes、get_note_detail、get_note_outline、get_note_changes  
+
+`get_note_detail` 支持 `offset`（默认 0）和 `limit`（默认 6000，最大 8000）分段读取正文，优先在段落边界切分。返回 `totalLength`、`endOffset`、`hasMore`、`nextOffset`；需要全文时按 `nextOffset` 继续读取，直到 `hasMore=false`。偏移使用 UTF-16 字符串索引，编辑笔记后应从头读取。短笔记一次返回全文；通用工具结果截断仍作为兜底保留。
+
+局部编辑优先使用 `patch_note({id, revision, edits:[{oldText, newText}]})`，末尾追加使用 `append_note({id, revision, content})`。`revision` 从 `get_note_detail` 获取，也会在成功编辑的结果中返回。版本基于当前会话中的完整笔记快照；手动编辑、导入、元信息修改或应用重启后应重新读取版本。每项原文必须唯一匹配，所有修改均针对同一份原正文，不允许重叠。空 `newText` 表示删除；插入可用原文作为锚点，替换为原文加新增内容。整批验证、保存成功才生效，保存失败会回滚。正文原样保存，追加不自动加换行。结果只回显修改数量、新版本及最多5处简短修改片段。全文重写仍使用 `update_note`。
+
+编辑结果包含 `editRanges:[{editIndex,start,end}]`，按提交的 edit 顺序返回最终正文的 UTF-16 区间 `[start,end)`（删除为零宽区间）。可携带新 `revision`，用 `get_note_detail({id,offset:start,limit,revision})` 定点回读；正文变化时拒绝读取旧偏移。重复匹配返回 `ok=false,status=ambiguous,code=TEXT_NOT_UNIQUE`，并附 `editIndex`、完整 `matchCount`、最多5处命中的偏移和上下文、`matchesTruncated`。歧义仍会拒绝整批写入，并触发同轮写操作回滚。
+
+`get_note_outline({id,offset,limit,revision})` 返回 Markdown 标题（井号或下划线形式）与 `:::fold` 折叠块标题的 `type,title,level,line,start,end,sectionEnd`，折叠块还标记 `closed`。行号从1开始，正文偏移为 UTF-16；代码围栏和缩进代码中的伪标题不会进入大纲。支持嵌套折叠，未闭合块标记 `closed=false`。这里的 `offset/nextOffset` 是大纲条目索引，默认30项、最多50项，并按结果长度缩小单页；标题预览最多160字符，`titleTruncated` 标记省略。按 `nextOffset` 翻页至 `hasMore=false`，可携带 `revision` 锁定版本。长笔记建议依次执行：读大纲 → 定点读正文 → 局部修改 → 按新偏移回读校验。
 **快捷访问**: add_link、delete_link、list_links  
 **自动化**: schedule_automation、list_automations、delete_automation  
 **记忆**: list_memories、get_memory_detail  

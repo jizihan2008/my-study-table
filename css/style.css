@@ -3337,6 +3337,13 @@ body {
   display: flex; align-items: center; justify-content: space-between;
   margin-top: 8px; gap: 8px; flex-wrap: wrap;
 }
+.ai-exchange-footer {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+  align-self: flex-start; margin-left: 42px;
+  max-width: calc(100% - 42px);
+}
+.ai-exchange-footer .ai-msg-cand-pager:empty { display: none; }
+.ai-exchange-footer .ai-msg-regen { max-width: 100%; overflow-wrap: anywhere; }
 .ai-msg-cand-nav {
   border: 1px solid var(--border); background: transparent;
   border-radius: 5px; padding: 2px 6px;
@@ -12314,3 +12321,35 @@ html.mst-fake-fullscreen #booksApp .bk-main-tabs {
 .pwa-only { display: none; }
 html.env-pwa .pwa-only { display: inline; }
 html.env-pwa .electron-only { display: none; }
+
+.review-float-filter { padding: 8px 14px; margin: 0; flex-shrink: 0; }
+@media (any-pointer: coarse) and (min-width: 481px) {
+  .notes-sidebar-resizer { width: 20px; }
+  .notes-sidebar-resizer::after { opacity: 1; }
+}
+
+/* 今天页待办队列：复用每日聚焦样式。 */
+.today-queue-card .today-section-title .lucide-icon { width:16px; height:16px; }
+.todo-queue-toolbar { display:flex; gap:6px; margin-bottom:14px; }
+.todo-queue-toolbar button { flex:1; padding:7px 10px; border:1px solid var(--border); border-radius:8px; background:var(--input-bg); color:var(--text-secondary); font:inherit; font-size:12px; font-weight:600; cursor:pointer; transition:var(--transition); }
+.todo-queue-toolbar button:hover { color:var(--primary); border-color:var(--primary); }
+.todo-queue-toolbar button:disabled, .todo-queue-actions button:disabled { opacity:.4; cursor:default; }
+.todo-queue-list { display:flex; flex-direction:column; gap:8px; margin-bottom:12px; }
+.todo-queue-item.dragging { opacity:.45; }
+.todo-queue-item.drop-before { box-shadow:inset 0 2px var(--primary); }
+.todo-queue-item.drop-after { box-shadow:inset 0 -2px var(--primary); }
+.todo-queue-grip { cursor:grab; color:var(--text-secondary); font-size:18px; width:18px; text-align:center; flex-shrink:0; }
+.todo-queue-item .focus-check.disabled { opacity:1; }
+.todo-queue-actions { display:flex; align-items:center; gap:5px; flex-shrink:0; }
+.todo-queue-empty { padding:18px 14px; text-align:center; color:var(--text-secondary); font-size:13px; }
+#todayTodoQueueToggle[hidden] { display:none; }
+.today-queue-card.is-collapsed .today-review-toggle .lucide-icon { transform:rotate(180deg); }
+@media(max-width:1100px) { .todo-queue-item .today-focus-main { flex-wrap:wrap; } .todo-queue-item .focus-text { min-width:100px; } .todo-queue-actions { margin-left:auto; } }
+
+.prompt-report-field { border-top: 1px solid var(--border); padding: 9px 0; }
+.prompt-report-field:first-child { border-top: 0; }
+.prompt-report-field > summary { cursor: pointer; color: var(--text-secondary); font-size: 12px; font-weight: 600; }
+.prompt-report-collapse-hint { float: right; font-size: 11px; font-weight: 400; }
+.prompt-report-collapse-hint::after { content: '展开'; }
+.prompt-report-field[open] > summary .prompt-report-collapse-hint::after { content: '折叠'; }
+.prompt-report-field-content { padding-top: 10px; }

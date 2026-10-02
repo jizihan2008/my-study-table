@@ -1399,6 +1399,7 @@ const PASTE_FILE_MIME_EXT = {
 // 纯文本达到该长度时，先询问是否转成 .txt 附件，避免超长正文挤满输入框。
 const LARGE_PASTE_TEXT_THRESHOLD = 2000;
 let largePasteDialogResolver = null;
+let aiPasteAsTextFile = false;
 
 function normalizePastedTextFileName(value) {
   let name = String(value || '').trim().replace(/[\\/:*?"<>|]/g, '-');
@@ -1537,9 +1538,14 @@ async function handleAiPaste(event) {
   if (input && input.disabled) return; // 未配置 Key 时界面只读，保持原生粘贴
   if (!isAiPasteZone(event)) return;
   const files = getClipboardFiles(dt);
-  const plainText = getClipboardPlainText(dt);
+  // ClipboardEvent 没有修饰键信息，由 keydown 记录 Ctrl+Shift+V。
+  const asTextFile = aiPasteAsTextFile;
+  aiPasteAsTextFile = false;
+  const plainText = asTextFile && files.length === 0
+    ? dt.getData('text/plain') : getClipboardPlainText(dt);
   if (files.length === 0) {
-    if (!input || event.target !== input || plainText.length < LARGE_PASTE_TEXT_THRESHOLD) return;
+    if (!input || !plainText) return;
+    if (!asTextFile && (event.target !== input || plainText.length < LARGE_PASTE_TEXT_THRESHOLD)) return;
     const selection = { start: input.selectionStart, end: input.selectionEnd };
     event.preventDefault();
     const fileName = await askLargePasteAsFile(plainText);
@@ -1566,6 +1572,12 @@ async function handleAiPaste(event) {
 function initAiPasteZone() {
   if (document._aiPasteAttached) return;
   document._aiPasteAttached = true;
+  document.addEventListener('keydown', event => {
+    aiPasteAsTextFile = (event.ctrlKey || event.metaKey) && event.shiftKey && !event.altKey
+      && event.key.toLowerCase() === 'v' && isAiPasteZone(event);
+  }, true);
+  document.addEventListener('keyup', () => { aiPasteAsTextFile = false; }, true);
+  window.addEventListener('blur', () => { aiPasteAsTextFile = false; });
   document.addEventListener('paste', handleAiPaste);
 }
 

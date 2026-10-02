@@ -377,6 +377,58 @@ test('large plain-text paste can become a named txt attachment or stay in the in
   });
 
   try {
+    const shortcutText = '中文文本\n第二行';
+    const pasteWithShortcut = text => page.evaluate(text => {
+      const input = document.getElementById('aiInput');
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', ctrlKey: true, shiftKey: true, bubbles: true }));
+      const dt = new DataTransfer();
+      dt.setData('text/plain', text);
+      input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'V', bubbles: true }));
+    }, text);
+    await page.evaluate(() => { document.getElementById('aiInput').value = '保留正文'; });
+    await pasteWithShortcut(shortcutText);
+    await expect(page.locator('#aiLargePasteOverlay')).toHaveClass(/open/);
+    expect(await page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(0);
+    await page.locator('#aiLargePasteFileName').fill('快捷粘贴笔记');
+    await page.getByRole('button', { name: '作为 .txt 附件' }).click();
+    await expect.poll(() => page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(1);
+    const shortcutAttachment = await page.evaluate(async () => ({
+      name: aiAttachments[0].name,
+      text: await aiAttachments[0].file.text(),
+      input: document.getElementById('aiInput').value
+    }));
+    expect(shortcutAttachment.name).toBe('快捷粘贴笔记.txt');
+    expect(shortcutAttachment.text).toBe(shortcutText);
+    expect(shortcutAttachment.input).toBe('保留正文');
+    await expect(page.locator('#aiLargePasteOverlay.open')).toHaveCount(0);
+    await page.evaluate(() => window.removeAttachment(0));
+
+    await pasteWithShortcut('C:\\notes\\example.txt');
+    await expect(page.locator('#aiLargePasteOverlay')).toHaveClass(/open/);
+    await page.locator('#aiLargePasteFileName').fill('路径.txt');
+    await page.getByRole('button', { name: '作为 .txt 附件' }).click();
+    await expect.poll(() => page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(1);
+    expect(await page.evaluate(() => aiAttachments[0].file.text())).toBe('C:\\notes\\example.txt');
+    await page.evaluate(() => window.removeAttachment(0));
+    await page.evaluate(() => { document.getElementById('aiInput').setSelectionRange(2, 2); });
+    await pasteWithShortcut('直接插入');
+    await page.getByRole('button', { name: '直接粘贴' }).click();
+    expect(await page.evaluate(() => document.getElementById('aiInput').value)).toBe('保留直接插入正文');
+    expect(await page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(0);
+    const normalPrevented = await page.evaluate(() => {
+      const input = document.getElementById('aiInput');
+      input.value = '';
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'v', ctrlKey: true, bubbles: true }));
+      const dt = new DataTransfer();
+      dt.setData('text/plain', '普通粘贴');
+      const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
+      input.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+    expect(normalPrevented).toBe(false);
+    expect(await page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(0);
+
     const longText = '长文本内容'.repeat(500);
     const prevented = await page.evaluate(text => {
       const input = document.getElementById('aiInput');

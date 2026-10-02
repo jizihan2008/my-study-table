@@ -47,6 +47,7 @@
     'study_calendar_events',   // 日历事件
     'study_checkin',           // 打卡记录
     'study_stats',             // 学习统计
+    'study_todo_queue',        // 待办队列
     'study_today_focus',       // 今日聚焦（实际存储 key）
     'study_longterm_goals',    // 长期目标（实际存储 key）
     'study_links_v3',          // 快捷链接
@@ -91,6 +92,7 @@
     'study_checkin': '打卡记录',
     'study_stats': '学习统计',
     'study_today_focus': '今日聚焦',
+    'study_todo_queue': '待办队列',
     'study_longterm_goals': '长期目标',
     'study_links_v3': '快捷链接',
     'study_quick_access': '快捷访问',

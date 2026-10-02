@@ -167,3 +167,29 @@ test('todo context menu can add a task directly to tomorrow focus', () => {
   assert.deepEqual(JSON.parse(JSON.stringify(saved[0].items)), [{ todoId: 2, text: '乙', done: false }]);
   assert.equal(notices[0][0], '已添加到明日聚焦');
 });
+
+
+test('queue and focus share notes, including legacy notes and clearing across dates', () => {
+  const { context: c, values } = focusContext();
+  const today = c.getTodayStr();
+  const tomorrow = c.getFocusDateByOffset(1);
+  c.saveFocusData({ days: {
+    [today]: { items: [{ todoId: 1, note: '旧备注' }] },
+    [tomorrow]: { items: [{ todoId: 1, note: '明日备注' }] }
+  } });
+  assert.equal(c.getTodoSharedNote(1), '旧备注');
+  vm.runInContext(fs.readFileSync('js/todo-queue.js', 'utf8'), c);
+  c.renderFocusList = () => {};
+  c.saveQueueTodoNote(1, ' 队列写下的话 ');
+  assert.equal(c.getTodoSharedNote(1), '队列写下的话');
+  assert.equal(c.getFocusItemsForDate(tomorrow).items[0].note, '队列写下的话');
+  c.saveTodayFocusNote(1, '聚焦写下的话');
+  assert.equal(c.getTodoSharedNote(1), '聚焦写下的话');
+  c.saveQueueTodoNote(1, '');
+  assert.equal(c.getTodoSharedNote(1), '');
+  assert.equal(c.getFocusItemsForDate(tomorrow).items[0].note, undefined);
+  c.saveData = () => false;
+  assert.equal(c.saveTodoSharedNote(1, '保存失败'), false);
+  assert.equal(c.getTodoSharedNote(1), '');
+  assert.equal(JSON.parse(values.get('study_today_focus')).notesByTodoId[1], '');
+});

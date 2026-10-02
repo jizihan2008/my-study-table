@@ -46,3 +46,27 @@ test('custom chat templates are listed separately from report templates', () => 
   assert.equal(vm.runInContext("getPromptTemplate('custom-1')", context), '请教我数学');
   assert.equal(vm.runInContext("getChatPromptTemplateDefs().map(item => item.id).join(',')", context), 'chat,custom-1');
 });
+
+test('report collapse is independent UI state and never filters report data', () => {
+  const { context } = loadPrompts();
+  context.sample = { todayStr: '2026-10-01', todayNotes: [{ title: 'sample note' }] };
+  vm.runInContext("setReportFieldCollapsed('morning', 'todayNotes', true)", context);
+  const html = vm.runInContext("friendlyPromptDataHtml('', 'morning', { previewData: sample })", context);
+  assert.match(html, /data-report-field="todayNotes" ><summary>/);
+  assert.match(html, /sample note/);
+  assert.match(vm.runInContext("reportPromptData('morning', sample)", context), /sample note/);
+  assert.equal(vm.runInContext("reportPromptData('morning', sample, 'legacy')", context), 'legacy');
+  assert.equal(vm.runInContext("getCollapsedReportFields('evening').length", context), 0);
+  vm.runInContext("setReportFieldCollapsed('morning', 'todayNotes', false)", context);
+  assert.match(vm.runInContext("friendlyPromptDataHtml('', 'morning', { previewData: sample })", context), /data-report-field="todayNotes" open/);
+});
+
+test('upgrade restores accidentally hidden fields and template reset preserves collapse state', () => {
+  const { context, values } = loadPrompts();
+  vm.runInContext("localStorage.setItem('study_prompt_templates_v1', JSON.stringify({ morning: 'custom', hiddenReportFields: { morning: ['todayStr', 'yesterdayStr', 'focusItems'] }, collapsedReportFields: { morning: ['taskline'] } }))", context);
+  assert.equal(vm.runInContext("getPromptTemplate('morning')", context), 'custom');
+  assert.doesNotMatch(values.get('study_prompt_templates_v1'), /hiddenReportFields/);
+  vm.runInContext("const saved = loadPromptTemplates(); delete saved.morning; persistPromptTemplates(saved)", context);
+  assert.match(vm.runInContext("getPromptTemplate('morning')", context), /\{\{日报数据\}\}/);
+  assert.equal(vm.runInContext("getCollapsedReportFields('morning').join(',')", context), 'taskline');
+});

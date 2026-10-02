@@ -11,6 +11,7 @@ const PROMPT_INSERTIONS = [
   { token: '当前时间', hint: '发送时的本地日期和时间' },
   { token: '待办信息', hint: '发送时的待办状态、层级和截止日期' },
   { token: '今日聚焦', hint: '发送时的今日聚焦任务' },
+  { token: '待办队列', hint: '按当前排序的完整待办队列，含层级、完成状态和截止日期' },
   { token: '工具说明', hint: '当前对话实际开放的 AI 工具说明' },
   { token: '当前AI身份', hint: '本次使用的 Key 与模型信息' },
   { token: '应用快照', hint: '普通聊天发送时的完整应用数据快照' },
@@ -34,7 +35,13 @@ function promptEsc(value) {
 function loadPromptTemplates() {
   try {
     const saved = JSON.parse(localStorage.getItem(PROMPT_TEMPLATES_KEY) || '{}');
-    return saved && typeof saved === 'object' && !Array.isArray(saved) ? saved : {};
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) return {};
+    // The former hide controls were unintended; restore all report data on upgrade.
+    if (Object.prototype.hasOwnProperty.call(saved, 'hiddenReportFields')) {
+      delete saved.hiddenReportFields;
+      persistPromptTemplates(saved);
+    }
+    return saved;
   } catch (_) { return {}; }
 }
 
@@ -93,12 +100,12 @@ function savePromptTemplate(id, value) {
 function promptTodoInfo() {
   const items = typeof todos !== 'undefined' && Array.isArray(todos) ? todos : [];
   if (!items.length) return '当前没有待办。';
-  const lines = items.slice(0, 100).map(todo => {
+  if (typeof buildAiTodoTreeSnapshot === 'function') return buildAiTodoTreeSnapshot();
+  const lines = items.map(todo => {
     const parents = typeof getAncestorPath === 'function' ? getAncestorPath(todo.id).map(item => item.text) : [];
     const path = [...parents, todo.text || '未命名待办'].join(' / ');
     return `- ${todo.done ? '[已完成]' : '[未完成]'} ${path}${todo.dueDate ? '；截止 ' + todo.dueDate : ''}`;
   });
-  if (items.length > 100) lines.push(`（另有 ${items.length - 100} 项待办未列出）`);
   return lines.join('\n');
 }
 
@@ -135,6 +142,7 @@ function resolvePromptTemplate(template, context = {}) {
     '当前AI身份': () => builtinSection('═══ 当前 AI 身份 ═══', '═══ 当前数据快照（只读参考） ═══'),
     '应用快照': () => builtinSection('═══ 当前数据快照（只读参考） ═══'),
     '日报数据': () => context.reportData || '（仅在生成日报时插入）',
+    '待办队列': () => typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '（待办队列模块未加载）',
     '我的补充': () => context.userInstruction ? '我的补充：\n' + context.userInstruction : ''
   };
   return String(template ?? '').replace(/\{\{\s*([^{}]+?)\s*\}\}/g, (token, name) => {
@@ -150,6 +158,26 @@ function reportDataFromLegacyPrompt(reportPrompt) {
   return start >= 0 ? text.slice(start, end >= 0 ? end : undefined).trim() : text;
 }
 
+function getCollapsedReportFields(templateId) {
+  const fields = loadPromptTemplates().collapsedReportFields?.[templateId];
+  return Array.isArray(fields) ? fields.filter(key => typeof key === 'string') : [];
+}
+
+function setReportFieldCollapsed(templateId, key, collapsed) {
+  if (!['morning', 'evening'].includes(templateId)) return;
+  const saved = loadPromptTemplates();
+  const fields = new Set(getCollapsedReportFields(templateId));
+  if (collapsed) fields.add(key);
+  else fields.delete(key);
+  saved.collapsedReportFields = { ...saved.collapsedReportFields, [templateId]: [...fields] };
+  persistPromptTemplates(saved);
+}
+
+function reportPromptData(templateId, data, legacyPrompt) {
+  if (legacyPrompt) return reportDataFromLegacyPrompt(legacyPrompt);
+  return `📊 **当前日报数据**\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+}
+
 function promptPreviewContext(templateId) {
   const conv = typeof getActiveConv === 'function' ? getActiveConv() : null;
   const apiCfg = typeof getEffectiveApiConfig === 'function' ? getEffectiveApiConfig() : {};
@@ -162,7 +190,7 @@ function promptPreviewContext(templateId) {
         : null;
     if (data) {
       context.previewData = data;
-      context.reportData = `📊 **当前完整数据（预览示例）**\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
+      context.reportData = reportPromptData(templateId, data);
       context.userInstruction = '（此处将在生成日报时替换为你当次填写的补充要求）';
     }
   } catch (_) { /* Preview remains usable if a data collector is unavailable. */ }
@@ -170,11 +198,12 @@ function promptPreviewContext(templateId) {
 }
 
 const PROMPT_DATA_LABELS = {
+  todoTreeSnapshot: '完整待办树', noteTreeSnapshot: '完整笔记树', todoQueueSnapshot: '待办队列', calendarSnapshot: '日历日程',
   todayStr: '日期', yesterdayStr: '昨日日期', focusItems: '昨日聚焦', todayFocusItems: '今日聚焦', tomorrowFocusItems: '明日聚焦',
   focusDone: '已完成聚焦', focusTotal: '聚焦总数', longTermGoals: '长期目标', yesterdayDoneTodos: '昨日完成待办', todayDoneTodos: '今日完成待办',
-  todayArchived: '今日归档', overdueTodos: '逾期待办', todayDueTodos: '今日截止', tomorrowDueTodos: '明日截止', undoneTodos: '未完成待办',
+  todayArchived: '今日归档', overdueTodos: '逾期待办', todayDueTodos: '今日截止', tomorrowDueTodos: '明日截止', 
   totalDone: '已完成待办总数', totalTodos: '待办总数', ydayTimerStr: '昨日专注时长', todayTimerStr: '今日专注时长',
-  ydayTimerSessions: '昨日专注记录', todayTimerSessions: '今日专注记录', ydayNotes: '昨日笔记', todayNotes: '今日笔记',
+  ydayTimerSessions: '昨日专注记录', todayTimerSessions: '今日专注记录', ydayCreatedNotes: '昨日创建笔记', ydayEditedNotes: '昨日编辑笔记', todayCreatedNotes: '今日创建笔记', todayEditedNotes: '今日编辑笔记',
   totalNotes: '笔记总数', reviewDueNotes: '待复习笔记', overdueReviewCount: '逾期复习数', reviewDisabled: '复习功能已关闭',
   habitsOverview: '习惯详情', habitsCount: '习惯总数', habitsDoneYesterday: '昨日完成习惯', habitsDoneToday: '今日完成习惯',
   taskline: '任务线', prevReport: '上一份日报', text: '内容', title: '标题', name: '名称', done: '已完成', dueDate: '截止日期',
@@ -198,7 +227,11 @@ function friendlyPromptValue(value, depth = 0) {
 }
 
 function friendlyPromptDataHtml(template, templateId, context) {
-  if (context.previewData) return `<section class="prompt-data-card"><h4>${templateId === 'morning' ? '晨间日报' : '晚间日报'}当前数据</h4>${friendlyPromptValue(context.previewData)}</section>`;
+  if (context.previewData) {
+    const collapsed = new Set(getCollapsedReportFields(templateId));
+    const fields = Object.entries(context.previewData).map(([key, item]) => `<details class="prompt-report-field" data-report-field="${promptEsc(key)}" ${collapsed.has(key) ? '' : 'open'}><summary>${promptEsc(friendlyPromptLabel(key))}<span class="prompt-report-collapse-hint"></span></summary><div class="prompt-report-field-content">${friendlyPromptValue(item)}</div></details>`).join('');
+    return `<section class="prompt-data-card"><h4>${templateId === 'morning' ? '晨间日报' : '晚间日报'}当前数据</h4><p>点击数据项标题折叠或展开；折叠仅影响界面展示，日报仍使用完整数据。</p><div class="prompt-data-fields">${fields}</div></section>`;
+  }
   const used = PROMPT_INSERTIONS.filter(item => new RegExp(`\\{\\{\\s*${item.token}\\s*\\}\\}`).test(template));
   if (!used.length) return '<div class="prompt-data-empty-state">这个模板没有使用应用数据标记。</div>';
   return used.map(item => {
@@ -234,6 +267,14 @@ function renderPromptStudio() {
         <aside class="prompt-preview-panel"><div class="prompt-preview-head"><div><span class="prompt-eyebrow">APP DATA</span><h3>插入应用信息</h3></div></div><p class="prompt-insert-help">标记在编辑时保持原样；每次发送时读取当时的信息并替换。</p><div class="prompt-insertion-list">${PROMPT_INSERTIONS.map(item => `<button type="button" data-insert-token="${item.token}"><span><strong>${item.token}</strong><small>${item.hint}</small></span><code>{{${item.token}}}</code></button>`).join('')}</div></aside>
       </div>
     </main>`;
+  root.querySelector('#promptDataOverview').addEventListener('toggle', event => {
+    const field = event.target;
+    if (!field.matches('details[data-report-field]')) return;
+    const collapsed = !field.open;
+    if (getCollapsedReportFields(def.id).includes(field.dataset.reportField) !== collapsed) {
+      setReportFieldCollapsed(def.id, field.dataset.reportField, collapsed);
+    }
+  }, true);
   const area = root.querySelector('#promptTemplateText');
   area.addEventListener('input', () => {
     promptSelection = { start: area.selectionStart, end: area.selectionEnd };

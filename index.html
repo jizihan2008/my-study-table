@@ -476,6 +476,26 @@
         </div>
           </div>
           <div class="today-right-column">
+        <div class="today-focus-card today-queue-card" id="todayTodoQueueCard">
+          <div class="today-focus-header">
+            <span class="today-section-title"><i data-lucide="list-ordered" class="lucide-icon" aria-hidden="true"></i> 待办队列</span>
+            <div class="today-review-header-actions">
+              <span class="today-focus-count" id="todayTodoQueueCount">0 项</span>
+              <button type="button" id="todayTodoQueueToggle" class="today-review-toggle" onclick="toggleTodoQueue()" aria-controls="todayTodoQueueList" aria-expanded="false" hidden><span id="todayTodoQueueToggleLabel">展开</span><i data-lucide="chevron-up" class="lucide-icon" aria-hidden="true"></i></button>
+            </div>
+          </div>
+          <div class="todo-queue-toolbar">
+            <button type="button" data-queue-fill onclick="addQueueToFocus(0)" title="按队列顺序填入今日聚焦的剩余名额">填入今日聚焦</button>
+            <button type="button" data-queue-fill onclick="addQueueToFocus(1)" title="按队列顺序填入明日聚焦的剩余名额">填入明日聚焦</button>
+          </div>
+          <div id="todayTodoQueueList" class="todo-queue-list"></div>
+          <button type="button" class="today-focus-add-btn" onclick="showQueueTodoPicker()"><i data-lucide="plus" class="lucide-icon" style="width:16px;height:16px;"></i>从待办选择</button>
+          <div class="today-todo-picker" id="queueTodoPicker" style="display:none;">
+            <div class="todo-picker-header"><span>选择待办事项</span><button class="todo-picker-close" onclick="closeQueueTodoPicker()" aria-label="关闭待办选择"><i data-lucide="x" class="lucide-icon" style="width:14px;height:14px;"></i></button></div>
+            <div class="todo-picker-search"><input type="text" id="queueTodoPickerSearch" placeholder="搜索待办..." oninput="renderQueueTodoPicker()"></div>
+            <div class="todo-picker-list" id="queueTodoPickerList"></div>
+          </div>
+        </div>
         <div class="today-schedule-card" id="todayScheduleCard">
           <div class="today-schedule-header">
             <span class="today-section-title"><i data-lucide="calendar-days" class="lucide-icon" aria-hidden="true"></i> 近日安排</span>
@@ -1690,6 +1710,10 @@
         <i data-lucide="x" class="lucide-icon" style="width:16px;height:16px;"></i>
       </button>
     </div>
+    <div class="today-review-filter-row review-float-filter" id="reviewFloatFilterRow">
+      <label for="reviewFloatTagFilter">标签</label>
+      <select id="reviewFloatTagFilter" onchange="setReviewFloatTagFilter(this.value)" aria-label="按标签筛选待复习笔记"></select>
+    </div>
     <div class="review-float-list" id="reviewFloatList"></div>
   </div>
 </div>
@@ -1752,6 +1776,7 @@
 <script src="js/appearance.js?v=20260929-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
+<script src="js/todo-queue.js?v=20261001-r1"></script>
 <script src="js/settings.js?v=20260929-r3"></script>
 <script src="js/utils.js?v=20260914-r2"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
@@ -1878,6 +1903,7 @@
   <div class="context-menu-item ctx-need-todo" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
   <div class="context-menu-item ctx-need-todo" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
   <div class="context-menu-sep ctx-need-todo"></div>
+  <div class="context-menu-item ctx-need-todo" onclick="todoCtxAddQueue()"><i data-lucide="list-ordered" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 加入待办队列</div>
   <div class="context-menu-item ctx-need-todo" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到今日聚焦</div>
   <div class="context-menu-item ctx-need-todo" id="todoCtxAddTomorrowFocusItem" onclick="todoCtxAddTomorrowFocus()"><i data-lucide="calendar-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到明日聚焦</div>
   <div id="todoCtxSortItems" class="ctx-need-todo">

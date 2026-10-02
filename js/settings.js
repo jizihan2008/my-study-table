@@ -742,6 +742,7 @@ const SYNC_CONFLICT_CATEGORIES = {
   study_quick_access: { id: 'links', label: '快捷链接' },
   study_taskline_v1: { id: 'planning', label: '学习规划' },
   study_today_focus: { id: 'planning', label: '学习规划' },
+  study_todo_queue: { id: 'planning', label: '待办队列' },
   study_longterm_goals: { id: 'planning', label: '学习规划' },
   study_timer_records: { id: 'records', label: '学习记录' },
   study_stats: { id: 'records', label: '学习记录' },
@@ -3184,7 +3185,7 @@ const MIGRATION_KEYS = [
   // 日历 / 统计 / 目标
   'study_calendar_events', 'study_stats', 'study_longterm_goals', 'study_quick_access',
   // 打卡 / 今日 / 链接 / AI
-  'study_checkin', 'study_today_focus', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
+  'study_checkin', 'study_today_focus', 'study_todo_queue', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
   'study_ai_usage_v1', 'study_ai_usage_v2',
   // UI/状态/敏感（仅本地备份，不同步）
   'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv',
@@ -3920,16 +3921,16 @@ function collectDailyReportData() {
   const todayDue = todos.filter(t => t.dueDate === todayStr && !t.done);
   const overdue = todos.filter(t => t.dueDate && t.dueDate < todayStr && !t.done);
 
-  // All undone todos (for today's planning)
-  const undoneTodos = todos.filter(t => !t.done);
 
-  // Yesterday's notes
-  const ydayNotes = notes.filter(n => {
-    if (!n.updatedAt) return false;
-    const d = new Date(n.updatedAt);
+  // Yesterday's created and edited notes (new notes are counted only as creations).
+  const noteDateMatches = timestamp => {
+    if (!timestamp) return false;
+    const d = new Date(timestamp);
     const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     return ds === yesterdayStr;
-  });
+  };
+  const ydayCreatedNotes = notes.filter(n => n.type === 'note' && noteDateMatches(n.createdAt));
+  const ydayEditedNotes = notes.filter(n => n.type === 'note' && noteDateMatches(n.updatedAt) && !noteDateMatches(n.createdAt));
 
   // Timer records for yesterday — with session details
   let ydayTimerMs = 0;
@@ -4012,6 +4013,10 @@ function collectDailyReportData() {
   return {
     todayStr,
     yesterdayStr,
+    calendarSnapshot: buildAiCalendarSnapshot([{ date: yesterdayStr, label: "昨天" }, { date: todayStr, label: "今天" }]),
+    todoQueueSnapshot: typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '',
+    todoTreeSnapshot: buildAiTodoTreeSnapshot(),
+    noteTreeSnapshot: buildAiNoteTreeSnapshot(),
     streak: checkinData.streak || 0,
     checkinLastDate: checkinData.lastDate || (checkinData.dates && checkinData.dates.length ? checkinData.dates[checkinData.dates.length - 1] : ''),
     todayCheckinTime: checkinData.checkinTimes && checkinData.checkinTimes[todayStr] || null,
@@ -4023,11 +4028,11 @@ function collectDailyReportData() {
     yesterdayDoneTodos: yesterdayDone.map(t => ({ text: t.text, id: t.id })),
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
     overdueTodos: overdue.map(t => ({ text: t.text, dueDate: t.dueDate, id: t.id })),
-    undoneTodos: undoneTodos.map(t => ({ text: t.text, id: t.id, dueDate: t.dueDate, tags: t.tags })),
     totalTodos: todos.length,
     totalDone: todos.filter(t => t.done).length,
     taskline,
-    ydayNotes: ydayNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
+    ydayCreatedNotes: ydayCreatedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
+    ydayEditedNotes: ydayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     ydayTimerStr: ydayTimerMs > 0 ? fmtTimer(ydayTimerMs) : '无',
     ydayTimerSessions,
     prevReport,
@@ -4163,15 +4168,11 @@ async function generateDailyReport(force, userInstruction) {
     ? data.todayDueTodos.map(t => `  - 📅 ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  无';
 
-  const undoneLines = data.undoneTodos.length > 0
-    ? data.undoneTodos.slice(0, 15).map(t => {
-        const info = [t.dueDate ? `📅${t.dueDate}` : '', t.tags?.length ? t.tags.join(',') : ''].filter(Boolean).join(' ');
-        return `  - ${t.text}${info ? '（' + info + '）' : ''}`;
-      }).join('\n')
+  const createdNoteLines = data.ydayCreatedNotes.length > 0
+    ? data.ydayCreatedNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
     : '  无';
-
-  const noteLines = data.ydayNotes.length > 0
-    ? data.ydayNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
+  const editedNoteLines = data.ydayEditedNotes.length > 0
+    ? data.ydayEditedNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
     : '  无';
 
   const prevReportBlock = data.prevReport
@@ -4191,6 +4192,10 @@ async function generateDailyReport(force, userInstruction) {
 📊 **数据一览**
 
 【连续打卡】${reportCheckinStreakText(data)}
+${data.calendarSnapshot}
+${data.todoQueueSnapshot}
+${data.todoTreeSnapshot}
+${data.noteTreeSnapshot}
 【昨日聚焦】${data.focusDone}/${data.focusTotal} 完成
 ${focusLines}
 【今日聚焦】${data.todayFocusItems.filter(i => i.done).length}/${data.todayFocusItems.length} 完成
@@ -4206,8 +4211,10 @@ ${overdueLines}
 【今日截止】${data.todayDueTodos.length} 项
 ${todayDueLines}
 【全局待办】${data.totalDone}/${data.totalTodos} 已完成
-【昨日笔记】${data.ydayNotes.length} 篇
-${noteLines}
+【昨日创建笔记】${data.ydayCreatedNotes.length} 篇
+${createdNoteLines}
+【昨日编辑笔记】${data.ydayEditedNotes.length} 篇
+${editedNoteLines}
 【复习状态】${data.reviewDisabled ? '间隔复习已在设置中关闭（不是没复习，是用户主动关掉了推送）' : `${data.notesWithReviewHistory}/${data.totalNotes} 篇笔记参与间隔复习`}
 ${data.reviewDisabled
   ? '  （复习已关闭，无需提醒复习）'
@@ -4232,7 +4239,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 1. **📅 昨日回顾** — 昨天整体怎么样？聚焦完成情况如何？有什么亮点或值得注意的模式？
 2. **✅ 昨日完成清单** — 列出昨天完成的待办（如有），给个简单的小总结
 3. **⚠️ 逾期提醒** — 有哪些任务逾期了？是否还在乎它们？建议优先处理还是重新规划？
-4. **📝 笔记回顾** — 昨天写的笔记有什么值得今天延续的思路？
+4. **📝 笔记回顾** — 分别回顾昨天创建的笔记和编辑的已有笔记，有什么值得今天延续的思路？
 5. **🎯 今日方向** — 结合长期目标、今日聚焦、今天截止的任务和昨日状态，今天最值得优先做什么？
 6. **🧠 复习习惯** — 待复习笔记的状态如何？是否有逾期未复习的？复习频率和节奏是否健康？是否需要调整复习策略？
 7. **💡 日常习惯** — 昨天哪些习惯完成了？哪些习惯掉链子了？有没有连续坚持很棒的？是否注意到什么模式？
@@ -4262,7 +4269,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     // 裸 fetch 未显式禁用会把 max_tokens 全部耗在 reasoning 上 → content 为空）；并处理
     // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
     const apiMessages = [
-      { role: 'system', content: resolvePromptTemplate(getPromptTemplate('morning'), { reportData: reportDataFromLegacyPrompt(reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+      { role: 'system', content: resolvePromptTemplate(getPromptTemplate('morning'), { reportData: reportPromptData('morning', data, reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
       ...conv.messages.slice(-20),
       { role: 'user', content: '请生成本次日报。' }
     ];
@@ -4382,7 +4389,6 @@ function collectEveningReportData() {
   const todayDue = todos.filter(t => t.dueDate === todayStr && !t.done);
   const overdue = todos.filter(t => t.dueDate && t.dueDate < todayStr && !t.done);
   const tomorrowDue = todos.filter(t => t.dueDate === tomorrowStr && !t.done);
-  const undoneTodos = todos.filter(t => !t.done);
   const totalTodos = todos.length;
 
   // 归档日志：恢复当天完成但已归档的待办（保证归档不影响"今日完成"显示），并统计当天归档
@@ -4410,13 +4416,15 @@ function collectEveningReportData() {
   });
   const totalDone = todos.filter(t => t.done).length;
 
-  // Today's notes
-  const todayNotes = notes.filter(n => {
-    if (!n.updatedAt) return false;
-    const d = new Date(n.updatedAt);
+  // Today's created and edited notes (new notes are counted only as creations).
+  const noteDateMatches = timestamp => {
+    if (!timestamp) return false;
+    const d = new Date(timestamp);
     const ds = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
     return ds === todayStr;
-  });
+  };
+  const todayCreatedNotes = notes.filter(n => n.type === 'note' && noteDateMatches(n.createdAt));
+  const todayEditedNotes = notes.filter(n => n.type === 'note' && noteDateMatches(n.updatedAt) && !noteDateMatches(n.createdAt));
 
   // Timer records for today
   let todayTimerMs = 0;
@@ -4463,6 +4471,10 @@ function collectEveningReportData() {
   return {
     todayStr,
     tomorrowStr,
+    calendarSnapshot: buildAiCalendarSnapshot([{ date: todayStr, label: "今天" }, { date: tomorrowStr, label: "明天" }]),
+    todoQueueSnapshot: typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '',
+    todoTreeSnapshot: buildAiTodoTreeSnapshot(),
+    noteTreeSnapshot: buildAiNoteTreeSnapshot(),
     yesterdayStr: getPastDateStr(1),
     streak: checkinData.streak || 0,
     checkinLastDate: checkinData.lastDate || (checkinData.dates && checkinData.dates.length ? checkinData.dates[checkinData.dates.length - 1] : ''),
@@ -4478,10 +4490,10 @@ function collectEveningReportData() {
     todayDueTodos: todayDue.map(t => ({ text: t.text, id: t.id })),
     overdueTodos: overdue.map(t => ({ text: t.text, dueDate: t.dueDate, id: t.id })),
     tomorrowDueTodos: tomorrowDue.map(t => ({ text: t.text, id: t.id })),
-    undoneTodos: undoneTodos.map(t => ({ text: t.text, id: t.id, dueDate: t.dueDate, tags: t.tags })),
     totalTodos,
     totalDone,
-    todayNotes: todayNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
+    todayCreatedNotes: todayCreatedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
+    todayEditedNotes: todayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     todayTimerStr: todayTimerMs > 0 ? fmtDuration(todayTimerMs) : '无',
     todayTimerSessions,
     prevReport,
@@ -4580,15 +4592,11 @@ async function generateEveningReport(userInstruction) {
     ? data.tomorrowDueTodos.map(t => `  - 📅 ${formatDailyReportTodoPath(findTodo(t.id), t.text)}`).join('\n')
     : '  无';
 
-  const undoneLines = data.undoneTodos.length > 0
-    ? data.undoneTodos.slice(0, 12).map(t => {
-        const info = [t.dueDate ? `📅${t.dueDate}` : '', t.tags?.length ? t.tags.join(',') : ''].filter(Boolean).join(' ');
-        return `  - ${t.text}${info ? '（' + info + '）' : ''}`;
-      }).join('\n')
+  const createdNoteLines = data.todayCreatedNotes.length > 0
+    ? data.todayCreatedNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
     : '  无';
-
-  const noteLines = data.todayNotes.length > 0
-    ? data.todayNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
+  const editedNoteLines = data.todayEditedNotes.length > 0
+    ? data.todayEditedNotes.map(n => `  - 📝 ${formatDailyReportNotePath(n.id, n.title)}`).join('\n')
     : '  无';
 
   const prevReportBlock = data.prevReport
@@ -4608,6 +4616,10 @@ async function generateEveningReport(userInstruction) {
 📊 **今日数据一览**
 
 【连续打卡】${reportCheckinStreakText(data)}
+${data.calendarSnapshot}
+${data.todoQueueSnapshot}
+${data.todoTreeSnapshot}
+${data.noteTreeSnapshot}
 【今日聚焦】${data.focusDone}/${data.focusTotal} 完成
 ${focusLines}
 【明日聚焦】${data.tomorrowFocusItems.filter(i => i.done).length}/${data.tomorrowFocusItems.length} 完成
@@ -4626,9 +4638,11 @@ ${data.todayTimerSessions.length > 0 ? data.todayTimerSessions.map(s => `  - ${s
 ${overdueLines}
 【明天截止】${data.tomorrowDueTodos.length} 项
 ${tomorrowLines}
-【全局待办】${data.totalDone}/${data.totalTodos} 已完成，剩余 ${data.undoneTodos.length} 项
-【今日笔记】${data.todayNotes.length} 篇
-${noteLines}
+【全局待办】${data.totalDone}/${data.totalTodos} 已完成
+【今日创建笔记】${data.todayCreatedNotes.length} 篇
+${createdNoteLines}
+【今日编辑笔记】${data.todayEditedNotes.length} 篇
+${editedNoteLines}
 【复习状态】${data.reviewDisabled ? '间隔复习已在设置中关闭' : (data.reviewDueNotes.length > 0 ? '有 ' + data.reviewDueNotes.length + ' 篇待复习' : '无待复习笔记')}
 ${!data.reviewDisabled && data.reviewDueNotes.length > 0
   ? data.reviewDueNotes.map(n => {
@@ -4650,7 +4664,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
 1. **📊 今日总览** — 今天整体状态怎么样？目标推进了多少？有没有意料之外的收获？
 2. **✅ 完成事项** — 今天完成了哪些待办？聚焦任务达成如何？给个简单的小总结
 3. **⏱️ 时间回顾** — 今天的计时记录反映了什么学习/工作模式？时间利用是否合理？
-4. **📝 笔记产出** — 今天写了哪些笔记？有没有值得标记的思路或洞察？
+4. **📝 笔记产出** — 分别回顾今天创建的笔记和编辑的已有笔记，有没有值得标记的思路或洞察？
 5. **⚠️ 遗留事项** — 哪些事情今天没做完？是否仍然重要？需要调整截止日期还是明天优先？
 6. **🧠 复习习惯** — 今天复习了吗？剩余待复习笔记的状态如何？
 7. **💡 日常习惯** — 今天的习惯打卡情况，有什么模式值得注意？
@@ -4682,7 +4696,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     // 裸 fetch 未显式禁用会把 max_tokens 全部耗在 reasoning 上 → content 为空）；并处理
     // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
     const apiMessages = [
-      { role: 'system', content: resolvePromptTemplate(getPromptTemplate('evening'), { reportData: reportDataFromLegacyPrompt(reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
+      { role: 'system', content: resolvePromptTemplate(getPromptTemplate('evening'), { reportData: reportPromptData('evening', data, reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
       ...conv.messages.slice(-20),
       { role: 'user', content: '请生成本次日报。' }
     ];

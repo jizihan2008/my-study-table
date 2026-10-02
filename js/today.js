@@ -243,7 +243,7 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const focusItem = isDirectFocus
     ? (getSelectedFocusItems().items || []).find(item => item.todoId === todoId)
     : null;
-  const note = focusItem && typeof focusItem.note === 'string' ? focusItem.note.trim() : '';
+  const note = getTodoSharedNote(todoId);
   const isEditingNote = isDirectFocus && focusNoteEditingId === todoId;
 
   const renderedChildren = children.map(c => renderFocusTodoNode(c.id, depth + 1, false)).join('');
@@ -333,19 +333,48 @@ function editTodayFocusNote(todoId) {
   });
 }
 
-function saveTodayFocusNote(todoId, value) {
-  const data = getSelectedFocusItems();
-  const item = (data.items || []).find(entry => entry.todoId === todoId);
-  if (!item) return;
+// 共用现有聚焦存储与同步通道；旧备注按所选日期优先读取。
+function getTodoSharedNote(todoId) {
+  const data = loadFocusData();
+  if (Object.prototype.hasOwnProperty.call(data.notesByTodoId || {}, todoId)) {
+    return String(data.notesByTodoId[todoId] || '').trim();
+  }
+  const dates = [selectedFocusDate, ...Object.keys(data.days).sort().reverse()];
+  for (const date of dates) {
+    const item = (data.days[date]?.items || []).find(entry => entry.todoId === todoId);
+    if (typeof item?.note === 'string' && item.note.trim()) return item.note.trim();
+  }
+  return '';
+}
+
+function saveTodoSharedNote(todoId, value) {
+  const data = loadFocusData();
   const note = String(value || '').trim().slice(0, 160);
-  if (note) item.note = note;
-  else delete item.note;
+  if (!data.notesByTodoId) data.notesByTodoId = {};
+  // 保留空字符串，防止清空后再次读到旧日期的备注。
+  data.notesByTodoId[todoId] = note;
+  for (const day of Object.values(data.days)) {
+    for (const item of day.items || []) {
+      if (item.todoId !== todoId) continue;
+      if (note) item.note = note;
+      else delete item.note;
+    }
+  }
+  return saveFocusData(data);
+}
+
+function saveTodayFocusNote(todoId, value) {
+  if (!saveTodoSharedNote(todoId, value)) {
+    if (typeof showMiniToast === 'function') showMiniToast('一句话保存失败', 'error');
+    return;
+  }
   focusNoteEditingId = null;
-  saveFocusData(data);
   renderFocusList();
+  if (typeof renderTodoQueue === 'function') renderTodoQueue();
 }
 
 function handleTodayFocusNoteKeydown(event, todoId) {
+  if (event.isComposing) return;
   if (event.key === 'Enter') {
     event.preventDefault();
     event.currentTarget.blur();
@@ -709,6 +738,7 @@ function renderReviewCard() {
 }
 
 // ═══════════ Review Float Window ═══════════
+let reviewFloatTagFilter = 'all';
 let reviewFloatIndex = 0;       // which review note is currently active
 let reviewFloatNotes = [];      // { id, title, reviewCount, nextReviewDate, summary }
 let reviewFloatExpanded = new Set(); // which items are expanded (showing summary)
@@ -717,6 +747,8 @@ let reviewFloatExpanded = new Set(); // which items are expanded (showing summar
 // Now: jumps to notes tab + selects the note so user can review content behind the float
 function reviewOpenNote(noteId) {
   const summary = getReviewSummary();
+  reviewFloatTagFilter = todayReviewTagFilter;
+  reviewFloatExpanded.clear();
   reviewFloatNotes = getFilteredTodayReviewNotes(summary.dueNotes);
   reviewFloatIndex = reviewFloatNotes.findIndex(n => n.id === noteId);
   if (reviewFloatIndex < 0) reviewFloatIndex = 0;
@@ -745,7 +777,41 @@ function closeReviewFloat(e) {
   document.getElementById('reviewFloatOverlay').style.display = 'none';
 }
 
+function setReviewFloatTagFilter(value) {
+  reviewFloatTagFilter = value;
+  reviewFloatExpanded.clear();
+  renderReviewFloat();
+  reviewFloatSelectCurrent();
+}
+
+function syncReviewFloatFilter() {
+  const dueNotes = getReviewSummary().dueNotes;
+  const activeId = reviewFloatNotes[reviewFloatIndex]?.id;
+  const tags = [...new Set(dueNotes.flatMap(note => note.tags || []))]
+    .filter(tag => typeof tag === 'string' && tag.trim())
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+  const hasUntagged = dueNotes.some(note => !note.tags?.length);
+  // Keep an exhausted filter selectable so other tags remain accessible.
+  if (reviewFloatTagFilter.startsWith('tag:') && !tags.includes(reviewFloatTagFilter.slice(4))) {
+    tags.push(reviewFloatTagFilter.slice(4));
+  }
+  const select = document.getElementById('reviewFloatTagFilter');
+  if (select) {
+    select.innerHTML = '<option value="all">全部标签</option>'
+      + (hasUntagged || reviewFloatTagFilter === 'untagged' ? '<option value="untagged">无标签</option>' : '')
+      + tags.map(tag => `<option value="${escapeAttr('tag:' + tag)}">${escapeHtml(tag)}</option>`).join('');
+    select.value = reviewFloatTagFilter;
+    select.disabled = tags.length === 0 && reviewFloatTagFilter === 'all';
+    select.title = select.disabled ? '待复习笔记暂无标签' : '按标签筛选待复习笔记';
+  }
+  reviewFloatNotes = dueNotes.filter(note => reviewFloatTagFilter === 'all'
+    || (reviewFloatTagFilter === 'untagged' ? !note.tags?.length : note.tags?.includes(reviewFloatTagFilter.slice(4))));
+  const index = reviewFloatNotes.findIndex(note => note.id === activeId);
+  reviewFloatIndex = index >= 0 ? index : Math.min(reviewFloatIndex, Math.max(0, reviewFloatNotes.length - 1));
+}
+
 function renderReviewFloat() {
+  syncReviewFloatFilter();
   const list = document.getElementById('reviewFloatList');
   const counter = document.getElementById('reviewFloatCounter');
   if (!list) return;
@@ -759,8 +825,9 @@ function renderReviewFloat() {
   if (reviewFloatNotes.length === 0) {
     list.innerHTML = `<div class="review-empty">
       <i data-lucide="check-circle-2" class="lucide-icon" style="width:28px;height:28px;color:#10b981;display:block;margin:0 auto 6px;"></i>
-      <span>暂无待复习的笔记</span>
+      <span>${reviewFloatTagFilter === 'all' ? '暂无待复习的笔记' : '该标签下暂无待复习笔记'}</span>
     </div>`;
+    setTimeout(() => adjustReviewFloatHeight(), 0);
     return;
   }
 
@@ -832,7 +899,7 @@ function adjustReviewFloatHeight() {
   const list = document.getElementById('reviewFloatList');
   if (!float || !header || !list) return;
   // Measure actual content height from child elements
-  const contentH = header.offsetHeight + list.scrollHeight;
+  const contentH = header.offsetHeight + (document.getElementById('reviewFloatFilterRow')?.offsetHeight || 0) + list.scrollHeight;
   const maxH = window.innerHeight * 0.75;
   if (contentH > maxH) {
     float.style.height = maxH + 'px';
@@ -914,7 +981,8 @@ function reviewFloatMarkDone(idx) {
   if (reviewFloatIndex >= reviewFloatNotes.length) {
     reviewFloatIndex = Math.max(0, reviewFloatNotes.length - 1);
   }
-  if (reviewFloatNotes.length === 0) {
+  reviewFloatExpanded.clear();
+  if (getReviewSummary().dueNotes.length === 0) {
     closeReviewFloat();
     renderReviewCard();
     return;
@@ -1098,6 +1166,7 @@ function renderToday() {
   if (!(window.SyncDOM && window.SyncDOM.active)) closeTodoPicker();
   renderCheckinCalendar();
   renderFocusList();
+  renderTodoQueue();
   renderReviewCard();
   renderGoals();
   renderTodaySchedule();

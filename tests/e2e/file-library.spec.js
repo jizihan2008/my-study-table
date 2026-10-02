@@ -46,13 +46,62 @@ test('mobile file library opens and keeps imported files after reload', async ({
   await expect(page.locator('#fileLibraryList')).toContainText('没有匹配的文件');
 });
 
+test('folder dialog works without native prompt and allows validation and cancellation', async ({ page }) => {
+  await page.addInitScript(() => { window.prompt = () => { throw new Error('prompt unsupported'); }; });
+  await page.goto(baseUrl + '/index.html');
+  await page.evaluate(() => switchTab('files'));
+  const newFolder = page.getByRole('button', { name: '新建文件夹' });
+  await newFolder.click();
+  const dialog = page.getByRole('dialog', { name: '新建文件夹' });
+  await expect(dialog).toBeVisible();
+  await page.getByRole('button', { name: '创建', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('请输入有效的文件夹名称');
+  await dialog.getByRole('textbox').fill('取消的文件夹');
+  await dialog.getByRole('button', { name: '取消' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(newFolder).toBeFocused();
+  await newFolder.click();
+  await dialog.getByRole('textbox').fill('  新课程  ');
+  await dialog.getByRole('textbox').press('Enter');
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('#fileLibraryList')).toContainText('新课程');
+  await expect(page.locator('#fileLibraryList')).not.toContainText('取消的文件夹');
+});
+
+test('folder dialog reports desktop save failures and allows retry', async ({ page }) => {
+  await page.addInitScript(() => {
+    const rows = [];
+    let attempts = 0;
+    window.electronAPI = {
+      filesList: async () => rows,
+      filesCreateFolder: async ({ name, parentId }) => {
+        if (++attempts === 1) throw new Error('磁盘不可用');
+        const folder = { id: 'folder_test', kind: 'folder', name, parentId, createdAt: Date.now() };
+        rows.push(folder);
+        return folder;
+      }
+    };
+  });
+  await page.goto(baseUrl + '/index.html');
+  await page.evaluate(() => switchTab('files'));
+  await page.getByRole('button', { name: '新建文件夹' }).click();
+  const dialog = page.getByRole('dialog', { name: '新建文件夹' });
+  await dialog.getByRole('textbox').fill('桌面课程');
+  await dialog.getByRole('button', { name: '创建', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('磁盘不可用');
+  await dialog.getByRole('button', { name: '创建', exact: true }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator('#fileLibraryList')).toContainText('桌面课程');
+});
+
 test('file library browses nested folders and keeps imported directory paths', async ({ page }) => {
   await page.goto(baseUrl + '/index.html');
   await page.evaluate(() => switchTab('files'));
   await expect(page.getByRole('button', { name: '导入文件夹' })).toBeVisible();
   await expect(page.getByRole('button', { name: '新建文件夹' })).toBeVisible();
-  page.once('dialog', dialog => dialog.accept('课程'));
   await page.getByRole('button', { name: '新建文件夹' }).click();
+  await page.getByRole('textbox', { name: '文件夹名称' }).fill('课程');
+  await page.getByRole('button', { name: '创建', exact: true }).click();
   await page.locator('#fileLibraryList').getByRole('button', { name: '课程' }).click();
 
   const source = fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'mst-e2e-folder-'));

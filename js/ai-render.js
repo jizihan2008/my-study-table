@@ -597,6 +597,16 @@ document.addEventListener('keydown', function(event) {
   if (event.key === 'Escape') { event.preventDefault(); closeAiMessageImmersive(); }
 });
 
+function jumpToAiAffectedNote(noteId) {
+  const note = typeof notes !== 'undefined' && notes.find(n => Number(n.id) === Number(noteId) && n.type === 'note');
+  if (!note) {
+    if (typeof showAiToast === 'function') showAiToast('这篇笔记已不存在');
+    return;
+  }
+  selectNote(note.id);
+  switchTab('notes');
+}
+
 function renderAiMessages() {
   const container = document.getElementById('aiMessages');
   if (!container) return;
@@ -657,6 +667,42 @@ function renderAiMessages() {
     }
   }
   const streamingDraft = _aiStreamingDrafts.get(String(conv.id));
+  // 一次提问后的全部非 user 消息属于同一回复链。操作栏只放在链尾，
+  // 候选导航仍指向 user 下的首节点，而不是最后一次工具调用后的回复。
+  let exchangeUser = null;
+  let exchangeStart = null;
+  let exchangeEnd = null;
+  let exchangeNotes = new Map();
+  const finishExchange = () => {
+    if (!exchangeUser || !exchangeStart || !exchangeEnd) return;
+    const siblings = isTreeConv(conv) ? siblingBranchIds(conv, exchangeStart.nodeId) : [];
+    exchangeEnd.exchange = {
+      userId: exchangeUser.nodeId,
+      startId: exchangeStart.nodeId,
+      count: siblings.length || 1,
+      index: Math.max(1, siblings.indexOf(exchangeStart.nodeId) + 1),
+      affectedNotes: [...exchangeNotes.values()]
+    };
+  };
+  for (const item of renderItems) {
+    if (item.type === 'user') {
+      finishExchange();
+      exchangeUser = item;
+      exchangeStart = null;
+      exchangeEnd = null;
+      exchangeNotes = new Map();
+    } else if (exchangeUser) {
+      if (!exchangeStart) exchangeStart = item;
+      exchangeEnd = item;
+      for (const outcome of item.msg._toolInfo?.outcomes || []) {
+        if (!outcome.ok || !['success', 'duplicate'].includes(outcome.status)) continue;
+        for (const note of outcome.affectedNotes || []) {
+          if (Number.isSafeInteger(Number(note.id)) && Number(note.id) > 0) exchangeNotes.set(Number(note.id), note);
+        }
+      }
+    }
+  }
+  finishExchange();
   if (streamingDraft) {
     renderItems.push({
       type: 'assistant',
@@ -681,6 +727,15 @@ function renderAiMessages() {
     const m = item.msg;
     if (!m) return ''; // safety: skip items without a message object
     const idx = item.idx;
+    const exchange = item.exchange;
+    const exchangeFooter = exchange && exchange.userId != null && !isAiLoading(conv.id) && !streamingDraft
+      ? `<div class="ai-exchange-footer" role="group" aria-label="回复链操作">
+          <div class="ai-msg-cand-pager">${exchange.count > 1 ? `<button class="ai-msg-cand-nav" onclick="navigateCandidateBranch(${exchange.startId}, -1)" title="上一个候选">‹</button><span class="ai-msg-cand-count">${exchange.index}/${exchange.count}</span><button class="ai-msg-cand-nav" onclick="navigateCandidateBranch(${exchange.startId}, 1)" title="下一个候选">›</button>` : ''}</div>
+          <div class="ai-msg-actions"><button class="ai-msg-regen" onclick="regenerateAiMessage(${exchange.userId})" title="重新生成这条问题的完整回复链">换一条</button></div>
+        ${exchange.affectedNotes.length ? exchange.affectedNotes.map(note => {
+          const current = typeof notes !== 'undefined' ? notes.find(n => Number(n.id) === Number(note.id) && n.type === 'note') : null;
+          return `<button type="button" class="ai-msg-regen" onclick="jumpToAiAffectedNote(${Number(note.id)})" title="跳转到笔记">📝 ${escapeHtml(current?.title || note.title || '未命名笔记')}</button>`;
+        }).join('') : ''}</div>` : '';
     const reasoningHtml = m._streaming ? `
       <div class="ai-streaming-reasoning"${m.reasoning ? '' : ' style="display:none"'}>
         <span class="ai-streaming-reasoning-label">🧠 深度思考</span>
@@ -758,6 +813,9 @@ function renderAiMessages() {
         'list_notes': '📝 笔记列表',
         'search_notes': '🔍 笔记搜索结果',
         'get_note_detail': '📝 笔记详情',
+        'get_note_outline': '📝 笔记大纲',
+        'patch_note': '📝 局部编辑笔记',
+        'append_note': '📝 追加笔记内容',
         'get_note_changes': '📝 笔记变更',
         'create_skill': '✨ 创建技能',
         'list_skills': '✨ 技能列表',
@@ -819,7 +877,7 @@ function renderAiMessages() {
             <div class="ai-tool-call-data">${dataContent}</div>
           </div>
         </div>
-      `;
+      ` + exchangeFooter;
     }
 
     // Hide tool_call, call_ai, and memory tags from user-facing messages
@@ -877,30 +935,13 @@ function renderAiMessages() {
     let bottomHtml = '';
     if (item.type === 'assistant') {
       const loading = isAiLoading(conv.id);
-      const canNav = item.branchCount > 1 && !loading;
-      // 分支切换（多个候选回复 = 兄弟分支）
-      let pagerHtml = '';
-      if (canNav) {
-        pagerHtml = `
-          <button class="ai-msg-cand-nav" onclick="navigateCandidateBranch(${item.nodeId}, -1)" title="上一个候选">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="15 18 9 12 15 6"/></svg>
-          </button>
-          <span class="ai-msg-cand-count">${item.branchCurIndex}/${item.branchCount}</span>
-          <button class="ai-msg-cand-nav" onclick="navigateCandidateBranch(${item.nodeId}, 1)" title="下一个候选">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="9 18 15 12 9 6"/></svg>
-          </button>`;
-      }
-      // 换一条 / 从这里分叉：在父 user 下新建分支
+      // 沉浸查看仍按单条消息提供。
       const immersiveBtn = !loading ? `<button class="ai-msg-immersive" onclick="openAiMessageImmersive(this)" title="沉浸查看这条回复">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
         沉浸查看
       </button>` : '';
-      const regenBtn = !loading ? `<button class="ai-msg-regen" onclick="regenerateAiMessage(${item.nodeId})" title="换一条（在父节点下新建分支）">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 11-2.12-9.36L23 10"/></svg>
-        换一条
-      </button>` : '';
-      if (pagerHtml || immersiveBtn || regenBtn) {
-        bottomHtml = `<div class="ai-msg-controls"><div class="ai-msg-cand-pager">${pagerHtml}</div><div class="ai-msg-actions">${immersiveBtn}${regenBtn}</div></div>`;
+      if (immersiveBtn) {
+        bottomHtml = `<div class="ai-msg-controls"><div class="ai-msg-cand-pager"></div><div class="ai-msg-actions">${immersiveBtn}</div></div>`;
       }
     } else if (item.type === 'user') {
       // 用户消息下方操作栏：编辑按钮（始终显示）+ 分叉时显示候选分支切换
@@ -940,7 +981,7 @@ function renderAiMessages() {
           ${bottomHtml}
         </div>
       </div>
-    `;
+    ` + exchangeFooter;
   }).join('');
   // Show typing indicator only when loading and there are no pending intermediate messages
   // (i.e., during the first API call before any tool results come back)
@@ -1244,7 +1285,7 @@ function summarizeNode(node) {
 function switchToTreeBranch(nodeId) {
   const conv = getActiveConv();
   if (!conv || isAiLoading(conv.id)) return;
-  if (switchBranch(conv, nodeId)) {
+  if (switchBranch(conv, branchTipNodeId(conv, nodeId))) {
     safeSaveAiConvs();
     renderAiMessages();
     renderAiTreePanel();

@@ -1019,14 +1019,14 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       } else if (!readOnly && executedWrites.has(sig)) {
         const saved = executedWrites.get(sig);
         const text = '已拦截重复操作，沿用本次请求的执行结果：' + saved.text;
-        resultObject = { ok: saved.ok, status: saved.ok ? 'duplicate' : 'failed', text, error: saved.error || null, data: null, durationMs: 0 };
+        resultObject = { ok: saved.ok, status: saved.ok ? 'duplicate' : 'failed', text, error: saved.error || null, data: saved.data || null, durationMs: 0 };
       } else if (!readOnly && persistentLedger[ledgerKey]) {
         const saved = persistentLedger[ledgerKey];
         const succeeded = saved.status === 'success';
         const text = saved.status === 'running'
           ? '⚠️ 已拦截可能重复的写入：上次执行被中断，结果未知，请先核对数据。'
           : '已拦截跨刷新重复操作，沿用上次结果：' + saved.text;
-        resultObject = { ok: succeeded, status: succeeded ? 'duplicate' : 'failed', text, error: succeeded ? null : (saved.text || '上次写入结果不确定'), data: null, durationMs: 0 };
+        resultObject = { ok: succeeded, status: succeeded ? 'duplicate' : 'failed', text, error: succeeded ? null : (saved.text || '上次写入结果不确定'), data: saved.data || null, durationMs: 0 };
       } else {
         {
           if (typeof onStreamDelta === 'function') onStreamDelta({ toolProgress: true, content: `🔧 正在执行 ${tc.action}（${index + 1}/${Math.min(toolCalls.length, 32)}）…`, reasoning: '' });
@@ -1039,7 +1039,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
             ? await executeToolCallStructured(tc.action, tc.params || {}, { conv, apiCfg })
             : normalizeAiToolResult(tc.action, await executeToolCall(tc.action, tc.params || {}, { conv, apiCfg }), Date.now() - startedAt);
           if (!readOnly) {
-            if (resultObject.ok) persistentLedger[ledgerKey] = { status: 'success', text: resultObject.text, updatedAt: Date.now() };
+            if (resultObject.ok) persistentLedger[ledgerKey] = { status: 'success', text: resultObject.text, data: resultObject.data || null, updatedAt: Date.now() };
             else delete persistentLedger[ledgerKey];
             saveAiToolLedger(persistentLedger);
           }
@@ -1053,9 +1053,10 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
         status: resultObject.status || (resultObject.ok ? 'success' : 'failed'),
         code: resultObject.code || (resultObject.ok ? 'OK' : 'TOOL_ERROR'),
         changed: resultObject.changed === true,
+        affectedNotes: resultObject.data?.affectedNotes || [],
         durationMs: resultObject.durationMs || 0, error: resultObject.error || null
       };
-      if (!readOnly && ['failed','skipped'].includes(roundOutcomes[index].status)) roundWriteFailed = true;
+      if (!readOnly && !roundOutcomes[index].ok) roundWriteFailed = true;
     };
     for (let index = 0; index < toolCalls.length;) {
       if (index >= 32 || !isAiReadOnlyTool(toolCalls[index].action)) {
@@ -1069,7 +1070,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       }
       await Promise.all(batch);
     }
-    const runtimeWriteFailure = toolCalls.some((tc, index) => !isAiReadOnlyTool(tc.action) && ['failed','skipped'].includes(roundOutcomes[index]?.status));
+    const runtimeWriteFailure = toolCalls.some((tc, index) => !isAiReadOnlyTool(tc.action) && roundOutcomes[index]?.ok === false);
     if (roundTransaction && runtimeWriteFailure) {
       if (typeof rollbackAiToolTransaction === 'function') rollbackAiToolTransaction(roundTransaction);
       for (let index = 0; index < toolCalls.length; index++) {
@@ -1164,7 +1165,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     incompleteReason = incompleteReason || '工具链未能生成最终答复，任务尚未确认完成。';
     finalCleanText = '⚠️ ' + incompleteReason;
   }
-  const failedCount = outcomes.filter(item => item.status === 'failed' || item.status === 'rolled_back').length;
+  const failedCount = outcomes.filter(item => !item.ok && item.status !== 'skipped').length;
   const successCount = outcomes.filter(item => item.status === 'success' || item.status === 'duplicate').length;
   const skippedCount = outcomes.filter(item => item.status === 'skipped').length;
   if (failedCount || incompleteReason) finalCleanText += `\n\n执行记录：成功 ${successCount} 项，失败 ${failedCount} 项，未执行 ${skippedCount} 项。详情见工具结果。`;

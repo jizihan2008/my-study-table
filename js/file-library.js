@@ -140,13 +140,50 @@
     await idb('readwrite', store => store.put(folder));
     return folder;
   }
-  global.createLibraryFolder = async function () {
-    const name = prompt('文件夹名称');
-    if (name === null) return;
-    const trimmed = name.trim();
-    if (!trimmed || trimmed === '.' || trimmed === '..') return alert('请输入有效的文件夹名称');
-    try { await saveFolder(trimmed, currentFolderId); renderFileLibrary(); }
-    catch (error) { alert('新建文件夹失败：' + error.message); }
+  global.createLibraryFolder = function () {
+    const existing = document.getElementById('fileLibraryFolderDialog');
+    if (existing) { existing.querySelector('input').focus(); return; }
+    const parentId = currentFolderId;
+    const previousFocus = document.activeElement;
+    const overlay = document.createElement('div');
+    overlay.id = 'fileLibraryFolderDialog';
+    overlay.className = 'modal-overlay open';
+    overlay.innerHTML = `<form class="modal" role="dialog" aria-modal="true" aria-labelledby="fileLibraryFolderTitle">
+      <div class="modal-header"><span class="modal-title" id="fileLibraryFolderTitle">新建文件夹</span><button type="button" class="modal-close" aria-label="取消">×</button></div>
+      <div class="modal-body"><div class="modal-field"><label for="fileLibraryFolderName">文件夹名称</label><input id="fileLibraryFolderName" autocomplete="off"><span role="alert" aria-live="polite"></span></div><button type="submit" class="btn-save-modal">创建</button></div>
+    </form>`;
+    const input = overlay.querySelector('input');
+    const submit = overlay.querySelector('[type="submit"]');
+    const errorLabel = overlay.querySelector('[role="alert"]');
+    let saving = false;
+    const close = () => { if (saving) return; overlay.remove(); previousFocus?.focus(); };
+    overlay.querySelector('.modal-close').onclick = close;
+    overlay.onclick = event => { if (event.target === overlay) close(); };
+    overlay.onkeydown = event => {
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      if (event.key === 'Tab') {
+        const controls = Array.from(overlay.querySelectorAll('button, input')).filter(control => !control.disabled);
+        const first = controls[0], last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
+    };
+    overlay.querySelector('form').onsubmit = async event => {
+      event.preventDefault();
+      if (saving) return;
+      const name = input.value.trim();
+      if (!name || name === '.' || name === '..') { errorLabel.textContent = '请输入有效的文件夹名称'; input.focus(); return; }
+      saving = true; submit.disabled = true; input.disabled = true; errorLabel.textContent = '';
+      try {
+        await saveFolder(name, parentId);
+        saving = false; close();
+        await renderFileLibrary();
+      } catch (error) {
+        errorLabel.textContent = '新建文件夹失败：' + error.message;
+      } finally { saving = false; submit.disabled = false; input.disabled = false; if (overlay.isConnected) input.focus(); }
+    };
+    document.body.appendChild(overlay);
+    input.focus();
   };
   global.openLibraryFolder = id => { currentFolderId = id || null; query = ''; const search = document.getElementById('fileLibrarySearch'); if (search) search.value = ''; renderFileLibrary(); };
   global.searchFileLibrary = value => { query = String(value || '').trim().toLowerCase(); renderFileLibrary(); };

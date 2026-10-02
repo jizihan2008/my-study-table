@@ -1667,10 +1667,13 @@ function initNotesResizer() {
     if (saved && saved >= 150 && saved <= 600) sidebar.style.width = saved + 'px';
   } catch (e) { /* 忽略 */ }
 
-  let startX = 0, startW = 0;
+  let startX = 0, startW = 0, activePointerId = null;
   resizer.addEventListener('pointerdown', function(e) {
+    if (activePointerId !== null || (e.pointerType === 'mouse' && e.button !== 0)) return;
     if (sidebar.classList.contains('hidden')) return;   // 侧边栏隐藏时不拖拽
     e.preventDefault();
+    activePointerId = e.pointerId;
+    resizer.setPointerCapture(e.pointerId);
     startX = e.clientX;
     startW = sidebar.getBoundingClientRect().width;
     resizer.classList.add('active');
@@ -1679,11 +1682,16 @@ function initNotesResizer() {
     document.body.style.cursor = 'col-resize';
 
     function onMove(ev) {
+      if (ev.pointerId !== activePointerId) return;
       const maxW = Math.min(520, Math.floor(window.innerWidth * 0.5));
       const w = Math.max(160, Math.min(maxW, startW + (ev.clientX - startX)));
       sidebar.style.width = w + 'px';
     }
-    function onUp() {
+    function onUp(ev) {
+      if (ev.pointerId !== activePointerId) return;
+      const pointerId = activePointerId;
+      activePointerId = null;
+      if (resizer.hasPointerCapture(pointerId)) resizer.releasePointerCapture(pointerId);
       resizer.classList.remove('active');
       sidebar.classList.remove('dragging');
       document.body.style.userSelect = '';

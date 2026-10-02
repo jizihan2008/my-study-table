@@ -16,7 +16,7 @@ function harness() {
   const loading = new Set();
   const stopped = new Set();
   const ctx = {
-    window: { _aiResumeInited: true }, console, localStorage: storage(),
+    window: { _aiResumeInited: true, addEventListener() {} }, console, localStorage: storage(),
     genId: () => ++id, document: { getElementById: () => null, addEventListener() {} },
     getEffectiveApiConfig: () => ({ apiKey: 'fake', name: 'original', model: 'test', contextLimit: 20 }),
     getActiveConvId: () => 'foreground', getActiveConv: () => ({ id: 'foreground', _webSearchMode: 'native' }),
@@ -436,6 +436,96 @@ test('candidate arrows follow sibling order and restore the full chosen branch',
   ctx.navigateCandidateBranch(third, 1);
   assert.equal(conv.activePath.includes(first), true);
   assert.equal(conv.messages.at(-1).content, 'first tool result');
+});
+
+test('reply-chain controls appear once after tools and before the next user', () => {
+  const ctx = harness();
+  const conv = { id: 'chain-controls' };
+  ctx.initTreeOnConv(conv);
+  const user = ctx.appendMessage(conv, { role: 'user', content: 'question' });
+  ctx.appendMessage(conv, { role: 'assistant', content: 'old answer' });
+  const start = ctx.createBranch(conv, user, { role: 'assistant', content: 'intermediate' });
+  ctx.appendMessage(conv, { role: 'system', content: 'tool output', _toolInfo: { toolNames: 'list_notes' } });
+  ctx.appendMessage(conv, { role: 'assistant', content: 'final answer' });
+  // 链尾为工具结果时同样要显示整链操作，不能依赖最后一条是 assistant。
+  ctx.appendMessage(conv, { role: 'system', content: 'last tool', _toolInfo: { toolNames: 'list_notes' } });
+  ctx.appendMessage(conv, { role: 'user', content: 'next question' });
+  const container = { innerHTML: '', scrollTop: 0, scrollHeight: 100, clientHeight: 100,
+    insertAdjacentHTML(position, html) { this.innerHTML += html; } };
+  ctx.document.getElementById = id => id === 'aiMessages' ? container : null;
+  ctx.getActiveConv = () => conv;
+  ctx.formatAiContent = text => text || '';
+  ctx.escapeHtml = text => String(text || '');
+  ctx.renderAiMessages();
+  const html = container.innerHTML;
+  assert.equal((html.match(/class="ai-msg-regen"/g) || []).length, 1);
+  assert.ok(html.indexOf('last tool') < html.indexOf('class="ai-msg-regen"'));
+  assert.ok(html.indexOf('class="ai-msg-regen"') < html.indexOf('next question'));
+  assert.ok(html.includes(`regenerateAiMessage(${user})`));
+  assert.ok(html.includes(`navigateCandidateBranch(${start}, 1)`));
+  assert.ok(html.includes('2/2'));
+  ctx.setAiLoading(conv.id, true);
+  ctx.renderAiMessages();
+  assert.equal(container.innerHTML.includes('class="ai-msg-regen"'), false);
+});
+
+test('tree panel branch selection restores the existing continuation', () => {
+  const ctx = harness();
+  const conv = conversation(ctx);
+  const reply = ctx.appendMessage(conv, { role: 'assistant', content: 'answer' });
+  const followup = ctx.appendMessage(conv, { role: 'user', content: 'follow up' });
+  ctx.getActiveConv = () => conv;
+  ctx.switchToTreeBranch(reply);
+  assert.equal(conv.activePath.at(-1), followup);
+});
+
+test('note writes report every affected note and omit failed or unchanged writes', async () => {
+  const ctx = harness();
+  vm.runInContext('let notes = [];', ctx);
+  const created = await ctx.executeToolCallStructured('add_note', { title: 'Created', content: 'text' });
+  const id = created.data.affectedNotes[0].id;
+  assert.equal(created.data.affectedNotes[0].title, 'Created');
+  const updated = await ctx.executeToolCallStructured('update_note', { id, title: 'Renamed' });
+  assert.equal(updated.data.affectedNotes[0].id, id);
+  assert.equal(updated.data.affectedNotes[0].title, 'Renamed');
+  const unchanged = await ctx.executeToolCallStructured('update_note', { id, title: 'Renamed' });
+  assert.equal(unchanged.data?.affectedNotes, undefined);
+  await ctx.executeToolCallStructured('add_note', { title: 'Second' });
+  const ids = JSON.parse(vm.runInContext('JSON.stringify(notes.map(n => n.id))', ctx));
+  const batch = await ctx.executeToolCallStructured('batch_set_note_tags', { ids, tags: 'tag' });
+  assert.equal(batch.data.affectedNotes.length, 2);
+  ctx.saveData = () => false;
+  const failed = await ctx.executeToolCallStructured('update_note', { id, title: 'Failed' });
+  assert.equal(failed.ok, false);
+  assert.equal(failed.data?.affectedNotes, undefined);
+});
+
+test('chain footer deduplicates note links and excludes rolled-back writes', () => {
+  const ctx = harness();
+  const conv = conversation(ctx);
+  const outcome = (id, title, status = 'success') => ({ ok: status === 'success', status, affectedNotes: [{ id, title }] });
+  ctx.appendMessage(conv, { role: 'system', content: 'tools', _toolInfo: { toolNames: 'add_note', outcomes: [outcome(101, 'First'), outcome(102, 'Second')] } });
+  ctx.appendMessage(conv, { role: 'system', content: 'more tools', _toolInfo: { toolNames: 'update_note', outcomes: [outcome(101, 'Renamed'), outcome(103, 'Rolled back', 'rolled_back')] } });
+  ctx.appendMessage(conv, { role: 'assistant', content: 'done' });
+  ctx.appendMessage(conv, { role: 'user', content: 'next question' });
+  const container = { innerHTML: '', scrollTop: 0, scrollHeight: 100, clientHeight: 100 };
+  ctx.document.getElementById = id => id === 'aiMessages' ? container : null;
+  ctx.getActiveConv = () => conv;
+  ctx.formatAiContent = text => text || '';
+  ctx.escapeHtml = text => String(text || '');
+  ctx.renderAiMessages();
+  assert.equal((container.innerHTML.match(/jumpToAiAffectedNote\(101\)/g) || []).length, 1);
+  assert.ok(container.innerHTML.includes('jumpToAiAffectedNote(102)'));
+  assert.equal(container.innerHTML.includes('jumpToAiAffectedNote(103)'), false);
+  assert.ok(container.innerHTML.indexOf('done') < container.innerHTML.indexOf('jumpToAiAffectedNote(101)'));
+  assert.ok(container.innerHTML.indexOf('jumpToAiAffectedNote(102)') < container.innerHTML.indexOf('next question'));
+  vm.runInContext('let notes = [{ id: 101, type: "note", title: "Renamed" }];', ctx);
+  let selected, tab;
+  ctx.selectNote = id => { selected = id; };
+  ctx.switchTab = name => { tab = name; };
+  ctx.jumpToAiAffectedNote(101);
+  assert.equal(selected, 101);
+  assert.equal(tab, 'notes');
 });
 
 test('edited user version arrows keep the selected version reply and continuation', () => {
@@ -1843,4 +1933,302 @@ test('uploaded images are not dropped by the inline size limit', () => {
   ctx.renderAttachPreview = () => {};
   const dropped = ctx.pruneOversizedImageAttachments(pending.slice(), { model: 'deepseek-flash' });
   assert.deepEqual(Array.from(dropped), ['big2.jpg']); // 只有走内联的那张被剔除
+});
+
+test('note detail pages reconstruct long content without tool truncation', async () => {
+  const ctx = harness();
+  const content = ('段落内容😀'.repeat(350) + '\n\n').repeat(12);
+  ctx.notes = [{ id: 901, type: 'note', title: '长笔记', content }];
+  let offset = 0;
+  let joined = '';
+  let count = 0;
+  do {
+    const result = await ctx.executeToolCallStructured('get_note_detail', { id: 901, offset });
+    assert.equal(result.ok, true);
+    assert.equal(ctx.boundAiToolResult(result.text), result.text);
+    assert.equal(result.data.offset, offset);
+    assert.equal(result.data.totalLength, content.length);
+    joined += result.data.content;
+    count++;
+    if (!result.data.hasMore) { assert.equal(result.data.nextOffset, null); break; }
+    assert.ok(result.data.nextOffset > offset);
+    assert.match(result.text, /正文尚未读完/);
+    offset = result.data.nextOffset;
+    assert.ok(count < 100);
+  } while (true);
+  assert.equal(joined, content);
+  assert.ok(count > 1);
+  for (const params of [{ offset: -1 }, { offset: 0.5 }, { limit: 0 }, { limit: 8001 }, { limit: null }]) {
+    assert.equal((await ctx.executeToolCallStructured('get_note_detail', { id: 901, ...params })).ok, false);
+  }
+  assert.equal((await ctx.executeToolCallStructured('get_note_detail', { id: 901, offset: content.length + 1 })).ok, false);
+  const schema = ctx.getAiToolJsonSchema('get_note_detail');
+  assert.equal(schema.properties.offset.type, 'integer');
+  assert.equal(schema.properties.limit.maximum, 8000);
+});
+
+test('note detail handles short, empty and tiny Unicode pages', async () => {
+  const ctx = harness();
+  for (const content of ['', '短笔记', '😀尾部']) {
+    ctx.notes = [{ id: 902, type: 'note', title: '笔记', content }];
+    const full = await ctx.executeToolCallStructured('get_note_detail', { id: 902 });
+    assert.equal(full.data.content, content);
+    assert.equal(full.data.hasMore, false);
+  }
+  const first = await ctx.executeToolCallStructured('get_note_detail', { id: 902, limit: 1 });
+  assert.equal(first.data.content, '😀');
+  assert.equal(first.data.nextOffset, 2);
+  const last = await ctx.executeToolCallStructured('get_note_detail', { id: 902, offset: 2 });
+  assert.equal(last.data.content, '尾部');
+  assert.equal(last.data.hasMore, false);
+});
+
+test('AI note create and update preserve decoded LaTeX and literal escapes', async () => {
+  const ctx = harness();
+  ctx.notes = [];
+  const content = String.raw`公式：$a \neq b$、$a \ne b$、$\nabla f$、$\nu$、$\notin$、$\theta$、$\frac{1}{2}$。
+代码：\n、\t、C:\notes\new.txt` + '\n真实换行\r\n下一段';
+  const created = await ctx.executeToolCallStructured('add_note', { title: '转义回归', content });
+  assert.equal(created.ok, true);
+  const note = ctx.notes[0];
+  assert.equal(note.content, content);
+  const updatedContent = content + '\n更新';
+  const textCall = ctx.parseSingleToolCall(JSON.stringify({ action: 'update_note', params: { id: note.id, content: updatedContent } }));
+  assert.equal(textCall.params.content, updatedContent);
+  assert.equal((await ctx.executeToolCallStructured(textCall.action, textCall.params)).ok, true);
+  assert.equal(note.content, updatedContent);
+  const nativeCalls = ctx.parseNativeLocalToolCalls([{ id: 'escape-test', function: { name: 'update_note', arguments: JSON.stringify({ id: note.id, content }) } }]);
+  assert.equal(nativeCalls[0].params.content, content);
+  assert.equal((await ctx.executeToolCallStructured(nativeCalls[0].action, nativeCalls[0].params)).ok, true);
+  assert.equal(note.content, content);
+  assert.equal((await ctx.executeToolCallStructured('get_note_detail', { id: note.id })).data.content, content);
+});
+
+test('partial note tools validate schemas and both tool protocols', async () => {
+  const ctx = harness();
+  const tools = ctx.selectAiToolsForConversation({ _toolGroups: ['note'] }, false, false);
+  for (const action of ['patch_note', 'append_note']) {
+    assert.equal(tools.has(action), true);
+    assert.equal(ctx.getAiToolMetadata(action).effect, 'write');
+    assert.ok(ctx.getAiToolTransactionScope(action).globals.includes('notes'));
+  }
+  const schema = ctx.getAiToolJsonSchema('patch_note');
+  assert.equal(schema.properties.edits.items.additionalProperties, false);
+  assert.equal(schema.properties.edits.items.required.join(','), 'oldText,newText');
+  assert.ok(schema.required.includes('revision'));
+  const base = { id: 701, revision: 'v1', edits: [{ oldText: 'a', newText: '' }] };
+  assert.equal(ctx.validateAiToolCall('patch_note', base).ok, true);
+  for (const params of [{ ...base, revision: '' }, { ...base, edits: [] }, { ...base, edits: [{ oldText: '', newText: 'x' }] }, { ...base, edits: [{ oldText: 'a', newText: null }] }, { ...base, edits: [{ oldText: 'a', newText: 'b', unknown: true }] }]) assert.equal(ctx.validateAiToolCall('patch_note', params).ok, false);
+  assert.equal(ctx.validateAiToolCall('append_note', { id: 701, revision: 'v1', content: '' }).ok, false);
+  const parsed = ctx.parseSingleToolCall(JSON.stringify({ action: 'patch_note', params: base }));
+  assert.equal(parsed.params.edits[0].newText, '');
+  const native = ctx.parseNativeLocalToolCalls([{ function: { name: 'patch_note', arguments: JSON.stringify(base) } }]);
+  assert.equal(native[0].params.revision, 'v1');
+  assert.equal(ctx.parseSingleToolCall('{"action":"patch_note","params":{"id":701,"revision":"v1","edits":[broken]}}'), null);
+});
+
+test('partial note edits apply atomically to original ranges and preserve exact text', async () => {
+  const ctx = harness();
+  const original = '开头\r\n' + String.raw`$a \neq b$` + '\n删除这段\n末尾';
+  ctx.notes = [{ id: 701, type: 'note', title: '局部修改', content: original, _summaryFresh: true }];
+  const read = await ctx.executeToolCallStructured('get_note_detail', { id: 701, limit: 2 });
+  const revision = read.data.revision;
+  assert.match(read.text, new RegExp('revision=' + revision));
+  const nextPage = await ctx.executeToolCallStructured('get_note_detail', { id: 701, offset: 2 });
+  assert.equal(nextPage.data.revision, revision);
+  let saves = 0;
+  ctx.saveData = (key, data) => { saves++; ctx.localStorage.setItem(key, JSON.stringify(data)); return true; };
+  const edited = await ctx.executeToolCallStructured('patch_note', { id: 701, revision, edits: [
+    { oldText: '末尾', newText: '末尾\n追加在此' },
+    { oldText: '删除这段\n', newText: '' },
+    { oldText: String.raw`$a \neq b$`, newText: String.raw`$a \ne c$` }
+  ] });
+  assert.equal(edited.ok, true);
+  assert.equal(edited.data.changedCount, 3);
+  assert.equal(saves, 1);
+  assert.equal(ctx.notes[0].content, '开头\r\n' + String.raw`$a \ne c$` + '\n末尾\n追加在此');
+  assert.equal(ctx.notes[0]._summaryFresh, false);
+  assert.notEqual(edited.data.revision, revision);
+  assert.equal(edited.data.affectedNotes[0].id, 701);
+  const suffix = '\n' + String.raw`代码 \n 和公式 \nabla`;
+  const appended = await ctx.executeToolCallStructured('append_note', { id: 701, revision: edited.data.revision, content: suffix });
+  assert.equal(appended.ok, true);
+  assert.ok(ctx.notes[0].content.endsWith(suffix));
+  assert.equal(saves, 2);
+  assert.equal(JSON.parse(ctx.localStorage.getItem('study_notes_v2'))[0].content, ctx.notes[0].content);
+  const noChange = await ctx.executeToolCallStructured('patch_note', { id: 701, revision: appended.data.revision, edits: [{ oldText: '开头', newText: '开头' }] });
+  assert.equal(noChange.changed, false);
+  assert.equal(noChange.data.changedCount, 0);
+  assert.equal(noChange.data.revision, appended.data.revision);
+  assert.equal(saves, 2);
+});
+
+test('partial note failures leave memory and storage unchanged', async () => {
+  const ctx = harness();
+  ctx.notes = [{ id: 702, type: 'note', content: '唯一abc和重复重复以及aaaa', updatedAt: 'same-time' }];
+  const read = await ctx.executeToolCallStructured('get_note_detail', { id: 702 });
+  const baseline = JSON.stringify(ctx.notes);
+  ctx.localStorage.setItem('study_notes_v2', baseline);
+  let saves = 0;
+  ctx.saveData = () => { saves++; return true; };
+  for (const [code, edits] of [
+    ['TEXT_NOT_FOUND', [{ oldText: '唯一', newText: '已改' }, { oldText: '不存在', newText: 'x' }]],
+    ['TEXT_NOT_UNIQUE', [{ oldText: '重复', newText: 'x' }]],
+    ['TEXT_NOT_UNIQUE', [{ oldText: 'aaa', newText: 'x' }]],
+    ['OVERLAPPING_EDITS', [{ oldText: 'abc', newText: 'x' }, { oldText: 'bc', newText: 'y' }]],
+    ['OVERLAPPING_EDITS', [{ oldText: '唯一', newText: 'x' }, { oldText: '唯一', newText: 'y' }]]
+  ]) {
+    const failed = await ctx.executeToolCallStructured('patch_note', { id: 702, revision: read.data.revision, edits });
+    assert.equal(failed.code, code);
+    assert.equal(failed.ok, false);
+    assert.equal(JSON.stringify(ctx.notes), baseline);
+    assert.equal(ctx.localStorage.getItem('study_notes_v2'), baseline);
+  }
+  assert.equal(saves, 0);
+  ctx.saveData = (key, data) => { ctx.localStorage.setItem(key, JSON.stringify(data)); return false; };
+  const saveFailed = await ctx.executeToolCallStructured('append_note', { id: 702, revision: read.data.revision, content: '后缀' });
+  assert.equal(saveFailed.code, 'SAVE_FAILED');
+  assert.equal(JSON.stringify(ctx.notes), baseline);
+  assert.equal(ctx.localStorage.getItem('study_notes_v2'), baseline);
+  ctx.notes[0].content += '手动编辑'; // Deliberately leave updatedAt unchanged.
+  const changed = JSON.stringify(ctx.notes);
+  for (const action of ['patch_note', 'append_note']) {
+    const conflict = await ctx.executeToolCallStructured(action, { id: 702, revision: read.data.revision, ...(action === 'patch_note' ? { edits: [{ oldText: '唯一', newText: 'x' }] } : { content: 'x' }) });
+    assert.equal(conflict.code, 'REVISION_CONFLICT');
+    assert.equal(JSON.stringify(ctx.notes), changed);
+  }
+});
+
+test('partial note result stays compact and same-round failure rolls back edits', async () => {
+  const ctx = harness();
+  ctx.notes = [{ id: 703, type: 'note', content: '首段\n' + '长'.repeat(20000) }];
+  const read = await ctx.executeToolCallStructured('get_note_detail', { id: 703 });
+  const edit = await ctx.executeToolCallStructured('patch_note', { id: 703, revision: read.data.revision, edits: [{ oldText: '首段', newText: '改后' }] });
+  assert.equal(edit.ok, true);
+  assert.ok(edit.text.length < 1000);
+  assert.equal(edit.text.includes('长'.repeat(100)), false);
+  const before = JSON.stringify(ctx.notes);
+  const conv = conversation(ctx);
+  let round = 0;
+  ctx.callAiApi = async () => round++ === 0 ? result([
+    { action: 'append_note', params: { id: 703, revision: edit.data.revision, content: '\n待回滚' } },
+    { action: 'patch_note', params: { id: 703, revision: edit.data.revision, edits: [{ oldText: '不存在', newText: 'x' }] } }
+  ], '') : result([], '已回滚');
+  await ctx.runToolCallLoop(ctx.getEffectiveApiConfig(), conv);
+  assert.equal(JSON.stringify(ctx.notes), before);
+});
+
+test('patch offsets describe final text in original edit order and support version-locked readback', async () => {
+  const ctx = harness();
+  ctx.notes = [{ id: 801, type: 'note', content: '前😀\r\nAAA--BBB--CCC尾' }];
+  const rev = (await ctx.executeToolCallStructured('get_note_detail', { id: 801 })).data.revision;
+  const edits = [{ oldText: 'CCC', newText: '' }, { oldText: 'AAA', newText: '长😀替换' }, { oldText: 'BBB', newText: 'B' }];
+  const patched = await ctx.executeToolCallStructured('patch_note', { id: 801, revision: rev, edits });
+  assert.equal(patched.ok, true);
+  for (const range of patched.data.editRanges) {
+    const expected = edits[range.editIndex].newText;
+    assert.equal(ctx.notes[0].content.slice(range.start, range.end), expected);
+    if (expected) {
+      const read = await ctx.executeToolCallStructured('get_note_detail', { id: 801, offset: range.start, limit: range.end - range.start, revision: patched.data.revision });
+      assert.equal(read.data.content, expected);
+    } else assert.equal(range.start, ctx.notes[0].content.indexOf('尾'));
+  }
+  assert.equal(patched.data.editRanges.map(x => x.editIndex).join(','), '0,1,2');
+  const beforeAppend = ctx.notes[0].content.length;
+  const appended = await ctx.executeToolCallStructured('append_note', { id: 801, revision: patched.data.revision, content: '\n😀追加' });
+  assert.equal(appended.data.editRanges[0].start, beforeAppend);
+  assert.equal(appended.data.editRanges[0].end, ctx.notes[0].content.length);
+  const staleRead = await ctx.executeToolCallStructured('get_note_detail', { id: 801, revision: patched.data.revision });
+  assert.equal(staleRead.code, 'REVISION_CONFLICT');
+});
+
+test('ambiguous edits expose counted bounded contexts and roll back earlier writes', async () => {
+  const ctx = harness();
+  ctx.notes = [{ id: 802, type: 'note', content: '第一章：重复\n第二章：重复\n' + 'aaaa'.repeat(10) }, { id: 803, type: 'note', content: '待修改' }];
+  const revision = (await ctx.executeToolCallStructured('get_note_detail', { id: 802 })).data.revision;
+  const ambiguous = await ctx.executeToolCallStructured('patch_note', { id: 802, revision, edits: [{ oldText: '重复', newText: '替换' }] });
+  assert.equal(ambiguous.ok, false);
+  assert.equal(ambiguous.status, 'ambiguous');
+  assert.equal(ambiguous.changed, false);
+  assert.equal(ambiguous.data.editIndex, 0);
+  assert.equal(ambiguous.data.matchCount, 2);
+  assert.match(ambiguous.data.matches[1].contextBefore, /第二章/);
+  for (const match of ambiguous.data.matches) assert.equal(ctx.notes[0].content.slice(match.start, match.end), '重复');
+  const overlapping = await ctx.executeToolCallStructured('patch_note', { id: 802, revision, edits: [{ oldText: 'aaa', newText: 'x' }] });
+  assert.equal(overlapping.data.matchCount, 38);
+  assert.equal(overlapping.data.matches.length, 5);
+  assert.equal(overlapping.data.matchesTruncated, true);
+  const otherRevision = (await ctx.executeToolCallStructured('get_note_detail', { id: 803 })).data.revision;
+  const baseline = JSON.stringify(ctx.notes);
+  ctx.localStorage.setItem('study_notes_v2', baseline);
+  ctx.saveData = (key, data) => { ctx.localStorage.setItem(key, JSON.stringify(data)); return true; };
+  let round = 0;
+  ctx.callAiApi = async () => round++ === 0 ? result([
+    { action: 'append_note', params: { id: 803, revision: otherRevision, content: '先写入' } },
+    { action: 'patch_note', params: { id: 802, revision, edits: [{ oldText: '重复', newText: 'x' }] } },
+    { action: 'append_note', params: { id: 803, revision: otherRevision, content: '不应执行' } }
+  ], '') : result([], '歧义需要重新定位');
+  const output = await ctx.runToolCallLoop({}, conversation(ctx));
+  assert.equal(JSON.stringify(ctx.notes), baseline);
+  assert.equal(ctx.localStorage.getItem('study_notes_v2'), baseline);
+  assert.match(output.finalCleanText, /失败 2 项/);
+  assert.equal(output.outcomes[1].status, 'ambiguous');
+  assert.equal(output.outcomes[0].status, 'rolled_back');
+  assert.equal(output.outcomes[2].status, 'skipped');
+});
+
+test('outline offsets preserve CRLF and Unicode while excluding code and tracking nested folds', async () => {
+  const ctx = harness();
+  const lines = ['# 章😀', '正文', ':::fold 外层', '## 子标题', ':::fold 内层', '内容', '```md', '# 伪标题', ':::fold 假折叠', ':::', '```', ':::', ':::', '~~~', '## 另一伪标题', '~~~', '    # 缩进代码', '节标题', '------', '### 末节 ###', '末尾'];
+  const content = lines.join('\r\n');
+  ctx.notes = [{ id: 804, type: 'note', content }];
+  const outline = await ctx.executeToolCallStructured('get_note_outline', { id: 804 });
+  assert.equal(outline.ok, true);
+  const items = outline.data.items;
+  assert.equal(items.map(x => x.title).join(','), '章😀,外层,子标题,内层,节标题,末节');
+  assert.equal(items[0].line, 1);
+  assert.equal(items[2].line, 4);
+  assert.equal(items[4].line, 18);
+  assert.equal(items[1].sectionEnd, content.indexOf('\r\n~~~') + 2);
+  assert.equal(items[3].sectionEnd, content.indexOf('\r\n:::\r\n:::') + 2 + 5);
+  for (const item of items) {
+    const source = content.slice(item.start, item.end);
+    assert.ok(source.includes(item.title));
+    assert.equal(item.start, lines.slice(0, item.line - 1).reduce((sum, line) => sum + line.length + 2, 0));
+    assert.ok(item.sectionEnd >= item.end);
+  }
+  const detail = await ctx.executeToolCallStructured('get_note_detail', { id: 804, offset: items[2].start, limit: items[2].end - items[2].start, revision: outline.data.revision });
+  assert.equal(detail.data.content, '## 子标题');
+  assert.equal(ctx.getAiToolMetadata('get_note_outline').effect, 'read');
+  const tools = ctx.selectAiToolsForConversation({ _toolGroups: ['note'] }, false, false);
+  assert.equal(tools.has('get_note_outline'), true);
+});
+
+test('outline pagination is complete, bounded and revision locked', async () => {
+  const ctx = harness();
+  ctx.notes = [{ id: 805, type: 'note', content: Array.from({ length: 120 }, (_, i) => '# ' + i + ' 标题' + '长'.repeat(200)).join('\n') }];
+  let offset = 0;
+  let revision;
+  const starts = [];
+  do {
+    const page = await ctx.executeToolCallStructured('get_note_outline', { id: 805, offset, limit: 50, ...(revision ? { revision } : {}) });
+    assert.equal(page.ok, true);
+    assert.equal(ctx.boundAiToolResult(page.text), page.text);
+    revision = page.data.revision;
+    for (const item of page.data.items) { starts.push(item.start); assert.equal(item.titleTruncated, true); }
+    if (!page.data.hasMore) break;
+    assert.ok(page.data.nextOffset > offset);
+    offset = page.data.nextOffset;
+  } while (true);
+  assert.equal(starts.length, 120);
+  assert.equal(new Set(starts).size, 120);
+  ctx.notes[0].content += '\n# 新标题';
+  assert.equal((await ctx.executeToolCallStructured('get_note_outline', { id: 805, revision })).code, 'REVISION_CONFLICT');
+  assert.equal(ctx.validateAiToolCall('get_note_outline', { id: 805, offset: 0.5 }).ok, false);
+  assert.equal(ctx.validateAiToolCall('get_note_outline', { id: 805, limit: 51 }).ok, false);
+  assert.equal(ctx.validateAiToolCall('get_note_detail', { id: 805, revision: null }).ok, false);
+  ctx.notes = [{ id: 806, type: 'note', content: '' }];
+  const empty = await ctx.executeToolCallStructured('get_note_outline', { id: 806 });
+  assert.equal(empty.data.totalItems, 0);
+  assert.equal(empty.data.hasMore, false);
 });

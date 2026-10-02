@@ -64,6 +64,14 @@ const AI_TOOLS = {
     description: '创建一条新笔记。支持 path 或 folderId 指定目标文件夹，可直接带标签',
     params: { title: '笔记标题（string）', content: '笔记内容（string，用真实换行分段，不要写 \\n）', folderId: '目标文件夹ID（number，可选，与path二选一）', path: '目标文件夹路径（不含自身），按顺序自动查找/创建（array of strings，可选，如["数学","微积分"]，与folderId二选一）', tags: '标签，逗号分隔（string，可选，如"数据结构,图论"）；建议优先复用笔记里已有的标签' }
   },
+  patch_note: {
+    description: '局部编辑笔记。先用 get_note_detail 获取 revision 和原文。edits 每项 oldText 必须在原正文中唯一匹配，修改范围不得重叠，newText 为空表示删除。插入可替换为原文加新增内容。整批验证成功才保存，失败时重新读取，不要猜测。',
+    params: { id: '笔记ID（number）', revision: '读取返回的版本（string，必填）', edits: '修改列表，每项含 oldText 和 newText（array of objects，必填）' }
+  },
+  append_note: {
+    description: '向笔记末尾追加正文，必须提供 get_note_detail 返回的 revision。content 原样追加，不自动加换行，版本冲突时重新读取。',
+    params: { id: '笔记ID（number）', revision: '读取返回的版本（string，必填）', content: '追加正文（string，必填）' }
+  },
   update_note: {
     description: '更新已有笔记的标题、正文或标签。注意：content 请用真实换行分段，不要写字面的 \\n；tags 传空字符串表示清空全部标签',
     params: { id: '笔记ID（number）', title: '新标题（string，可选）', content: '新内容（string，可选，用真实换行分段，不要写 \\n）', tags: '新标签，逗号分隔（string，可选，如"数据结构,图论"；传空字符串则清空全部标签）' }
@@ -96,9 +104,13 @@ const AI_TOOLS = {
     description: '查看全部笔记标签的全集：每个标签挂了几篇笔记（附笔记标题），以及还有哪些笔记尚未打标签。给笔记归类前先调用它，复用已有标签而不是每次造新标签',
     params: { search: '按标签名或笔记标题筛选（string，可选）', includeNotes: '是否附上每个标签下的笔记标题与ID（boolean，可选，默认true；只想要标签清单+计数时传false更省 token）' }
   },
+  get_note_outline: {
+    description: '读取笔记大纲：Markdown 标题和 :::fold 标题的行号、正文 UTF-16 偏移 [start,end)、sectionEnd。跳过代码块，支持嵌套折叠。先读大纲定位，再用 get_note_detail 定点读取；offset 是大纲条目索引，按 nextOffset 翻页，revision 可锁定版本。',
+    params: { id: '笔记ID（number）', offset: '大纲条目起始索引，默认0（number，可选，非负整数）', limit: '条目上限，默认30，范围1~50（number，可选，整数）', revision: '可选版本锁，来自先前读取结果（string，可选）' }
+  },
   get_note_detail: {
-    description: '获取单条笔记的完整内容（包括标题、正文、创建/更新时间）',
-    params: { id: '笔记ID（number）' }
+    description: '读取笔记正文。短笔记一次返回，长笔记按段落分段。需要全文时必须按返回的 nextOffset 继续调用，直到 hasMore=false；不要把首段当作全文。offset 使用 JavaScript 字符串索引（UTF-16），内容编辑后应从 offset=0 重新读取。',
+    params: { id: '笔记ID（number）', revision: '可选版本锁，版本变化时拒绝读取（string，可选）', offset: '正文起始偏移，默认0（number，可选，非负整数）', limit: '每段正文字符上限，默认6000，范围1~8000（number，可选，整数）' }
   },
   get_note_changes: {
     description: '获取昨天或今天有修改的笔记列表，用于回顾学习进展。可以看到哪些笔记被编辑过',
@@ -255,7 +267,7 @@ const AI_TOOLS = {
 // （conv._toolGroups）；没设置过的对话沿用上次保存的选择，从未选过则全部开放。
 const AI_TOOL_GROUPS = [
   { key: 'todo', label: '待办与聚焦', tools: ['add_todo','batch_add_todos','update_todo','delete_todo','set_todo_completed','move_todo','list_todos','get_todo_detail','get_today_status','get_focus_tasks','set_focus_task','get_stats','get_todo_stats','batch_update_todos','get_review_status','get_habits_status'] },
-  { key: 'note', label: '笔记与复习', tools: ['add_note','update_note','set_note_review','batch_set_note_tags','move_note','delete_note','list_notes','search_notes','get_note_tags','get_note_detail','get_note_changes'] },
+  { key: 'note', label: '笔记与复习', tools: ['add_note','update_note','patch_note','append_note','set_note_review','batch_set_note_tags','move_note','delete_note','list_notes','search_notes','get_note_tags','get_note_detail','get_note_outline','get_note_changes'] },
   { key: 'translation', label: '翻译与闪卡', tools: ['list_translations','set_translation_vocabulary','review_translation_flashcard'] },
   { key: 'skill', label: '技能库', tools: ['create_skill','list_skills','get_skill','update_skill','delete_skill'] },
   { key: 'link', label: '快捷访问', tools: ['add_link','delete_link','list_links'] },
@@ -347,6 +359,53 @@ function selectAiToolsForConversation(conv, webEnabled, kimiNative) {
   return selected;
 }
 
+// Shared full hierarchy snapshots for chat and daily reports.
+function buildAiHierarchyLines(items, describe) {
+  const children = new Map();
+  const ids = new Set(items.map(item => item.id));
+  for (const item of items) {
+    const siblings = children.get(item.parentId) || [];
+    siblings.push(item);
+    children.set(item.parentId, siblings);
+  }
+  const visited = new Set();
+  const lines = [];
+  function visit(item, number, depth) {
+    if (visited.has(item.id)) return;
+    visited.add(item.id);
+    lines.push(`${'  '.repeat(depth + 1)}[${number}] ${describe(item)}`);
+    (children.get(item.id) || []).forEach((child, index) => visit(child, `${number}.${index + 1}`, depth + 1));
+  }
+  let rootIndex = 0;
+  items.filter(item => item.parentId == null || !ids.has(item.parentId))
+    .forEach(item => visit(item, String(++rootIndex), 0));
+  // Include disconnected cycles once, without recursing forever or omitting nodes.
+  items.forEach(item => { if (!visited.has(item.id)) visit(item, String(++rootIndex), 0); });
+  return lines.join('\n');
+}
+
+function buildAiTodoTreeSnapshot() {
+  const items = typeof todos !== 'undefined' && Array.isArray(todos) ? todos : [];
+  const doneCount = items.filter(item => item.done).length;
+  const lines = buildAiHierarchyLines(items, todo => {
+    const timer = typeof getTodoTimerStr === 'function' ? getTodoTimerStr(todo.id) : '';
+    return `[ID:${todo.id}] ${todo.done ? '✅ [已完成]' : '⬜ [未完成]'} ${todo.text || '未命名待办'}`
+      + (todo.dueDate ? `；截止 ${todo.dueDate}` : '')
+      + (todo.done && todo.completedAt ? ` ✅完成于${todo.completedAt}` : '')
+      + timer + (todo.tags?.length ? ` 🏷️${todo.tags.join(',')}` : '');
+  });
+  return `📋 完整待办树：共 ${items.length} 项，已完成 ${doneCount} 项（包含全部层级）\n${lines || '  （暂无待办）'}\n`;
+}
+
+function buildAiNoteTreeSnapshot() {
+  const items = typeof notes !== 'undefined' && Array.isArray(notes)
+    ? notes.filter(item => item.type === 'note' || item.type === 'folder') : [];
+  const lines = buildAiHierarchyLines(items, item => item.type === 'folder'
+    ? `📁 [ID:${item.id}] ${item.title || '未命名'}`
+    : `📄 [ID:${item.id}] ${item.title || '未命名'}${item.summary ? ' — ' + item.summary : ''}`);
+  return `📝 完整笔记树：${items.filter(item => item.type === 'note').length} 篇笔记，${items.filter(item => item.type === 'folder').length} 个文件夹（含已有摘要）\n${lines || '  （暂无笔记）'}\n`;
+}
+
 function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApiConfig()) {
   // Check if web search is enabled for the active conversation
   const _activeConv = conv;
@@ -410,6 +469,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '4. 定时自动化触发时，你会收到一条以「[🤖 系统自动触发]」开头的消息，其中包含任务内容，请直接执行任务并在回复中向用户说明完成了什么。这条消息不是用户手动发送的，而是系统自动注入的\n';
   prompt += '5. 如果用户只是聊天/提问/问知识类问题，不需要调用工具，正常回答即可。\n';
   prompt += '6. 给笔记打标签时：名字保持稳定、按学科/主题归一（如统一用「数据结构」而不是「数据结构」「DS」混用）；一批笔记要归类时用 batch_set_note_tags 一次写完，不要逐篇调用 update_note。标签会出现在「今天」页待复习列表的标签筛选里，所以别造只用一次的一次性标签。\n';
+  prompt += '   编辑笔记正文时优先使用 patch_note 局部修改或 append_note 末尾追加，避免重发整篇正文。长文先用 get_note_outline 定位标题，再用 get_note_detail 读取相关段落和 revision；提交唯一匹配的 oldText/newText。多个修改必须基于同一份原文且互不重叠。版本冲突或匹配失败时重新读取，成功后使用返回的新 revision 和 editRanges 的最终正文偏移定点回读校验；读取时携带 revision 锁定版本。ambiguous 时根据 matches 上下文扩大 oldText，整批不会写入。只有确实要全文重写时才使用 update_note 的 content。所有正文原样保存，不进行二次转义。\n';
   if (_wsEnabled) {
     if (_isKimiNative) {
       prompt += '   注意：用户已开启「Kimi 原生搜索」，你拥有内置 $web_search 能力，当用户问实时信息、新闻、最新知识等需要联网的问题时，你会自动触发原生搜索并回答\n';
@@ -422,6 +482,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '8. 重要：当你返回一个 <tool_call> 后，系统会执行对应的工具，并将结果以「【工具执行结果】」开头的 system 消息注入到对话中。\n';
   prompt += '   你必须仔细阅读结果中的【结构化状态】：ok=true 表示成功，status=failed 表示失败，status=duplicate 表示系统已安全拦截重复写入。失败时请告知用户原因，不要假装成功。\n';
   prompt += '   另外，add_note 和 update_note 的 content 参数中，请使用真实的换行（回车换行）来分段，不要使用字面上的 \\n 字符（即不要在字符串中写反斜杠n），否则笔记内容中会显示成字面 \\n 文本而不会换行。\n';
+  prompt += '   正文解析后会原样保存，不做二次转义。通过 JSON 传参时，换行按 JSON 标准编码为 \\n，LaTeX 和路径里的每个反斜杠必须编码为双反斜杠（例如公式命令 \\neq 在 JSON 字符串中写作 \\\\neq）；不要把公式反斜杠当成换行或制表符。\n';
   prompt += '9. 你可以通过 <call_ai> 标签唤起另一个 AI 助手参与对话。格式：<call_ai>{"keyId":"目标 Key 名称","prompt":"要发送的消息"}</call_ai>\n';
   prompt += '   系统会在你回复后自动调用目标 AI，它的回复会以独立消息直接显示在对话中（标注 🔑 Key 名称）。你不需要重复或转发该回复。\n';
   prompt += '10. 提醒应与用户明确要求一致：只有用户要求设置提醒/定时任务时才创建，普通聊天或提到截止日期时可以建议，但不要自动创建。\n';
@@ -493,29 +554,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
     prompt += '\n';
   }
 
-  // 待办概览 — 明确解释总数构成：顶级任务数 + 所有层级子任务数
-  const doneCount = todos.filter(t => t.done).length;
-  const totalCount = todos.length;
-  const topLevelTodos = todos.filter(t => t.parentId === null);
-  // 递归统计所有层级的子任务（使用 getAllDescendantIds）
-  let actualChildCount = 0;
-  for (const t of topLevelTodos) {
-    const descendants = getAllDescendantIds(t.id);
-    actualChildCount += descendants.length - 1; // 减1排除自身
-  }
-  const orphanChildren = todos.filter(t => t.parentId !== null && !todos.some(p => p.id === t.parentId));
-  prompt += `📋 待办：共 ${totalCount} 个（${topLevelTodos.length} 个顶级任务 + ${actualChildCount} 个子任务` + (orphanChildren.length > 0 ? ` + ${orphanChildren.length} 个孤立子任务` : '') + `），已完成 ${doneCount} 个` + (totalCount > 0 ? `（${Math.round(doneCount/totalCount*100)}%）` : '') + '\n';
-  prompt += `  ⚠️ 说明：总数 = 顶级任务数 + 所有层级子任务数。例如 3 个待办 = 1 个顶级任务 + 2 个子任务（可能含多层级）。\n`;
-  prompt += `  ⚠️ 注意：以下仅列出顶级任务。如需查看完整的任务层级（含子任务），请调用 list_todos 工具。\n`;
-  prompt += `  ⚠️ 注意：快照数据与 list_todos 工具返回的数据来自同一数据源，查询结果应完全一致。如果工具查询结果与快照一致，无需重复查询。\n`;
-  if (topLevelTodos.length > 0) {
-    prompt += `  以下列出所有顶级任务：\n`;
-    topLevelTodos.forEach(t => {
-      const childCount = getChildren(t.id).length;
-      const timerStr = getTodoTimerStr(t.id);
-      prompt += `   [ID:${t.id}] ${t.done ? '✅' : '⬜'} ${t.text}` + (childCount > 0 ? `（含 ${childCount} 个子任务）` : '') + (t.dueDate ? ` 📅${t.dueDate}` : '') + (t.done && t.completedAt ? ` ✅完成于${t.completedAt}` : '') + timerStr + (t.tags && t.tags.length > 0 ? ` 🏷️${t.tags.join(',')}` : '') + '\n';
-    });
-  }
+  prompt += buildAiTodoTreeSnapshot();
 
   // 长期目标与「今天」页使用同一数据源。正文做单项目限长，避免异常长备注挤占整段上下文。
   if (typeof loadGoals === 'function') {
@@ -539,8 +578,9 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   }
 
   prompt += buildAiFocusSnapshot();
+  if (typeof buildAiTodoQueueSnapshot === 'function') prompt += buildAiTodoQueueSnapshot();
 
-  // 日历日程（今天 + 未来两天；每周重复事件按天展开）
+  // 日历日程（今天；每周重复事件按天展开）
   prompt += buildAiCalendarSnapshot();
 
   // 打卡
@@ -633,35 +673,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
         + '，完整标签+计数见 get_note_tags\n';
     }
   }
-  // Numbered hierarchy tree: [1] → [1.1] → [1.1.1], interleaving folders and notes
-  if (noteItems.length > 0 || noteFolders.length > 0) {
-    const folderMap = {}; noteFolders.forEach(f => { folderMap[f.id] = f; });
-    let noteIdx = 0;
-    function buildTree(parentId, prefix) {
-      // Get child folders and notes at this level
-      const childFolders = noteFolders.filter(f => f.parentId === parentId);
-      const childNotes = noteItems.filter(n => n.parentId === parentId);
-      let localIdx = 1;
-      // Folders first
-      for (const f of childFolders) {
-        const num = prefix ? prefix + '.' + localIdx : String(localIdx);
-        const subFolderCount = noteFolders.filter(sf => sf.parentId === f.id).length;
-        const subNoteCount = noteItems.filter(sn => sn.parentId === f.id).length;
-        const parts = [subNoteCount > 0 ? `${subNoteCount} 篇笔记` : '', subFolderCount > 0 ? `${subFolderCount} 个子文件夹` : ''].filter(Boolean);
-        prompt += `   [${num}] 📁 [ID:${f.id}] ${f.title || '未命名'}` + (parts.length > 0 ? `（${parts.join('，')}）` : '') + '\n';
-        buildTree(f.id, num);
-        localIdx++;
-      }
-      // Notes after folders at same level
-      for (const n of childNotes) {
-        const num = prefix ? prefix + '.' + localIdx : String(localIdx);
-        const summary = n.summary || '';
-        prompt += `   [${num}] 📄 [ID:${n.id}] ${n.title || '未命名'}` + (summary ? ' — ' + summary : '') + '\n';
-        localIdx++;
-      }
-    }
-    buildTree(null, '');
-  }
+  prompt += buildAiNoteTreeSnapshot();
 
   // 自动化任务
   if (automations.length > 0) {
@@ -803,8 +815,9 @@ async function executeCallAiAndPush(params, conv) {
 // keep returning display strings; the orchestration layer always receives a
 // predictable object and no mutation starts until validation has passed.
 const AI_TOOL_REQUIRED_PARAMS = {
+  patch_note:['id','revision','edits'], append_note:['id','revision','content'],
   add_todo:['text'], batch_add_todos:['todos'], update_todo:['id'], delete_todo:['id'], set_todo_completed:['id','completed'], move_todo:['id'], get_todo_detail:['id'],
-  batch_update_todos:['ids','action'], batch_set_note_tags:['ids','tags'], add_note:['title'], update_note:['id'], set_note_review:['ids','needsReview'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'],
+  batch_update_todos:['ids','action'], batch_set_note_tags:['ids','tags'], add_note:['title'], update_note:['id'], set_note_review:['ids','needsReview'], move_note:['id'], delete_note:['id'], search_notes:['query'], get_note_detail:['id'], get_note_outline:['id'],
   set_translation_vocabulary:['entryIds','inVocabulary'], review_translation_flashcard:['entryId','rating'],
   create_skill:['name','content'], get_skill:['skillId'], update_skill:['skillId'], delete_skill:['skillId'],
   add_link:['name','url'], delete_link:['id'], schedule_automation:['at','prompt'], delete_automation:['id'], get_memory_detail:['id'], web_search:['query'], read_webpage:['url'],
@@ -814,7 +827,7 @@ const AI_TOOL_REQUIRED_PARAMS = {
 
 const AI_TOOL_READ_ONLY = new Set([
   'list_todos','get_todo_detail','get_today_status','get_focus_tasks','get_stats','get_todo_stats',
-  'list_notes','search_notes','get_note_tags','get_note_detail','get_note_changes','list_skills','get_skill','list_links','list_automations',
+  'list_notes','search_notes','get_note_tags','get_note_detail','get_note_outline','get_note_changes','list_skills','get_skill','list_links','list_automations',
   'list_memories','get_memory_detail','web_search','read_webpage','quest_get','quest_review',
   'get_habits_status','get_review_status','list_translations','list_chats','search_chat_messages','list_calendar_events'
 ]);
@@ -879,6 +892,84 @@ function formatAiNoteTags(note) {
   return tags.length > 0 ? `🏷️ 标签：${tags.join('、')}\n` : '';
 }
 
+// Opaque session versions compare exact snapshots, including manual edits and imports.
+const aiNoteVersions = new Map();
+const aiNoteVersionSession = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
+let aiNoteVersionSequence = 0;
+function getAiNoteRevision(note) {
+  const snapshot = JSON.stringify(note);
+  let entry = aiNoteVersions.get(note.id);
+  if (!entry || entry.snapshot !== snapshot) {
+    entry = { snapshot, revision: aiNoteVersionSession + '-' + (++aiNoteVersionSequence) };
+    aiNoteVersions.set(note.id, entry);
+  }
+  return entry.revision;
+}
+
+function buildAiNoteOutline(content) {
+  const items = [];
+  const folds = [];
+  let fence = null;
+  let previous = null;
+  let line = 0;
+  for (const match of content.matchAll(/([^\r\n]*)(\r\n|\n|\r|$)/g)) {
+    if (!match[0].length) break;
+    line++;
+    const text = match[1];
+    const start = match.index;
+    const end = start + text.length;
+    if (fence) {
+      const closing = /^ {0,3}(`+|~+)[ \t]*$/.exec(text);
+      if (closing && closing[1][0] === fence.char && closing[1].length >= fence.length) fence = null;
+      previous = null;
+      continue;
+    }
+    const opening = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(text);
+    if (opening && (opening[1][0] !== '`' || !opening[2].includes('`'))) {
+      fence = { char: opening[1][0], length: opening[1].length };
+      previous = null;
+      continue;
+    }
+    if (/^(?: {4}|\t)/.test(text)) { previous = null; continue; }
+    const fold = /^ {0,3}:::fold(?:[ \t]+(.*?))?[ \t]*$/.exec(text);
+    if (fold) {
+      items.push({ type: 'fold', title: (fold[1] || '').trim() || '折叠内容', level: folds.length + 1, line, start, end, sectionEnd: content.length, closed: false, _fold: folds.at(-1) });
+      folds.push(items.length - 1);
+      previous = null;
+      continue;
+    }
+    if (/^ {0,3}:::[ \t]*$/.test(text)) {
+      if (folds.length) {
+        const item = items[folds.pop()];
+        item.sectionEnd = start + match[0].length;
+        item.closed = true;
+      }
+      previous = null;
+      continue;
+    }
+    const heading = /^ {0,3}(#{1,6})(?:[ \t]+(.*?)|[ \t]*)$/.exec(text);
+    const underline = /^ {0,3}(=+|-+)[ \t]*$/.exec(text);
+    if (heading) {
+      items.push({ type: 'heading', title: (heading[2] || '').replace(/[ \t]+#+[ \t]*$/, '').trim(), level: heading[1].length, line, start, end, sectionEnd: content.length, _fold: folds.at(-1) });
+      previous = null;
+    } else if (underline && previous) {
+      items.push({ type: 'heading', title: previous.text.trim(), level: underline[1][0] === '=' ? 1 : 2, line: previous.line, start: previous.start, end, sectionEnd: content.length, _fold: folds.at(-1) });
+      previous = null;
+    } else previous = text.trim() && !/^ {0,3}(?:[-*+]\s|>)/.test(text) ? { text, line, start } : null;
+  }
+  const headings = [];
+  for (const item of items) {
+    if (item.type !== 'heading') continue;
+    while (headings.length && headings.at(-1).level >= item.level) headings.pop().sectionEnd = item.start;
+    headings.push(item);
+  }
+  for (const item of items) {
+    if (item._fold !== undefined) item.sectionEnd = Math.min(item.sectionEnd, items[item._fold].sectionEnd);
+    delete item._fold;
+  }
+  return items;
+}
+
 function inferAiToolPropertySchema(action, name, description) {
   const d = String(description || '');
   let schema;
@@ -905,6 +996,9 @@ function inferAiToolPropertySchema(action, name, description) {
   if (name === 'type' && action === 'quest_edit_condition') schema.enum = ['todo','note','timer','manual'];
   if (name === 'page') schema.minimum = 1;
   if (name === 'pageSize') { schema.minimum = 1; schema.maximum = 50; }
+  if (['get_note_detail','get_note_outline'].includes(action) && name === 'offset') { schema.type = 'integer'; schema.minimum = 0; }
+  if (action === 'get_note_detail' && name === 'limit') { schema.type = 'integer'; schema.minimum = 1; schema.maximum = 8000; }
+  if (action === 'get_note_outline' && name === 'limit') { schema.type = 'integer'; schema.minimum = 1; schema.maximum = 50; }
   if (/^(?:id|parentId|folderId|todoId|noteId|questId|lineId|targetId|conditionIndex)$/.test(name)) schema.minimum = 1;
   if (name === 'minutes' || name === 'estMinutes') schema.minimum = 0;
   if (name === 'pos') schema = { type: ['object','null'], properties: { x: { type: 'number' }, y: { type: 'number' } }, required: ['x','y'], additionalProperties: false, description: d };
@@ -921,6 +1015,11 @@ function getAiToolJsonSchema(action) {
   const required = (typeof AI_TOOL_REQUIRED_PARAMS !== 'undefined' && AI_TOOL_REQUIRED_PARAMS[action])
     ? AI_TOOL_REQUIRED_PARAMS[action].slice()
     : Object.entries(tool.params || {}).filter(([, d]) => /必填/.test(String(d))).map(([name]) => name);
+  if (action === 'patch_note') {
+    properties.edits.minItems = 1;
+    properties.edits.maxItems = 50;
+    properties.edits.items = { type: 'object', additionalProperties: false, required: ['oldText','newText'], properties: { oldText: { type: 'string', minLength: 1 }, newText: { type: 'string' } } };
+  }
   if (action === 'batch_add_todos' && properties.todos) {
     properties.todos.items = {
       type: 'object', additionalProperties: false, required: ['text'],
@@ -963,6 +1062,22 @@ function validateAiToolCall(action, params) {
     }
   }
   if (['get_skill','update_skill','delete_skill'].includes(action) && (typeof params.skillId !== 'string' || !params.skillId.trim())) return { ok: false, error: 'skillId 必须是非空字符串' };
+  if (['patch_note','append_note'].includes(action)) {
+    if (typeof params.revision !== 'string' || !params.revision.trim()) return { ok: false, error: 'revision 必须是读取返回的非空版本字符串' };
+    if (action === 'append_note' && (typeof params.content !== 'string' || !params.content.length)) return { ok: false, error: 'content 必须是非空字符串' };
+    if (action === 'patch_note') {
+      if (!Array.isArray(params.edits) || !params.edits.length || params.edits.length > 50) return { ok: false, error: 'edits 必须包含 1~50 项修改' };
+      for (const edit of params.edits) {
+        if (!edit || typeof edit !== 'object' || Array.isArray(edit) || Object.keys(edit).some(key => !['oldText','newText'].includes(key)) || typeof edit.oldText !== 'string' || !edit.oldText.length || typeof edit.newText !== 'string') return { ok: false, error: '每项修改只能包含非空字符串 oldText 和字符串 newText（可为空）' };
+      }
+    }
+  }
+  if (['get_note_detail','get_note_outline'].includes(action)) {
+    if (params.revision !== undefined && (typeof params.revision !== 'string' || !params.revision.trim())) return { ok: false, error: 'revision 必须是非空版本字符串' };
+    const maxLimit = action === 'get_note_outline' ? 50 : 8000;
+    if (params.offset !== undefined && (!Number.isSafeInteger(params.offset) || params.offset < 0)) return { ok: false, error: 'offset 必须是非负整数' };
+    if (params.limit !== undefined && (!Number.isSafeInteger(params.limit) || params.limit < 1 || params.limit > maxLimit)) return { ok: false, error: `limit 必须是 1~${maxLimit} 的整数` };
+  }
   for (const key of ['id','parentId','folderId','todoId','noteId','questId','lineId','targetId','conditionIndex','minutes','estMinutes','page','pageSize','max_results','maxChars','maxResults']) {
     if (params[key] !== undefined && params[key] !== null && (!Number.isFinite(Number(params[key])) || Number(params[key]) < 0)) return { ok: false, error: `参数 ${key} 必须是有效数字` };
   }
@@ -1158,33 +1273,29 @@ function validateAiCalendarDate(value) {
   return { date: text };
 }
 
-// 数据快照里的日程摘要：今天 + 未来两天（每周重复事件按天展开），让 AI 不必为常见问题先查一次
-function buildAiCalendarSnapshot() {
-  if (typeof loadCalendarEvents !== 'function' || typeof getCalendarEventsOnDate !== 'function') return '';
+// 按指定日期展开日程；普通聊天默认只注入今天。
+function buildAiCalendarSnapshot(days) {
+  if (typeof loadCalendarEvents !== 'function' || typeof getCalendarEventsOnDate !== 'function') return '📅 日历日程：日历模块未加载，无法读取日程\n';
   let events;
-  try { events = loadCalendarEvents(); } catch (e) { return ''; }
-  if (!Array.isArray(events) || events.length === 0) return '';
-
-  const dayStr = d => d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
-  const label = ['今天', '明天', '后天'];
-  const dayLines = [];
-  for (let offset = 0; offset < 3; offset++) {
+  try { events = loadCalendarEvents(); } catch (e) { return '📅 日历日程：读取失败\n'; }
+  if (!Array.isArray(events)) return '📅 日历日程：数据不可用\n';
+  const today = typeof getTodayStr === 'function' ? getTodayStr() : (() => {
     const d = new Date();
-    d.setDate(d.getDate() + offset);
-    const dateStr = dayStr(d);
-    const list = getCalendarEventsOnDate(dateStr, events);
-    if (list.length === 0) continue;
-    const items = list.slice(0, 6).map(ev => {
-      const timeText = typeof formatCalEventTimeRange === 'function' ? formatCalEventTimeRange(ev, '-') : (ev.startTime || ev.time || '');
-      const repeat = ev.repeat === 'weekly' && typeof calEventRepeatLabel === 'function' ? `[${calEventRepeatLabel(ev)}]` : '';
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  })();
+  const selectedDays = days || [{ date: today, label: '今天' }];
+  const dayLines = selectedDays.map(day => {
+    const list = getCalendarEventsOnDate(day.date, events);
+    const items = list.map(ev => {
+      const timeText = typeof formatCalEventTimeRange === 'function' ? formatCalEventTimeRange(ev, '-') : (ev.allDay ? '全天' : ev.startTime || ev.time || '');
+      const repeat = ev.repeat === 'weekly' && typeof calEventRepeatLabel === 'function' ? '[' + calEventRepeatLabel(ev) + ']' : '';
+      const span = ev.endDate && ev.endDate !== ev.date ? '[跨天 ' + ev.date + ' 至 ' + ev.endDate + ']' : '';
       const auto = ev.autoRecord === true ? '[自动计时]' : '';
-      return `${timeText ? timeText + ' ' : ''}${ev.title || '未命名'}${repeat}${auto}`;
-    }).join('，');
-    dayLines.push(`${label[offset]}(${dateStr})：${items}${list.length > 6 ? ` 等${list.length}个` : ''}`);
-  }
-  if (dayLines.length === 0) return '📅 日历：今天起三天内没有日程事件\n';
-  return `📅 日历日程（共 ${events.length} 个事件；重复事件按所选星期几逐周出现，可用 list_calendar_events 查看详情）：\n   `
-    + dayLines.join('\n   ') + '\n';
+      return '  - ' + (timeText ? timeText + ' ' : '') + (ev.title || '未命名') + repeat + span + auto + (ev.note ? '（备注：' + ev.note + '）' : '');
+    });
+    return day.label + '(' + day.date + ')：' + (items.length ? '\n' + items.join('\n') : '无日程');
+  });
+  return '📅 日历日程（重复事件已按日期展开，已排除取消的场次；安排不代表实际完成）：\n' + dayLines.join('\n') + '\n';
 }
 
 function normalizeAiToolResult(action, value, durationMs = 0) {
@@ -1218,7 +1329,7 @@ const AI_TOOL_TRANSACTION_SCOPES = {
     keys: ['study_todos_v2','study_todo_completed_log','study_todos_trash','study_today_focus']
   },
   note: {
-    actions: ['add_note','update_note','set_note_review','batch_set_note_tags','move_note','delete_note'],
+    actions: ['add_note','update_note','patch_note','append_note','set_note_review','batch_set_note_tags','move_note','delete_note'],
     globals: ['notes'],
     keys: ['study_notes_v2','study_notes_trash']
   },
@@ -1295,6 +1406,12 @@ async function executeToolCallStructured(action, params, context = {}) {
     const value = await executeToolCall(action, checked.params, context);
     const result = normalizeAiToolResult(action, value, Date.now() - startedAt);
     if (!result.ok) rollbackAiToolTransaction(transaction);
+    if (result.ok && transaction?.globals.notes && typeof notes !== 'undefined') {
+      const before = new Map(transaction.globals.notes.map(note => [note.id, JSON.stringify(note)]));
+      const affectedNotes = notes.filter(note => note.type === 'note' && before.get(note.id) !== JSON.stringify(note))
+        .map(note => ({ id: note.id, title: note.title || '未命名笔记' }));
+      if (affectedNotes.length) result.data = { ...(result.data || {}), affectedNotes };
+    }
     return result;
   } catch (error) {
     rollbackAiToolTransaction(transaction);
@@ -2065,9 +2182,9 @@ async function executeToolCall(action, params, context = {}) {
     }
     case 'add_note': {
       const title = params.title || '未命名笔记';
-      let content = params.content || '';
-      // Replace literal \n with real newlines (keep LaTeX \[ and \( markers intact)
-      content = content.replace(/\\n/g, '\n');
+      // Tool protocol parsing already decodes JSON escapes. Preserve the decoded
+      // string verbatim: a second pass would corrupt LaTeX (\ne, \neq, \nabla).
+      const content = params.content || '';
       let folderId = null;
       if (params.folderId) {
         folderId = Number(params.folderId);
@@ -2108,7 +2225,7 @@ async function executeToolCall(action, params, context = {}) {
       if (!parsedTags.ok) return `错误：${parsedTags.error}`;
       const changed = [];
       if (params.title !== undefined && params.title !== note.title) { note.title = params.title; changed.push('标题'); }
-      if (params.content !== undefined) { note.content = params.content.replace(/\\n/g, '\n'); changed.push('正文'); }
+      if (params.content !== undefined) { note.content = params.content; changed.push('正文'); }
       if (parsedTags.tags !== null) {
         note.tags = parsedTags.tags;
         changed.push(parsedTags.tags.length > 0 ? `标签（${parsedTags.tags.join('、')}）` : '标签（已清空）');
@@ -2119,6 +2236,62 @@ async function executeToolCall(action, params, context = {}) {
       note.updatedAt = new Date().toISOString();
       if (saveData('study_notes_v2', notes) !== true) return '❌ 笔记保存失败';
       return `✅ 已更新笔记「${note.title}」：${changed.join('、')}`;
+    }
+    case 'patch_note':
+    case 'append_note': {
+      const note = notes.find(n => n.id === Number(params.id) && n.type === 'note');
+      const fail = (code, message) => ({ ok: false, changed: false, code, text: `❌ ${message}`, error: message });
+      if (!note) return fail('NOTE_NOT_FOUND', '未找到目标笔记');
+      if (getAiNoteRevision(note) !== params.revision) return fail('REVISION_CONFLICT', '笔记版本已改变，请重新调用 get_note_detail 读取当前版本和相关段落');
+      const original = String(note.content || '');
+      const ranges = [];
+      if (action === 'patch_note') {
+        for (let i = 0; i < params.edits.length; i++) {
+          const edit = params.edits[i];
+          const start = original.indexOf(edit.oldText);
+          if (start < 0) return fail('TEXT_NOT_FOUND', `第 ${i + 1} 项原文未找到，请重新读取相关段落`);
+          let matchCount = 0;
+          const matches = [];
+          for (let pos = start; pos >= 0; pos = original.indexOf(edit.oldText, pos + 1)) {
+            matchCount++;
+            if (matches.length < 5) {
+              const end = pos + edit.oldText.length;
+              matches.push({ start: pos, end, contextBefore: original.slice(Math.max(0, pos - 60), pos), matchPreview: edit.oldText.slice(0, 120), contextAfter: original.slice(end, end + 60) });
+            }
+          }
+          if (matchCount > 1) {
+            const data = { revision: params.revision, editIndex: i, matchCount, matches, matchesTruncated: matchCount > matches.length };
+            return { ...fail('TEXT_NOT_UNIQUE', `第 ${i + 1} 项原文匹配 ${matchCount} 处，请根据上下文扩大原文范围以唯一定位`), status: 'ambiguous', data, text: `❌ 原文匹配存在歧义，整批未写入\n${JSON.stringify(data)}` };
+          }
+          ranges.push({ editIndex: i, start, end: start + edit.oldText.length, ...edit });
+        }
+        ranges.sort((a, b) => a.start - b.start);
+        for (let i = 1; i < ranges.length; i++) {
+          if (ranges[i].start < ranges[i - 1].end) return fail('OVERLAPPING_EDITS', '修改范围重叠，请合并成一项修改');
+        }
+      } else ranges.push({ editIndex: 0, start: original.length, end: original.length, oldText: '', newText: params.content });
+      let delta = 0;
+      const editRanges = ranges.map(edit => {
+        const start = edit.start + delta;
+        delta += edit.newText.length - (edit.end - edit.start);
+        return { editIndex: edit.editIndex, start, end: start + edit.newText.length };
+      }).sort((a, b) => a.editIndex - b.editIndex);
+      let content = original;
+      for (const edit of [...ranges].reverse()) content = content.slice(0, edit.start) + edit.newText + content.slice(edit.end);
+      const changed = content !== original;
+      const changedCount = ranges.filter(edit => edit.oldText !== edit.newText).length;
+      if (changed) {
+        // Publish only after the entire candidate has been persisted successfully.
+        const candidate = { ...note, content, updatedAt: new Date().toISOString(), _summaryFresh: false };
+        const nextNotes = notes.map(n => n === note ? candidate : n);
+        if (saveData('study_notes_v2', nextNotes) !== true) return fail('SAVE_FAILED', '笔记保存失败，整批修改未生效');
+        Object.assign(note, candidate);
+        if (typeof renderNotes === 'function') renderNotes();
+      }
+      const revision = getAiNoteRevision(note);
+      const excerpt = text => text.length > 80 ? text.slice(0, 80) + '…' : text;
+      const previews = ranges.filter(edit => edit.oldText !== edit.newText).slice(0, 5).map(edit => ({ oldText: excerpt(edit.oldText), newText: excerpt(edit.newText) }));
+      return { ok: true, changed, data: { id: note.id, revision, changedCount, editRanges, previews }, text: `✅ 笔记 [ID:${note.id}]：已修改 ${changedCount} 处\nrevision=${revision}\neditRanges=${JSON.stringify(editRanges)}（最终正文 UTF-16，[start,end)；删除为零宽区间）\n${previews.map(edit => JSON.stringify(edit)).join('\n')}${changedCount > 5 ? '\n[仅回显前5处修改]' : ''}` };
     }
     case 'set_note_review': {
       if (!Array.isArray(params.ids) || params.ids.length === 0) return '错误：缺少笔记ID数组 ids';
@@ -2408,19 +2581,62 @@ async function executeToolCall(action, params, context = {}) {
       }
       return result;
     }
+    case 'get_note_outline': {
+      const note = notes.find(n => n.id === Number(params.id) && n.type === 'note');
+      if (!note) return '错误：未找到目标笔记';
+      const revision = getAiNoteRevision(note);
+      if (params.revision !== undefined && params.revision !== revision) return { ok: false, code: 'REVISION_CONFLICT', changed: false, text: '❌ 笔记版本已改变，请从头读取大纲' };
+      const content = String(note.content || '');
+      const outline = buildAiNoteOutline(content);
+      const offset = params.offset ?? 0;
+      if (offset > outline.length) return '错误：offset 超过大纲条目总数';
+      const items = [];
+      let chars = 0;
+      for (const entry of outline.slice(offset, offset + (params.limit ?? 30))) {
+        const item = { ...entry, title: entry.title.slice(0, 160), titleTruncated: entry.title.length > 160 };
+        const cost = JSON.stringify(item).length + 1;
+        if (items.length && chars + cost > 9500) break;
+        items.push(item);
+        chars += cost;
+      }
+      const next = offset + items.length;
+      const data = { id: note.id, revision, totalLength: content.length, totalItems: outline.length, offset, hasMore: next < outline.length, nextOffset: next < outline.length ? next : null, items };
+      return { ok: true, data, text: '📝 笔记大纲（line 从1开始，正文偏移为 UTF-16，[start,end)；offset/nextOffset 为大纲条目索引）\n' + JSON.stringify(data) };
+    }
     case 'get_note_detail': {
       const id = params.id;
       if (!id) return '错误：缺少笔记ID';
       const n = notes.find(nt => nt.id === id);
       if (!n) return `错误：未找到ID为 ${id} 的笔记`;
+      const revision = getAiNoteRevision(n);
+      if (params.revision !== undefined && params.revision !== revision) return { ok: false, code: 'REVISION_CONFLICT', text: '❌ 笔记版本已改变，请重新读取大纲或笔记', changed: false };
+      const content = String(n.content || '');
+      const offset = params.offset ?? 0;
+      const limit = params.limit ?? 6000;
+      if (offset > content.length) return '错误：offset 超过正文总长度，请从 offset=0 重新读取';
+      if (offset > 0 && /[\uDC00-\uDFFF]/.test(content[offset] || '') && /[\uD800-\uDBFF]/.test(content[offset - 1])) return '错误：offset 位于字符中间，请使用返回的 nextOffset';
+      let end = Math.min(content.length, offset + limit);
+      if (end < content.length) {
+        const boundary = content.lastIndexOf('\n\n', end - 2);
+        if (boundary >= offset + Math.floor(limit / 2)) end = boundary + 2;
+        // Keep surrogate pairs intact; even limit=1 must make progress.
+        if (/[\uD800-\uDBFF]/.test(content[end - 1] || '') && /[\uDC00-\uDFFF]/.test(content[end] || '')) end += end - offset === 1 ? 1 : -1;
+      }
+      const hasMore = end < content.length;
+      const page = { revision: getAiNoteRevision(n), totalLength: content.length, offset, endOffset: end, hasMore, nextOffset: hasMore ? end : null, content: content.slice(offset, end), updatedAt: n.updatedAt || null };
       let result = `📝 笔记详情 [ID:${n.id}]\n`;
       result += `📌 标题：${n.title || '未命名'}\n`;
       result += formatAiNoteTags(n);
       result += `🔁 复习状态：${n._skipReview ? '跳过复习' : '需要复习'}\n`;
       result += `🕐 创建时间：${n.createdAt ? new Date(n.createdAt).toLocaleString('zh-CN') : '未知'}\n`;
       result += `🕑 最后编辑：${n.updatedAt ? new Date(n.updatedAt).toLocaleString('zh-CN') : '未知'}\n`;
-      result += `\n📄 正文：\n${n.content || '(空)'}\n`;
-      return result;
+      // Reserve room for the page and continuation instructions under the common tool cap.
+      if (result.length > 2000) result = result.slice(0, 1900) + '\n[笔记元信息过长，已省略部分]\n';
+      result += `📑 正文范围：[${offset}, ${end}) / ${content.length}（UTF-16）\n`;
+      result += `hasMore=${hasMore}；nextOffset=${page.nextOffset}\nrevision=${page.revision}\n`;
+      if (hasMore) result += `⚠️ 正文尚未读完。继续读取：get_note_detail ${JSON.stringify({ id: n.id, offset: end, limit, revision })}\n`;
+      result += `\n📄 正文：\n${page.content || '(空)'}\n`;
+      return { ok: true, text: result, data: page };
     }
     case 'get_note_changes': {
       const period = (params.period || 'today').toLowerCase();
@@ -3010,6 +3226,8 @@ function parseSingleToolCall(raw) {
   try {
     params = JSON.parse(paramsJson);
   } catch (e) {
+    // Never salvage a partially parsed edit batch or bypass its version check.
+    if (['patch_note','append_note'].includes(action)) return null;
     // Fallback: manual extraction for malformed JSON
     const paramsStr = raw.slice(braceStart + 1, braceEnd);
     params = {};
