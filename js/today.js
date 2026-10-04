@@ -258,9 +258,8 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
           ${displayPath.parents.length ? `<span class="focus-parent-path">${displayPath.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>')}</span>` : ''}
           <span class="focus-title">${escapeHtml(todo.text)}</span>
         </span>
-        <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录">
+        <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录" aria-label="跳转到待办目录">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-          去目录
         </button>
         ${isDirectFocus ? `<button class="focus-timer-start" onclick="event.stopPropagation(); startFocusTimer(${todoId})" title="以此任务开始计时" aria-label="以此任务开始计时"><i data-lucide="play" class="lucide-icon"></i></button>` : ''}
         ${isDirectFocus ? `<button class="focus-note-edit" onclick="event.stopPropagation(); editTodayFocusNote(${todoId})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}">
@@ -560,8 +559,95 @@ function deleteTodayFocus(idx) {
 // ═══════════ Today: Review Card ═══════════
 let todayReviewCollapsed = localStorage.getItem('study_today_review_collapsed') === 'true';
 let todayReviewTagFilter = localStorage.getItem('study_today_review_tag_filter') || 'all';
+let todayReviewDraggedId = null;
+
+// 只保存列表顺序与置顶 ID，不改动笔记目录顺序或复习日期。
+function loadTodayReviewLayout() {
+  try {
+    const data = JSON.parse(localStorage.getItem('study_today_review_layout') || '{}');
+    const validIds = new Set(notes.filter(note => note.type === 'note').map(note => note.id));
+    const clean = ids => Array.isArray(ids) ? [...new Set(ids)].filter(id => validIds.has(id)) : [];
+    return { order: clean(data?.order), pinned: clean(data?.pinned) };
+  } catch { return { order: [], pinned: [] }; }
+}
+
+function getOrderedTodayReviewNotes(dueNotes) {
+  const layout = loadTodayReviewLayout();
+  const pinned = new Map(layout.pinned.map((id, index) => [id, index]));
+  const order = new Map(layout.order.map((id, index) => [id, index]));
+  return [...dueNotes].sort((a, b) => {
+    if (pinned.has(a.id) !== pinned.has(b.id)) return pinned.has(a.id) ? -1 : 1;
+    if (pinned.has(a.id)) return pinned.get(a.id) - pinned.get(b.id);
+    return (order.get(a.id) ?? Infinity) - (order.get(b.id) ?? Infinity) || 0;
+  });
+}
+
+function saveTodayReviewLayout(layout) {
+  if (saveData('study_today_review_layout', layout) !== true) {
+    showMiniToast('复习列表排序保存失败', 'error');
+    return false;
+  }
+  return true;
+}
+
+function toggleTodayReviewPin(id) {
+  if (!notes.some(note => note.id === id && note.type === 'note')) return;
+  const layout = loadTodayReviewLayout();
+  if (layout.pinned.includes(id)) layout.pinned = layout.pinned.filter(item => item !== id);
+  else layout.pinned.push(id);
+  if (saveTodayReviewLayout(layout)) renderReviewCard();
+}
+
+function reorderTodayReviewNotes(id, targetId, after) {
+  const dueNotes = getReviewSummary().dueNotes;
+  if (id === targetId || !dueNotes.some(note => note.id === id) || !dueNotes.some(note => note.id === targetId)) return false;
+  const layout = loadTodayReviewLayout();
+  const isPinned = layout.pinned.includes(id);
+  if (isPinned !== layout.pinned.includes(targetId)) return false;
+  // 筛选之外与本轮已完成的笔记也保留位置；新到期笔记沿用默认的逾期顺序。
+  const order = isPinned ? layout.pinned : [...new Set([...layout.order, ...dueNotes.map(note => note.id)])];
+  order.splice(order.indexOf(id), 1);
+  order.splice(order.indexOf(targetId) + (after ? 1 : 0), 0, id);
+  if (isPinned) layout.pinned = order;
+  else layout.order = order;
+  return saveTodayReviewLayout(layout);
+}
+
+function startTodayReviewDrag(event, id) {
+  todayReviewDraggedId = id;
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', String(id));
+  event.currentTarget.closest('.review-item').classList.add('dragging');
+}
+
+function overTodayReviewDrag(event, targetId) {
+  if (todayReviewDraggedId == null || todayReviewDraggedId === targetId) return;
+  const pinned = loadTodayReviewLayout().pinned;
+  if (pinned.includes(todayReviewDraggedId) !== pinned.includes(targetId)) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  const row = event.currentTarget;
+  const after = event.clientY >= row.getBoundingClientRect().top + row.offsetHeight / 2;
+  row.classList.toggle('drop-before', !after);
+  row.classList.toggle('drop-after', after);
+}
+
+function dropTodayReviewDrag(event, targetId) {
+  if (todayReviewDraggedId == null) return;
+  event.preventDefault();
+  const row = event.currentTarget;
+  const after = event.clientY >= row.getBoundingClientRect().top + row.offsetHeight / 2;
+  reorderTodayReviewNotes(todayReviewDraggedId, targetId, after);
+  endTodayReviewDrag();
+}
+
+function endTodayReviewDrag() {
+  todayReviewDraggedId = null;
+  renderReviewCard();
+}
 
 function getFilteredTodayReviewNotes(dueNotes) {
+  dueNotes = getOrderedTodayReviewNotes(dueNotes);
   if (todayReviewTagFilter === 'all') return dueNotes;
   if (todayReviewTagFilter === 'untagged') return dueNotes.filter(note => !note.tags?.length);
   if (todayReviewTagFilter.startsWith('tag:')) {
@@ -697,7 +783,9 @@ function renderReviewCard() {
     return;
   }
 
+  const pinnedIds = new Set(loadTodayReviewLayout().pinned);
   list.innerHTML = visibleNotes.map(n => {
+    const pinned = pinnedIds.has(n.id);
     // Calculate review stage label
     const stageLabels = getReviewStageLabels();
     const stageIdx = Math.min(n.reviewCount, stageLabels.length - 1);
@@ -713,8 +801,11 @@ function renderReviewCard() {
     const displayPath = getTodayReviewNoteDisplayPath(n);
 
     return `
-      <div class="review-item">
+      <div class="review-item${pinned ? ' is-pinned' : ''}" data-review-note-id="${n.id}"
+        ondragover="overTodayReviewDrag(event, ${n.id})" ondrop="dropTodayReviewDrag(event, ${n.id})"
+        ondragleave="this.classList.remove('drop-before','drop-after')">
         <div class="review-item-header">
+          <span class="review-item-grip" draggable="true" ondragstart="startTodayReviewDrag(event, ${n.id})" ondragend="endTodayReviewDrag()" title="${pinned ? '拖拽调整置顶笔记顺序' : '拖拽调整未置顶笔记顺序'}" aria-label="拖拽排序">⠿</span>
           <span class="review-item-title" title="${escapeAttr(displayPath)}">${escapeHtml(displayPath)}</span>
           <span class="review-item-stage">第 ${n.reviewCount + 1} 轮复习 · ${stageLabel}</span>
         </div>
@@ -722,6 +813,9 @@ function renderReviewCard() {
         <div class="review-item-footer">
           <span class="review-item-overdue">${overdueLabel}</span>
           <div class="review-item-actions">
+            <button type="button" class="review-btn review-btn-pin" onclick="toggleTodayReviewPin(${n.id})" aria-pressed="${pinned}" title="${pinned ? '取消置顶' : '置顶笔记'}">
+              <i data-lucide="${pinned ? 'pin-off' : 'pin'}" class="lucide-icon" style="width:14px;height:14px;"></i> ${pinned ? '取消置顶' : '置顶'}
+            </button>
             <button class="review-btn review-btn-review" onclick="reviewOpenNote(${n.id})" title="打开笔记复习">
               <i data-lucide="eye" class="lucide-icon" style="width:14px;height:14px;"></i> 复习
             </button>
@@ -785,7 +879,7 @@ function setReviewFloatTagFilter(value) {
 }
 
 function syncReviewFloatFilter() {
-  const dueNotes = getReviewSummary().dueNotes;
+  const dueNotes = getOrderedTodayReviewNotes(getReviewSummary().dueNotes);
   const activeId = reviewFloatNotes[reviewFloatIndex]?.id;
   const tags = [...new Set(dueNotes.flatMap(note => note.tags || []))]
     .filter(tag => typeof tag === 'string' && tag.trim())

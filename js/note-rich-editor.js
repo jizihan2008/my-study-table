@@ -11,11 +11,13 @@
   let syncing = false;
   let footnoteLabels = [];
   let footnoteDefinitions = '';
+  let mathPointerStart = null;
+  let closeMathEditor = null;
 
   const blockTags = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'PRE', 'BLOCKQUOTE', 'TABLE', 'HR', 'DETAILS']);
 
   function escapeInline(text) {
-    return String(text || '').replace(/([\\`*_[\]$])/g, '\\$1');
+    return String(text || '').replace(/\u200b/g, '').replace(/([\\`*_[\]$])/g, '\\$1');
   }
 
   function extractFootnotes(markdown) {
@@ -84,12 +86,35 @@
       const latex = getLatexSource(math);
       if (latex) math.dataset.latex = latex;
       math.setAttribute('contenteditable', 'false');
+      math.title = '双击编辑公式';
+      const display = math.closest('.markdown-math-display');
+      const atomic = display || math.closest('.katex-display') || math;
+      atomic.setAttribute('contenteditable', 'false');
+      if (display) {
+        for (const side of ['previousSibling', 'nextSibling']) {
+          const sibling = display[side];
+          if (sibling?.nodeType === Node.ELEMENT_NODE && blockTags.has(sibling.tagName)) continue;
+          const paragraph = document.createElement('p');
+          paragraph.textContent = '\u200b';
+          if (side === 'previousSibling') display.before(paragraph);
+          else display.after(paragraph);
+        }
+      } else {
+        for (const side of ['previousSibling', 'nextSibling']) {
+          const sibling = atomic[side];
+          if (sibling?.nodeType === Node.TEXT_NODE && sibling.textContent.length) continue;
+          const boundary = document.createTextNode('\u200b');
+          if (side === 'previousSibling') atomic.before(boundary);
+          else atomic.after(boundary);
+        }
+      }
     });
     container.querySelectorAll('.footnotes').forEach(section => section.setAttribute('contenteditable', 'false'));
     container.querySelectorAll('img').forEach(image => image.setAttribute('contenteditable', 'false'));
   }
 
   function setMarkdown(markdown, noteId) {
+    closeMathEditor?.(false);
     if (!host) init();
     if (!host) return;
     syncing = true;
@@ -114,9 +139,30 @@
     const tag = node.tagName.toLowerCase();
     const children = () => Array.from(node.childNodes).map(inline).join('');
     if (tag === 'br') return '\n';
-    if (tag === 'strong' || tag === 'b') return '**' + children() + '**';
-    if (tag === 'em' || tag === 'i') return '*' + children() + '*';
-    if (tag === 'del' || tag === 's' || tag === 'strike') return '~~' + children() + '~~';
+    const emphasis = (marker, selector) => {
+      const value = children();
+      if (node.parentElement?.closest(selector)) return value;
+      // Delimiters adjoining whitespace render as literal stars in CommonMark.
+      const content = value.trim();
+      if (!content) return value;
+      const start = value.length - value.trimStart().length;
+      const leading = value.slice(0, start), trailing = value.slice(start + content.length);
+      const previous = node.previousSibling?.textContent?.slice(-1) || '';
+      const next = node.nextSibling?.textContent?.slice(0, 1) || '';
+      const punctuation = char => /[\p{P}\p{S}]/u.test(char);
+      const word = char => !!char && !/\s/u.test(char) && !punctuation(char);
+      // CommonMark cannot close punctuation-ending emphasis before a word
+      // (e.g. Chinese text after a bold colon). Inline HTML is lossless here.
+      if ((!leading && punctuation(content[0]) && word(previous))
+        || (!trailing && punctuation(content.slice(-1)) && word(next))) {
+        const semanticTag = marker === '**' ? 'strong' : marker === '*' ? 'em' : 'del';
+        return leading + '<' + semanticTag + '>' + content + '</' + semanticTag + '>' + trailing;
+      }
+      return leading + marker + content + marker + trailing;
+    };
+    if (tag === 'strong' || tag === 'b') return emphasis('**', 'strong, b');
+    if (tag === 'em' || tag === 'i') return emphasis('*', 'em, i');
+    if (tag === 'del' || tag === 's' || tag === 'strike') return emphasis('~~', 'del, s, strike');
     if (tag === 'code') {
       const value = node.textContent || '';
       const ticks = value.includes('`') ? '``' : '`';
@@ -186,6 +232,9 @@
     if (node.nodeType === Node.TEXT_NODE) return escapeInline(node.textContent || '');
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const tag = node.tagName.toLowerCase();
+    // Native paste may place an atomic inline formula directly inside a quote.
+    // Keep it as TeX instead of serializing its MathML and visual DOM separately.
+    if (node.classList.contains('katex')) return inline(node);
     if (tag === 'details') {
       const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
       const body = Array.from(node.children).find(child => child.classList.contains('note-fold-body'));
@@ -198,7 +247,9 @@
         .filter(Boolean)
         .join('\n\n')
         .trim();
-      return ':::fold ' + (title || '折叠内容') + '\n' + (bodyMarkdown || '正文内容') + '\n:::';
+      // An empty body is real document content (including in history), not a
+      // request to create a fold. Never inject the new-fold placeholder here.
+      return ':::fold ' + (title || '折叠内容') + '\n' + bodyMarkdown + '\n:::';
     }
     if (tag === 'p') return Array.from(node.childNodes).map(inline).join('').replace(/\n+$/g, '');
     if (/^h[1-6]$/.test(tag)) return '#'.repeat(Number(tag[1])) + ' ' + Array.from(node.childNodes).map(inline).join('').trim();
@@ -215,7 +266,7 @@
     }
     if (tag === 'table') return serializeTable(node);
     if (tag === 'hr') return node.classList.contains('footnotes-sep') ? '' : '---';
-    if (node.classList.contains('markdown-math-display')) {
+    if (node.classList.contains('markdown-math-display') || node.classList.contains('katex-display')) {
       const math = node.querySelector('.katex');
       const latex = getLatexSource(math);
       return latex ? '$$\n' + latex.trim() + '\n$$' : '';
@@ -224,9 +275,90 @@
     return Array.from(node.childNodes).map(child => blockTags.has(child.tagName) ? block(child) : inline(child)).join('');
   }
 
+  function focusHistoryChange(before, after) {
+    const render = markdown => {
+      const container = document.createElement('div');
+      container.innerHTML = root.formatNoteContent(prepareMarkdown(markdown || ''));
+      normalizeRenderedDom(container);
+      return container;
+    };
+    const oldDom = render(before), newDom = render(after);
+    let index = 0;
+    while (index < oldDom.childNodes.length && index < newDom.childNodes.length
+      && oldDom.childNodes[index].isEqualNode(newDom.childNodes[index])) index++;
+    const oldText = oldDom.childNodes[index]?.textContent || '';
+    const newText = newDom.childNodes[index]?.textContent || '';
+    let offset = 0;
+    if (oldText !== newText) {
+      while (offset < oldText.length && offset < newText.length && oldText[offset] === newText[offset]) offset++;
+    }
+    const range = document.createRange();
+    const node = host.childNodes[index];
+    if (!node) {
+      range.selectNodeContents(host.lastChild || host);
+      range.collapse(false);
+    } else {
+      const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+      let text = node.nodeType === Node.TEXT_NODE ? node : walker.nextNode();
+      let last = null;
+      while (text && offset > text.length) {
+        offset -= text.length;
+        last = text;
+        text = walker.nextNode();
+      }
+      text = text || last;
+      const atomic = text?.parentElement?.closest('[contenteditable="false"]');
+      if (atomic) range.setStartBefore(atomic);
+      else if (text) range.setStart(text, Math.min(offset, text.length));
+      else range.setStartBefore(node);
+      range.collapse(true);
+    }
+    const element = range.startContainer.nodeType === Node.ELEMENT_NODE
+      ? range.startContainer : range.startContainer.parentElement;
+    // Opening ancestors makes changes inside a folded section visible.
+    for (let fold = element.closest('details'); fold && host.contains(fold); fold = fold.parentElement?.closest('details')) fold.open = true;
+    host.focus({ preventScroll: true });
+    restoreRange(range);
+    let rect = range.getBoundingClientRect();
+    const fallback = node?.nodeType === Node.ELEMENT_NODE ? node : host.lastElementChild || element;
+    if (!rect.height) rect = fallback.getBoundingClientRect();
+    for (let parent = element; parent; parent = parent.parentElement) {
+      if (parent.scrollHeight <= parent.clientHeight || parent.clientHeight <= 0) continue;
+      const bounds = parent.getBoundingClientRect();
+      const delta = rect.top - bounds.top - parent.clientHeight / 3;
+      parent.scrollTop += delta;
+      rect = range.getBoundingClientRect();
+      if (!rect.height) rect = fallback.getBoundingClientRect();
+    }
+  }
+
   function getMarkdown() {
     if (!host) return currentMarkdown;
-    let markdown = Array.from(host.childNodes).map(block).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+    const source = host.cloneNode(true);
+    const mergeFormatting = container => {
+      const aliases = { B: 'strong', I: 'em', S: 'del', STRIKE: 'del' };
+      Array.from(container.children).forEach(child => {
+        const tag = aliases[child.tagName];
+        if (tag) {
+          const replacement = document.createElement(tag);
+          while (child.firstChild) replacement.appendChild(child.firstChild);
+          child.replaceWith(replacement);
+          child = replacement;
+        }
+        mergeFormatting(child);
+      });
+      for (let child = container.firstChild; child; child = child.nextSibling) {
+        if (!child.matches?.('strong, em, del')) continue;
+        // **one****two** has ambiguous delimiters; serialize one formatted run.
+        while (child.nextSibling?.nodeName === child.nodeName) {
+          const next = child.nextSibling;
+          while (next.firstChild) child.appendChild(next.firstChild);
+          next.remove();
+        }
+      }
+    };
+    mergeFormatting(source);
+    let markdown = Array.from(source.childNodes).map(block).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
     if (footnoteDefinitions) markdown += (markdown ? '\n\n' : '') + footnoteDefinitions;
     currentMarkdown = markdown;
     return markdown;
@@ -244,14 +376,103 @@
     });
   }
 
-  function notifyChange() {
+  function notifyChange(change = {}) {
     if (syncing) return;
     assignHeadingIds();
     const previous = currentMarkdown;
     const markdown = getMarkdown();
     if (typeof root.captureNoteFoldStates === 'function') root.captureNoteFoldStates(host, currentNoteId, false);
-    if (typeof options.onChange === 'function') options.onChange(markdown, previous, currentNoteId);
-    else if (typeof root.onRichNotesChange === 'function') root.onRichNotesChange(markdown, previous);
+    if (typeof options.onChange === 'function') options.onChange(markdown, previous, currentNoteId, change);
+    else if (typeof root.onRichNotesChange === 'function') root.onRichNotesChange(markdown, previous, change);
+  }
+
+  function editMath(math) {
+    const latex = getLatexSource(math);
+    if (!latex || !root.katex?.renderToString || !root.DOMPurify) return;
+    closeMathEditor?.(false);
+    const noteId = currentNoteId;
+    const displayMode = !!math.closest('.markdown-math-display, .katex-display');
+    const dialog = document.createElement('dialog');
+    dialog.className = 'note-math-dialog';
+    dialog.setAttribute('aria-labelledby', 'noteMathEditorTitle');
+    dialog.innerHTML = '<div class="modal-header"><span class="modal-title" id="noteMathEditorTitle">编辑公式</span>'
+      + '<button type="button" class="modal-close" aria-label="关闭公式编辑器">✕</button></div>'
+      + '<div class="note-math-editor-body"><label for="noteMathSource">LaTeX 源码</label>'
+      + '<textarea id="noteMathSource" spellcheck="false" aria-describedby="noteMathHint noteMathError"></textarea>'
+      + '<p id="noteMathHint" class="hint">只填写公式内容，无需添加外层 $ 或 $$。Ctrl+Enter 保存，Esc 取消。</p>'
+      + '<label>实时预览</label><div class="note-math-preview" aria-label="公式预览"></div>'
+      + '<p id="noteMathError" class="note-math-error" role="status"></p></div>'
+      + '<div class="note-math-actions"><button type="button" class="note-math-cancel">取消</button>'
+      + '<button type="button" class="note-math-save">保存</button></div>';
+    const input = dialog.querySelector('textarea');
+    const preview = dialog.querySelector('.note-math-preview');
+    const error = dialog.querySelector('.note-math-error');
+    const save = dialog.querySelector('.note-math-save');
+    input.value = latex;
+    let replacement = null;
+    function renderPreview() {
+      replacement = null;
+      error.textContent = '';
+      preview.replaceChildren();
+      try {
+        if (!input.value.trim()) throw new Error('请输入公式内容。');
+        preview.innerHTML = root.DOMPurify.sanitize(root.katex.renderToString(
+          root.StudyMarkdown?.normalizeLatex ? root.StudyMarkdown.normalizeLatex(input.value.trim()) : input.value.trim(),
+          { displayMode, throwOnError: true, trust: false, strict: 'warn', output: 'htmlAndMathml' }
+        ), { USE_PROFILES: { html: true, mathMl: true } });
+        replacement = preview.querySelector('.katex');
+      } catch (reason) {
+        error.textContent = reason.message || '公式暂时无法渲染，请检查源码。';
+      }
+      save.disabled = !replacement;
+      input.setAttribute('aria-invalid', String(!replacement));
+    }
+    const close = (restoreFocus = true) => {
+      closeMathEditor = null;
+      dialog.close();
+      dialog.remove();
+      if (restoreFocus && host.contains(math)) {
+        const atomic = math.closest('.markdown-math-display, .katex-display') || math;
+        const range = document.createRange();
+        range.setStartAfter(atomic);
+        range.collapse(true);
+        host.focus({ preventScroll: true });
+        restoreRange(range);
+      }
+    };
+    closeMathEditor = close;
+    function commit() {
+      renderPreview();
+      if (!replacement || noteId !== currentNoteId || !host.contains(math)) return;
+      const source = input.value.trim();
+      if (source === latex) { close(); return; }
+      const updated = replacement.cloneNode(true);
+      updated.dataset.latex = source;
+      updated.setAttribute('contenteditable', 'false');
+      updated.title = '双击编辑公式';
+      math.replaceWith(updated);
+      math = updated;
+      notifyChange({ historyBoundary: true });
+      close();
+    }
+    dialog.querySelector('.modal-close').addEventListener('click', () => close());
+    dialog.querySelector('.note-math-cancel').addEventListener('click', () => close());
+    save.addEventListener('click', commit);
+    dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+    dialog.addEventListener('keydown', event => {
+      // Keep textarea undo and formatting keys local to the formula draft.
+      event.stopPropagation();
+      if (event.isComposing) return;
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') { event.preventDefault(); commit(); }
+    });
+    input.addEventListener('input', event => { if (!event.isComposing) renderPreview(); });
+    input.addEventListener('compositionend', renderPreview);
+    document.body.appendChild(dialog);
+    renderPreview();
+    dialog.showModal();
+    input.focus({ preventScroll: true });
+    input.select();
   }
 
   function restoreRange(range) {
@@ -279,11 +500,42 @@
     return hasBlockContent ? container.innerHTML : '<p>' + container.innerHTML + '</p>';
   }
 
+  const foldWrappingBlocks = 'blockquote, ul, ol, pre, table, p, h1, h2, h3, h4, h5, h6';
+
+  function expandWholeBlockSelection(range) {
+    if (!range || range.collapsed) return range;
+    const element = range.commonAncestorContainer.nodeType === Node.ELEMENT_NODE
+      ? range.commonAncestorContainer : range.commonAncestorContainer.parentElement;
+    let block = element.closest(foldWrappingBlocks);
+    const expanded = range.cloneRange();
+    const hasContent = fragment => {
+      const container = document.createElement('div');
+      container.appendChild(fragment);
+      return !!(container.textContent || '').replace(/\u200b/g, '').trim()
+        || !!container.querySelector('img, input:not([type="checkbox"]), hr, video, audio, .katex');
+    };
+    while (block && host.contains(block)) {
+      const before = document.createRange();
+      before.selectNodeContents(block);
+      before.setEnd(expanded.startContainer, expanded.startOffset);
+      const after = document.createRange();
+      after.selectNodeContents(block);
+      after.setStart(expanded.endContainer, expanded.endOffset);
+      if (hasContent(before.cloneContents()) || hasContent(after.cloneContents())) break;
+      // Selecting all text usually omits its enclosing structural block. Include the
+      // block itself so insertHTML replaces it instead of nesting a fold in it.
+      expanded.selectNode(block);
+      block = block.parentElement.closest(foldWrappingBlocks);
+    }
+    return expanded;
+  }
+
   async function command(type) {
     if (!host) return;
-    host.focus();
     const selection = window.getSelection();
     const savedRange = selection && selection.rangeCount && host.contains(selection.anchorNode) ? selection.getRangeAt(0).cloneRange() : null;
+    host.focus({ preventScroll: true });
+    if (savedRange) restoreRange(savedRange);
     const simple = { bold: 'bold', italic: 'italic', strikethrough: 'strikeThrough', ul: 'insertUnorderedList', ol: 'insertOrderedList' };
     if (simple[type]) document.execCommand(simple[type], false, null);
     else if (type === 'heading') {
@@ -325,9 +577,28 @@
       insertHtml('<table><thead><tr><th>列 1</th><th>列 2</th></tr></thead><tbody><tr><td>内容</td><td>内容</td></tr></tbody></table><p><br></p>');
       return;
     } else if (type === 'fold') {
-      restoreRange(savedRange);
-      const selectedHtml = rangeContentsHtml(savedRange);
-      insertHtml('<details class="note-fold" open><summary>折叠标题</summary><div class="note-fold-body">' + selectedHtml + '</div></details><p><br></p>');
+      const foldRange = expandWholeBlockSelection(savedRange);
+      restoreRange(foldRange);
+      const selectedHtml = rangeContentsHtml(foldRange);
+      const html = '<details class="note-fold" open><summary>折叠标题</summary><div class="note-fold-body">' + selectedHtml + '</div></details><p><br></p>';
+      const selectedBlockNode = foldRange && foldRange.startContainer === foldRange.endContainer
+        && foldRange.endOffset === foldRange.startOffset + 1
+        && foldRange.startContainer.childNodes[foldRange.startOffset]?.matches?.(foldWrappingBlocks);
+      if (selectedBlockNode || (foldRange && savedRange && (foldRange.startContainer !== savedRange.startContainer
+        || foldRange.startOffset !== savedRange.startOffset || foldRange.endContainer !== savedRange.endContainer
+        || foldRange.endOffset !== savedRange.endOffset))) {
+        // Chromium insertHTML can reapply the enclosing structure even when its
+        // entire node is selected. Replace at the promoted DOM boundary.
+        const fragment = foldRange.createContextualFragment(html);
+        const paragraph = fragment.lastChild;
+        foldRange.deleteContents();
+        foldRange.insertNode(fragment);
+        const caret = document.createRange();
+        caret.setStart(paragraph, 0);
+        caret.collapse(true);
+        restoreRange(caret);
+        notifyChange();
+      } else insertHtml(html);
       return;
     } else if (type === 'hr') {
       document.execCommand('insertHorizontalRule', false, null);
@@ -353,16 +624,140 @@
     });
   }
 
+  function foldTitleRange() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return null;
+    const range = selection.getRangeAt(0);
+    const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    const summary = element.closest('summary');
+    return summary && host.contains(summary) && summary.parentElement.matches('details.note-fold')
+      && summary.contains(range.endContainer) ? range : null;
+  }
+
+  function insertTitleContent(range, fragment) {
+    const last = fragment.lastChild;
+    if (!last) return;
+    range.deleteContents();
+    range.insertNode(fragment);
+    range.setStartAfter(last);
+    range.collapse(true);
+    restoreRange(range);
+  }
+
+  function enterFoldBodyFromTitle() {
+    const range = foldTitleRange();
+    if (!range) return false;
+    const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    const fold = element.closest('summary').parentElement;
+    let body = Array.from(fold.children).find(child => child.classList.contains('note-fold-body'));
+    if (!body) {
+      body = document.createElement('div');
+      body.className = 'note-fold-body';
+      fold.appendChild(body);
+    }
+    const paragraph = emptyParagraph();
+    body.prepend(paragraph);
+    fold.open = true;
+    focusParagraph(paragraph);
+    return true;
+  }
+
   function handlePaste(event) {
     event.preventDefault();
     const clipboard = event.clipboardData;
     const html = clipboard?.getData('text/html') || '';
+    const titleRange = foldTitleRange();
     if (html && root.DOMPurify) {
-      const clean = root.DOMPurify.sanitize(html, {
-        ALLOWED_TAGS: ['p', 'div', 'br', 'strong', 'b', 'em', 'i', 's', 'del', 'code', 'pre', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'ul', 'ol', 'li', 'blockquote', 'a', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'details', 'summary'],
-        ALLOWED_ATTR: ['href', 'class', 'open']
+      // Keep the renderer's spans, MathML, images and task checkboxes.
+      // DOMPurify's default HTML/MathML profiles still remove executable content.
+      const container = document.createElement('div');
+      container.innerHTML = root.DOMPurify.sanitize(html, {
+        USE_PROFILES: { html: true, mathMl: true },
+        ADD_ATTR: ['contenteditable']
       });
-      document.execCommand('insertHTML', false, clean);
+      container.querySelectorAll('input').forEach(input => {
+        if (input.type !== 'checkbox') input.remove();
+      });
+      container.querySelectorAll('img, a').forEach(node => {
+        const attr = node.tagName === 'IMG' ? 'src' : 'href';
+        if (!isSafeUserUrl(node.getAttribute(attr), attr === 'src')) node.removeAttribute(attr);
+      });
+      // Clipboard HTML can include the source surface's computed background and
+      // text colors. Rebuild math from TeX so only formula-authored styles remain,
+      // including deliberate \color or \colorbox, alongside KaTeX's layout styles.
+      container.querySelectorAll('.katex').forEach(math => {
+        const latex = getLatexSource(math);
+        if (latex && root.katex?.renderToString) {
+          try {
+            const rendered = document.createElement('div');
+            rendered.innerHTML = root.DOMPurify.sanitize(root.katex.renderToString(
+              root.StudyMarkdown?.normalizeLatex ? root.StudyMarkdown.normalizeLatex(latex) : latex,
+              {
+                displayMode: !!math.closest('.katex-display, .markdown-math-display'),
+                throwOnError: false, trust: false, strict: 'warn', output: 'htmlAndMathml'
+              }
+            ), { USE_PROFILES: { html: true, mathMl: true } });
+            const replacement = rendered.querySelector('.katex');
+            if (replacement) {
+              replacement.dataset.latex = latex;
+              math.replaceWith(replacement);
+              return;
+            }
+          } catch (_) {
+            // Malformed external TeX must not prevent the rest of the paste.
+          }
+        }
+        // Still discard copied backgrounds when the clipboard has no TeX source
+        // or the renderer is unavailable, preserving positioning and font metrics.
+        [math, ...math.querySelectorAll('[style]')].forEach(node => {
+          Array.from(node.style).filter(name => name.startsWith('background'))
+            .forEach(name => node.style.removeProperty(name));
+        });
+      });
+      // Chromium can express copied bold/italic text as styled spans.
+      // Convert those styles to the semantic tags our Markdown serializer uses.
+      container.querySelectorAll('[style]').forEach(node => {
+        if (node.closest('.katex')) return;
+        const style = node.style;
+        const tags = [];
+        if (!node.matches('strong, b') && (style.fontWeight === 'bold' || Number(style.fontWeight) >= 600)) tags.push('strong');
+        if (!node.matches('em, i') && style.fontStyle === 'italic') tags.push('em');
+        if (!node.matches('del, s, strike') && style.textDecorationLine.includes('line-through')) tags.push('del');
+        tags.forEach(tag => {
+          const wrapper = document.createElement(tag);
+          while (node.firstChild) wrapper.appendChild(node.firstChild);
+          node.appendChild(wrapper);
+        });
+        node.removeAttribute('style');
+      });
+      normalizeRenderedDom(container);
+      if (titleRange) {
+        // A summary is a single inline title. Strip clipboard block wrappers,
+        // keeping inline formatting and separating pasted paragraphs with spaces.
+        container.querySelectorAll('input, .footnotes').forEach(node => node.remove());
+        container.querySelectorAll('br').forEach(node => node.replaceWith(document.createTextNode(' ')));
+        Array.from(container.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, ul, ol, li, pre, blockquote, table, thead, tbody, tr, th, td, details, summary, hr')).reverse().forEach(node => {
+          node.replaceWith(...node.childNodes, document.createTextNode(' '));
+        });
+        const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+        const textNodes = [];
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          node.textContent = node.textContent.replace(/[\r\n]+/g, ' ');
+          textNodes.push(node);
+        }
+        for (const node of textNodes.reverse()) {
+          node.textContent = node.textContent.trimEnd();
+          if (node.textContent) break;
+          node.remove();
+        }
+        const fragment = document.createDocumentFragment();
+        while (container.firstChild) fragment.appendChild(container.firstChild);
+        insertTitleContent(titleRange, fragment);
+      } else document.execCommand('insertHTML', false, container.innerHTML);
+    } else if (titleRange) {
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(document.createTextNode((clipboard?.getData('text/plain') || '').replace(/[\r\n]+/g, ' ')));
+      insertTitleContent(titleRange, fragment);
     } else document.execCommand('insertText', false, clipboard?.getData('text/plain') || '');
     notifyChange();
   }
@@ -381,45 +776,117 @@
     return true;
   }
 
-  function exitFoldAtEnd() {
+  function caretElement() {
     const selection = window.getSelection();
-    if (!selection || selection.rangeCount === 0) return false;
-    const range = selection.getRangeAt(0);
-    if (!range.collapsed) return false;
-    const anchor = range.endContainer;
-    const element = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement;
-    const body = element?.closest('.note-fold-body');
-    const fold = body?.closest('details.note-fold');
-    if (!body || !fold || !host.contains(fold)) return false;
+    if (!selection?.rangeCount || !selection.isCollapsed) return null;
+    const node = selection.anchorNode;
+    const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+    return host.contains(element) ? element : null;
+  }
 
-    // DOM boundaries differ when the caret is at the end of a text node versus
-    // after its paragraph. Treat both as the visual end if only empty wrappers or
-    // line breaks remain, while keeping Ctrl+Enter untouched before real content.
-    const tail = range.cloneRange();
-    tail.setEnd(body, body.childNodes.length);
-    const fragment = tail.cloneContents();
-    const tailContainer = document.createElement('div');
-    tailContainer.appendChild(fragment);
-    const remainingText = (tailContainer.textContent || '').replace(/\u200b/g, '').trim();
-    const remainingContent = tailContainer.querySelector('img,video,audio,table,hr,input,iframe,pre,ul,ol,blockquote,h1,h2,h3,h4,h5,h6');
-    if (remainingText || remainingContent) return false;
-
-    let paragraph = fold.nextElementSibling;
-    const reusableEmptyParagraph = paragraph?.tagName === 'P'
-      && !(paragraph.textContent || '').replace(/\u200b/g, '').trim()
-      && !paragraph.querySelector('img,video,audio,table,hr,input,iframe');
-    if (!reusableEmptyParagraph) {
-      paragraph = document.createElement('p');
-      paragraph.appendChild(document.createElement('br'));
-      fold.after(paragraph);
-    }
-
-    const nextRange = document.createRange();
-    nextRange.setStart(paragraph, 0);
-    nextRange.collapse(true);
-    selection.removeAllRanges();
-    selection.addRange(nextRange);
+  function focusParagraph(paragraph) {
+    const range = document.createRange();
+    range.setStart(paragraph, 0);
+    range.collapse(true);
+    restoreRange(range);
     notifyChange();
+  }
+
+  function emptyParagraph() {
+    const paragraph = document.createElement('p');
+    paragraph.appendChild(document.createElement('br'));
+    return paragraph;
+  }
+
+  function exitEditingBlock() {
+    const element = caretElement();
+    let target = element?.closest('pre, ul, ol, table, blockquote, details.note-fold');
+    if (!target || !host.contains(target)) return false;
+    // Exit all levels of the same structure, while staying in a containing fold
+    // or quote when leaving a different structure such as a list or code block.
+    const selector = target.matches('ul, ol') ? 'ul, ol' : target.tagName.toLowerCase();
+    let parent = target.parentElement?.closest(selector);
+    while (parent && host.contains(parent)) {
+      target = parent;
+      parent = target.parentElement?.closest(selector);
+    }
+    const paragraph = emptyParagraph();
+    target.after(paragraph);
+    focusParagraph(paragraph);
+    return true;
+  }
+
+  function isEmptyEditingNode(node) {
+    return !(node.textContent || '').replace(/\u200b/g, '').trim()
+      && !node.querySelector('img, video, audio, table, hr, iframe, pre, ul, ol, .katex');
+  }
+
+  function exitEmptyItem() {
+    const element = caretElement();
+    if (!element || element.closest('pre, table')) return false;
+    const item = element.closest('li');
+    const quote = element.closest('blockquote');
+    const node = item || (quote && element.closest('p, div'));
+    const container = item ? item.parentElement : quote;
+    if (!node || !container || !host.contains(container)
+      || !container.contains(node) || !isEmptyEditingNode(node)) return false;
+    // Split at the empty item so following items/paragraphs keep their order.
+    const tailRange = document.createRange();
+    tailRange.setStartAfter(node);
+    tailRange.setEnd(container, container.childNodes.length);
+    const trailing = container.cloneNode(false);
+    trailing.removeAttribute('id');
+    trailing.appendChild(tailRange.extractContents());
+    node.remove();
+    const paragraph = emptyParagraph();
+    container.after(paragraph);
+    if (trailing.children.length || trailing.textContent.trim()) paragraph.after(trailing);
+    if (!container.children.length && !container.textContent.trim()) container.remove();
+    focusParagraph(paragraph);
+    return true;
+  }
+
+  function enterTaskItem() {
+    const element = caretElement();
+    const item = element?.closest('li');
+    const checkbox = item?.querySelector(':scope > input[type="checkbox"], :scope > p > input[type="checkbox"]');
+    if (!checkbox || element.closest('pre, table')) return false;
+    document.execCommand('insertParagraph', false, null);
+    const newItem = caretElement()?.closest('li');
+    if (newItem && newItem !== item) {
+      const inputs = newItem.querySelectorAll(':scope > input[type="checkbox"], :scope > p > input[type="checkbox"]');
+      inputs.forEach(input => input.remove());
+      const input = document.createElement('input');
+      input.type = 'checkbox';
+      input.checked = false;
+      input.setAttribute('contenteditable', 'false');
+      input.setAttribute('aria-label', '任务状态');
+      const body = newItem.querySelector(':scope > p') || newItem;
+      body.prepend(input, document.createTextNode(' '));
+      newItem.classList.add('markdown-task-item');
+      // Put the caret after the noneditable checkbox, before the new item's text.
+      const range = document.createRange();
+      range.setStartAfter(input.nextSibling);
+      range.collapse(true);
+      restoreRange(range);
+    }
+    notifyChange();
+    return true;
+  }
+
+  function removeSingleEmptyQuote() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return false;
+    const anchor = selection.anchorNode;
+    const element = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement;
+    const quote = element?.closest('blockquote');
+    if (!quote || !host.contains(quote) || !quote.contains(selection.focusNode)
+      || !isEmptyEditingNode(quote) || quote.querySelector('input, blockquote, details')) return false;
+    const lines = Array.from(quote.querySelectorAll('p, div')).filter(node => !node.querySelector('p, div'));
+    if (lines.length > 1 || quote.querySelectorAll('br').length > 1) return false;
+    const paragraph = emptyParagraph();
+    quote.replaceWith(paragraph);
+    focusParagraph(paragraph);
     return true;
   }
 
@@ -476,10 +943,27 @@
       if (event.target.matches('input[type="checkbox"]')) notifyChange();
     });
     host.addEventListener('paste', handlePaste);
+    host.addEventListener('dblclick', event => {
+      const math = event.target.closest('.katex');
+      if (!math) return;
+      event.preventDefault();
+      event.stopPropagation();
+      editMath(math);
+    });
+    host.addEventListener('beforeinput', event => {
+      if (!event.isComposing && event.inputType === 'insertParagraph' && enterFoldBodyFromTitle()) {
+        event.preventDefault();
+        return;
+      }
+      if (!event.isComposing && ['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)
+        && removeSingleEmptyQuote()) event.preventDefault();
+    });
     if (host.id === 'notesRichEditor' && typeof root.onNotePreviewScroll === 'function') {
       host.addEventListener('scroll', root.onNotePreviewScroll);
     }
     host.addEventListener('pointerdown', event => {
+      mathPointerStart = event.target.closest('.katex') && event.button === 0
+        ? { x: event.clientX, y: event.clientY } : null;
       const summary = getEditableFoldSummary(event);
       if (summary && isFoldToggleClick(event, summary)) {
         // Keep clicking the disclosure control from moving the editing caret
@@ -488,6 +972,24 @@
       }
     });
     host.addEventListener('click', event => {
+      const math = event.target.closest('.katex');
+      if (math && !event.shiftKey && event.detail === 1 && mathPointerStart
+        && Math.abs(event.clientX - mathPointerStart.x) < 5 && Math.abs(event.clientY - mathPointerStart.y) < 5) {
+        const atomic = math.closest('.markdown-math-display') || math.closest('.katex-display') || math;
+        const after = event.clientX >= math.getBoundingClientRect().left + math.getBoundingClientRect().width / 2;
+        const range = document.createRange();
+        const boundary = atomic[after ? 'nextSibling' : 'previousSibling'];
+        if (atomic.matches('.markdown-math-display') && boundary?.nodeType === Node.ELEMENT_NODE) {
+          range.selectNodeContents(boundary);
+          range.collapse(!after);
+        } else if (after) range.setStartAfter(atomic);
+        else range.setStartBefore(atomic);
+        range.collapse(true);
+        host.focus({ preventScroll: true });
+        restoreRange(range);
+        event.preventDefault();
+        return;
+      }
       const summary = getEditableFoldSummary(event);
       if (summary && !isFoldToggleClick(event, summary)) {
         // In editing mode the title is editable text. Cancel the native
@@ -507,7 +1009,25 @@
     host.addEventListener('mouseup', updateToolbarState);
     host.addEventListener('keydown', event => {
       const modifier = event.ctrlKey || event.metaKey;
-      if (modifier && event.key === 'Enter' && exitFoldAtEnd()) {
+      if (!modifier && !event.shiftKey && !event.altKey && !event.isComposing
+        && event.key === 'Enter' && enterFoldBodyFromTitle()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (!modifier && !event.altKey && !event.shiftKey && !event.isComposing
+        && (event.key === 'Backspace' || event.key === 'Delete') && removeSingleEmptyQuote()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (modifier && event.key === 'Enter' && exitEditingBlock()) {
+        event.preventDefault();
+        event.stopPropagation();
+        return;
+      }
+      if (!modifier && !event.shiftKey && !event.altKey && !event.isComposing
+        && event.key === 'Enter' && (exitEmptyItem() || enterTaskItem())) {
         event.preventDefault();
         event.stopPropagation();
         return;
@@ -541,6 +1061,7 @@
     setMarkdown,
     getMarkdown,
     command,
+    focusHistoryChange,
     isSyncing: () => syncing,
     getCurrentNoteId: () => currentNoteId
   };

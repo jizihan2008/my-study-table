@@ -133,6 +133,17 @@ test('ordinary AI prompt includes yesterday, today and tomorrow focus, and the r
   assert.equal(report, prompt);
   assert.match(report, new RegExp(`昨日聚焦（${yesterday}）`));
   assert.match(report, new RegExp(`明日聚焦（${tomorrow}）`));
+  context.saveTodoSharedNote(1, '更新后的共享备注');
+  assert.match(context.buildAiTodoTreeSnapshot(), /共享备注：更新后的共享备注/);
+  assert.match(context.buildAiFocusSnapshot(), /共享备注：更新后的共享备注/);
+  const settings = fs.readFileSync(path.join(__dirname, '..', 'js', 'settings.js'), 'utf8');
+  const formatters = settings.slice(settings.indexOf('function formatDailyReportFocusPath('), settings.indexOf('function formatDailyReportNotePath('));
+  vm.runInContext(formatters, context);
+  assert.match(context.formatDailyReportFocusPath({ todoId: 1, note: '过时备注' }), /共享备注：更新后的共享备注/);
+  context.saveTodoSharedNote(1, '');
+  assert.doesNotMatch(context.buildAiTodoTreeSnapshot(), /共享备注/);
+  assert.doesNotMatch(context.buildAiFocusSnapshot(), /共享备注/);
+  assert.doesNotMatch(context.formatDailyReportFocusPath({ todoId: 1, note: '过时备注' }), /备注/);
 });
 
 test('todo context menu can add a task directly to tomorrow focus', () => {

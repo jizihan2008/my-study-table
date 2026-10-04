@@ -3,6 +3,7 @@
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const { isPathInside, normalizeExtensionId } = require('./security');
+const { organize } = require('../lib/file-library-order');
 
 const AUDIO_MIME = Object.freeze({
   '.mp3': 'audio/mpeg', '.wav': 'audio/wav', '.ogg': 'audio/ogg',
@@ -25,6 +26,8 @@ function safeLibraryName(value) {
 function registerLibraryIpc({ app, dialog, ipcMain, userDataPath, getMainWindow }) {
   const booksCacheDir = path.join(userDataPath, 'books');
   const fileLibraryDir = path.join(userDataPath, 'files');
+  const orderPath = path.join(fileLibraryDir, '.order.json');
+  let organizeQueue = Promise.resolve();
   const window = () => typeof getMainWindow === 'function' ? getMainWindow() : null;
 
   function libraryTarget(parent, id, name) {
@@ -61,6 +64,39 @@ function registerLibraryIpc({ app, dialog, ipcMain, userDataPath, getMainWindow 
     if (!target) throw new Error('文件夹不存在');
     return target;
   }
+
+  async function readOrder() {
+    try { return JSON.parse(await fs.readFile(orderPath, 'utf8')); }
+    catch (error) { if (error.code === 'ENOENT') return {}; throw error; }
+  }
+
+  ipcMain.handle('files:organize', (_event, payload) => {
+    const operation = organizeQueue.then(async () => {
+      const { rows, paths } = await scanLibrary();
+      const order = await readOrder();
+      for (const row of rows) row.order = order[row.id];
+      const updates = organize(rows, payload);
+      if (!updates.length) return { ok: true };
+      const item = rows.find(row => row.id === payload.id);
+      const parentId = payload.parentId || null;
+      const source = paths.get(item.id);
+      const target = libraryTarget(parentId ? paths.get(parentId) : fileLibraryDir, item.id, item.name);
+      const moved = (item.parentId || null) !== parentId;
+      if (moved) await fs.rename(source, target);
+      const nextOrder = Object.fromEntries(rows.filter(row => Number.isFinite(row.order)).map(row => [row.id, row.order]));
+      for (const row of updates) nextOrder[row.id] = row.order;
+      try {
+        await fs.writeFile(orderPath + '.tmp', JSON.stringify(nextOrder), 'utf8');
+        await fs.rename(orderPath + '.tmp', orderPath);
+      } catch (error) {
+        if (moved) await fs.rename(target, source);
+        throw error;
+      }
+      return { ok: true };
+    });
+    organizeQueue = operation.catch(() => {});
+    return operation;
+  });
 
   async function addFolder(parent, name) {
     const id = FOLDER_LIBRARY_PREFIX + randomUUID();
@@ -140,6 +176,8 @@ function registerLibraryIpc({ app, dialog, ipcMain, userDataPath, getMainWindow 
     try {
       await fs.mkdir(fileLibraryDir, { recursive: true });
       const { rows } = await scanLibrary();
+      const order = await readOrder();
+      for (const row of rows) if (Number.isFinite(order[row.id])) row.order = order[row.id];
       return rows.sort((a, b) => b.createdAt - a.createdAt);
     } catch (_) { return []; }
   });

@@ -240,10 +240,23 @@
       if (!match) return false;
 
       let nextLine = startLine + 1;
+      let depth = 1;
+      let fence = null;
       for (; nextLine < endLine; nextLine++) {
+        if (state.sCount[nextLine] - state.blkIndent >= 4) continue;
         const lineStart = state.bMarks[nextLine] + state.tShift[nextLine];
         const line = state.src.slice(lineStart, state.eMarks[nextLine]);
-        if (closePattern.test(line)) break;
+        const fenceMatch = /^ {0,3}(`{3,}|~{3,})(.*)$/.exec(line);
+        if (fence) {
+          if (fenceMatch && fenceMatch[1][0] === fence.char && fenceMatch[1].length >= fence.length && !fenceMatch[2].trim()) fence = null;
+          continue;
+        }
+        if (fenceMatch && !(fenceMatch[1][0] === '`' && fenceMatch[2].includes('`'))) {
+          fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
+          continue;
+        }
+        if (openPattern.test(line)) depth++;
+        else if (closePattern.test(line) && --depth === 0) break;
       }
       if (nextLine >= endLine) return false;
       if (silent) return true;
@@ -264,7 +277,12 @@
     md.renderer.rules.collapsible_block = function (tokens, idx, options, env) {
       const meta = tokens[idx].meta || {};
       const title = md.renderInline(meta.title || '折叠内容', env).trim();
-      const body = md.render(meta.body || '', env);
+      if (env.__readingPlan && meta.readingFoldId != null) {
+        return '<details class="note-fold" data-fold-index="' + meta.readingFoldId + '" data-lazy-fold="' + meta.readingFoldId + '"' +
+          (env.__readingPlan.foldStates[meta.readingFoldId] ? ' open' : '') + '><summary>' + title + '</summary>' +
+          '<div class="note-fold-body">' + md.utils.escapeHtml(meta.body || '') + '</div></details>\n';
+      }
+      const body = md.render(meta.body || '', { ...env, __sourceLineOffset: Number(tokens[idx].attrGet('data-source-line')) + 1 });
       return '<details class="note-fold"><summary>' + title + '</summary>' +
         '<div class="note-fold-body">' + body + '</div></details>\n';
     };
@@ -294,11 +312,33 @@
       }
     });
 
+    // Rich editing needs a lossless fallback when CommonMark delimiters cannot
+    // represent punctuation next to words. Accept only attribute-free format
+    // tags; arbitrary HTML remains disabled and output is still sanitized.
+    md.inline.ruler.before('html_inline', 'rich_format_tag', (state, silent) => {
+      const match = state.src.slice(state.pos).match(/^<\/?(?:strong|em|del)>/);
+      if (!match) return false;
+      if (!silent) state.push('html_inline', '', 0).content = match[0];
+      state.pos += match[0].length;
+      return true;
+    });
+
     md.validateLink = value => isSafeUrl(value, 'link') || isSafeUrl(value, 'image');
     if (typeof footnote === 'function') md.use(footnote);
     installMath(md, katex);
     installTaskLists(md);
     installCollapsibleBlocks(md);
+
+    function mapSourceLines(tokens, offset = 0) {
+      tokens.forEach(token => {
+        if (!token.block || !token.map || !token.tag) return;
+        token.attrSet('data-source-line', token.map[0] + offset);
+        token.attrSet('data-source-end', token.map[1] + offset);
+      });
+    }
+    md.core.ruler.push('source_lines', state => {
+      if (state.env.__sourceMap) mapSourceLines(state.tokens, state.env.__sourceLineOffset || 0);
+    });
 
     const defaultFence = md.renderer.rules.fence.bind(md.renderer.rules);
     md.renderer.rules.fence = function (tokens, idx, options, env, self) {
@@ -317,6 +357,7 @@
     };
 
     md.renderer.rules.heading_open = function (tokens, idx, options, env, self) {
+      if (env.__readingPlan && tokens[idx].attrGet('id')) return self.renderToken(tokens, idx, options);
       const inline = tokens[idx + 1];
       const title = inline && Array.isArray(inline.children)
         ? inline.children.map(child => child.content || '').join('')
@@ -356,6 +397,20 @@
         ' loading="lazy" decoding="async" referrerpolicy="no-referrer">';
     };
 
+    ['fence', 'code_block', 'collapsible_block', 'math_display'].forEach(name => {
+      const render = md.renderer.rules[name];
+      md.renderer.rules[name] = function(tokens, index, ...args) {
+        let html = render.call(this, tokens, index, ...args);
+        const start = tokens[index].attrGet('data-source-line');
+        const end = tokens[index].attrGet('data-source-end');
+        if (start != null) {
+          html = html.replace(/^<(\w+)/, '<$1 data-source-line="' + start + '" data-source-end="' + end + '"');
+          if (name === 'collapsible_block') html = html.replace('<summary>', '<summary data-source-line="' + start + '" data-source-end="' + (Number(start) + 1) + '">');
+        }
+        return html;
+      };
+    });
+
     function sanitize(html) {
       if (!purify || typeof purify.sanitize !== 'function') return html;
       return purify.sanitize(html, {
@@ -366,9 +421,55 @@
       });
     }
 
+    function createReadingPlan(source, options = {}) {
+      const env = { docId: 'md' + (++renderSequence), __sourceMap: true };
+      const tokens = md.parse(String(source || ''), env);
+      const blocks = [];
+      let group = [], depth = 0;
+      tokens.forEach(token => {
+        group.push(token);
+        depth += token.nesting;
+        if (depth === 0) { blocks.push({ tokens: group }); group = []; }
+      });
+      if (group.length) blocks.push({ tokens: group });
+      const headings = [], folds = new Map(), counts = Object.create(null);
+      let foldIndex = 0;
+      const visit = (items, blockIndex, ancestors = [], offset = 0) => {
+        mapSourceLines(items, offset);
+        items.forEach((token, index) => {
+          if (token.type === 'heading_open') {
+            const title = (items[index + 1]?.children || []).map(child => child.content || '').join('');
+            const base = slugifyHeading(title), count = counts[base] || 0;
+            counts[base] = count + 1;
+            const id = count ? base + '-' + count : base;
+            token.attrSet('id', id);
+            headings.push({ id, tagName: token.tag.toUpperCase(), textContent: title, blockIndex, ancestors });
+          }
+          if (token.type === 'collapsible_block') {
+            const id = foldIndex++;
+            token.meta.readingFoldId = id;
+            const bodyTokens = md.parse(token.meta.body || '', env);
+            folds.set(id, bodyTokens);
+            visit(bodyTokens, blockIndex, [...ancestors, id], Number(token.attrGet('data-source-line')) + 1);
+          }
+        });
+      };
+      blocks.forEach((block, index) => {
+        visit(block.tokens, index);
+        block.text = block.tokens.map(token => token.type === 'inline' || token.type === 'fence' || token.type === 'code_block'
+          ? token.content : token.type === 'collapsible_block' ? token.meta.title + '\n' + token.meta.body : '').filter(Boolean).join('\n');
+      });
+      const plan = { blocks, headings, foldStates: options.foldStates || {} };
+      env.__readingPlan = plan;
+      plan.renderBlock = index => sanitize(md.renderer.render(blocks[index].tokens, md.options, env));
+      plan.renderFold = id => sanitize(md.renderer.render(folds.get(Number(id)) || [], md.options, env));
+      return plan;
+    }
+
     return {
+      createReadingPlan,
       render: function (source, options) {
-        const env = { docId: 'md' + (++renderSequence) };
+        const env = { docId: 'md' + (++renderSequence), __sourceMap: !!options?.sourceMap };
         let html = md.render(String(source || ''), env);
         if (options && typeof options.transformHtml === 'function') html = options.transformHtml(html);
         return sanitize(html);
@@ -407,6 +508,10 @@
     return renderer ? renderer.renderInline(source) : render(source);
   }
 
+  function createReadingPlan(source, options) {
+    return getRenderer()?.createReadingPlan(source, options) || null;
+  }
+
   function installExternalLinkHandler() {
     if (!root.document || root.__studyMarkdownLinkHandlerInstalled) return;
     root.__studyMarkdownLinkHandlerInstalled = true;
@@ -431,6 +536,7 @@
     render,
     renderInline,
     createRenderer,
+    createReadingPlan,
     normalizeLatex,
     isSafeUrl,
     slugifyHeading,

@@ -1390,6 +1390,11 @@ function deleteTimerRecord(recordId) {
 // 只有点击关闭按钮才会关闭；暂停/停止/保存/重置均不会自动关闭。
 let timerFloatVisible = false; // 浮窗是否显示
 
+function showTimerFloat() {
+  timerFloatVisible = true;
+  updateTimerFloat();
+}
+
 function timerFloatTargetHtml() {
   const linkedTodo = timerLinkedTodoId ? findTodo(timerLinkedTodoId) : null;
   const linkedGoal = timerLinkedGoalId ? loadGoals().find(g => g.id === timerLinkedGoalId) : null;
@@ -1526,3 +1531,14 @@ function makeTimerFloatDraggable(el) {
 
 // Restore timer state on page load (survives refresh / window close)
 loadAndRestoreTimerState();
+
+// Available throughout the app, including while editing. Opening the float
+// leaves the timer state, current page, selection and input focus untouched.
+document.addEventListener('keydown', function(event) {
+  if (event.defaultPrevented || event.isComposing || event.altKey
+    || !(event.ctrlKey || event.metaKey) || !event.shiftKey
+    || event.key.toLowerCase() !== 't') return;
+  event.preventDefault();
+  event.stopImmediatePropagation();
+  if (!event.repeat) showTimerFloat();
+}, true);

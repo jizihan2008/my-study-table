@@ -30,6 +30,65 @@ test.afterAll(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
 });
 
+test('dragging reorders items, moves them into folders and back through breadcrumbs, and persists', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await page.evaluate(() => switchTab('files'));
+  await page.getByRole('button', { name: '新建文件夹' }).click();
+  await page.getByRole('textbox', { name: '文件夹名称' }).fill('课程');
+  await page.getByRole('button', { name: '创建', exact: true }).click();
+  await page.locator('#fileLibraryInput').setInputFiles([
+    { name: 'a.txt', mimeType: 'text/plain', buffer: Buffer.from('alpha') },
+    { name: 'b.txt', mimeType: 'text/plain', buffer: Buffer.from('beta') }
+  ]);
+  const items = page.locator('#fileLibraryList .file-library-item');
+  const a = items.filter({ hasText: 'a.txt' });
+  const b = items.filter({ hasText: 'b.txt' });
+  const folder = items.filter({ hasText: '课程' });
+  await expect(items).toHaveCount(3);
+  await b.dragTo(folder, { targetPosition: { x: 30, y: 2 } });
+  await expect(items.first()).toContainText('b.txt');
+  await page.reload();
+  await page.evaluate(() => switchTab('files'));
+  await expect(items.first()).toContainText('b.txt');
+  await a.dragTo(folder);
+  await expect(items).toHaveCount(2);
+  await folder.getByRole('button', { name: '课程', exact: true }).click();
+  await expect(a).toBeVisible();
+  // Read the stored blob to verify moving preserves the file itself.
+  expect(await page.evaluate(async () => {
+    const db = await new Promise(resolve => { const r = indexedDB.open('study-file-library', 1); r.onsuccess = () => resolve(r.result); });
+    const rows = await new Promise(resolve => { const r = db.transaction('files').objectStore('files').getAll(); r.onsuccess = () => resolve(r.result); });
+    db.close();
+    return rows.find(row => row.name === 'a.txt').blob.text();
+  })).toBe('alpha');
+  await a.dragTo(page.locator('#fileLibraryBreadcrumbs').getByRole('button', { name: '文件库', exact: true }));
+  await expect(items).toHaveCount(0);
+  await page.locator('#fileLibraryBreadcrumbs').getByRole('button', { name: '文件库', exact: true }).click();
+  await expect(items).toHaveCount(3);
+  await expect(items.last()).toContainText('a.txt');
+  await page.reload();
+  await page.evaluate(() => switchTab('files'));
+  await expect(items.last()).toContainText('a.txt');
+});
+
+test('dropping an external file on a folder imports directly into it', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await page.evaluate(() => switchTab('files'));
+  await page.getByRole('button', { name: '新建文件夹' }).click();
+  await page.getByRole('textbox', { name: '文件夹名称' }).fill('资料');
+  await page.getByRole('button', { name: '创建', exact: true }).click();
+  const folder = page.locator('#fileLibraryList .file-library-item').filter({ hasText: '资料' });
+  await expect(folder).toBeVisible();
+  const transfer = await page.evaluateHandle(() => {
+    const data = new DataTransfer();
+    data.items.add(new File(['notes'], 'notes.txt', { type: 'text/plain' }));
+    return data;
+  });
+  await folder.dispatchEvent('drop', { dataTransfer: transfer });
+  await folder.getByRole('button', { name: '资料', exact: true }).click();
+  await expect(page.locator('#fileLibraryList')).toContainText('notes.txt');
+});
+
 test('mobile file library opens and keeps imported files after reload', async ({ page }) => {
   await page.goto(baseUrl + '/index.html');
   await page.evaluate(() => switchTab('files'));

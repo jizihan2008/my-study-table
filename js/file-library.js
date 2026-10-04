@@ -5,6 +5,10 @@
   const STORE = 'files';
   let query = '';
   let currentFolderId = null;
+  let draggedId = null;
+  let organizing = false;
+  let dropTarget = null;
+  const { compare, organize } = global.FileLibraryOrder;
 
   function isDesktop() { return !!global.electronAPI?.filesList; }
   function openDb() {
@@ -65,7 +69,7 @@
     if (['zip', 'rar', '7z'].includes(ext)) return 'file-archive';
     return 'file';
   }
-  async function importPicked(files, preservePaths = false) {
+  async function importPicked(files, preservePaths = false, destinationId = currentFolderId) {
     const rows = Array.from(files || []);
     if (!rows.length) return;
     try {
@@ -73,7 +77,7 @@
       const folders = preservePaths ? (await listFiles()).filter(item => item.kind === 'folder') : [];
       const folderIds = new Map();
       for (const file of rows) {
-        let parentId = currentFolderId;
+        let parentId = destinationId;
         if (preservePaths) {
           const parts = String(file.webkitRelativePath || '').split('/').filter(Boolean).slice(0, -1);
           for (const part of parts) {
@@ -246,14 +250,26 @@
     if (breadcrumbs) {
       const ancestors = []; let cursor = byId.get(currentFolderId);
       while (cursor && ancestors.length < 100) { ancestors.unshift(cursor); cursor = byId.get(cursor.parentId); }
-      breadcrumbs.innerHTML = `<button type="button" onclick="openLibraryFolder(null)">文件库</button>${ancestors.map(item => `<i data-lucide="chevron-right"></i><button type="button" onclick="openLibraryFolder('${item.id}')">${escapeHtml(item.name)}</button>`).join('')}`;
+      breadcrumbs.innerHTML = `<button type="button" data-folder-id="" onclick="openLibraryFolder(null)">文件库</button>${ancestors.map(item => `<i data-lucide="chevron-right"></i><button type="button" data-folder-id="${item.id}" onclick="openLibraryFolder('${item.id}')">${escapeHtml(item.name)}</button>`).join('')}`;
     }
     const files = all.filter(item => query ? item.name.toLowerCase().includes(query) : (item.parentId || null) === currentFolderId)
-      .sort((a, b) => (a.kind === 'folder' ? 0 : 1) - (b.kind === 'folder' ? 0 : 1) || a.name.localeCompare(b.name, 'zh-CN'));
+      .sort(compare);
     if (!files.length) { list.innerHTML = '<div class="file-library-empty"><i data-lucide="folder-open"></i><strong>' + (query ? '没有匹配的文件' : '文件库还是空的') + '</strong><span>导入资料后，可直接打开，也可作为 AI 对话附件。</span></div>'; }
     else list.innerHTML = files.map(item => item.kind === 'folder'
       ? `<article class="file-library-item"><div class="file-library-icon"><i data-lucide="folder"></i></div><button type="button" class="file-library-folder-name" onclick="openLibraryFolder('${item.id}')" title="${escapeAttr(item.name)}">${escapeHtml(item.name)}</button><div class="file-library-actions"><button onclick="openLibraryFolder('${item.id}')" title="打开文件夹"><i data-lucide="chevron-right"></i><span>打开</span></button><button class="danger" onclick="deleteLibraryFile('${item.id}')" title="删除文件夹"><i data-lucide="trash-2"></i></button></div></article>`
       : `<article class="file-library-item"><div class="file-library-icon"><i data-lucide="${iconFor(item.name)}"></i></div><div class="file-library-meta"><strong title="${escapeAttr(item.name)}">${escapeHtml(item.name)}</strong><span>${sizeLabel(item.size)} · ${new Date(item.createdAt).toLocaleString()}</span></div><div class="file-library-actions"><button onclick="openLibraryFile('${item.id}')" title="打开"><i data-lucide="external-link"></i><span>打开</span></button><button onclick="attachLibraryFileToAi('${item.id}')" title="发送给 AI"><i data-lucide="paperclip"></i><span>给 AI</span></button><button class="danger" onclick="deleteLibraryFile('${item.id}')" title="删除"><i data-lucide="trash-2"></i></button></div></article>`).join('');
+    list.querySelectorAll('.file-library-item').forEach((element, index) => {
+      const item = files[index];
+      element.dataset.itemId = item.id;
+      element.dataset.kind = item.kind || 'file';
+      element.dataset.parentId = item.parentId || '';
+      element.draggable = true;
+      const handle = document.createElement('span');
+      handle.className = 'file-library-drag-handle';
+      handle.title = '拖拽排序；拖到文件夹中间放入，拖到路径栏移出';
+      handle.innerHTML = '<i data-lucide="grip-vertical" aria-hidden="true"></i>';
+      element.prepend(handle);
+    });
     if (global.lucide) global.lucide.createIcons();
   };
   global.openFileLibraryPicker = async function () {
@@ -267,7 +283,7 @@
     const files = all.filter(item => item.kind !== 'folder');
     const byId = new Map(all.map(item => [item.id, item]));
     const pathFor = item => { const parts = []; let parent = byId.get(item.parentId); while (parent && parts.length < 100) { parts.unshift(parent.name); parent = byId.get(parent.parentId); } return parts.join(' / '); };
-    overlay.innerHTML = `<div class="todo-picker-panel file-library-picker"><div class="todo-picker-header"><span><i data-lucide="folder-open"></i> 从文件库插入</span><button class="todo-picker-close" onclick="closeFileLibraryPicker()">×</button></div><div class="file-library-picker-list">${files.length ? files.map(item => `<button onclick="attachLibraryFileToAi('${item.id}')"><i data-lucide="${iconFor(item.name)}"></i><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(pathFor(item) || '文件库')} · ${sizeLabel(item.size)}</small></span></button>`).join('') : '<div class="file-library-empty"><strong>文件库为空</strong><span>请先在“文件库”中导入文件。</span></div>'}</div></div>`;
+    overlay.innerHTML = `<div class="timer-picker ai-context-picker file-library-picker" role="dialog" aria-modal="true" aria-label="从文件库插入"><div class="todo-picker-header"><span><i data-lucide="folder-open"></i> 从文件库插入</span><button type="button" class="todo-picker-close" onclick="closeFileLibraryPicker()" title="关闭" aria-label="关闭"><i data-lucide="x"></i></button></div><div class="file-library-picker-list">${files.length ? files.map(item => `<button onclick="attachLibraryFileToAi('${item.id}')"><i data-lucide="${iconFor(item.name)}"></i><span><strong>${escapeHtml(item.name)}</strong><small>${escapeHtml(pathFor(item) || '文件库')} · ${sizeLabel(item.size)}</small></span></button>`).join('') : '<div class="file-library-empty"><strong>文件库为空</strong><span>请先在“文件库”中导入文件。</span></div>'}</div></div>`;
     overlay.style.display = 'flex'; if (global.lucide) global.lucide.createIcons();
   };
   global.closeFileLibraryPicker = () => { const el = document.getElementById('fileLibraryPicker'); if (el) el.style.display = 'none'; };
@@ -277,21 +293,95 @@
     if (!section || section._fileDropReady) return;
     section._fileDropReady = true;
     let dragDepth = 0;
+    const internalType = 'application/x-study-library-item';
+    const isInternal = event => draggedId && Array.from(event.dataTransfer?.types || []).includes(internalType);
+    const clearTarget = () => {
+      section.querySelectorAll('.library-drop-folder, .library-drop-before, .library-drop-after').forEach(element => element.classList.remove('library-drop-folder', 'library-drop-before', 'library-drop-after'));
+      dropTarget = null;
+    };
+    const finishDrag = () => {
+      clearTarget(); draggedId = null;
+      section.querySelectorAll('.library-dragging').forEach(element => element.classList.remove('library-dragging'));
+    };
+    const targetFor = (event, internal) => {
+      const breadcrumb = event.target.closest('[data-folder-id]');
+      if (breadcrumb) return { element: breadcrumb, parentId: breadcrumb.dataset.folderId || null, beforeId: null, style: 'library-drop-folder' };
+      const row = event.target.closest('.file-library-item');
+      if (row) {
+        if (internal && row.dataset.itemId === draggedId) return null;
+        const rect = row.getBoundingClientRect();
+        const offset = (event.clientY - rect.top) / rect.height;
+        if (row.dataset.kind === 'folder' && (!internal || (offset > .25 && offset < .75))) {
+          return { element: row, parentId: row.dataset.itemId, beforeId: null, style: 'library-drop-folder' };
+        }
+        if (!internal || query) return null;
+        const after = offset >= .5;
+        return { element: row, parentId: row.dataset.parentId || null, beforeId: after ? row.nextElementSibling?.dataset.itemId || null : row.dataset.itemId, style: after ? 'library-drop-after' : 'library-drop-before' };
+      }
+      const list = event.target.closest('#fileLibraryList');
+      return internal && list && !query ? { element: list, parentId: currentFolderId, beforeId: null, style: 'library-drop-after' } : null;
+    };
+    section.addEventListener('dragstart', event => {
+      const row = event.target.closest('.file-library-item');
+      if (!row) return;
+      if (organizing || event.target.closest('.file-library-actions')) { event.preventDefault(); return; }
+      draggedId = row.dataset.itemId;
+      event.dataTransfer.setData(internalType, draggedId);
+      event.dataTransfer.effectAllowed = 'move';
+      row.classList.add('library-dragging');
+    });
+    section.addEventListener('dragend', finishDrag);
     section.addEventListener('dragenter', event => {
+      if (isInternal(event)) { event.preventDefault(); return; }
       if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
       event.preventDefault(); dragDepth++; section.classList.add('file-drop-active');
     });
     section.addEventListener('dragover', event => {
+      const internal = isInternal(event);
+      const external = Array.from(event.dataTransfer?.types || []).includes('Files');
+      if (internal || external) {
+        clearTarget();
+        dropTarget = targetFor(event, internal);
+        if (dropTarget) {
+          event.preventDefault(); event.dataTransfer.dropEffect = internal ? 'move' : 'copy';
+          dropTarget.element.classList.add(dropTarget.style);
+          section.classList.remove('file-drop-active');
+          return;
+        }
+        if (internal) { event.preventDefault(); event.dataTransfer.dropEffect = 'none'; return; }
+      }
       if (!Array.from(event.dataTransfer?.types || []).includes('Files')) return;
       event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; section.classList.add('file-drop-active');
     });
     section.addEventListener('dragleave', event => {
+      if (!section.contains(event.relatedTarget)) clearTarget();
       dragDepth = Math.max(0, dragDepth - 1);
       if (!dragDepth) section.classList.remove('file-drop-active');
     });
-    section.addEventListener('drop', event => {
+    section.addEventListener('drop', async event => {
       event.preventDefault(); dragDepth = 0; section.classList.remove('file-drop-active');
-      if (event.dataTransfer?.files?.length) importPicked(event.dataTransfer.files);
+      const internal = isInternal(event);
+      const target = targetFor(event, internal);
+      const id = draggedId;
+      finishDrag();
+      if (internal) {
+        if (!target || organizing) return;
+        organizing = true;
+        try {
+          const payload = { id, parentId: target.parentId, beforeId: target.beforeId };
+          if (isDesktop()) {
+            const result = await global.electronAPI.filesOrganize(payload);
+            if (!result?.ok) throw new Error(result?.reason || '保存失败');
+          } else {
+            const updates = organize(await listFiles(), payload);
+            await idb('readwrite', store => { for (const row of updates) store.put(row); });
+          }
+          await renderFileLibrary();
+        } catch (error) { alert('移动或排序失败：' + error.message); }
+        finally { organizing = false; }
+        return;
+      }
+      if (event.dataTransfer?.files?.length) importPicked(event.dataTransfer.files, false, target ? target.parentId : currentFolderId);
     });
     document.addEventListener('paste', event => {
       if (!section.classList.contains('active')) return;

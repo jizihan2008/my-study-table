@@ -6,6 +6,44 @@ const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const { registerLibraryIpc } = require('../electron/register-library-ipc');
+const { compare } = require('../lib/file-library-order');
+
+test('file library persists sorting and moves folders without losing their contents', async t => {
+  const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-library-organize-'));
+  t.after(() => fs.rm(tempRoot, { recursive: true, force: true }));
+  const handlers = new Map();
+  const register = () => registerLibraryIpc({
+    app: { getPath: () => tempRoot },
+    dialog: {},
+    ipcMain: { handle: (channel, handler) => handlers.set(channel, handler) },
+    userDataPath: tempRoot,
+    getMainWindow: () => null
+  });
+  register();
+  const folder = await handlers.get('files:create-folder')(null, { name: '课程' });
+  const child = await handlers.get('files:create-folder')(null, { name: '章节', parentId: folder.id });
+  const [a, b] = await handlers.get('files:import-data')(null, [
+    { name: 'a.txt', data: Buffer.from('a') }, { name: 'b.txt', data: Buffer.from('b') }
+  ]);
+  await handlers.get('files:organize')(null, { id: b.id, beforeId: folder.id });
+  register(); // Reopen handlers to check disk persistence rather than in-memory state.
+  let rows = await handlers.get('files:list')();
+  assert.deepEqual(rows.filter(row => !row.parentId).sort(compare).map(row => row.id), [b.id, folder.id, a.id]);
+  await handlers.get('files:organize')(null, { id: a.id, parentId: child.id });
+  await assert.rejects(handlers.get('files:organize')(null, { id: folder.id, parentId: child.id }), /自身或其子文件夹/);
+  await assert.rejects(handlers.get('files:organize')(null, { id: folder.id, parentId: folder.id }), /自身或其子文件夹/);
+  await assert.rejects(handlers.get('files:organize')(null, { id: a.id, parentId: b.id }), /目标文件夹/);
+  await assert.rejects(handlers.get('files:organize')(null, { id: b.id, beforeId: a.id }), /排序目标/);
+  await handlers.get('files:organize')(null, { id: folder.id, parentId: null, beforeId: b.id });
+  assert.equal(String((await handlers.get('files:read')(null, a.id)).data), 'a');
+  await handlers.get('files:organize')(null, { id: child.id, parentId: null });
+  rows = await handlers.get('files:list')();
+  assert.equal(rows.find(row => row.id === a.id).parentId, child.id);
+  assert.equal(rows.find(row => row.id === child.id).parentId, null);
+  assert.equal(String((await handlers.get('files:read')(null, a.id)).data), 'a');
+  await handlers.get('files:organize')(null, { id: a.id, beforeId: folder.id });
+  assert.equal((await handlers.get('files:list')()).find(row => row.id === a.id).parentId, null);
+});
 
 test('textbook cache handlers round-trip safe identifiers and reject traversal', async t => {
   const tempRoot = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-library-test-'));

@@ -46,6 +46,7 @@ test('failed queue writes do not report a changed order', () => {
 test('prompt queue uses full live order, hierarchy, completion and deadlines', () => {
   const {context: c, store, todos} = setup();
   c.getFocusTodoDisplayPath = todo => ({full: '父任务 › ' + todo.text});
+  c.getTodoSharedNote = id => id === 2 ? '先整理错题' : '';
   todos[1].dueDate = '2026-10-03';
   store.set('study_todo_queue', '[6,2,1,3,4,5,7]');
   const text = c.buildAiTodoQueueSnapshot();
@@ -53,6 +54,9 @@ test('prompt queue uses full live order, hierarchy, completion and deadlines', (
   assert.match(text, /1\. \[ID:6\] 已完成 父任务 › 任务6/);
   assert.match(text, /2\. \[ID:2\] 未完成 父任务 › 任务2（截止 2026-10-03）/);
   assert.match(text, /7\. \[ID:7\]/);
+  assert.match(text, /任务2（截止 2026-10-03）｜共享备注：先整理错题/);
+  c.getTodoSharedNote = () => '';
+  assert.doesNotMatch(c.buildAiTodoQueueSnapshot(), /共享备注/);
   c.reorderTodoQueue(7,6,false);
   assert.match(c.buildAiTodoQueueSnapshot(), /1\. \[ID:7\]/);
   store.set('study_todo_queue', '[]');

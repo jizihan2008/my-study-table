@@ -9,6 +9,7 @@ test('float filters all due notes and keeps an exhausted tag available', () => {
   const context = vm.createContext({
     document: { getElementById: () => select },
     getReviewSummary: () => ({ dueNotes: context.due }),
+    getOrderedTodayReviewNotes: due => due,
     escapeAttr: value => value, escapeHtml: value => value,
     due: [{id: 1, tags: ['数学']}, {id: 2, tags: ['英语']}, {id: 3, tags: []}]
   });

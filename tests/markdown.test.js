@@ -12,6 +12,17 @@ function createRenderer() {
   return StudyMarkdown.createRenderer({ markdownit, footnote, hljs, katex });
 }
 
+test('source maps are opt-in and retain absolute lines inside nested folds', () => {
+  const renderer = createRenderer();
+  const source = '# 顶部\n\n:::fold 外层\n前文\n\n:::fold 内层\n## 内部标题\n\n> 引用内容\n:::\n:::';
+  assert.doesNotMatch(renderer.render(source), /data-source-line/);
+  const html = renderer.render(source, { sourceMap: true });
+  assert.match(html, /<h2 data-source-line="6" data-source-end="7"/);
+  assert.match(html, /<p data-source-line="8" data-source-end="9">引用内容/);
+  const plan = renderer.createReadingPlan(source);
+  assert.match(plan.renderFold(1), /<h2 data-source-line="6" data-source-end="7"/);
+});
+
 test('shared markdown renderer covers CommonMark and GFM structures', () => {
   const html = createRenderer().render([
     '# 一级',
@@ -157,4 +168,21 @@ test('collapsible note blocks render a title and Markdown body safely', () => {
   const unsafeTitle = renderer.render(':::fold <img src=x onerror=alert(1)>\n正文\n:::');
   assert.doesNotMatch(unsafeTitle, /<img src=x/);
   assert.match(unsafeTitle, /&lt;img src=x onerror=alert\(1\)&gt;/);
+});
+
+test('nested folds and fenced delimiter text do not terminate the outer fold', () => {
+  const renderer = createRenderer();
+  const source = [
+    ':::fold Outer', 'Before', '', ':::fold Inner', 'Actual **body**', ':::', '',
+    '```text', ':::', ':::fold This is code', '```', '', 'After', ':::'
+  ].join('\n');
+  const html = renderer.render(source);
+  assert.equal((html.match(/<details class="note-fold">/g) || []).length, 2);
+  assert.match(html, /<summary>Inner<\/summary>[\s\S]*Actual <strong>body<\/strong>/);
+  assert.match(html, /<code class="language-text[^"]*">[\s\S]*:::fold This is code/);
+  assert.match(html, /<p>After<\/p>\s*<\/div><\/details>/);
+  const plan = renderer.createReadingPlan(source);
+  assert.equal(plan.blocks.length, 1);
+  assert.match(plan.renderFold(0), /data-lazy-fold="1"/);
+  assert.match(plan.renderFold(1), /Actual <strong>body<\/strong>/);
 });

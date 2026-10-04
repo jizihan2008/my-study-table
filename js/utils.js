@@ -71,13 +71,14 @@ document.addEventListener('keydown', function(e) {
   // 焦点在任意输入框时保留浏览器原生撤销/重做，避免 Ctrl+Z 误触发待办回滚
   const activeEl = document.activeElement;
   const inTextInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
-  const inNoteField = activeEl && (activeEl.id === 'notesTextarea' || activeEl.id === 'noteTitleInput' || activeEl.id === 'notesRichEditor');
-  if (e.ctrlKey && !e.shiftKey && e.key === 'z') {
+  const inNoteField = activeEl && (activeEl.id === 'notesTextarea' || activeEl.id === 'noteTitleInput' || activeEl.id === 'notesRichEditor' || activeEl.id === 'notesSplitRichEditor');
+  const historyKey = e.key.toLowerCase();
+  if (e.ctrlKey && !e.shiftKey && historyKey === 'z') {
     if (inTextInput && !inNoteField) return; // 交给原生输入撤销
     e.preventDefault();
     if (inNoteField) undoNote(); else undoTodo();
   }
-  if ((e.ctrlKey && e.key === 'y') || (e.ctrlKey && e.shiftKey && e.key === 'z')) {
+  if ((e.ctrlKey && historyKey === 'y') || (e.ctrlKey && e.shiftKey && historyKey === 'z')) {
     if (inTextInput && !inNoteField) return; // 交给原生输入重做
     e.preventDefault();
     if (inNoteField) redoNote(); else redoTodo();

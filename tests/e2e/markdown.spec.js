@@ -25,6 +25,147 @@ test.afterAll(async () => {
   if (userDataPath) await fs.rm(userDataPath, { recursive: true, force: true });
 });
 
+test('note views follow content across virtual reading, rich editing and source', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    const note = getActiveNote();
+    note.content = Array.from({ length: 150 }, (_, index) => `## 位置章节 ${index}\n\n第 ${index} 段 **重点**，公式 $\\frac{x}{2}\\neq y$。\n\n> 引用段落 ${index}`).join('\n\n');
+    note._dirtyContent = true;
+    renderNotes();
+    switchNoteView('preview');
+    jumpToNoteHeading('位置章节-110');
+  });
+  await expect.poll(() => page.evaluate(() => !!document.querySelector('#notesPreview #位置章节-110'))).toBe(true);
+  const expectedOffset = await page.evaluate(() => {
+    const view = document.getElementById('notesPreview');
+    const heading = view.querySelector('#位置章节-110');
+    view.scrollTop += heading.getBoundingClientRect().top - view.getBoundingClientRect().top - 18;
+    return heading.getBoundingClientRect().top - view.getBoundingClientRect().top;
+  });
+  for (const mode of ['rich', 'edit', 'preview', 'edit', 'rich', 'preview']) {
+    await page.evaluate(mode => switchNoteView(mode), mode);
+    await page.waitForTimeout(80);
+    if (mode !== 'edit') {
+      const position = await page.evaluate(mode => {
+        const view = document.getElementById(mode === 'rich' ? 'notesRichEditor' : 'notesPreview');
+        const heading = view.querySelector('#位置章节-110');
+        return heading ? heading.getBoundingClientRect().top - view.getBoundingClientRect().top : null;
+      }, mode);
+      expect(position).not.toBeNull();
+      expect(Math.abs(position - expectedOffset)).toBeLessThan(24);
+    } else {
+      expect(await page.evaluate(() => document.getElementById('notesTextarea').scrollTop)).toBeGreaterThan(1000);
+    }
+  }
+  expect(await page.evaluate(() => document.querySelectorAll('#notesPreview .katex').length)).toBeLessThan(40);
+});
+
+test('view switching finds nested fold content and retains the current note identity', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    const note = getActiveNote();
+    note.content = '# 开始\n\n' + '前面的普通段落\n\n'.repeat(45) + ':::fold 外层\n:::fold 内层\n## 折叠内部位置\n\n引用之前\n\n> 这里是要跟随的引用内容\n:::\n:::\n\n' + '后面的普通段落\n\n'.repeat(25);
+    note._foldStates = {};
+    renderNotes();
+    switchNoteView('rich');
+    const view = document.getElementById('notesRichEditor');
+    view.querySelectorAll('details').forEach(fold => fold.open = true);
+    const target = view.querySelector('#折叠内部位置');
+    view.scrollTop += target.getBoundingClientRect().top - view.getBoundingClientRect().top - 16;
+  });
+  for (const mode of ['preview', 'edit', 'rich', 'preview']) {
+    await page.evaluate(mode => switchNoteView(mode), mode);
+    await page.waitForTimeout(80);
+    if (mode !== 'edit') {
+      const result = await page.evaluate(mode => {
+        const view = document.getElementById(mode === 'rich' ? 'notesRichEditor' : 'notesPreview');
+        const heading = view.querySelector('#折叠内部位置');
+        return { top: heading.getBoundingClientRect().top - view.getBoundingClientRect().top,
+          open: Array.from(view.querySelectorAll('details')).every(fold => fold.open) };
+      }, mode);
+      expect(result.open).toBe(true);
+      expect(Math.abs(result.top - 16)).toBeLessThan(25);
+    }
+  }
+  await page.evaluate(() => {
+    createNewNote();
+    const note = getActiveNote();
+    note._dirtyContent = true;
+    note.content = '# 另一篇笔记\n\n自己的内容';
+    renderNotes();
+    switchNoteView('rich');
+  });
+  expect(await page.evaluate(() => document.getElementById('notesRichEditor').scrollTop)).toBe(0);
+});
+
+test('wrapped paragraphs retain their text position and source scrolling updates the anchor', async () => {
+  const anchor = await page.evaluate(() => {
+    switchTab('notes');
+    const note = getActiveNote();
+    note.content = Array.from({ length: 220 }, (_, index) => `这是长段落里的第${index}句文字，用来检验不同宽度下的内容定位。`).join(' ');
+    note._dirtyContent = true;
+    renderNotes();
+    switchNoteView('rich');
+    const view = document.getElementById('notesRichEditor');
+    view.scrollTop = (view.scrollHeight - view.clientHeight) * .6;
+    return NoteViewPosition.capture(view, note.content, note.id);
+  });
+  expect(anchor.quote.length).toBeGreaterThan(5);
+  for (const mode of ['edit', 'preview', 'rich']) {
+    await page.evaluate(mode => switchNoteView(mode), mode);
+    await page.waitForTimeout(80);
+    if (mode === 'edit') continue;
+    const offset = await page.evaluate(({ mode, quote }) => {
+      const view = document.getElementById(mode === 'rich' ? 'notesRichEditor' : 'notesPreview');
+      const text = view.querySelector('p').firstChild;
+      const index = text.textContent.indexOf(quote);
+      const range = document.createRange();
+      range.setStart(text, index);
+      range.setEnd(text, index + 1);
+      return range.getBoundingClientRect().top - view.getBoundingClientRect().top;
+    }, { mode, quote: anchor.quote });
+    expect(Math.abs(offset - anchor.offset)).toBeLessThan(22);
+  }
+  await page.evaluate(() => {
+    switchNoteView('edit');
+    document.getElementById('notesTextarea').scrollTop = 0;
+    switchNoteView('preview');
+  });
+  expect(await page.evaluate(() => document.getElementById('notesPreview').scrollTop)).toBeLessThan(30);
+});
+
+test('secondary pane follows its own content when switching reading and editing', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    const left = getActiveNote();
+    left.content = '# 左侧笔记';
+    createNewNote();
+    const right = getActiveNote();
+    right._dirtyContent = true;
+    right.content = Array.from({ length: 100 }, (_, index) => `## 右侧位置 ${index}\n\n右侧第${index}段文字。`).join('\n\n');
+    selectNote(left.id);
+    switchNoteView('rich');
+    setNotesImmersive(true);
+    setNotesImmersiveSplit(true);
+    selectNotesSplitNote(right.id);
+    setNotesSplitSecondaryMode('preview');
+    const view = document.getElementById('notesSplitPreview');
+    NoteReadingRenderer.get(view).ensureHeading('右侧位置-70');
+    const heading = view.querySelector('#右侧位置-70');
+    view.scrollTop += heading.getBoundingClientRect().top - view.getBoundingClientRect().top - 20;
+  });
+  for (const mode of ['rich', 'preview', 'rich', 'preview']) {
+    await page.evaluate(mode => setNotesSplitSecondaryMode(mode), mode);
+    await page.waitForTimeout(80);
+    const offset = await page.evaluate(mode => {
+      const view = document.getElementById(mode === 'rich' ? 'notesSplitRichEditor' : 'notesSplitPreview');
+      return view.querySelector('#右侧位置-70').getBoundingClientRect().top - view.getBoundingClientRect().top;
+    }, mode);
+    expect(Math.abs(offset - 20)).toBeLessThan(25);
+  }
+  await page.evaluate(() => { setNotesImmersiveSplit(false); setNotesImmersive(false); });
+});
+
 test('browser renderer sanitizes hostile input and preserves rich markdown', async () => {
   const result = await page.evaluate(() => {
     const source = [
@@ -589,6 +730,7 @@ test('note preview builds a hierarchical TOC and jumps to the selected heading',
   expect(initial.targets).toEqual(['总览', '第一部分', '详细说明', '第一部分-1']);
   expect(initial.indents).toEqual(['0px', '12px', '24px', '12px']);
 
+  await expect(page.locator('#notesPreview')).toBeVisible();
   await page.evaluate(() => {
     const preview = document.getElementById('notesPreview');
     const heading = window.getNotePreviewHeadings().find(item => item.id === '第一部分');
@@ -616,6 +758,8 @@ test('note preview builds a hierarchical TOC and jumps to the selected heading',
   console.log(JSON.stringify(jumped));
   expect(jumped.scrollTop).toBeGreaterThan(0);
   expect(jumped).toEqual(expect.objectContaining({ activeTarget: '详细说明' }));
+  expect(jumped.headingTops.find(heading => heading.id === '详细说明').top).toBeGreaterThanOrEqual(jumped.previewTop);
+  expect(jumped.headingTops.find(heading => heading.id === '详细说明').top).toBeLessThan(jumped.previewTop + 80);
 
   await page.locator('.notes-toc-close').click();
   await expect(page.locator('#notesTocPanel')).not.toHaveClass(/visible/);
@@ -969,4 +1113,552 @@ test('note search, sorting, and compact metadata controls work together', async 
 
   await page.locator('#notesSortSelect').selectOption('manual');
   await expect(page.locator('#notesList .ns-root > .ns-note').first()).toHaveAttribute('draggable', 'true');
+});
+
+for (const mode of ['rich', 'edit']) {
+  for (const trigger of ['keyboard', 'toolbar']) {
+    test(`note ${mode} ${trigger} undo and redo locate the upcoming change`, async () => {
+      const fieldId = mode === 'rich' ? 'notesRichEditor' : 'notesTextarea';
+      await page.evaluate(({ mode, fieldId }) => {
+        switchTab('notes');
+        const content = Array.from({ length: 180 }, (_, i) => `Paragraph ${i} with enough text to scroll.`).join('\n\n');
+        const note = { id: 'history-scroll-test', type: 'note', title: 'Scroll test', content: content + '\n\nChanged', updatedAt: new Date().toISOString() };
+        notes = [note];
+        activeNoteId = note.id;
+        notesUndoStack = [{ noteId: note.id, content, title: note.title }];
+        notesRedoStack = [];
+        renderNotes();
+        switchNoteView(mode);
+        updateUndoRedoButtons();
+        const field = document.getElementById(fieldId);
+        field.style.height = '260px';
+        field.style.maxHeight = '260px';
+        field.style.overflow = 'auto';
+        field.focus({ preventScroll: true });
+        if (mode === 'rich') {
+          const range = document.createRange();
+          range.setStart(field.querySelectorAll('p')[60].firstChild, 5);
+          range.collapse(true);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+        } else field.setSelectionRange(2300, 2300);
+        field.scrollTop = 1100;
+      }, { mode, fieldId });
+      await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+      const before = await page.locator('#' + fieldId).evaluate(el => el.scrollTop);
+      expect(before).toBeGreaterThan(0);
+      for (const action of ['undo', 'redo']) {
+        if (trigger === 'keyboard') await page.keyboard.press(action === 'undo' ? 'Control+z' : 'Control+y');
+        else await page.locator(action === 'undo' ? '#notesUndoBtn' : '#notesRedoBtn').click();
+        await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+        expect(await page.locator('#' + fieldId).evaluate(el => el.scrollTop)).toBeGreaterThan(before);
+        const caretAtChange = await page.evaluate(({ mode, fieldId }) => {
+          const field = document.getElementById(fieldId);
+          if (mode === 'edit') return field.selectionStart >= field.value.indexOf('Paragraph 179');
+          const range = getSelection().getRangeAt(0);
+          const prefix = document.createRange();
+          prefix.selectNodeContents(field);
+          prefix.setEnd(range.startContainer, range.startOffset);
+          return prefix.toString().includes('Paragraph 179');
+        }, { mode, fieldId });
+        expect(caretAtChange).toBe(true);
+        const content = await page.evaluate(() => getActiveNote().content);
+        expect(content.endsWith('Changed')).toBe(action === 'redo');
+      }
+    });
+  }
+}
+
+for (const kind of ['format', 'title', 'deleted paragraph']) {
+  test(`history locates ${kind} before applying the snapshot`, async () => {
+    const result = await page.evaluate(kind => {
+      switchTab('notes');
+      const paragraphs = Array.from({ length: 90 }, (_, i) => `Paragraph ${i}`);
+      const plain = paragraphs.join('\n\n');
+      let before = plain, after = plain;
+      if (kind === 'format') {
+        const formatted = paragraphs.slice();
+        formatted[60] = '**Paragraph 60**';
+        before = formatted.join('\n\n');
+      } else if (kind === 'deleted paragraph') {
+        const deleted = paragraphs.slice();
+        deleted.splice(60, 1);
+        before = deleted.join('\n\n');
+      }
+      notes = [{ id: 'history-location-case', type: 'note', title: 'New title', content: before, updatedAt: new Date().toISOString() }];
+      activeNoteId = notes[0].id;
+      notesUndoStack = [{ noteId: notes[0].id, title: kind === 'title' ? 'Old title' : 'New title', content: after }];
+      notesRedoStack = [];
+      renderNotes();
+      switchNoteView('rich');
+      const host = document.getElementById('notesRichEditor');
+      host.style.height = '260px';
+      host.style.maxHeight = '260px';
+      host.style.overflow = 'auto';
+      host.scrollTop = 0;
+      const locate = locateNotesHistoryChange;
+      const steps = [];
+      locateNotesHistoryChange = (...args) => {
+        locate(...args);
+        steps.push({ content: getActiveNote().content, title: getActiveNote().title,
+          text: getSelection().anchorNode?.textContent,
+          focus: document.activeElement.id, scroll: host.scrollTop });
+      };
+      try { undoNote(); redoNote(); } finally { locateNotesHistoryChange = locate; }
+      return { steps, before, after };
+    }, kind);
+    expect(result.steps).toHaveLength(4);
+    expect(result.steps[0].content).toBe(result.before);
+    expect(result.steps[1].content).toBe(result.after);
+    expect(result.steps[2].content).toBe(result.after);
+    expect(result.steps[3].content).toBe(result.before);
+    if (kind === 'title') {
+      expect(result.steps[0].title).toBe('New title');
+      expect(result.steps[1].title).toBe('Old title');
+      expect(result.steps.every(step => step.focus === 'noteTitleInput')).toBe(true);
+    } else {
+      expect(result.steps.every(step => step.scroll > 0)).toBe(true);
+      expect(result.steps[0].text).toContain(kind === 'format' ? 'Paragraph 60' : 'Paragraph 61');
+      expect(result.steps[1].text).toContain('Paragraph 60');
+    }
+  });
+}
+
+test('repeated rich undo and redo keep adjacent and nested bold text intact', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    notes = [{ id: 'history-bold-test', type: 'note', title: 'Bold test', content: '前文 **原始粗体** 后文', updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    notesUndoStack = [];
+    notesRedoStack = [];
+    renderNotes();
+    switchNoteView('rich');
+    const host = document.getElementById('notesRichEditor');
+    host.innerHTML = '<p>前文 <b>相邻</b><strong>粗体</strong> <strong><b>嵌套粗体</b></strong> <b> 带空格粗体 </b> 后文<strong>粗体：</strong>紧接正文</p>';
+    host.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  for (let i = 0; i < 3; i++) {
+    await page.evaluate(() => { undoNote(); redoNote(); });
+    const result = await page.evaluate(() => {
+      const host = document.getElementById('notesRichEditor');
+      const output = { text: host.textContent, bold: Array.from(host.querySelectorAll('strong,b'), node => node.textContent).join('|') };
+      // Subsequent typing serializes the restored DOM, as it does in normal use.
+      getActiveNote()._dirtyContent = false;
+      host.querySelector('p').appendChild(document.createTextNode('。'));
+      host.dispatchEvent(new Event('input', { bubbles: true }));
+      return output;
+    });
+    expect(result.text).not.toContain('*');
+    expect(result.text).not.toContain('\\');
+    expect(result.bold).toContain('相邻粗体');
+    expect(result.bold).toContain('嵌套粗体');
+    expect(result.bold).toContain('带空格粗体');
+    expect(result.bold).toContain('粗体：');
+  }
+});
+
+for (const nested of [false, true]) {
+  test(`fold wraps a fully selected ${nested ? 'nested ' : ''}quote`, async () => {
+    const result = await page.evaluate(async nested => {
+      switchTab('notes');
+      notes = [{ id: 'quote-fold-test', type: 'note', title: 'Quote fold', content: 'before\n\n> quoted **bold** text\n>\n> second paragraph\n\nafter', updatedAt: new Date().toISOString() }];
+      activeNoteId = notes[0].id;
+      notesUndoStack = [];
+      notesRedoStack = [];
+      renderNotes();
+      switchNoteView('rich');
+      const host = document.getElementById('notesRichEditor');
+      if (nested) host.innerHTML = '<p>before</p><blockquote><blockquote><p>quoted <strong>bold</strong> text</p><p>second paragraph</p></blockquote></blockquote><p>after</p>';
+      const quote = host.querySelector('blockquote');
+      const paragraphs = quote.querySelectorAll('p');
+      const range = document.createRange();
+      range.setStart(paragraphs[0].firstChild, 0);
+      range.setEnd(paragraphs[1].firstChild, paragraphs[1].firstChild.length);
+      host.focus();
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      await RichNoteEditor.command('fold');
+      const markdown = RichNoteEditor.getMarkdown();
+      const structure = () => ({
+        outerFold: !!host.querySelector(':scope > details.note-fold'),
+        quoteInside: !!host.querySelector(':scope > details > .note-fold-body > blockquote'),
+        foldInQuote: !!host.querySelector('blockquote details'),
+        bold: host.querySelector('details strong')?.textContent,
+        outside: Array.from(host.querySelectorAll(':scope > p'), node => node.textContent).filter(Boolean)
+      });
+      const initial = structure();
+      RichNoteEditor.setMarkdown(markdown, getActiveNote().id);
+      return { initial, restored: structure(), markdown };
+    }, nested);
+    for (const structure of [result.initial, result.restored]) {
+      expect(structure).toEqual({ outerFold: true, quoteInside: true, foldInQuote: false, bold: 'bold', outside: ['before', 'after'] });
+    }
+    expect(result.markdown).toContain(':::fold 折叠标题\n>');
+  });
+}
+
+for (const [name, content, selector] of [
+  ['ordered list', '1. first **bold**\n2. second', 'ol'],
+  ['bullet list', '- first **bold**\n- second', 'ul'],
+  ['task list', '- [x] first **bold**\n- [ ] second', 'ul'],
+  ['nested list', '- first\n  - nested **bold**\n- second', 'ul'],
+  ['code block', '```js\nconst bold = 1;\n```', 'pre'],
+  ['table', '| first | bold |\n| --- | --- |\n| second | third |', 'table'],
+  ['heading', '## first **bold**', 'h2']
+]) {
+  test(`fold wraps a fully selected ${name} and keeps its structure`, async () => {
+    const result = await page.evaluate(async ({ content, selector }) => {
+      switchTab('notes');
+      notes = [{ id: 'structure-fold', type: 'note', title: 'Fold', content: 'before\n\n' + content + '\n\nafter', updatedAt: new Date().toISOString() }];
+      activeNoteId = notes[0].id;
+      renderNotes();
+      switchNoteView('rich');
+      const host = document.getElementById('notesRichEditor');
+      const block = host.querySelector(':scope > ' + selector);
+      const walker = document.createTreeWalker(block, NodeFilter.SHOW_TEXT);
+      const texts = [];
+      for (let node = walker.nextNode(); node; node = walker.nextNode()) if (node.textContent.trim()) texts.push(node);
+      const range = document.createRange();
+      range.setStart(texts[0], 0);
+      range.setEnd(texts.at(-1), texts.at(-1).length);
+      host.focus();
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      await RichNoteEditor.command('fold');
+      const check = () => ({
+        outer: !!host.querySelector(':scope > details'),
+        inside: !!host.querySelector(':scope > details > .note-fold-body > ' + selector),
+        backwards: !!host.querySelector(selector + ' details'),
+        text: host.querySelector('details .note-fold-body')?.textContent,
+        outside: Array.from(host.querySelectorAll(':scope > p'), node => node.textContent).filter(Boolean),
+        checked: Array.from(host.querySelectorAll('details input'), input => input.checked)
+      });
+      const initial = check();
+      const markdown = RichNoteEditor.getMarkdown();
+      RichNoteEditor.setMarkdown(markdown, notes[0].id);
+      return { initial, restored: check(), markdown };
+    }, { content, selector });
+    for (const structure of [result.initial, result.restored]) {
+      expect(structure.outer).toBe(true);
+      expect(structure.inside).toBe(true);
+      expect(structure.backwards).toBe(false);
+      expect(structure.outside).toEqual(['before', 'after']);
+      expect(structure.text).toContain('bold');
+      if (name === 'task list') expect(structure.checked).toEqual([true, false]);
+    }
+    expect(result.markdown).toContain(content);
+  });
+}
+
+for (const display of [false, true]) {
+  for (const side of ['before', 'after']) {
+    test(`click and type ${side} ${display ? 'display' : 'inline'} LaTeX`, async () => {
+      await page.evaluate(display => {
+        switchTab('notes');
+        notes = [{ id: 'math-caret', type: 'note', title: 'Math', content: display ? '$$\nx^2\n$$' : '$x^2$', updatedAt: new Date().toISOString() }];
+        activeNoteId = notes[0].id;
+        renderNotes();
+        switchNoteView('rich');
+      }, display);
+      await expect(page.locator('#notesRichEditor .katex')).toBeVisible();
+      await page.locator('#notesRichEditor .katex').scrollIntoViewIfNeeded();
+      const rect = await page.locator('#notesRichEditor .katex').boundingBox();
+      await page.mouse.click(side === 'after' ? rect.x + rect.width - 1 : rect.x + 1, rect.y + rect.height / 2);
+      await page.keyboard.insertText('新增文字');
+      const result = await page.evaluate(() => ({
+        markdown: RichNoteEditor.getMarkdown(),
+        latex: document.querySelector('#notesRichEditor .katex').dataset.latex,
+        formulaText: document.querySelector('#notesRichEditor .katex').textContent
+      }));
+      expect(result.latex).toBe('x^2');
+      expect(result.formulaText).not.toContain('新增文字');
+      expect(result.markdown).not.toContain('\u200b');
+      expect(result.markdown).toBe(display
+        ? (side === 'after' ? '$$\nx^2\n$$\n\n新增文字' : '新增文字\n\n$$\nx^2\n$$')
+        : (side === 'after' ? '$x^2$新增文字' : '新增文字$x^2$'));
+    });
+  }
+}
+
+test('click blank space immediately after an inline formula and continue typing', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    notes = [{ id: 'math-blank-space', type: 'note', title: 'Math', content: '$x^2$', updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    renderNotes();
+    switchNoteView('rich');
+  });
+  const math = page.locator('#notesRichEditor .katex');
+  await expect(math).toBeVisible();
+  await math.scrollIntoViewIfNeeded();
+  const rect = await math.boundingBox();
+  await page.mouse.click(rect.x + rect.width + 8, rect.y + rect.height / 2);
+  await page.keyboard.insertText('后面的文字');
+  expect(await page.evaluate(() => RichNoteEditor.getMarkdown())).toBe('$x^2$后面的文字');
+});
+
+test('note rendering and rich round-trip preserve LaTeX escape prefixes', async () => {
+  const result = await page.evaluate(() => {
+    const formulas = [
+      String.raw`a \neq b`, String.raw`a \ne b`, String.raw`x \notin A`,
+      String.raw`\nexists x`, String.raw`\nabla f`, String.raw`\nu`,
+      String.raw`\theta + \tau`, String.raw`\rho + \rightarrow`,
+      String.raw`\frac{1}{2}`, String.raw`\beta`,
+      String.raw`\begin{matrix}1&2\\3&4\end{matrix}`
+    ];
+    const code = String.raw`literal \n \t \r \b \f and C:\notes\new.txt`;
+    const source = formulas.map(formula => '$' + formula + '$').join('\n\n') + '\n\n```text\n' + code + '\n```';
+    switchTab('notes');
+    notes = [{ id: 'latex-escapes', type: 'note', title: 'Escapes', content: source, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    renderNotes();
+    switchNoteView('preview');
+    const preview = document.getElementById('notesPreview');
+    const previewCount = preview.querySelectorAll('.katex').length;
+    const previewCode = preview.querySelector('pre code').textContent.trimEnd();
+    const previewErrors = preview.querySelectorAll('.katex-error').length;
+    switchNoteView('rich');
+    const host = document.getElementById('notesRichEditor');
+    const first = Array.from(host.querySelectorAll('.katex'), node => node.dataset.latex);
+    const markdown = RichNoteEditor.getMarkdown();
+    const stored = JSON.parse(JSON.stringify({ content: markdown })).content;
+    RichNoteEditor.setMarkdown(stored, notes[0].id);
+    const second = Array.from(host.querySelectorAll('.katex'), node => node.dataset.latex);
+    return { formulas, first, second, previewCount, previewErrors, previewCode, code,
+      richCode: host.querySelector('pre code').textContent.trimEnd(), markdown, source };
+  });
+  expect(result.previewCount).toBe(result.formulas.length);
+  expect(result.previewErrors).toBe(0);
+  expect(result.first).toEqual(result.formulas);
+  expect(result.second).toEqual(result.formulas);
+  expect(result.previewCode).toBe(result.code);
+  expect(result.richCode).toBe(result.code);
+  expect(result.markdown).toBe(result.source);
+});
+
+test('long reading notes render a bounded window and keep source and TOC intact', async () => {
+  const initial = await page.evaluate(() => {
+    switchTab('notes');
+    const source = Array.from({ length: 160 }, (_, i) => `## Section ${i}\n\nFormula $x_${i}^2$ body text.\n\n` + '```js\nconst value = ' + i + ';\n```').join('\n\n');
+    notes = [{ id: 'reading-performance', type: 'note', title: 'Long note', content: source, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    noteViewMode = 'preview';
+    const original = katex.renderToString;
+    let eagerCalls = 0;
+    katex.renderToString = (...args) => { eagerCalls++; return original(...args); };
+    const eagerStart = performance.now();
+    formatNoteContent(source, notes[0]);
+    const eagerMs = performance.now() - eagerStart;
+    let lazyCalls = 0;
+    katex.renderToString = (...args) => { lazyCalls++; return original(...args); };
+    const lazyStart = performance.now();
+    renderNotes();
+    const lazyMs = performance.now() - lazyStart;
+    katex.renderToString = original;
+    const preview = document.getElementById('notesPreview');
+    return { eagerCalls, lazyCalls, eagerMs, lazyMs, blocks: NoteReadingRenderer.get(preview).plan.blocks.length, source };
+  });
+  await expect(page.locator('#notesPreview')).toBeVisible();
+  await page.waitForFunction(() => document.querySelectorAll('#notesPreview [data-rendered]').length > 0);
+  console.log(JSON.stringify({ readingAcceptance: initial.eagerCalls, firstWindowFormulaCalls: initial.lazyCalls, eagerMs: initial.eagerMs, lazyMs: initial.lazyMs, blocks: initial.blocks }));
+  expect(initial.eagerCalls).toBe(160);
+  expect(initial.lazyCalls).toBeLessThan(20);
+  expect(initial.lazyCalls / initial.eagerCalls).toBeLessThan(0.1);
+  await expect(page.locator('#notesTocList .notes-toc-item')).toHaveCount(160);
+  expect(await page.locator('#notesPreview [data-rendered]').count()).toBeLessThan(50);
+  await page.evaluate(() => jumpToNoteHeading('section-140'));
+  await page.waitForFunction(() => !!document.querySelector('#notesPreview #section-140'));
+  const far = await page.evaluate(() => {
+    const preview = document.getElementById('notesPreview');
+    const controller = NoteReadingRenderer.get(preview);
+    const position = controller.getHeadings().find(heading => heading.id === 'section-140').getBoundingClientRect().top;
+    return { position, top: preview.getBoundingClientRect().top, source: getActiveNote().content, rendered: preview.querySelectorAll('[data-rendered]').length };
+  });
+  expect(far.source).toBe(initial.source);
+  expect(far.position).toBeGreaterThanOrEqual(far.top);
+  expect(far.position).toBeLessThan(far.top + 100);
+  expect(far.rendered).toBeLessThan(50);
+  await page.screenshot({ path: path.resolve('test-results/reading-lazy-acceptance.png') });
+  await page.evaluate(() => {
+    const preview = document.getElementById('notesPreview');
+    NoteReadingRenderer.get(preview).materializeAll();
+  });
+  await expect(page.locator('#notesPreview .katex')).toHaveCount(160);
+  await expect(page.locator('#notesPreview pre code')).toHaveCount(160);
+  const before = await page.evaluate(() => getActiveNote().content);
+  await page.evaluate(() => switchNoteView('rich'));
+  await expect(page.locator('#notesRichEditor .katex')).toHaveCount(160);
+  expect(await page.evaluate(() => RichNoteEditor.getMarkdown())).toBe(before);
+});
+
+test('closed fold bodies defer formula rendering and reuse the expanded body', async () => {
+  const initial = await page.evaluate(() => {
+    switchTab('notes');
+    const content = ':::fold Heavy fold\n## Fold heading\n\n' + Array.from({ length: 45 }, (_, i) => '$x_' + i + '^2$').join('\n\n') + '\n::: ';
+    notes = [{ id: 'deferred-fold', type: 'note', title: 'Fold', content, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    noteViewMode = 'preview';
+    renderNotes();
+    const fold = document.querySelector('#notesPreview details');
+    return { lazy: fold.hasAttribute('data-lazy-fold'), formulas: fold.querySelectorAll('.katex').length, headings: getNotePreviewHeadings().map(item => item.id) };
+  });
+  expect(initial.lazy).toBe(true);
+  expect(initial.formulas).toBe(0);
+  expect(initial.headings).toEqual(['fold-heading']);
+  await expect(page.locator('#notesPreview')).toBeVisible();
+  await page.locator('#notesPreview summary').click();
+  await expect(page.locator('#notesPreview .katex')).toHaveCount(45);
+  await page.evaluate(() => {
+    window.foldNode = document.querySelector('#notesPreview .katex');
+  });
+  await page.locator('#notesPreview summary').click();
+  await page.locator('#notesPreview summary').click();
+  expect(await page.evaluate(() => window.foldNode === document.querySelector('#notesPreview .katex'))).toBe(true);
+  await page.locator('#notesPreview summary').click();
+  await page.evaluate(() => jumpToNoteHeading('fold-heading'));
+  await expect(page.locator('#notesPreview details')).toHaveAttribute('open', '');
+  await expect(page.locator('#notesPreview #fold-heading')).toBeVisible();
+});
+
+test('reading search, select-all, secondary pane and annotated fallback keep complete content', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    const source = Array.from({ length: 100 }, (_, i) => 'Paragraph ' + i + ' with $x_' + i + '$').join('\n\n');
+    notes = [{ id: 'read-main', type: 'note', title: 'Main', content: source, updatedAt: new Date().toISOString() },
+      { id: 'read-second', type: 'note', title: 'Second', content: source, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    noteViewMode = 'preview';
+    renderNotes();
+    setNotesImmersive(true);
+    setNotesImmersiveSplit(true);
+    setNotesSplitSecondaryMode('preview');
+  });
+  await expect(page.locator('#notesSplitPreview')).toBeVisible();
+  expect(await page.locator('#notesSplitPreview [data-rendered]').count()).toBeLessThan(50);
+  await page.locator('#notesPreview').focus();
+  await page.keyboard.press('Control+a');
+  const copied = await page.evaluate(() => getSelection().toString());
+  expect(copied).toContain('Paragraph 0');
+  expect(copied).toContain('Paragraph 99');
+  await page.evaluate(() => {
+    getSelection().removeAllRanges();
+    setNotesImmersiveSplit(false);
+    setNotesImmersive(false);
+    const note = getActiveNote();
+    note._annotations = [{ id: 'annotation-check', start: 0, end: 9, text: 'comment' }];
+    switchNoteView('preview');
+  });
+  expect(await page.evaluate(() => !!NoteReadingRenderer.get(document.getElementById('notesPreview')))).toBe(false);
+  await expect(page.locator('#notesPreview mark.note-ann')).toHaveText('Paragraph');
+  await page.evaluate(() => {
+    const note = getActiveNote();
+    note._annotations = [];
+    note.content = 'Text[^ref]\n\n[^ref]: Definition with $x^2$';
+    switchNoteView('preview');
+  });
+  await expect(page.locator('#notesPreview .footnote-ref')).toHaveCount(1);
+  await expect(page.locator('#notesPreview .footnotes')).toContainText('Definition');
+  expect(await page.evaluate(() => !!NoteReadingRenderer.get(document.getElementById('notesPreview')))).toBe(false);
+});
+
+test('undo and redo preserve an empty fold body without inventing placeholder text', async () => {
+  const source = ':::fold Title\nActual body **bold** with $x^2$\n:::';
+  await page.evaluate(source => {
+    switchTab('notes');
+    notes = [{ id: 'empty-fold-history', type: 'note', title: 'Fold', content: source, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    notesUndoStack = [];
+    notesRedoStack = [];
+    noteViewMode = 'rich';
+    renderNotes();
+    const host = document.getElementById('notesRichEditor');
+    host.querySelector('.note-fold-body').innerHTML = '<p><br></p>';
+    host.dispatchEvent(new Event('input', { bubbles: true }));
+  }, source);
+  const emptied = await page.evaluate(() => getActiveNote().content);
+  expect(emptied).toBe(':::fold Title\n\n:::');
+  await page.evaluate(() => undoNote());
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(source);
+  await expect(page.locator('#notesRichEditor .note-fold-body')).toContainText('Actual body');
+  await page.evaluate(() => redoNote());
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(emptied);
+  await page.evaluate(() => {
+    const host = document.getElementById('notesRichEditor');
+    getActiveNote()._dirtyContent = false;
+    host.querySelector('summary').textContent = 'Changed title';
+    host.dispatchEvent(new Event('input', { bubbles: true }));
+    undoNote();
+  });
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(emptied);
+  await expect(page.locator('#notesRichEditor .note-fold-body')).toHaveText('');
+});
+
+test('closed lazy folds retain full bodies through reading, editing and history', async () => {
+  const source = ':::fold Heavy fold\nActual body **bold** with $x^2$\n\n- first\n- second\n:::';
+  await page.evaluate(source => {
+    switchTab('notes');
+    notes = [{ id: 'lazy-fold-history', type: 'note', title: 'Fold', content: source, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    notesUndoStack = [];
+    notesRedoStack = [];
+    noteViewMode = 'preview';
+    renderNotes();
+    switchNoteView('rich');
+    const host = document.getElementById('notesRichEditor');
+    host.querySelector('summary').textContent = 'Edited fold';
+    host.dispatchEvent(new Event('input', { bubbles: true }));
+    undoNote();
+  }, source);
+  for (let index = 0; index < 3; index++) {
+    const restored = await page.evaluate(() => RichNoteEditor.getMarkdown());
+    expect(restored).toBe(source);
+    await page.evaluate(() => { redoNote(); undoNote(); });
+  }
+});
+
+test('toolbar folds selected existing content and keeps it through undo and redo', async () => {
+  await page.evaluate(() => {
+    switchTab('notes');
+    notes = [{ id: 'toolbar-fold-history', type: 'note', title: 'Fold', content: 'Actual **body** to fold', updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    notesUndoStack = [];
+    notesRedoStack = [];
+    noteViewMode = 'rich';
+    renderNotes();
+    const host = document.getElementById('notesRichEditor');
+    host.focus();
+    const range = document.createRange();
+    range.selectNodeContents(host.querySelector('p'));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.locator('#notesFormatToolbar button[title="折叠文字块"]').click();
+  await expect(page.locator('#notesRichEditor .note-fold-body')).toContainText('Actual body to fold');
+  await page.locator('#notesUndoBtn').click();
+  await page.locator('#notesRedoBtn').click();
+  await expect(page.locator('#notesRichEditor .note-fold-body')).toContainText('Actual body to fold');
+  expect(await page.evaluate(() => getActiveNote().content)).not.toContain('正文内容');
+});
+
+test('nested nonempty folds retain their bodies when undo restores Markdown', async () => {
+  const source = ':::fold Outer\nBefore inner\n\n:::fold Inner\nActual **body** to keep\n:::\n\nAfter inner\n:::';
+  const result = await page.evaluate(source => {
+    switchTab('notes');
+    notes = [{ id: 'nested-fold-history', type: 'note', title: 'Fold', content: source, updatedAt: new Date().toISOString() }];
+    activeNoteId = notes[0].id;
+    notesUndoStack = [];
+    notesRedoStack = [];
+    noteViewMode = 'rich';
+    renderNotes();
+    const host = document.getElementById('notesRichEditor');
+    const before = RichNoteEditor.getMarkdown();
+    host.querySelector('summary').textContent = 'Changed outer';
+    host.dispatchEvent(new Event('input', { bubbles: true }));
+    undoNote();
+    return { before, after: RichNoteEditor.getMarkdown(), folds: host.querySelectorAll('details.note-fold').length, text: host.textContent };
+  }, source);
+  expect(result.before).toBe(source);
+  expect(result.after).toBe(source);
+  expect(result.folds).toBe(2);
+  expect(result.text).toContain('Actual body to keep');
 });

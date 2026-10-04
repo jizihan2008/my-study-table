@@ -21,7 +21,7 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20260924-r4">
+<link rel="stylesheet" href="css/style.css?v=20261004-r6">
 <link rel="stylesheet" href="css/workspace.css?v=20260926-r4">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -337,7 +337,7 @@
       <div class="file-library-head">
         <div>
           <h2><i data-lucide="folder-open" aria-hidden="true"></i> 文件库</h2>
-          <p>集中保存学习资料，随时打开或交给 AI 阅读。</p>
+          <p>集中保存学习资料，随时打开或交给 AI 阅读。拖到项目上下边缘排序，拖到文件夹中间放入，拖到路径栏移出。</p>
         </div>
         <div class="file-library-head-actions">
           <button type="button" class="file-library-primary" onclick="importLibraryFiles()"><i data-lucide="upload" aria-hidden="true"></i> 导入文件</button>
@@ -481,6 +481,7 @@
             <span class="today-section-title"><i data-lucide="list-ordered" class="lucide-icon" aria-hidden="true"></i> 待办队列</span>
             <div class="today-review-header-actions">
               <span class="today-focus-count" id="todayTodoQueueCount">0 项</span>
+              <button type="button" id="todayTodoQueueHideDone" class="today-review-toggle" onclick="setTodoQueueHideDone(this.getAttribute('aria-pressed') !== 'true')" aria-controls="todayTodoQueueList" aria-pressed="false" title="隐藏已完成待办">隐藏已完成</button>
               <button type="button" id="todayTodoQueueToggle" class="today-review-toggle" onclick="toggleTodoQueue()" aria-controls="todayTodoQueueList" aria-expanded="false" hidden><span id="todayTodoQueueToggleLabel">展开</span><i data-lucide="chevron-up" class="lucide-icon" aria-hidden="true"></i></button>
             </div>
           </div>
@@ -594,6 +595,7 @@
     <div class="card">
       <div class="section-header">
         <span class="section-title"><i data-lucide="timer" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 计时器</span>
+        <button type="button" class="timer-link-btn" onclick="showTimerFloat()" title="呼出计时器小浮窗（Ctrl+Shift+T）" aria-keyshortcuts="Control+Shift+T Meta+Shift+T">浮窗 <small>Ctrl+Shift+T</small></button>
       </div>
       <div class="card-scroll" id="timerContainer">
         <!-- rendered by renderTimer() -->
@@ -1739,8 +1741,10 @@
 <script src="lib/markdown/purify.min.js"></script>
 <script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/markdown.js?v=20260929-r1"></script>
-<script src="js/note-rich-editor.js?v=20260929-r1"></script>
+<script src="js/markdown.js?v=20261004-r3"></script>
+<script src="js/note-reading-renderer.js?v=20261004-r2"></script>
+<script src="js/note-view-position.js?v=20261004-r1"></script>
+<script src="js/note-rich-editor.js?v=20261004-r2"></script>
 <script src="js/platform.js?v=20260826-r2"></script>
 <script src="js/secrets.js?v=20260827-r2"></script>
 <script src="js/data-store.js?v=20260930-r1"></script>
@@ -1752,16 +1756,17 @@
 <script src="js/core.js?v=20260929-r2"></script>
 <script src="js/trash.js?v=20260923-r1"></script>
 <script src="js/todos.js?v=20260922-r1"></script>
-<script src="js/notes.js?v=20260928-r1"></script>
-<script src="js/file-library.js?v=20260923-r1"></script>
+<script src="js/notes.js?v=20261004-r4"></script>
+<script src="lib/file-library-order.js?v=20261004-r1"></script>
+<script src="js/file-library.js?v=20261004-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20260922-r1"></script>
+<script src="js/today.js?v=20261004-r2"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260929-r1"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
 <script src="js/ai-conv.js?v=20260929-r1"></script>
 <script src="js/ai-attach.js?v=20260928-r3"></script>
-<script src="js/ai-render.js?v=20260922-r2"></script>
+<script src="js/ai-render.js?v=20261004-r1"></script>
 <script src="js/ai-tools.js?v=20260924-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
@@ -1776,9 +1781,9 @@
 <script src="js/appearance.js?v=20260929-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
-<script src="js/todo-queue.js?v=20261001-r1"></script>
+<script src="js/todo-queue.js?v=20261004-r3"></script>
 <script src="js/settings.js?v=20260929-r3"></script>
-<script src="js/utils.js?v=20260914-r2"></script>
+<script src="js/utils.js?v=20261004-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
 <script src="js/inbox.js?v=20260914-r2"></script>
@@ -1798,7 +1803,7 @@
 <script src="js/books-study.js?v=20260821-r2"></script>
 <script src="js/calendar.js?v=20260825-r10"></script>
 <script src="js/taskline.js?v=20260914-r14"></script>
-<script src="js/timer.js?v=20260914-r6"></script>
+<script src="js/timer.js?v=20261004-r1"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
 <script src="js/stats.js?v=20260923-hover"></script>
 <script src="js/updater.js?v=20260802-r1"></script>

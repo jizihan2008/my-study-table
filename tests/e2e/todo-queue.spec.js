@@ -3,6 +3,67 @@ const { _electron: electron } = require('playwright');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+test('队列隐藏已完成：筛选后折叠、排序、持久化与完成状态更新', async () => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-queue-filter-'));
+  let app;
+  try {
+    app = await electron.launch({args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'], env: {...process.env, MST_E2E: '1', MST_USER_DATA_PATH: profile}});
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => typeof renderTodoQueue === 'function' && typeof renderCheckinCalendar === 'function' && document.querySelector('#nav-today[aria-current="page"]'));
+    await page.evaluate(() => {
+      todos = Array.from({length: 8}, (_, i) => ({id: i + 201, text: '筛选任务 ' + (i + 1), parentId: null, done: i < 2, tags: [], createdAt: Date.now()}));
+      saveData('study_todos_v2', todos);
+      saveTodoQueue(todos.map(todo => todo.id));
+      switchTab('today');
+    });
+    const filter = page.locator('#todayTodoQueueHideDone');
+    await expect(filter).toHaveAttribute('aria-pressed', 'false');
+    await expect(filter).toHaveText('隐藏已完成');
+    await filter.click();
+    await expect(filter).toHaveAttribute('aria-pressed', 'true');
+    await expect(filter).toHaveText('显示已完成');
+    await expect(page.locator('.todo-queue-item')).toHaveCount(5);
+    await expect(page.locator('.todo-queue-item.completed')).toHaveCount(0);
+    await expect(page.locator('.todo-queue-item .focus-title')).toHaveText(['筛选任务 3', '筛选任务 4', '筛选任务 5', '筛选任务 6', '筛选任务 7']);
+    await expect(page.locator('#todayTodoQueueCount')).toHaveText('6 / 8 项');
+    await page.locator('#todayTodoQueueToggle').click();
+    await expect(page.locator('.todo-queue-item')).toHaveCount(6);
+    await page.locator('.todo-queue-grip').last().dragTo(page.locator('.todo-queue-grip').first());
+    const order = await page.evaluate(() => loadTodoQueue());
+    expect(order).toHaveLength(8);
+    expect(order.slice(0, 2)).toEqual([201, 202]);
+    expect(order.indexOf(208)).toBeLessThan(order.indexOf(203));
+    await page.reload();
+    await page.waitForFunction(() => typeof renderTodoQueue === 'function');
+    await page.evaluate(() => switchTab('today'));
+    await expect(filter).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.locator('.todo-queue-item')).toHaveCount(6);
+    expect(await page.evaluate(() => loadTodoQueue())).toEqual(order);
+    await page.evaluate(() => toggleTodo(208));
+    await expect(page.locator('.todo-queue-item')).toHaveCount(5);
+    await expect(page.locator('#todayTodoQueueToggle')).toBeHidden();
+    await page.evaluate(() => toggleTodo(208));
+    await expect(page.locator('.todo-queue-item')).toHaveCount(6);
+    await page.evaluate(() => {
+      todos.forEach(todo => { todo.done = true; });
+      saveData('study_todos_v2', todos);
+      renderTodos();
+    });
+    await expect(page.locator('.todo-queue-item')).toHaveCount(0);
+    await expect(page.locator('.todo-queue-empty')).toContainText('均已完成');
+    await expect(page.locator('[data-queue-fill]').first()).toBeDisabled();
+    await filter.click();
+    await expect(page.locator('.todo-queue-item.completed')).toHaveCount(8);
+    expect(await page.evaluate(() => loadTodoQueue())).toEqual(order);
+    await page.evaluate(() => { saveTodoQueue([]); renderTodoQueue(); });
+    await filter.click();
+    await expect(page.locator('.todo-queue-empty')).toContainText('加入待办队列');
+  } finally {
+    if (app) await app.close();
+    await fs.rm(profile, {recursive: true, force: true});
+  }
+});
+
 test('待办右键入队、折叠、拖拽和跨日聚焦', async () => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-queue-'));
   let app;

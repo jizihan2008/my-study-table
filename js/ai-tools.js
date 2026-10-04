@@ -389,10 +389,12 @@ function buildAiTodoTreeSnapshot() {
   const doneCount = items.filter(item => item.done).length;
   const lines = buildAiHierarchyLines(items, todo => {
     const timer = typeof getTodoTimerStr === 'function' ? getTodoTimerStr(todo.id) : '';
+    const note = typeof getTodoSharedNote === 'function' ? getTodoSharedNote(todo.id) : '';
     return `[ID:${todo.id}] ${todo.done ? '✅ [已完成]' : '⬜ [未完成]'} ${todo.text || '未命名待办'}`
       + (todo.dueDate ? `；截止 ${todo.dueDate}` : '')
       + (todo.done && todo.completedAt ? ` ✅完成于${todo.completedAt}` : '')
-      + timer + (todo.tags?.length ? ` 🏷️${todo.tags.join(',')}` : '');
+      + timer + (todo.tags?.length ? ` 🏷️${todo.tags.join(',')}` : '')
+      + (note ? `｜共享备注：${note}` : '');
   });
   return `📋 完整待办树：共 ${items.length} 项，已完成 ${doneCount} 项（包含全部层级）\n${lines || '  （暂无待办）'}\n`;
 }
@@ -715,7 +717,8 @@ function buildAiFocusSnapshot() {
       const name = todo && typeof getFocusTodoDisplayPath === 'function'
         ? getFocusTodoDisplayPath(todo).full : (item.text || '未命名待办');
       text += `   ${item.done ? '✅' : '⬜'} [ID:${item.todoId}] ${name}`;
-      if (item.note) text += `｜备注：${item.note}`;
+      const note = typeof getTodoSharedNote === 'function' ? getTodoSharedNote(item.todoId) : (item.note || '');
+      if (note) text += `｜共享备注：${note}`;
       text += '\n';
     }
     return text;

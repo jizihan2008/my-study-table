@@ -77,8 +77,9 @@ function applyNoteFoldStates(container, noteId) {
   _applyingNoteFoldStates = true;
   try {
     container.querySelectorAll('details.note-fold').forEach((fold, index) => {
-      fold.dataset.foldIndex = String(index);
-      if (typeof states[index] === 'boolean') fold.open = states[index];
+      const foldIndex = fold.dataset.foldIndex || String(index);
+      fold.dataset.foldIndex = foldIndex;
+      if (typeof states[foldIndex] === 'boolean') fold.open = states[foldIndex];
     });
   } finally {
     _applyingNoteFoldStates = false;
@@ -89,10 +90,12 @@ function captureNoteFoldStates(container, noteId, persist) {
   if (!container) return;
   const note = findNoteForFoldState(noteId);
   if (!note) return;
-  const states = {};
+  const states = typeof NoteReadingRenderer !== 'undefined' && NoteReadingRenderer.get(container)
+    ? { ...(note._foldStates || {}) } : {};
   container.querySelectorAll('details.note-fold').forEach((fold, index) => {
-    fold.dataset.foldIndex = String(index);
-    states[index] = fold.open;
+    const foldIndex = fold.dataset.foldIndex || String(index);
+    fold.dataset.foldIndex = foldIndex;
+    states[foldIndex] = fold.open;
   });
   note._foldStates = states;
   if (persist) saveData('study_notes_v2', notes);
@@ -119,7 +122,14 @@ function createNewNote(parentId) {
   localStorage.setItem('study_active_note', activeNoteId);
   saveData('study_notes_v2', notes);
   renderNotes();
-  setTimeout(() => document.getElementById('noteTitleInput').focus(), 100);
+  setTimeout(() => {
+    // A delayed focus from a previously-created note must not steal the current
+    // editor selection (or turn a selected-body formatting action into a blank one).
+    if (String(activeNoteId) !== String(newNote.id)) return;
+    const selection = window.getSelection();
+    if (newNote._dirtyContent || (selection && !selection.isCollapsed)) return;
+    document.getElementById('noteTitleInput')?.focus({ preventScroll: true });
+  }, 100);
 }
 
 function createNoteFolder(name, parentId) {
@@ -309,16 +319,17 @@ function onNotesChange() {
   }, 500);
 }
 
-function onRichNotesChange(markdown, previousMarkdown) {
+function onRichNotesChange(markdown, previousMarkdown, change = {}) {
   const note = getActiveNote();
   if (!note || typeof RichNoteEditor === 'undefined') return;
   if (RichNoteEditor.getCurrentNoteId() !== note.id || markdown === note.content) return;
-  if (!note._dirtyContent) {
-    pushNotesUndo(note.id, previousMarkdown == null ? (note.content || '') : previousMarkdown, note.title);
+  if (!note._dirtyContent || change.historyBoundary) {
+    pushNotesUndo(note.id, change.historyBoundary ? (note.content || '') : previousMarkdown == null ? (note.content || '') : previousMarkdown, note.title);
     note._dirtyContent = true;
     notesRedoStack = [];
   }
   note.content = markdown;
+  if (change.historyBoundary) note._dirtyContent = false;
   note.updatedAt = new Date().toISOString();
   const textarea = document.getElementById('notesTextarea');
   if (textarea) textarea.value = markdown;
@@ -370,12 +381,79 @@ function updateUndoRedoButtons() {
   if (redoBtn) redoBtn.disabled = notesRedoStack.length === 0;
 }
 
+function locateNotesHistoryChange(before, after, titleOnly) {
+  const prefixLength = (oldText, newText) => {
+    let offset = 0;
+    while (offset < oldText.length && offset < newText.length && oldText[offset] === newText[offset]) offset++;
+    return offset;
+  };
+  if (titleOnly) {
+    const input = document.getElementById('noteTitleInput');
+    const offset = prefixLength(before.title || '', after.title || '');
+    input.focus({ preventScroll: true });
+    input.setSelectionRange(offset, offset);
+    input.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+    return;
+  }
+  if (noteViewMode === 'rich' && typeof RichNoteEditor !== 'undefined') {
+    RichNoteEditor.focusHistoryChange(before.content, after.content);
+    return;
+  }
+  const textarea = document.getElementById('notesTextarea');
+  const offset = prefixLength(before.content || '', after.content || '');
+  textarea.focus({ preventScroll: true });
+  textarea.setSelectionRange(Math.min(offset, textarea.value.length), Math.min(offset, textarea.value.length));
+  // Measure wrapped source lines with the same typography and usable width.
+  const mirror = document.createElement('div');
+  const style = getComputedStyle(textarea);
+  for (const property of ['fontFamily', 'fontSize', 'fontWeight', 'fontStyle', 'lineHeight', 'letterSpacing', 'padding', 'border', 'boxSizing', 'tabSize']) mirror.style[property] = style[property];
+  Object.assign(mirror.style, { position: 'fixed', top: '0', left: '-100000px', visibility: 'hidden',
+    width: textarea.offsetWidth + 'px', whiteSpace: 'pre-wrap', overflowWrap: 'break-word' });
+  mirror.textContent = textarea.value.slice(0, offset);
+  const marker = document.createElement('span');
+  marker.textContent = '|';
+  mirror.appendChild(marker);
+  document.body.appendChild(mirror);
+  textarea.scrollTop = Math.max(0, marker.getBoundingClientRect().top - mirror.getBoundingClientRect().top - textarea.clientHeight / 3);
+  mirror.remove();
+  textarea.scrollIntoView({ block: 'nearest', behavior: 'instant' });
+}
+
+function restoreSplitNoteHistory(note,snapshot,beforeChange,status){
+  if(!notesImmersive||!notesImmersiveSplit||String(note.id)!==String(notesSplitNoteId)||String(note.id)===String(activeNoteId))return false;
+  setNotesSplitSecondaryMode('rich');
+  getNotesSplitRichEditor()?.focusHistoryChange(beforeChange.content,snapshot.content);
+  note.content=snapshot.content;
+  note.title=snapshot.title;
+  note.updatedAt=new Date().toISOString();
+  note._dirtyContent=false;
+  note._dirtyTitle=false;
+  saveData('study_notes_v2',notes);
+  renderNotesImmersiveSplit();
+  getNotesSplitRichEditor()?.setMarkdown(note.content||'',note.id);
+  getNotesSplitRichEditor()?.focusHistoryChange(beforeChange.content,snapshot.content);
+  const label=document.getElementById('notesSplitStatus');
+  if(label)label.textContent=status;
+  updateUndoRedoButtons();
+  renderNoteList();
+  return true;
+}
+
 function undoNote() {
   if (notesUndoStack.length === 0) return;
   if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   const snapshot = notesUndoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
   if (!note) { updateUndoRedoButtons(); return; }
+  const beforeChange = { content: note.content || '', title: note.title || '' };
+  if(notesImmersive&&notesImmersiveSplit&&String(note.id)===String(notesSplitNoteId)&&String(note.id)!==String(activeNoteId)){
+    notesRedoStack.push({noteId:note.id,content:note.content,title:note.title,timestamp:Date.now()});
+    restoreSplitNoteHistory(note,snapshot,beforeChange,'已撤销');
+    return;
+  }
+  if(String(note.id)!==String(activeNoteId))selectNote(note.id);
+  const titleOnly = beforeChange.content === (snapshot.content || '');
+  locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
   notesRedoStack.push({ noteId: note.id, content: note.content, title: note.title, timestamp: Date.now() });
   note.content = snapshot.content;
   note.title = snapshot.title;
@@ -394,6 +472,7 @@ function undoNote() {
   document.getElementById('notesWordCount').textContent = chars + ' 字';
   updateUndoRedoButtons();
   renderNoteList();
+  locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
 }
 
 function redoNote() {
@@ -402,6 +481,15 @@ function redoNote() {
   const snapshot = notesRedoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
   if (!note) { updateUndoRedoButtons(); return; }
+  const beforeChange = { content: note.content || '', title: note.title || '' };
+  if(notesImmersive&&notesImmersiveSplit&&String(note.id)===String(notesSplitNoteId)&&String(note.id)!==String(activeNoteId)){
+    notesUndoStack.push({noteId:note.id,content:note.content,title:note.title,timestamp:Date.now()});
+    restoreSplitNoteHistory(note,snapshot,beforeChange,'已恢复');
+    return;
+  }
+  if(String(note.id)!==String(activeNoteId))selectNote(note.id);
+  const titleOnly = beforeChange.content === (snapshot.content || '');
+  locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
   notesUndoStack.push({ noteId: note.id, content: note.content, title: note.title, timestamp: Date.now() });
   note.content = snapshot.content;
   note.title = snapshot.title;
@@ -420,6 +508,7 @@ function redoNote() {
   document.getElementById('notesWordCount').textContent = chars + ' 字';
   updateUndoRedoButtons();
   renderNoteList();
+  locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
 }
 
 // ═══════════ Notes: Rendering ═══════════
@@ -1636,7 +1725,6 @@ function renderNotes(){
   const textarea=document.getElementById('notesTextarea');
   if(titleInput)titleInput.value=note.title;
   if(textarea)textarea.value=note.content;
-  if(typeof RichNoteEditor!=='undefined')RichNoteEditor.setMarkdown(note.content||'',note.id);
   switchNoteView(noteViewMode);
   const chars=(note.content||'').replace(/\s/g,'').length;
   const wcEl=document.getElementById('notesWordCount');
@@ -1722,6 +1810,14 @@ const FORMAT_DEFS = {
   code:          { p: '`',  s: '`',  ph: '代码' },
   latex:         { p: '\\(', s: '\\)', ph: '公式' },
 };
+
+// Formatting acts on the editor's selection. Moving focus to a toolbar button
+// can collapse that selection before command() reads it (creating a placeholder
+// fold instead of wrapping the selected content).
+document.getElementById('notesFormatToolbar')?.addEventListener('pointerdown', event => {
+  const button = event.target.closest('button.fmt-btn');
+  if (button && !button.disabled && event.button === 0) event.preventDefault();
+});
 
 function formatText(type) {
   const selectionNode=window.getSelection()?.anchorNode;
@@ -1945,7 +2041,7 @@ function getNotesSplitRichEditor(){
   notesSplitRichEditor=createRichNoteEditor({
     hostId:'notesSplitRichEditor',
     toolbarSelector:'#notesFormatToolbar',
-    onChange:(markdown,_previous,noteId)=>onNotesSplitRichChange(markdown,noteId)
+    onChange:(markdown,_previous,noteId,change)=>onNotesSplitRichChange(markdown,noteId,change)
   });
   notesSplitRichEditor.init();
   return notesSplitRichEditor;
@@ -2005,12 +2101,13 @@ function renderNotesImmersiveSplit(){
 
   const preview=document.getElementById('notesSplitPreview');
   const editor=document.getElementById('notesSplitRichEditor');
+  const splitAnchor=typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(preview?.clientHeight?preview:editor,secondary.content||'',secondary.id):null;
   const richEditor=getNotesSplitRichEditor();
   if(preview){
     preview.style.display=notesSplitMode==='preview'?'block':'none';
     if(notesSplitMode==='preview'){
-      preview.innerHTML=formatNoteContent(secondary.content||'');
-      applyNoteFoldStates(preview,secondary.id);
+      if(typeof NoteReadingRenderer!=='undefined')NoteReadingRenderer.mount(preview,secondary.content||'',secondary);
+      else{preview.innerHTML=formatNoteContent(secondary.content||'');applyNoteFoldStates(preview,secondary.id);}
     }
   }
   if(editor){
@@ -2022,6 +2119,7 @@ function renderNotesImmersiveSplit(){
   }
   const status=document.getElementById('notesSplitStatus');
   if(status&&document.activeElement!==editor)status.textContent='已保存';
+  if(typeof NoteViewPosition!=='undefined')NoteViewPosition.restore(notesSplitMode==='preview'?preview:editor,secondary.content||'',secondary.id,splitAnchor);
 }
 
 function setNotesImmersiveSplit(force){
@@ -2063,12 +2161,16 @@ function setNotesSplitSecondaryMode(mode){
   notesSplitMode=(mode==='rich'||mode==='edit')?'rich':'preview';
   localStorage.setItem('study_notes_split_mode',notesSplitMode);
   renderNotesImmersiveSplit();
-  if(notesSplitMode==='rich')setTimeout(()=>document.getElementById('notesSplitRichEditor')?.focus(),0);
+  if(notesSplitMode==='rich')setTimeout(()=>document.getElementById('notesSplitRichEditor')?.focus({preventScroll:true}),0);
 }
 
-function onNotesSplitRichChange(value,noteId){
+function onNotesSplitRichChange(value,noteId,change={}){
   const note=findNoteByLooseId(noteId||notesSplitNoteId);
   if(!note||String(note.id)===String(activeNoteId)||note.content===String(value))return;
+  if(change.historyBoundary){
+    pushNotesUndo(note.id,note.content||'',note.title);
+    notesRedoStack=[];
+  }
   note.content=String(value);
   note.updatedAt=new Date().toISOString();
   note._summaryFresh=false;
@@ -2168,6 +2270,8 @@ document.addEventListener('keydown',function(event){
 function getNotePreviewHeadings(){
   const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
   if(!preview)return[];
+  const reading=noteViewMode==='preview'&&typeof NoteReadingRenderer!=='undefined'?NoteReadingRenderer.get(preview):null;
+  if(reading)return reading.getHeadings();
   return Array.from(preview.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]'));
 }
 
@@ -2240,7 +2344,8 @@ function setActiveNoteTocItem(targetId){
 function jumpToNoteHeading(targetId){
   const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
   if(!preview)return;
-  const heading=getNotePreviewHeadings().find(item=>item.id===targetId);
+  const reading=noteViewMode==='preview'&&typeof NoteReadingRenderer!=='undefined'?NoteReadingRenderer.get(preview):null;
+  const heading=reading?reading.ensureHeading(targetId):getNotePreviewHeadings().find(item=>item.id===targetId);
   if(!heading)return;
   const previewRect=preview.getBoundingClientRect();
   const headingRect=heading.getBoundingClientRect();
@@ -2253,7 +2358,7 @@ function jumpToNoteHeading(targetId){
     _noteTocJumpTimer=0;
     onNotePreviewScroll();
   },reduceMotion?80:1400);
-  preview.scrollTo({top:Math.max(0,top),behavior:reduceMotion?'auto':'smooth'});
+  preview.scrollTo({top:Math.max(0,top),behavior:reduceMotion||reading?'auto':'smooth'});
   setActiveNoteTocItem(targetId);
 }
 
@@ -2297,6 +2402,9 @@ function updateNoteReadingProgress(preview){
 }
 
 function switchNoteView(mode){
+  const note=getActiveNote();
+  const previousView=document.getElementById(noteViewMode==='edit'?'notesTextarea':noteViewMode==='rich'?'notesRichEditor':'notesPreview');
+  const position=mode!==noteViewMode&&note&&typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(previousView,note.content||'',note.id):null;
   noteViewMode=mode;
   localStorage.setItem('study_note_view_mode',mode);
   const section=document.getElementById('section-notes');
@@ -2307,7 +2415,7 @@ function switchNoteView(mode){
   ta.classList.add('hidden');rich?.classList.remove('active');pv.classList.remove('active');if(sp)sp.style.display='none';
   [eb,rb,pb,sb].forEach(b=>{if(b)b.classList.remove('active')});
   const tb=document.getElementById('notesFormatToolbar');if(tb)tb.style.display=(mode==='edit'||mode==='rich')?'':'none';
-  if(mode==='preview'){const n=getActiveNote();pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';if(n)applyNoteFoldStates(pv,n.id);pv.classList.add('active');if(pb)pb.classList.add('active');}
+  if(mode==='preview'){const n=getActiveNote();if(n&&typeof NoteReadingRenderer!=='undefined')NoteReadingRenderer.mount(pv,n.content||'',n);else{pv.innerHTML=n?formatNoteContent(n.content||''):'<p style="color:var(--text-secondary)">暂无内容</p>';if(n)applyNoteFoldStates(pv,n.id);}pv.classList.add('active');if(pb)pb.classList.add('active');}
   else if(mode==='summary'){if(sp)sp.style.display='flex';if(sb)sb.classList.add('active');renderNoteSummary();const n=getActiveNote();if(n&&!n._summaryFresh&&!n._summaryUpdating&&(n.content||'').trim().length>0&&isAutoSummaryEnabled())generateNoteSummary(n);}
   else if(mode==='rich'){const n=getActiveNote();if(typeof RichNoteEditor!=='undefined')RichNoteEditor.setMarkdown(n?.content||'',n?.id);rich?.classList.add('active');if(rb)rb.classList.add('active');}
   else{const n=getActiveNote();if(ta&&n)ta.value=n.content||'';ta.classList.remove('hidden');if(eb)eb.classList.add('active');} // 不自动聚焦，避免移动端切编辑模式弹键盘
@@ -2321,6 +2429,7 @@ function switchNoteView(mode){
   if(mode==='preview'||mode==='rich')requestAnimationFrame(()=>updateNoteReadingProgress(mode==='rich'?rich:pv));
   else updateNoteReadingProgress(null);
   if(notesImmersive)renderNotesImmersiveSplit();
+  if(note&&typeof NoteViewPosition!=='undefined')NoteViewPosition.restore(mode==='edit'?ta:mode==='rich'?rich:mode==='preview'?pv:null,note.content||'',note.id,position);
 }
 
 // ═══════════ Notes: Summary ═══════════

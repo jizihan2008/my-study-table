@@ -1438,10 +1438,10 @@ function renderNoteMindmap(code) {
 // ── Shared Markdown-to-HTML base renderer ──
 // 统一交给 StudyMarkdown：CommonMark/GFM、KaTeX、脚注、任务列表、代码高亮和 DOMPurify。
 // extraProcessor 在最终消毒前执行，供 AI 的 [ID:数字] 等受控扩展注入 HTML。
-function formatMarkdownBase(text, extraProcessor) {
+function formatMarkdownBase(text, extraProcessor, sourceMap = false) {
   if (typeof text !== 'string') return '';
   if (typeof StudyMarkdown !== 'undefined' && StudyMarkdown && typeof StudyMarkdown.render === 'function') {
-    return StudyMarkdown.render(text, { transformHtml: extraProcessor });
+    return StudyMarkdown.render(text, { transformHtml: extraProcessor, sourceMap });
   }
   let html = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\n/g, '<br>');
   return html;
@@ -1506,12 +1506,13 @@ function injectNoteAnnotations(text, note) {
 }
 
 function formatNoteContent(text, note) {
-  // Replace literal \n (backslash-n) with real newlines before markdown processing
-  let cleaned = (text || '').replace(/\\n/g, '\n');
+  // Note content is already decoded text. Decoding backslash escapes again
+  // corrupts TeX commands such as \neq/\nu and literal escapes in code blocks.
+  let cleaned = String(text || '');
   // 注入批注锚点标记（基于源文本偏移，与 textarea 一致）
   const n = note || (typeof getActiveNote === 'function' ? getActiveNote() : null);
   cleaned = injectNoteAnnotations(cleaned, n);
-  let html = formatMarkdownBase(cleaned);
+  let html = formatMarkdownBase(cleaned, undefined, true);
   // 批注标记 → 高亮 <mark>（⟦id⟧ / ⟦/id⟧ 不受 markdown 处理影响）
   html = html.replace(/\u27E6([A-Za-z0-9_-]+)\u27E7/g, '<mark class="note-ann" data-id="$1">');
   html = html.replace(/\u27E6\/([A-Za-z0-9_-]+)\u27E7/g, '</mark>');

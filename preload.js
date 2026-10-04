@@ -62,6 +62,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   filesCreateFolder: (payload) => ipcRenderer.invoke('files:create-folder', payload),
   filesImportData: (files, parentId) => ipcRenderer.invoke('files:import-data', files, parentId),
   filesList: () => ipcRenderer.invoke('files:list'),
+  filesOrganize: (payload) => ipcRenderer.invoke('files:organize', payload),
   filesRead: (id) => ipcRenderer.invoke('files:read', id),
   filesOpen: (id) => ipcRenderer.invoke('files:open', id),
   filesShowDir: (folderId) => ipcRenderer.invoke('files:show-dir', folderId),

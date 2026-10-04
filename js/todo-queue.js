@@ -71,8 +71,10 @@ function buildAiTodoQueueSnapshot() {
   const lines = ids.map((id, index) => {
     const todo = findTodo(id);
     const path = getFocusTodoDisplayPath(todo).full;
+    const note = typeof getTodoSharedNote === 'function' ? getTodoSharedNote(id) : '';
     return `  ${index + 1}. [ID:${id}] ${todo.done ? '已完成' : '未完成'} ${path}`
-      + (todo.dueDate ? `（截止 ${todo.dueDate}）` : '');
+      + (todo.dueDate ? `（截止 ${todo.dueDate}）` : '')
+      + (note ? `｜共享备注：${note}` : '');
   });
   return `📋 待办队列（共 ${ids.length} 项，按用户当前排序；这是候选待办，不代表已经加入今日或明日聚焦）：\n${lines.join('\n')}\n`;
 }
@@ -103,6 +105,15 @@ function removeTodoFromQueue(id) {
 function toggleTodoQueue() {
   const expanded = localStorage.getItem('study_todo_queue_expanded') === 'true';
   localStorage.setItem('study_todo_queue_expanded', String(!expanded));
+  renderTodoQueue();
+}
+
+function setTodoQueueHideDone(hidden) {
+  try {
+    localStorage.setItem('study_todo_queue_hide_done', String(hidden));
+  } catch {
+    showMiniToast('队列显示设置保存失败', 'error');
+  }
   renderTodoQueue();
 }
 
@@ -218,15 +229,22 @@ function renderTodoQueue() {
   const list = document.getElementById('todayTodoQueueList');
   if (!list) return;
   const ids = loadTodoQueue();
+  const hideDone = localStorage.getItem('study_todo_queue_hide_done') === 'true';
+  const visibleIds = hideDone ? ids.filter(id => !findTodo(id).done) : ids;
+  const hideDoneButton = document.getElementById('todayTodoQueueHideDone');
+  hideDoneButton.setAttribute('aria-pressed', String(hideDone));
+  hideDoneButton.textContent = hideDone ? '显示已完成' : '隐藏已完成';
+  hideDoneButton.title = hideDone ? '显示已完成待办' : '隐藏已完成待办';
   const expanded = localStorage.getItem('study_todo_queue_expanded') === 'true';
-  document.getElementById('todayTodoQueueCount').textContent = `${ids.length} 项`;
+  document.getElementById('todayTodoQueueCount').textContent = hideDone && visibleIds.length !== ids.length
+    ? `${visibleIds.length} / ${ids.length} 项` : `${ids.length} 项`;
   const toggle = document.getElementById('todayTodoQueueToggle');
-  toggle.hidden = ids.length <= 5;
+  toggle.hidden = visibleIds.length <= 5;
   document.getElementById('todayTodoQueueToggleLabel').textContent = expanded ? '折叠' : '展开';
   toggle.title = expanded ? '折叠待办队列（显示前 5 项）' : '展开全部待办队列';
   document.getElementById('todayTodoQueueCard').classList.toggle('is-collapsed', !expanded);
   toggle.setAttribute('aria-expanded', String(expanded));
-  list.innerHTML = ids.length ? (expanded ? ids : ids.slice(0, 5)).map((id, index) => {
+  list.innerHTML = visibleIds.length ? (expanded ? visibleIds : visibleIds.slice(0, 5)).map((id, index) => {
     const todo = findTodo(id);
     const path = getFocusTodoDisplayPath(todo);
     const note = getTodoSharedNote(id);
@@ -241,7 +259,7 @@ function renderTodoQueue() {
         ${path.parents.length ? '<span class="focus-parent-path">' + path.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>') + '</span>' : ''}
         <span class="focus-title">${escapeHtml(todo.text)}</span>
       </span>
-      <button class="focus-nav" onclick="goToTodoFromFocus(${id})" title="跳转到待办目录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>去目录</button>
+      <button class="focus-nav" onclick="goToTodoFromFocus(${id})" title="跳转到待办目录" aria-label="跳转到待办目录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></button>
       <button class="focus-note-edit" onclick="event.stopPropagation(); editQueueTodoNote(${id})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>
       <div class="todo-queue-actions">
         <button class="focus-nav" title="添加到今日聚焦" onclick="addQueueToFocus(0, ${id})" ${todo.done ? 'disabled' : ''}>今日</button>
@@ -252,7 +270,7 @@ function renderTodoQueue() {
         <input class="today-focus-note-input" id="queueTodoNoteInput-${id}" type="text" maxlength="160" value="${escapeAttr(note)}" placeholder="写一句话提醒自己…" onkeydown="handleQueueTodoNoteKeydown(event, ${id})" onblur="saveQueueTodoNote(${id}, this.value)">
       </div>` : (note ? `<button class="today-focus-note-row" onclick="editQueueTodoNote(${id})" title="点击编辑"><i data-lucide="message-square" class="lucide-icon"></i><span>${escapeHtml(note)}</span></button>` : '')}
       </div>`;
-  }).join('') : '<div class="todo-queue-empty">在待办上右键，选择「加入待办队列」</div>';
+  }).join('') : `<div class="todo-queue-empty">${ids.length ? '队列中的待办均已完成，点击「显示已完成」可查看' : '在待办上右键，选择「加入待办队列」'}</div>`;
   document.querySelectorAll('[data-queue-fill]').forEach(button => { button.disabled = !ids.some(id => !findTodo(id).done); });
   if (document.getElementById('queueTodoPicker')?.style.display === 'block') renderQueueTodoPicker();
   if (typeof lucide !== 'undefined') lucide.createIcons();

@@ -3188,7 +3188,7 @@ const MIGRATION_KEYS = [
   'study_checkin', 'study_today_focus', 'study_todo_queue', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
   'study_ai_usage_v1', 'study_ai_usage_v2',
   // UI/状态/敏感（仅本地备份，不同步）
-  'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv',
+  'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv', 'study_today_review_layout',
   'study_api_keys', 'study_active_api_key_id', 'study_developer_mode', 'study_debug_mode',
   'study_automations'
 ];
@@ -3848,7 +3848,9 @@ function formatDailyReportFocusPath(focusItem) {
   const todo = (typeof todos !== 'undefined' && Array.isArray(todos))
     ? todos.find(t => t.id === focusItem.todoId)
     : null;
-  return todo ? formatDailyReportTodoPath(todo) : (focusItem.text || '未命名任务');
+  const name = todo ? formatDailyReportTodoPath(todo) : (focusItem.text || '未命名任务');
+  const note = typeof getTodoSharedNote === 'function' ? getTodoSharedNote(focusItem.todoId) : (focusItem.note || '');
+  return name + (note ? `｜共享备注：${note}` : '');
 }
 
 function formatDailyReportTodoPath(todo, fallbackText) {
