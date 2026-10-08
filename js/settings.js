@@ -4015,6 +4015,7 @@ function collectDailyReportData() {
   return {
     todayStr,
     yesterdayStr,
+    aiConversationSummaries: typeof collectReportAiConversations === 'function' ? collectReportAiConversations(yesterdayStr) : [],
     calendarSnapshot: buildAiCalendarSnapshot([{ date: yesterdayStr, label: "昨天" }, { date: todayStr, label: "今天" }]),
     todoQueueSnapshot: typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '',
     todoTreeSnapshot: buildAiTodoTreeSnapshot(),
@@ -4230,6 +4231,7 @@ ${data.reviewDisabled
 ${!data.reviewDisabled && data.overdueReviewCount > 0 ? `⚠️ 其中 ${data.overdueReviewCount} 篇已逾期` : ''}
 【昨日习惯】（昨日完成情况）${data.habitsDoneYesterday}/${data.habitsCount} 已完成
 ${reportHabitLines(data.habitsOverview, 'morning')}
+${typeof formatReportAiConversations === 'function' ? formatReportAiConversations(data.aiConversationSummaries, data.yesterdayStr) : ''}
 ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务｜主线「${data.taskline.currentMain || '未创建'}」${data.taskline.mainProgress !== null ? '进度 ' + data.taskline.mainProgress + '%' : '（暂无任务）'}
   - 激活任务 ${data.taskline.activeCount} 个${data.taskline.activeNames.length > 0 ? '：' + data.taskline.activeNames.join('、') : ''}
   ${data.taskline.ydayDone.length > 0 ? '- 昨日完成任务：' + data.taskline.ydayDone.join('、') : ''}` : ''}${prevReportBlock}
@@ -4474,6 +4476,7 @@ function collectEveningReportData() {
     todayStr,
     tomorrowStr,
     calendarSnapshot: buildAiCalendarSnapshot([{ date: todayStr, label: "今天" }, { date: tomorrowStr, label: "明天" }]),
+    aiConversationSummaries: typeof collectReportAiConversations === 'function' ? collectReportAiConversations(todayStr) : [],
     todoQueueSnapshot: typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '',
     todoTreeSnapshot: buildAiTodoTreeSnapshot(),
     noteTreeSnapshot: buildAiNoteTreeSnapshot(),
@@ -4655,6 +4658,7 @@ ${!data.reviewDisabled && data.reviewDueNotes.length > 0
   : ''}
 【今日习惯】${data.habitsDoneToday}/${data.habitsCount} 已完成
 ${reportHabitLines(data.habitsOverview, 'evening')}
+${typeof formatReportAiConversations === 'function' ? formatReportAiConversations(data.aiConversationSummaries, data.todayStr) : ''}
 ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务｜主线「${data.taskline.currentMain || '未创建'}」${data.taskline.mainProgress !== null ? '进度 ' + data.taskline.mainProgress + '%' : '（暂无任务）'}
   - 激活任务 ${data.taskline.activeCount} 个${data.taskline.activeNames.length > 0 ? '：' + data.taskline.activeNames.join('、') : ''}
   ${data.taskline.ydayDone.length > 0 ? '- 今日完成任务：' + data.taskline.ydayDone.join('、') : ''}` : ''}${prevReportBlock}

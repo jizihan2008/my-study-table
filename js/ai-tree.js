@@ -178,7 +178,7 @@ function migrateConvToTree(conv) {
       const userNodeId = genId();
       tree[userNodeId] = {
         id: userNodeId, role: 'user',
-        content: m.content, time: m.time,
+        content: m.content, time: m.time, timestamp: m.timestamp ?? m.createdAt ?? null,
         attachments: m.attachments, visionFiles: m.visionFiles,
         parentId: prevId, children: []
       };
@@ -201,6 +201,7 @@ function migrateConvToTree(conv) {
             role: cm.role || 'assistant',
             content: cm.content,
             time: cm.time,
+            timestamp: cm.timestamp ?? cm.createdAt ?? null,
             reasoning: cm.reasoning,
             keyName: cm.keyName,
             tool_calls: cm.tool_calls,
@@ -227,6 +228,7 @@ function migrateConvToTree(conv) {
       role: m.role || 'assistant',
       content: m.content,
       time: m.time,
+      timestamp: m.timestamp ?? m.createdAt ?? null,
       reasoning: m.reasoning,
       keyName: m.keyName,
       attachments: m.attachments,
@@ -306,6 +308,7 @@ function appendMessage(conv, msg) {
   const parentId = conv.activePath[conv.activePath.length - 1];
   const nodeId = genId();
   const node = Object.assign({}, msg, {
+    timestamp: Object.prototype.hasOwnProperty.call(msg, 'timestamp') ? msg.timestamp : Date.now(),
     id: nodeId,
     parentId: parentId,
     children: []
@@ -328,6 +331,7 @@ function createBranch(conv, baseNodeId, msg) {
   if (!conv.tree || !conv.tree[baseNodeId]) return null;
   const nodeId = genId();
   const node = Object.assign({}, msg, {
+    timestamp: Object.prototype.hasOwnProperty.call(msg, 'timestamp') ? msg.timestamp : Date.now(),
     id: nodeId,
     parentId: baseNodeId,
     children: []
@@ -354,6 +358,7 @@ function createBranchFromEdit(conv, baseUserId, newContent, extraFields) {
   if (!conv.tree[parentId]) return null;
   const nodeId = genId();
   const node = Object.assign({}, extraFields || {}, {
+    timestamp: extraFields?.timestamp ?? Date.now(),
     id: nodeId,
     role: 'user',
     content: newContent,
@@ -499,6 +504,11 @@ function trimConvMessages(conv, maxLen) {
   }
 
   const keep = nodes.slice(-maxLen).map(n => ({ role: n.role, content: n.content, time: n.time, reasoning: n.reasoning, keyName: n.keyName, attachments: n.attachments, visionFiles: n.visionFiles, tool_calls: n.tool_calls, _toolInfo: n._toolInfo, _malformedToolProtocol: n._malformedToolProtocol, _dsmlToolProtocol: n._dsmlToolProtocol, _toolRoundCleanText: n._toolRoundCleanText, _kimiSearch: n._kimiSearch, _kimiSearchResult: n._kimiSearchResult }));
+  keep.forEach((message, index) => {
+    const original = nodes[nodes.length - keep.length + index];
+    message.timestamp = Object.prototype.hasOwnProperty.call(original, 'timestamp')
+      ? original.timestamp : (Number(original.id) > 1e14 ? Math.floor(Number(original.id) / 1000) : Number(original.id));
+  });
   resetConvTree(conv);
   for (const k of keep) appendMessage(conv, k);
   return true;

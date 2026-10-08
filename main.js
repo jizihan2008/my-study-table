@@ -15,6 +15,7 @@ const {
   parseExternalUrl,
   parsePublicWebUrl
 } = require('./electron/security');
+const { normalizeReadOptions, waitForContent, createSnapshotCache, pageSnapshot, installRequestGuard } = require('./electron/web-reader');
 const { registerBackupIpc } = require('./electron/register-backup-ipc');
 const { registerDiagnostics } = require('./electron/diagnostics');
 const {
@@ -1911,110 +1912,91 @@ ipcMain.handle('mail:fetch', async (event, cfg) => {
 
 // ═══════════ 网页阅读 IPC（AI 读网页）：隐藏 BrowserWindow 真实渲染 + 正文提取 ═══════════
 
-// 常规 Chrome User-Agent，规避部分站点对爬虫的拦截
-const WEB_READER_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36';
-const WEB_READER_TIMEOUT = 25000;     // 整体渲染超时（ms）
-const WEB_READER_STABLE_WAIT = 12000; // 等待 JS 渲染稳定的最大时长（ms）
+const WEB_READER_TIMEOUT = 25000;
+const webReaderSnapshots = createSnapshotCache();
+let activeWebReaders = 0;
 
-// 在页面上下文执行的正文提取脚本：移除噪声节点后返回 { title, text }
-function webReaderExtractScript() {
-  return `(() => {
-    try {
-      const noise = 'script,style,noscript,svg,canvas,iframe,nav,footer,header,aside,form,' +
-        '[class*="advertisement"],[class*="advert"],[id*="advert"],[class*="ads"],[id*="ads"],' +
-        '.ad,.ads,.banner,.cookie,.popup,.modal,.comment,.related,[hidden]';
-      document.querySelectorAll(noise).forEach(n => n.remove());
-      document.querySelectorAll('*').forEach(el => {
-        try {
-          const st = window.getComputedStyle(el);
-          if (st.display === 'none' || st.visibility === 'hidden' || el.getClientRects().length === 0) el.remove();
-        } catch (e) {}
-      });
-      const main = document.querySelector('article') || document.querySelector('main') || document.body;
-      let text = (main && main.innerText) || '';
-      text = text.replace(/[ \\t]+/g, ' ').replace(/\\n\\s*\\n+/g, '\\n').trim();
-      return JSON.stringify({ title: document.title || '', text: text });
-    } catch (e) {
-      return JSON.stringify({ title: '', text: '', error: String((e && e.message) || e) });
-    }
-  })()`;
-}
-
-// 等待页面 JS 渲染趋于稳定：正文长度两次采样一致且非空，或超时兜底
-async function waitWebReaderStable(wc) {
-  const deadline = Date.now() + WEB_READER_STABLE_WAIT;
-  let prev = -1;
-  while (Date.now() < deadline) {
-    try {
-      const len = await wc.executeJavaScript('document.body ? document.body.innerText.length : 0');
-      if (len > 0 && len === prev) {
-        await new Promise(r => setTimeout(r, 500));
-        const again = await wc.executeJavaScript('document.body ? document.body.innerText.length : 0');
-        if (again === len) return true;
-      }
-      prev = len;
-    } catch (e) { /* 页面尚未就绪，继续等待 */ }
-    await new Promise(r => setTimeout(r, 400));
-  }
-  return true;
-}
-
-// IPC: 阅读网页正文 —— 隐藏 BrowserWindow 真实渲染（支持 JS 渲染的 SPA），提取 title + 正文纯文本
-ipcMain.handle('web:read', async (event, { url, maxChars } = {}) => {
-  let win = null;
+ipcMain.handle('web:read', async (event, payload = {}) => {
+  let win = null, timer = null, cleanup = null, acquired = false, cancelled = false;
   try {
-    if (!url) return { ok: false, error: '缺少网页 URL' };
-    const target = parsePublicWebUrl(url);
+    if (!event.sender || event.sender !== mainWindow?.webContents) return { ok: false, error: '网页读取只允许主窗口调用' };
+    const options = normalizeReadOptions(payload);
+    const owner = event.sender.id;
+    if (options.snapshotId) return pageSnapshot(webReaderSnapshots.get(owner, options), options, options.snapshotId);
+    if (options.offset > 0) return { ok: false, error: '续读必须提供上次返回的 snapshotId' };
+    if (activeWebReaders >= 3) return { ok: false, error: '网页读取繁忙，请稍后重试' };
+    activeWebReaders++; acquired = true;
     win = new BrowserWindow({
       show: false,
       webPreferences: {
-        contextIsolation: true,
-        nodeIntegration: false,
-        sandbox: true,
-        backgroundThrottling: false, // 隐藏窗口禁用节流，保证 SPA 的 JS 正常执行
-        partition: 'web-reader-' + Date.now() + '-' + Math.floor(Math.random() * 1e6) // 独立临时会话，隔离 cookie
+        contextIsolation: true, nodeIntegration: false, sandbox: true,
+        backgroundThrottling: false,
+        partition: 'web-reader-' + crypto.randomUUID()
       }
     });
-    // 安全加固：拦截新窗口/弹窗，拒绝一切权限请求
-    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    win.webContents.session.setPermissionRequestHandler((wc, permission, cb) => cb(false));
-    win.webContents.session.setPermissionCheckHandler(() => false);
-    win.webContents.setUserAgent(WEB_READER_UA);
-    let blockedNavigation = '';
-    const guardWebReaderNavigation = (navigationEvent, navigationUrl) => {
+    const wc = win.webContents;
+    wc.setWindowOpenHandler(() => ({ action: 'deny' }));
+    wc.session.setPermissionRequestHandler((wc, permission, cb) => cb(false));
+    wc.session.setPermissionCheckHandler(() => false);
+    wc.setUserAgent(wc.getUserAgent().replace(/\sElectron\/\S+/g, '').replace(/\smy-study-table\/\S+/gi, ''));
+    let blockedNavigation = '', statusCode = 0, contentType = '', blockedResources = 0;
+    const guardNavigation = (navigationEvent, navigationUrl) => {
       try { parsePublicWebUrl(navigationUrl); }
-      catch (error) {
-        blockedNavigation = String((error && error.message) || error);
-        navigationEvent.preventDefault();
-      }
+      catch (error) { blockedNavigation = error.message; navigationEvent.preventDefault(); }
     };
-    win.webContents.on('will-redirect', guardWebReaderNavigation);
-    win.webContents.on('will-navigate', guardWebReaderNavigation);
-
-    const outcome = await Promise.race([
-      (async () => {
-        try {
-          await win.loadURL(target.href);
-        } catch (e) {
-          return { ok: false, error: '页面加载失败：' + String((e && e.message) || e) };
-        }
-        if (blockedNavigation) return { ok: false, error: '页面跳转已被拦截：' + blockedNavigation };
-        await waitWebReaderStable(win.webContents);
-        if (blockedNavigation) return { ok: false, error: '页面跳转已被拦截：' + blockedNavigation };
-        const raw = await win.webContents.executeJavaScript(webReaderExtractScript());
-        const data = JSON.parse(raw || '{}');
-        if (data.error) return { ok: false, error: '页面内容提取失败：' + data.error };
-        const text = (data.text || '').trim();
-        if (!text) return { ok: false, error: '未能提取到页面正文（可能需登录或需交互渲染）' };
-        return { ok: true, title: (data.title || '').trim(), text, finalUrl: win.webContents.getURL() || target.href };
-      })(),
-      new Promise(resolve => setTimeout(() => resolve({ ok: false, error: '页面渲染超时（超过 25 秒）' }), WEB_READER_TIMEOUT))
+    wc.on('will-redirect', guardNavigation);
+    wc.on('will-navigate', guardNavigation);
+    cleanup = installRequestGuard(wc.session, (details, error) => {
+      if (details.resourceType === 'mainFrame') blockedNavigation = error.message;
+      else blockedResources++;
+    });
+    wc.session.webRequest.onHeadersReceived((details, callback) => {
+      if (details.resourceType === 'mainFrame') {
+        statusCode = details.statusCode;
+        contentType = String(Object.entries(details.responseHeaders || {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1]?.[0] || '');
+      }
+      callback({ cancel: false });
+    });
+    const alive = () => !cancelled && !win.isDestroyed();
+    const work = async () => {
+      try { await win.loadURL(options.url); }
+      catch (error) { return { ok: false, error: blockedNavigation ? '页面请求已被拦截：' + blockedNavigation : '页面加载失败：' + error.message }; }
+      if (blockedNavigation) return { ok: false, error: '页面请求已被拦截：' + blockedNavigation };
+      if (statusCode >= 400) return { ok: false, error: `网页返回 HTTP ${statusCode}（可能需要登录或被网站拦截）` };
+      if (contentType && !/text\/|html|xml|json|javascript/i.test(contentType)) return { ok: false, error: '该链接不是可阅读的文本网页，请使用文件/PDF 阅读功能' };
+      const { data, stable } = await waitForContent(wc, { alive });
+      if (!alive()) return { ok: false, error: '网页读取已取消' };
+      if (blockedNavigation) return { ok: false, error: '页面跳转已被拦截：' + blockedNavigation };
+      if (data.status === 'challenge') return { ok: false, error: '网站返回验证码、人机验证或访问拦截页面，未读取到目标正文' };
+      if (data.status === 'login_required') return { ok: false, error: '该网页需要登录；阅读器使用独立会话，未读取到目标正文' };
+      if (!data.text?.trim()) return { ok: false, error: '未能提取网页正文（可能需要交互或不支持该页面格式）' };
+      const warnings = [];
+      if (!stable) warnings.push('等待内容稳定超时，正文可能未加载完整');
+      if (data.sourceTruncated) warnings.push('页面超过提取上限，快照可能不完整');
+      if (data.hasFrames) warnings.push('页面包含 iframe，未提取其中的内容');
+      if (blockedResources) warnings.push('部分非公网或不支持的资源请求已被拦截，内容可能不完整');
+      const snapshot = { title: data.title, text: data.text, headings: data.headings, links: data.links,
+        sourceTruncated: data.sourceTruncated, warnings, finalUrl: parsePublicWebUrl(wc.getURL()).href };
+      const snapshotId = webReaderSnapshots.put(owner, options.url, snapshot);
+      return pageSnapshot(snapshot, options, snapshotId);
+    };
+    return await Promise.race([
+      work(),
+      new Promise(resolve => { timer = setTimeout(() => {
+        cancelled = true;
+        resolve({ ok: false, error: '网页读取超时（超过 25 秒），请稍后重试' });
+      }, WEB_READER_TIMEOUT); })
     ]);
-    return outcome;
-  } catch (err) {
-    return { ok: false, error: '读取网页失败：' + String((err && err.message) || err) };
+  } catch (error) {
+    return { ok: false, error: '读取网页失败：' + String(error.message || error) };
   } finally {
-    if (win) { try { win.destroy(); } catch (e) {} }
+    cancelled = true;
+    if (timer) clearTimeout(timer);
+    if (win) {
+      try { win.destroy(); } catch (_) {}
+      try { if (cleanup) cleanup(); } catch (_) {}
+    }
+    if (acquired) activeWebReaders--;
   }
 });
 

@@ -10,6 +10,7 @@
     "check": "node scripts/check-project.js",
     "test": "node --test tests/*.test.js",
     "test:e2e": "playwright test",
+    "test:web-reader:browser": "node --test tests/browser/web-reader-dom.test.js",
     "verify": "npm run check && npm test",
     "build": "electron-builder --win",
     "build:dir": "electron-builder --win --dir",

@@ -19,8 +19,8 @@ const PROMPT_INSERTIONS = [
   { token: '我的补充', hint: '生成日报前输入的补充要求' }
 ];
 const REPORT_DEFAULTS = {
-  morning: '你是用户的学习伙伴。请生成一份晨间日报，帮助用户回顾昨天、安排今天。语气清醒、温暖、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、逾期事项、今日聚焦、复习与习惯，并给出明确的今日方向。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}',
-  evening: '你是用户的学习伙伴。请生成一份晚间日报，帮助用户总结今天、沉淀收获，并为明天指出方向。语气温暖、具体、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、专注时间、笔记、复习、习惯和遗留事项。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}'
+  morning: '你是用户的学习伙伴。请生成一份晨间日报，帮助用户回顾昨天、安排今天。语气清醒、温暖、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、逾期事项、今日聚焦、复习与习惯，并给出明确的今日方向。结合昨天所有 AI 对话的摘要与摘录，回顾讨论主题、结论、收获和待解决问题。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}',
+  evening: '你是用户的学习伙伴。请生成一份晚间日报，帮助用户总结今天、沉淀收获，并为明天指出方向。语气温暖、具体、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、专注时间、笔记、复习、习惯和遗留事项。结合今天所有 AI 对话的摘要与摘录，总结讨论主题、结论、收获和待解决问题。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}'
 };
 let selectedPromptTemplate = 'chat';
 let selectedPromptView = 'source';
@@ -198,6 +198,7 @@ function promptPreviewContext(templateId) {
 }
 
 const PROMPT_DATA_LABELS = {
+  aiConversationSummaries: 'AI 对话摘要', convId: '会话 ID', convTitle: '会话标题', date: '对话日期', messageCount: '消息数', summary: '摘要', excerpts: '当日对话摘录（待归纳）',
   todoTreeSnapshot: '完整待办树', noteTreeSnapshot: '完整笔记树', todoQueueSnapshot: '待办队列', calendarSnapshot: '日历日程',
   todayStr: '日期', yesterdayStr: '昨日日期', focusItems: '昨日聚焦', todayFocusItems: '今日聚焦', tomorrowFocusItems: '明日聚焦',
   focusDone: '已完成聚焦', focusTotal: '聚焦总数', longTermGoals: '长期目标', yesterdayDoneTodos: '昨日完成待办', todayDoneTodos: '今日完成待办',

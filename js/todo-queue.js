@@ -130,29 +130,56 @@ function startTodoQueueDrag(event, id) {
   event.dataTransfer.effectAllowed = 'move';
   event.dataTransfer.setData('text/plain', String(id));
   event.currentTarget.classList.add('dragging');
+  document.addEventListener('dragover', overTodoQueue, true);
+  document.addEventListener('drop', dropTodoQueue, true);
+}
+
+// 原生拖拽仍由浏览器管理；落点沿纵轴判断，允许横向偏离及行间空隙。
+function getTodoQueueDropTarget(event) {
+  const list = document.getElementById('todayTodoQueueList');
+  if (!list) return null;
+  const bounds = list.getBoundingClientRect();
+  const horizontalTolerance = 160;
+  if (event.clientX < bounds.left - horizontalTolerance || event.clientX > bounds.right + horizontalTolerance
+    || event.clientY < bounds.top || event.clientY > bounds.bottom) return null;
+  const rows = Array.from(list.querySelectorAll('.todo-queue-item'));
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+    if (event.clientY < rect.top + rect.height / 2) {
+      return { row, id: Number(row.dataset.todoId), after: false };
+    }
+  }
+  const row = rows[rows.length - 1];
+  return row ? { row, id: Number(row.dataset.todoId), after: true } : null;
 }
 
 function overTodoQueue(event) {
   if (todoQueueDraggedId == null) return;
+  const target = getTodoQueueDropTarget(event);
+  document.querySelectorAll('.todo-queue-item.drop-before, .todo-queue-item.drop-after')
+    .forEach(row => row.classList.remove('drop-before', 'drop-after'));
+  if (!target) return;
   event.preventDefault();
   event.dataTransfer.dropEffect = 'move';
-  const row = event.currentTarget;
-  const after = event.clientY >= row.getBoundingClientRect().top + row.offsetHeight / 2;
-  row.classList.toggle('drop-before', !after);
-  row.classList.toggle('drop-after', after);
+  target.row.classList.add(target.after ? 'drop-after' : 'drop-before');
 }
 
-function dropTodoQueue(event, targetId) {
+function dropTodoQueue(event) {
   if (todoQueueDraggedId == null) return;
+  const target = getTodoQueueDropTarget(event);
+  if (!target) return;
   event.preventDefault();
-  if (todoQueueDraggedId === targetId) { endTodoQueueDrag(); return; }
-  const row = event.currentTarget;
-  const after = event.clientY >= row.getBoundingClientRect().top + row.offsetHeight / 2;
-  if (!reorderTodoQueue(todoQueueDraggedId, targetId, after)) showMiniToast('队列排序未保存', 'error');
+  event.stopPropagation();
+  if (todoQueueDraggedId !== target.id && !reorderTodoQueue(todoQueueDraggedId, target.id, target.after)) {
+    showMiniToast('队列排序未保存', 'error');
+  }
   endTodoQueueDrag();
 }
 
 function endTodoQueueDrag() {
+  document.removeEventListener('dragover', overTodoQueue, true);
+  document.removeEventListener('drop', dropTodoQueue, true);
+  if (todoQueueDraggedId == null) return;
   todoQueueDraggedId = null;
   renderTodoQueue();
 }
@@ -249,9 +276,8 @@ function renderTodoQueue() {
     const path = getFocusTodoDisplayPath(todo);
     const note = getTodoSharedNote(id);
     const editing = queueNoteEditingId === id;
-    return `<div class="today-focus-item todo-queue-item${todo.done ? ' completed' : ''}" draggable="true"
-      ondragstart="startTodoQueueDrag(event, ${id})" ondragover="overTodoQueue(event)"
-      ondragleave="this.classList.remove('drop-before','drop-after')" ondrop="dropTodoQueue(event, ${id})" ondragend="endTodoQueueDrag()">
+    return `<div class="today-focus-item todo-queue-item${todo.done ? ' completed' : ''}" draggable="true" data-todo-id="${id}"
+      ondragstart="startTodoQueueDrag(event, ${id})" ondragend="endTodoQueueDrag()">
       <div class="today-focus-main">
       <span class="todo-queue-grip" title="拖拽排序 · 第 ${index + 1} 项">⠿</span>
       <span class="focus-check${todo.done ? ' done' : ''} disabled" title="${todo.done ? '已完成' : '未完成'}" aria-label="${todo.done ? '已完成' : '未完成'}"></span>

@@ -347,7 +347,9 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   box-shadow: var(--shadow-lg);
 }
 #section-notes.notes-immersive .notes-format-toolbar {
-  top: 0; transform: translateY(calc(-100% - 2px));
+  /* Keep the revealed toolbar below the 34px floating controls and their gap. */
+  top: calc(max(12px, env(safe-area-inset-top)) + 46px);
+  transform: translateY(calc(-100% - 60px - env(safe-area-inset-top)));
 }
 #section-notes.notes-immersive .notes-editor-footer {
   bottom: 0; transform: translateY(calc(100% + 2px));

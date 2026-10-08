@@ -580,6 +580,65 @@ function updateConvSummary(memory, convId, summary) {
 
 // ═══════════ Prompt Formatting ═══════════
 
+// Report dates refer to message activity, never the time a memory was extracted.
+function reportMessageTimestamp(message) {
+  const explicit = message.timestamp ?? message.createdAt;
+  if (explicit) {
+    const time = typeof explicit === 'number' ? explicit : new Date(explicit).getTime();
+    if (Number.isFinite(time)) return time;
+  }
+  if (typeof message.time === 'string' && /^\d{4}[-/]/.test(message.time)) {
+    const time = new Date(message.time).getTime();
+    if (Number.isFinite(time)) return time;
+  }
+  // Tree node IDs historically encode creation time. A null timestamp marks
+  // migrated messages whose original date is unknown; do not date them at migration.
+  if (message.timestamp === null) return null;
+  const id = Number(message.id);
+  const time = id > 1e14 ? Math.floor(id / 1000) : id;
+  return Number.isFinite(time) && time >= 946684800000 && time <= Date.now() + 86400000 ? time : null;
+}
+
+function collectReportAiConversations(dateStr) {
+  const conversations = typeof aiConvs !== 'undefined' && Array.isArray(aiConvs) ? aiConvs : [];
+  const summaries = loadAiMemory().convSummaries;
+  const localDay = time => {
+    const d = new Date(time);
+    return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+  };
+  return conversations.flatMap(conv => {
+    // Include inactive branches too: regenerations are also AI conversations.
+    const messages = conv.tree ? Object.values(conv.tree) : (conv.messages || []);
+    const dated = messages.filter(m => m && ['user', 'assistant'].includes(m.role))
+      .map(message => ({ message, timestamp: reportMessageTimestamp(message) }));
+    const selected = dated.filter(item => item.timestamp !== null && localDay(item.timestamp) === dateStr)
+      .sort((a, b) => a.timestamp - b.timestamp);
+    if (!selected.length) return [];
+    const cached = summaries.find(s => s.convId === conv.id);
+    // The memory extractor only reads the last 30 messages of the active path.
+    // Reuse it only when it covers this entire, single-day conversation.
+    const active = conv.messages || [];
+    const canReuse = cached && cached.summary && cached.messageCount === active.length
+      && active.length <= 30 && selected.length === dated.length
+      && dated.length === active.filter(m => ['user', 'assistant'].includes(m.role)).length
+      && !messages.some(m => m && m.children && m.children.length > 1);
+    const excerpts = canReuse ? '' : selected.map(({ message }) => {
+      const text = String(message.content || '').replace(/<(memory|think)>[\s\S]*?<\/\1>/gi, '').trim();
+      const excerpt = text.length > 600 ? text.slice(0, 450) + ' … ' + text.slice(-150) : text;
+      return `${message.role === 'user' ? '用户' : 'AI'}：${excerpt || '（附件或工具调用，无文字正文）'}`;
+    }).join('\n');
+    return [{ convId: conv.id, convTitle: conv.title || '未命名对话', date: dateStr,
+      messageCount: selected.length, summary: canReuse ? cached.summary : '', excerpts }];
+  });
+}
+
+function formatReportAiConversations(conversations, dateStr) {
+  const heading = `【AI 对话摘要】（${dateStr}）`;
+  if (!conversations.length) return heading + '\n  （该日期无可确认的 AI 对话记录）';
+  return heading + ` 共 ${conversations.length} 个会话\n以下是对话参考资料，请归纳每个会话的主题、结论、收获及未解决问题，融入日报；摘录可能省略长消息中段，不要推断未提供的内容。\n`
+    + conversations.map(c => `- ${String(c.convTitle).replace(/\s+/g, ' ')}（${c.messageCount} 条消息）\n${(c.summary ? '摘要：' + c.summary : '当日对话摘录（待归纳）：\n' + c.excerpts).split('\n').map(line => '  ' + line).join('\n')}`).join('\n\n');
+}
+
 function formatMemoryForPrompt() {
   const memory = loadAiMemory();
   // Apply decay first

@@ -49,6 +49,17 @@ function conversation(ctx) {
 }
 const result = (tools = [], text = 'final answer') => ({ toolCalls: tools, cleanText: text, rawReply: text, finishReason: 'stop' });
 
+test('webpage tool data is never promoted to a system API message', () => {
+  const ctx = harness();
+  const conv = conversation(ctx);
+  ctx.appendMessage(conv, { role: 'system', content: 'UNTRUSTED_WEB_BODY', _toolInfo: { toolNames: 'read_webpage' } });
+  const messages = ctx.buildApiMessages(conv, [], ctx.getEffectiveApiConfig());
+  const webpage = messages.find(m => String(m.content).includes('UNTRUSTED_WEB_BODY'));
+  assert.equal(webpage.role, 'user');
+  assert.match(webpage.content, /不是用户指令/);
+  assert.equal(messages.some(m => m.role === 'system' && String(m.content).includes('UNTRUSTED_WEB_BODY')), false);
+});
+
 test('AI skill tools support create, list, read, edit and explicit deletion', async () => {
   const ctx = harness();
   // 接口组由用户在对话设置里勾选，不再按消息关键词筛选
