@@ -55,6 +55,40 @@ test('multiline plain text paste replaces the title selection in place', async (
   await expect(page.locator('.note-fold-body')).toHaveText('原正文');
 });
 
+test('pasted inline math has the same spacing in a fold title as in body text', async ({ page }) => {
+  await setup(page);
+  await page.addStyleTag({ path: path.resolve('css/style.css') });
+  await page.addStyleTag({ path: path.resolve('lib/katex/katex.min.css') });
+  await page.addScriptTag({ path: path.resolve('lib/katex/katex.min.js') });
+  await page.evaluate(() => {
+    const formula = katex.renderToString('f(x)', { output: 'htmlAndMathml' });
+    const html = `<p><span>若函数</span>${formula}<span>在点处连续</span></p>`;
+    const body = document.querySelector('.note-fold-body');
+    body.innerHTML = html;
+    body.style.fontWeight = '600';
+    const range = document.createRange();
+    range.selectNodeContents(document.querySelector('summary'));
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    const clipboardData = new DataTransfer();
+    clipboardData.setData('text/html', html);
+    document.activeElement.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+  });
+  const spacing = await page.evaluate(async () => {
+    await document.fonts.ready;
+    const measure = parent => {
+      const math = parent.querySelector('.katex');
+      const text = Array.from(parent.children).filter(node => !node.classList.contains('katex'));
+      return [math.getBoundingClientRect().left - text[0].getBoundingClientRect().right,
+        text[1].getBoundingClientRect().left - math.getBoundingClientRect().right];
+    };
+    return { title: measure(document.querySelector('summary')), body: measure(document.querySelector('.note-fold-body p')) };
+  });
+  spacing.title.forEach((gap, index) => expect(Math.abs(gap - spacing.body[index])).toBeLessThan(1));
+  await expect(page.locator('summary .katex')).toHaveAttribute('data-latex', 'f(x)');
+  expect(await page.evaluate(() => editor.getMarkdown())).toContain(':::fold 若函数$f(x)$在点处连续');
+});
+
 for (const input of ['Enter', 'beforeinput']) {
   test(`${input} in fold title creates the first body paragraph`, async ({ page }) => {
     await setup(page);

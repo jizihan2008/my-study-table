@@ -2,6 +2,71 @@ const { test, expect } = require('@playwright/test');
 const path = require('node:path');
 test.use({ channel: process.env.MST_TEST_BROWSER || undefined });
 
+for (const surface of ['paragraph', 'root', 'quote', 'fold']) {
+  test(`pasted inline math stays inline after a Markdown round trip in ${surface}`, async ({ page }) => {
+    const markup = {
+      paragraph: '<p>待替换</p>', root: '', quote: '<blockquote>待替换</blockquote>',
+      fold: '<details class="note-fold" open><summary>标题</summary><div class="note-fold-body">待替换</div></details>'
+    };
+    await page.setContent(`<div id="notesRichEditor" contenteditable="true">${markup[surface]}</div>`);
+    await page.addScriptTag({ path: path.resolve('lib/markdown/purify.min.js') });
+    await page.addScriptTag({ path: path.resolve('lib/markdown/markdown-it.min.js') });
+    await page.addScriptTag({ path: path.resolve('lib/katex/katex.min.js') });
+    await page.addScriptTag({ path: path.resolve('js/markdown.js') });
+    await page.addScriptTag({ path: path.resolve('js/note-rich-editor.js') });
+    const result = await page.evaluate(surface => {
+      window.formatNoteContent = value => StudyMarkdown.render(value);
+      RichNoteEditor.init();
+      const host = document.getElementById('notesRichEditor');
+      const target = host.querySelector(surface === 'paragraph' ? 'p' : surface === 'quote' ? 'blockquote' : '.note-fold-body') || host;
+      host.focus();
+      const range = document.createRange();
+      range.selectNodeContents(target);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      const data = new DataTransfer();
+      data.setData('text/html', '若函数\n' + katex.renderToString('f(x)') + '\n在点处连续。');
+      host.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+      const before = host.querySelectorAll('br, .katex-display').length;
+      const markdown = RichNoteEditor.getMarkdown();
+      RichNoteEditor.setMarkdown(markdown, 'paste-roundtrip');
+      return { before, markdown, after: host.querySelectorAll('br, .katex-display').length,
+        mathCount: host.querySelectorAll('.katex').length, savedAgain: RichNoteEditor.getMarkdown() };
+    }, surface);
+    expect(result.before).toBe(0);
+    expect(result.mathCount).toBe(1);
+    expect(result.after).toBe(0);
+    expect(result.markdown).toContain('若函数 $f(x)$ 在点处连续。');
+    expect(result.savedAgain).toBe(result.markdown);
+  });
+}
+
+test('round trips retain explicit line breaks, separate paragraphs, code and display math', async ({ page }) => {
+  await page.setContent('<div id="notesRichEditor" contenteditable="true"></div>');
+  await page.addScriptTag({ path: path.resolve('lib/markdown/purify.min.js') });
+  await page.addScriptTag({ path: path.resolve('lib/markdown/markdown-it.min.js') });
+  await page.addScriptTag({ path: path.resolve('lib/katex/katex.min.js') });
+  await page.addScriptTag({ path: path.resolve('js/markdown.js') });
+  await page.addScriptTag({ path: path.resolve('js/note-rich-editor.js') });
+  const result = await page.evaluate(() => {
+    window.formatNoteContent = value => StudyMarkdown.render(value);
+    RichNoteEditor.init();
+    const host = document.getElementById('notesRichEditor');
+    host.innerHTML = '<p>首行<br>次行</p>\n<p>下一段</p>\n<pre><code>first\n  second</code></pre>\n'
+      + katex.renderToString('x^2', { displayMode: true });
+    const markdown = RichNoteEditor.getMarkdown();
+    RichNoteEditor.setMarkdown(markdown, 'authored-breaks');
+    return { markdown, breaks: host.querySelectorAll('br').length,
+      code: host.querySelector('pre code').textContent, displays: host.querySelectorAll('.katex-display').length };
+  });
+  expect(result.markdown).toContain('首行\n次行\n\n下一段');
+  expect(result.markdown).toContain('```\nfirst\n  second\n```');
+  expect(result.markdown).toContain('$$\nx^2\n$$');
+  expect(result.breaks).toBe(1);
+  expect(result.code).toBe('first\n  second\n');
+  expect(result.displays).toBe(1);
+});
+
 test('rich note paste retains note structures and removes unsafe content', async ({ page }) => {
   await page.setContent('<div id="notesRichEditor" contenteditable="true"></div>');
   await page.addScriptTag({ path: path.resolve('lib/markdown/purify.min.js') });

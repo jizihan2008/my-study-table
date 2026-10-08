@@ -1815,8 +1815,80 @@ const FORMAT_DEFS = {
 // can collapse that selection before command() reads it (creating a placeholder
 // fold instead of wrapping the selected content).
 document.getElementById('notesFormatToolbar')?.addEventListener('pointerdown', event => {
-  const button = event.target.closest('button.fmt-btn');
+  const button = event.target.closest('button.fmt-btn, button.fmt-heading-option');
   if (button && !button.disabled && event.button === 0) event.preventDefault();
+});
+
+let notesHeadingSelection = null;
+
+function updateNotesHeadingState(level) {
+  const button = document.getElementById('notesHeadingButton');
+  if (button) {
+    button.querySelector('b').textContent = level ? 'H' + level : 'H';
+    button.classList.toggle('active', level > 0);
+  }
+  document.querySelectorAll('#notesHeadingMenu [data-heading]').forEach(option => {
+    option.setAttribute('aria-checked', String(Number(option.dataset.heading) === level));
+  });
+}
+
+function toggleNotesHeadingMenu() {
+  const menu = document.getElementById('notesHeadingMenu');
+  if (menu.matches(':popover-open')) { menu.hidePopover(); return; }
+  const selection = window.getSelection();
+  const node = selection?.anchorNode;
+  const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+  const editor = element?.closest('#notesRichEditor, #notesSplitRichEditor');
+  const textarea = document.getElementById('notesTextarea');
+  notesHeadingSelection = editor && selection.rangeCount
+    ? { editor, range: selection.getRangeAt(0).cloneRange() }
+    : { textarea, start: textarea.selectionStart, end: textarea.selectionEnd };
+  const heading = element?.closest('h1,h2,h3,h4,h5,h6');
+  const lineStart = textarea.selectionStart > 0 ? textarea.value.lastIndexOf('\n', textarea.selectionStart - 1) + 1 : 0;
+  const sourceHeading = /^(#{1,6})[ \t]+/.exec(textarea.value.slice(lineStart));
+  updateNotesHeadingState(editor ? (heading ? Number(heading.tagName.slice(1)) : 0) : (sourceHeading?.[1].length || 0));
+  menu.showPopover();
+  const rect = document.getElementById('notesHeadingButton').getBoundingClientRect();
+  menu.style.left = Math.max(0, Math.min(rect.left, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = Math.max(0, Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8)) + 'px';
+  menu.querySelector('[aria-checked="true"]')?.focus({ preventScroll: true });
+}
+
+function applyNotesHeading(level) {
+  if (!Number.isInteger(level) || level < 0 || level > 6) return;
+  document.getElementById('notesHeadingMenu').hidePopover();
+  const saved = notesHeadingSelection;
+  if (saved?.editor?.isConnected) {
+    saved.editor.focus({ preventScroll: true });
+    const selection = window.getSelection();
+    selection.removeAllRanges();
+    selection.addRange(saved.range);
+  } else if (saved?.textarea) {
+    saved.textarea.focus({ preventScroll: true });
+    saved.textarea.setSelectionRange(saved.start, saved.end);
+  }
+  notesHeadingSelection = null;
+  formatText(level ? 'heading' + level : 'paragraph');
+}
+
+document.getElementById('notesHeadingMenu')?.addEventListener('toggle', event => {
+  document.getElementById('notesHeadingButton')?.setAttribute('aria-expanded', String(event.newState === 'open'));
+});
+document.getElementById('notesHeadingMenu')?.addEventListener('keydown', event => {
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopPropagation();
+    event.currentTarget.hidePopover();
+    document.getElementById('notesHeadingButton')?.focus({ preventScroll: true });
+    return;
+  }
+  if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+  event.preventDefault();
+  const buttons = Array.from(event.currentTarget.querySelectorAll('button'));
+  const index = buttons.indexOf(document.activeElement);
+  const next = event.key === 'Home' ? 0 : event.key === 'End' ? buttons.length - 1
+    : (index + (event.key === 'ArrowDown' ? 1 : -1) + buttons.length) % buttons.length;
+  buttons[next].focus();
 });
 
 function formatText(type) {
@@ -1837,6 +1909,28 @@ function formatText(type) {
   const end = ta.selectionEnd;
   const text = ta.value;
   const sel = text.substring(start, end);
+
+  if (/^heading[1-6]$/.test(type) || type === 'paragraph' || type === 'heading') {
+    const level = type === 'heading' ? 2 : type === 'paragraph' ? 0 : Number(type.slice(-1));
+    const lineStart = start > 0 ? text.lastIndexOf('\n', start - 1) + 1 : 0;
+    const lastSelected = end > start && text[end - 1] === '\n' ? end - 1 : end;
+    const nextNewline = text.indexOf('\n', lastSelected);
+    const lineEnd = nextNewline < 0 ? text.length : nextNewline;
+    const prefix = '#'.repeat(level) + (level ? ' ' : '');
+    const lines = text.slice(lineStart, lineEnd).split('\n');
+    const replacement = lines.map(line => prefix + line.replace(/^ {0,3}#{1,6}(?:[ \t]+|$)/, '')).join('\n');
+    ta.value = text.slice(0, lineStart) + replacement + text.slice(lineEnd);
+    if (start === end) {
+      const oldPrefix = /^ {0,3}#{1,6}(?:[ \t]+|$)/.exec(lines[0])?.[0].length || 0;
+      ta.selectionStart = ta.selectionEnd = lineStart + prefix.length + Math.max(0, start - lineStart - oldPrefix);
+    } else {
+      ta.setSelectionRange(lineStart, lineStart + replacement.length);
+    }
+    ta.focus();
+    updateNotesHeadingState(level);
+    onNotesChange();
+    return;
+  }
 
   // ── Toggle-able types: unwrap if already wrapped ──
   const def = FORMAT_DEFS[type];
@@ -1867,7 +1961,6 @@ function formatText(type) {
       prefix = beforeNl + '```\n'; suffix = '\n```' + afterNl; placeholder = '代码'; break;
     }
     case 'latex':       prefix = '\\(';  suffix = '\\)';  placeholder = '公式'; break;
-    case 'heading':     prefix = '## '; suffix = '';    placeholder = '标题'; break;
     case 'link':        prefix = '[';   suffix = '](https://example.com)'; placeholder = '链接文字'; break;
     case 'image':       prefix = '![';  suffix = '](https://example.com/image.png)'; placeholder = '图片说明'; break;
     case 'ul':          prefix = '- ';  suffix = '';    placeholder = '列表项'; break;
@@ -2239,7 +2332,7 @@ function updateNotesImmersiveControls(clientY){
   const footer=section.querySelector('.notes-editor-footer');
   const topLimit=section.classList.contains('show-top-controls')?(toolbar?.offsetHeight||44)+12:18;
   const bottomLimit=section.classList.contains('show-bottom-controls')?(footer?.offsetHeight||42)+12:18;
-  section.classList.toggle('show-top-controls',clientY<=topLimit);
+  section.classList.toggle('show-top-controls',clientY<=topLimit || !!document.getElementById('notesHeadingMenu')?.matches(':popover-open'));
   section.classList.toggle('show-bottom-controls',clientY>=window.innerHeight-bottomLimit);
 }
 

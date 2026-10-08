@@ -1,0 +1,26 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self'; style-src 'self'; script-src 'self'">
+  <title>时芽 · 专注精灵</title>
+  <link rel="stylesheet" href="pet.css">
+</head>
+<body>
+  <main id="pet" aria-label="时芽桌宠">
+    <div id="bubble" role="status" aria-live="polite" hidden></div>
+    <div class="tools">
+      <button id="menu" type="button" title="桌宠菜单" aria-label="桌宠菜单">···</button>
+      <button id="hide" type="button" title="收起，可从应用托盘唤回" aria-label="收起时芽">×</button>
+    </div>
+    <button id="character" type="button" aria-label="和时芽互动，按方向键移动" title="点击互动 · 拖动移动 · 右键菜单">
+      <img src="../../icons/pet/shiya.png" alt="银紫双马尾、蓝白衣服的时芽" draggable="false">
+      <canvas id="sprite" width="512" height="512" aria-label="时芽的逐帧动作" hidden></canvas>
+    </button>
+    <button id="name" type="button" title="打开 My Study Table">🌱 时芽 <span>· 学习搭子</span></button>
+  </main>
+  <script src="sprite-player.js"></script>
+  <script src="pet.js"></script>
+</body>
+</html>

@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell, Tray, Menu, nativeImage, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell, Tray, Menu, nativeImage, dialog, screen } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -25,6 +25,7 @@ const {
 } = require('./electron/register-extension-ipc');
 const { registerLibraryIpc } = require('./electron/register-library-ipc');
 const { registerSecretIpc } = require('./electron/register-secret-ipc');
+const { registerDesktopPet } = require('./electron/desktop-pet');
 const { registerUpdaterIpc } = require('./electron/register-updater-ipc');
 const { resolveQQChatChunks } = require('./electron/qq-chat-policy');
 const { createQQChatAutoSyncService } = require('./electron/qq-chat-auto-sync');
@@ -42,6 +43,7 @@ app.setPath('userData', userDataPath);
 if (process.platform === 'win32') app.setAppUserModelId('com.mystudytable.app');
 
 let mainWindow;
+const desktopPet = registerDesktopPet({ app, BrowserWindow, ipcMain, screen, Menu, userDataPath, getMainWindow: () => mainWindow });
 registerBackupIpc({ ipcMain, shell, userDataPath });
 const diagnostics = registerDiagnostics({ app, ipcMain, userDataPath });
 const extensionService = registerExtensionIpc({
@@ -182,6 +184,8 @@ function createTray() {
         }
       }
     },
+    { label: '唤出时芽桌宠', click: () => desktopPet.show() },
+    { label: '收起时芽桌宠', click: () => desktopPet.hide() },
     { type: 'separator' },
     {
       label: '退出应用',
@@ -243,7 +247,7 @@ function createWindow() {
     // Windows 有时会在创建窗口时使用 Electron 默认类图标；
     // 显示前再设置一次多尺寸 ICO，确保任务栏收到 WM_SETICON。
     mainWindow.setIcon(APP_ICON_PATH);
-    mainWindow.show();
+    if (!process.argv.includes('--pet-only')) mainWindow.show();
   });
 
   // 点击关闭按钮时隐藏到托盘，而不是退出
@@ -264,7 +268,11 @@ const gotTheLock = app.requestSingleInstanceLock();
 if (!gotTheLock) {
   app.quit();
 } else {
-  app.on('second-instance', () => {
+  app.on('second-instance', (_event, argv) => {
+    if (argv.includes('--show-pet')) {
+      desktopPet.show();
+      return;
+    }
     if (mainWindow) {
       if (mainWindow.isMinimized()) mainWindow.restore();
       mainWindow.show();
@@ -274,6 +282,8 @@ if (!gotTheLock) {
   app.whenReady().then(() => {
     if (process.env.MST_E2E !== '1') createTray();
     createWindow();
+    // Tests opt in so existing single-window suites keep their launch order.
+    if (process.env.MST_E2E !== '1' || process.env.MST_PET_E2E === '1') desktopPet.restore(process.argv.includes('--show-pet'));
     if (process.env.MST_E2E !== '1') {
       updaterService.init();
       startConfirmServer(); // 监听 localhost:3000 供 Supabase 确认链接回调

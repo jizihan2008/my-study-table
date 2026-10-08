@@ -328,7 +328,8 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   background: var(--bg); overflow: hidden;
 }
 #section-notes.notes-immersive > .card {
-  width: 100%; height: 100%; border: 0; border-radius: 0; box-shadow: none;
+  /* Override the mobile card radius so immersive notes fill every corner. */
+  width: 100%; height: 100%; border: 0; border-radius: 0 !important; box-shadow: none;
 }
 #section-notes.notes-immersive .notes-layout,
 #section-notes.notes-immersive .notes-editor,

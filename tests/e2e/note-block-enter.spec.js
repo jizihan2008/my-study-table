@@ -18,6 +18,23 @@ async function setup(page, html, selector, offset = 0) {
   }, { selector, offset });
 }
 
+test('saving ordered lists preserves numbering across intervening paragraphs and folds', async ({ page }) => {
+  await setup(page, '<ol><li>第一项</li></ol><p>说明</p><ol start="2"><li>第二项</li><li>第三项</li></ol>'
+    + '<details class="note-fold" open><summary>标题</summary><div class="note-fold-body"><ol start="4"><li>第四项</li></ol></div></details>', 'li');
+  await page.addScriptTag({ path: path.resolve('lib/markdown/markdown-it.min.js') });
+  await page.addScriptTag({ path: path.resolve('lib/markdown/purify.min.js') });
+  await page.addScriptTag({ path: path.resolve('js/markdown.js') });
+  const result = await page.evaluate(() => {
+    const markdown = RichNoteEditor.getMarkdown();
+    const rendered = document.createElement('div');
+    rendered.innerHTML = StudyMarkdown.render(markdown);
+    return { markdown, starts: Array.from(rendered.querySelectorAll('ol'), list => list.start) };
+  });
+  expect(result.markdown).toContain('2. 第二项\n3. 第三项');
+  expect(result.markdown).toContain('4. 第四项');
+  expect(result.starts).toEqual([1, 2, 4]);
+});
+
 for (const [name, html, selector, outer] of [
   ['code', '<pre><code>abcdef</code></pre>', 'code', 'pre'],
   ['list', '<ul><li>abcdef</li><li>second</li></ul>', 'li', 'ul'],

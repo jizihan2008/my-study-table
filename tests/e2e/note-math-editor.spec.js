@@ -34,6 +34,140 @@ async function setup(source) {
   }, source);
 }
 
+test('LaTeX toolbar inserts an editable inline formula at the selected text', async () => {
+  await setup('前文 x^2 后文');
+  await page.evaluate(() => {
+    const host = document.getElementById('notesRichEditor');
+    host.focus();
+    const text = host.querySelector('p').firstChild;
+    const range = document.createRange();
+    range.setStart(text, 3);
+    range.setEnd(text, 6);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await expect(page.locator('.note-math-dialog')).toBeVisible();
+  await expect(page.getByLabel('LaTeX 源码')).toHaveValue('x^2');
+  await page.getByLabel('LaTeX 源码').fill(String.raw`\frac{x}{2}`);
+  await page.getByLabel('LaTeX 源码').press('Control+Enter');
+  await expect(page.locator('.note-math-dialog')).toHaveCount(0);
+  await expect(page.locator('#notesRichEditor .katex')).toHaveAttribute('data-latex', String.raw`\frac{x}{2}`);
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(String.raw`前文 $\frac{x}{2}$ 后文`);
+  expect(await page.evaluate(() => noteViewMode)).toBe('rich');
+  await page.evaluate(() => undoNote());
+  expect(await page.evaluate(() => getActiveNote().content)).toBe('前文 x^2 后文');
+  await page.evaluate(() => redoNote());
+  await expect(page.locator('#notesRichEditor .katex')).toHaveAttribute('data-latex', String.raw`\frac{x}{2}`);
+});
+
+for (const [name, source, selector] of [
+  ['quote', '> 前文 x^2 后文', 'blockquote p'],
+  ['fold title', ':::fold 标题 x^2 后文\n正文\n:::', 'summary'],
+  ['fold body', ':::fold 标题\n前文 x^2 后文\n:::', '.note-fold-body p']
+]) {
+  test(`LaTeX insertion preserves its ${name}`, async () => {
+    await setup(source);
+    await page.evaluate(selector => {
+      const host = document.getElementById('notesRichEditor');
+      host.focus();
+      const text = host.querySelector(selector).firstChild;
+      const start = text.textContent.indexOf('x^2');
+      const range = document.createRange();
+      range.setStart(text, start);
+      range.setEnd(text, start + 3);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    }, selector);
+    await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+    await page.locator('.note-math-save').click();
+    await expect(page.locator(`#notesRichEditor ${selector} .katex`)).toHaveAttribute('data-latex', 'x^2');
+    expect(await page.evaluate(() => getActiveNote().content)).toBe(source.replace('x^2', '$x^2$'));
+  });
+}
+
+test('invalid or cancelled LaTeX insertion keeps the original note and caret', async () => {
+  const source = '前文后文';
+  await setup(source);
+  await page.evaluate(() => {
+    const host = document.getElementById('notesRichEditor');
+    host.focus();
+    const range = document.createRange();
+    range.setStart(host.querySelector('p').firstChild, 2);
+    range.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.getByLabel('LaTeX 源码').fill(String.raw`\frac{`);
+  await expect(page.locator('.note-math-save')).toBeDisabled();
+  await page.getByLabel('LaTeX 源码').press('Control+Enter');
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(source);
+  await page.getByLabel('LaTeX 源码').press('Escape');
+  expect(await page.evaluate(() => notesUndoStack.length)).toBe(0);
+  await page.keyboard.insertText('中间');
+  expect(await page.evaluate(() => getActiveNote().content)).toBe('前文中间后文');
+});
+
+test('LaTeX toolbar inserts only into the secondary editor without switching panes', async () => {
+  await setup('左侧正文');
+  const ids = await page.evaluate(() => {
+    const left = getActiveNote();
+    createNewNote();
+    const right = getActiveNote();
+    right.content = '右侧正文';
+    right._dirtyContent = true;
+    selectNote(left.id);
+    setNotesImmersive(true);
+    setNotesImmersiveSplit(true);
+    selectNotesSplitNote(right.id);
+    setNotesSplitSecondaryMode('rich');
+    return { left: left.id, right: right.id };
+  });
+  await page.locator('#notesSplitRichEditor').evaluate(host => {
+    host.focus();
+    const range = document.createRange();
+    range.setStart(host.querySelector('p').firstChild, 2);
+    range.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.mouse.move(400, 2);
+  await expect(page.locator('#section-notes')).toHaveClass(/show-top-controls/);
+  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.getByLabel('LaTeX 源码').fill('x^2');
+  await page.locator('.note-math-save').click();
+  await expect(page.locator('#notesSplitRichEditor .katex')).toHaveAttribute('data-latex', 'x^2');
+  expect(await page.evaluate(() => getActiveNote().content)).toBe('左侧正文');
+  expect(await page.evaluate(id => findNoteByLooseId(id).content, ids.right)).toBe('右侧$x^2$正文');
+  expect(await page.evaluate(() => noteViewMode)).toBe('rich');
+  await page.keyboard.press('Control+Z');
+  await expect(page.locator('#notesSplitRichEditor .katex')).toHaveCount(0);
+  expect(await page.evaluate(() => activeNoteId)).toBe(ids.left);
+});
+
+test('pasted inline formula remains in its paragraph when switching to source and back', async () => {
+  await setup('待替换');
+  await page.evaluate(() => {
+    const host = document.getElementById('notesRichEditor');
+    host.focus();
+    const range = document.createRange();
+    range.selectNodeContents(host.firstElementChild);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    const data = new DataTransfer();
+    data.setData('text/html', '<p>若函数\n' + katex.renderToString('f(x)') + '\n在点处连续。</p>');
+    host.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+  });
+  await expect(page.locator('#notesRichEditor .katex')).toHaveCount(1);
+  await page.evaluate(() => switchNoteView('edit'));
+  await expect(page.locator('#notesTextarea')).toHaveValue('若函数 $f(x)$ 在点处连续。');
+  await page.evaluate(() => switchNoteView('rich'));
+  await expect(page.locator('#notesRichEditor > p')).toHaveCount(1);
+  await expect(page.locator('#notesRichEditor br, #notesRichEditor .katex-display')).toHaveCount(0);
+  await expect(page.locator('#notesRichEditor .katex')).toHaveAttribute('data-latex', 'f(x)');
+});
+
 async function doubleClickMath(selector = '#notesRichEditor .katex') {
   const formula = page.locator(selector);
   await expect(formula).toBeVisible();

@@ -19,11 +19,153 @@ test.beforeAll(async () => {
   });
   page = await electronApp.firstWindow();
   await page.waitForFunction(() => document.readyState !== 'loading' && !!window.AIStream && typeof window.setAiStreamingDraft === 'function');
+  await page.waitForFunction(() => document.querySelector('#section-today.active'));
 });
 
 test.afterAll(async () => {
   if (electronApp) await electronApp.close();
   if (userDataPath) await fs.rm(userDataPath, { recursive: true, force: true });
+});
+
+test('completed reply chains collapse earlier messages and can be expanded without losing history', async () => {
+  await page.evaluate(() => {
+    switchTab('ai'); createNewConv();
+    const conv = getActiveConv();
+    appendMessage(conv, { role: 'user', content: '整理学习计划' });
+    appendMessage(conv, { role: 'assistant', content: '先查看学习任务。' });
+    appendMessage(conv, { role: 'system', content: '任务查询结果', _toolInfo: { toolNames: 'list_todos' } });
+    setAiLoading(conv.id, true);
+    setAiStreamingDraft(conv.id, { content: '正在整理最终建议。' });
+    renderAiMessages();
+  });
+  await expect(page.locator('.ai-reply-chain-toggle')).toHaveCount(0);
+  await expect(page.locator('#aiMessages')).toContainText('先查看学习任务。');
+  await page.evaluate(() => {
+    const conv = getActiveConv();
+    appendMessage(conv, { role: 'assistant', content: '最终建议：今天复习数学。' });
+    clearAiStreamingDraft(conv.id, false);
+    setAiLoading(conv.id, false);
+    renderAiMessages();
+  });
+  const toggle = page.locator('#aiMessages .ai-reply-chain-toggle');
+  await expect(toggle).toHaveText('▸ 已折叠 2 条消息 · 展开查看');
+  await expect(page.locator('#aiMessages .ai-chat-msg.assistant')).toHaveCount(1);
+  await expect(page.locator('#aiMessages')).not.toContainText('先查看学习任务。');
+  await expect(page.locator('#aiMessages')).toContainText('最终建议：今天复习数学。');
+  await page.locator('#aiMessages').evaluate(async element => {
+    await Promise.all(element.getAnimations({ subtree: true }).filter(animation =>
+      animation.effect.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})));
+  });
+  await page.screenshot({ path: test.info().outputPath('collapsed-reply-chain.png') });
+  await toggle.click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#aiMessages')).toContainText('先查看学习任务。');
+  await expect(page.locator('#aiMessages')).toContainText('任务查询结果');
+  await expect(page.locator('#aiMessages .ai-chat-msg.assistant')).toHaveCount(2);
+  await page.evaluate(() => renderAiMessages());
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await toggle.click();
+  await expect(page.locator('#aiMessages .ai-reply-chain-history')).toHaveCount(0);
+  expect(await page.evaluate(() => getActiveConv().messages.length)).toBe(4);
+});
+
+test('a long completed chain expands every message beyond the history page boundary', async () => {
+  await page.evaluate(() => {
+    switchTab('ai'); createNewConv();
+    const conv = getActiveConv();
+    appendMessage(conv, { role: 'user', content: '长回复链' });
+    for (let index = 0; index < 35; index++) appendMessage(conv, { role: 'assistant', content: '过程消息 ' + index });
+    appendMessage(conv, { role: 'assistant', content: '长回复链最终结果' });
+    setAiLoading(conv.id, false);
+    renderAiMessages();
+  });
+  await expect(page.locator('#aiMessages .ai-chat-msg.assistant')).toHaveCount(1);
+  await expect(page.locator('#aiMessages .ai-reply-chain-toggle')).toContainText('已折叠 35 条消息');
+  await page.locator('#aiMessages .ai-reply-chain-toggle').click();
+  await expect(page.locator('#aiMessages .ai-chat-msg.assistant')).toHaveCount(36);
+  await expect(page.locator('#aiMessages')).toContainText('过程消息 0');
+  await expect(page.locator('#aiMessages')).toContainText('过程消息 34');
+  await page.locator('#aiMessages .ai-reply-chain-toggle').click();
+});
+
+test('old exchanges stay collapsed while a new exchange is generating', async () => {
+  await page.evaluate(() => {
+    switchTab('ai'); createNewConv();
+    const conv = getActiveConv();
+    appendMessage(conv, { role: 'user', content: '第一轮问题' });
+    appendMessage(conv, { role: 'assistant', content: '第一轮过程' });
+    appendMessage(conv, { role: 'assistant', content: '第一轮结果' });
+    appendMessage(conv, { role: 'user', content: '第二轮问题' });
+    appendMessage(conv, { role: 'assistant', content: '第二轮过程' });
+    appendMessage(conv, { role: 'assistant', content: '第二轮继续' });
+    setAiLoading(conv.id, true);
+    renderAiMessages();
+  });
+  await expect(page.locator('#aiMessages .ai-reply-chain-toggle')).toHaveCount(1);
+  await expect(page.locator('#aiMessages')).not.toContainText('第一轮过程');
+  await expect(page.locator('#aiMessages')).toContainText('第一轮结果');
+  await expect(page.locator('#aiMessages')).toContainText('第二轮过程');
+  await expect(page.locator('#aiMessages')).toContainText('第二轮继续');
+  await page.evaluate(() => { setAiLoading(getActiveConv().id, false); renderAiMessages(); });
+  await expect(page.locator('#aiMessages .ai-reply-chain-toggle')).toHaveCount(2);
+});
+
+test('candidate switching keeps reply-chain messages and expansion state separate', async () => {
+  await page.evaluate(() => {
+    switchTab('ai'); createNewConv();
+    const conv = getActiveConv();
+    const user = appendMessage(conv, { role: 'user', content: '候选回复问题' });
+    appendMessage(conv, { role: 'assistant', content: '第一候选过程' });
+    appendMessage(conv, { role: 'assistant', content: '第一候选结果' });
+    createBranch(conv, user, { role: 'assistant', content: '第二候选过程' });
+    appendMessage(conv, { role: 'assistant', content: '第二候选结果' });
+    setAiLoading(conv.id, false);
+    renderAiMessages();
+  });
+  const toggle = page.locator('#aiMessages .ai-reply-chain-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await toggle.click();
+  await expect(page.locator('#aiMessages')).toContainText('第二候选过程');
+  await page.locator('#aiMessages .ai-exchange-footer button[title="上一个候选"]').click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('#aiMessages')).toContainText('第一候选结果');
+  await expect(page.locator('#aiMessages')).not.toContainText('第二候选');
+  await page.locator('#aiMessages .ai-exchange-footer button[title="下一个候选"]').click();
+  await expect(toggle).toHaveAttribute('aria-expanded', 'true');
+  await expect(page.locator('#aiMessages')).toContainText('第二候选过程');
+  await expect(page.locator('#aiMessages')).not.toContainText('第一候选');
+});
+
+test('multiline tool protocol stays hidden in cached replies, reasoning and streaming drafts', async () => {
+  const result = await page.evaluate(async () => {
+    switchTab('ai');
+    createNewConv();
+    const conv = getActiveConv();
+    const protocol = '<tool_call>{"action":"patch_note","params":{"edits":[{"oldText":"若\n公式\n存在","newText":"修复后"}]}}</tool_call>';
+    appendMessage(conv, { role: 'user', content: '整理笔记' });
+    appendMessage(conv, { role: 'assistant', content: '调用前\n' + protocol + '\n调用后',
+      _toolRoundCleanText: '调用前\n' + protocol + '\n调用后', reasoning: '正在分析。\n' + protocol });
+    renderAiMessages();
+    const saved = document.querySelector('#aiMessages .ai-chat-msg.assistant .ai-chat-bubble').textContent;
+    setAiLoading(conv.id, true);
+    setAiStreamingDraft(conv.id, { content: '开始整理。\n' + protocol.slice(0, -12), reasoning: '分析中。\n' + protocol });
+    await new Promise(resolve => setTimeout(resolve, 70));
+    const streaming = document.getElementById('aiStreamingDraft').textContent;
+    clearAiStreamingDraft(conv.id);
+    setAiLoading(conv.id, false);
+    renderAiMessages();
+    const reloaded = document.querySelector('#aiMessages .ai-chat-msg.assistant .ai-chat-bubble').textContent;
+    return { saved, streaming, reloaded, raw: conv.messages.find(message => message.role === 'assistant').content };
+  });
+  for (const text of [result.saved, result.streaming, result.reloaded]) {
+    expect(text).not.toMatch(/tool_call|patch_note|oldText|newText|修复后/);
+  }
+  expect(result.saved).toContain('调用前');
+  expect(result.saved).toContain('调用后');
+  expect(result.saved).toContain('正在分析。');
+  expect(result.streaming).toContain('开始整理。');
+  expect(result.streaming).toContain('分析中。');
+  expect(result.raw).toContain('patch_note');
 });
 
 test('streaming draft batches incremental updates and becomes Markdown only after completion', async () => {
@@ -120,6 +262,8 @@ test('regeneration through real tool loop persists its final answer', async () =
   expect(calls).toBe(2);
   expect(output).toEqual({ final: '这是工具查询后的最终回答。', count: 1, keyName: '原始模型', loading: false });
   await expect(page.locator('#aiMessages')).toContainText('这是工具查询后的最终回答。');
+  await expect(page.locator('#aiMessages .ai-reply-chain-toggle')).toContainText('已折叠 2 条消息');
+  await page.locator('#aiMessages .ai-reply-chain-toggle').click();
   await expect(page.locator('#aiMessages .ai-tool-status.success')).toContainText('list_todos');
 });
 
@@ -520,6 +664,78 @@ test('PDF compatibility lets the user choose extracted text or rendered page ima
   expect(output.imagePreview).toContain('页面图片');
   expect(output.renderedPages).toBe(2);
   expect(output.imagePrefixes).toEqual(['data:image/jpeg;base64,', 'data:image/jpeg;base64,']);
+});
+
+test('PDF send progress survives composer clearing and chat rebuilds, then clears after reply or stop', async () => {
+  const pdfBase64 = buildTestPdf(3).toString('base64');
+  const output = await page.evaluate(async ({ pdfBase64 }) => {
+    const originals = {
+      config: window.getEffectiveApiConfig, render: window.renderPdfAttachmentPages,
+      loop: window.runToolCallLoop, autoTitle: window.isAutoTitleEnabled
+    };
+    const seen = [];
+    let stopped = false;
+    let requestVisible = false;
+    let hiddenInOtherConv = false;
+    let restored = false;
+    window.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'deepseek-flash', name: 'PDF 进度测试' });
+    window.isAutoTitleEnabled = () => false;
+    window.renderPdfAttachmentPages = async (file, opts) => {
+      return originals.render(file, { ...opts, maxWidth: 300, onPage: info => {
+        opts.onPage(info);
+        const progress = document.querySelector('#aiPdfSendProgress progress');
+        seen.push({ done: info.done, value: progress?.value, previewEmpty: !window.getAiAttachmentsSnapshot().length });
+        window.renderAiMessages();
+        if (info.done === 1) {
+          const origin = window.getActiveConvId();
+          window.createNewConv();
+          hiddenInOtherConv = !document.getElementById('aiPdfSendProgress');
+          window.switchConv(origin);
+          restored = document.querySelector('#aiPdfSendProgress progress')?.value === 33;
+          if (stopped) window.handleAiSendOrStop();
+        }
+      } });
+    };
+    window.runToolCallLoop = async (cfg, conv, unused, onDelta) => {
+      if (!stopped) requestVisible = !!document.getElementById('aiPdfSendProgress')?.textContent.includes('等待 AI 响应');
+      if (!stopped) onDelta({ content: '完成', reasoning: '' });
+      return { finalCleanText: stopped ? '⏹️ 已手动停止。' : '完成', stopped };
+    };
+    try {
+      window.switchTab('ai');
+      window.createNewConv();
+      const bytes = Uint8Array.from(atob(pdfBase64), c => c.charCodeAt(0));
+      const send = async () => {
+        window.addAiAttachmentFiles([new File([bytes], 'progress.pdf', { type: 'application/pdf' })]);
+        window.toggleAttachPdfMode(0);
+        await window.sendAiMessage();
+      };
+      await send();
+      const clearedAfterReply = !document.getElementById('aiPdfSendProgress');
+      const completedPages = seen.splice(0);
+      stopped = true;
+      await send();
+      return { completedPages, hiddenInOtherConv, restored, requestVisible,
+        clearedAfterReply, clearedAfterStop: !document.getElementById('aiPdfSendProgress'),
+        stoppedPages: seen.map(s => s.done), loading: window.isAiLoading(window.getActiveConvId()) };
+    } finally {
+      window.getEffectiveApiConfig = originals.config;
+      window.renderPdfAttachmentPages = originals.render;
+      window.runToolCallLoop = originals.loop;
+      window.isAutoTitleEnabled = originals.autoTitle;
+    }
+  }, { pdfBase64 });
+  expect(output.completedPages).toEqual([
+    { done: 0, value: 0, previewEmpty: true }, { done: 1, value: 33, previewEmpty: true },
+    { done: 2, value: 67, previewEmpty: true }, { done: 3, value: 100, previewEmpty: true }
+  ]);
+  expect(output.hiddenInOtherConv).toBe(true);
+  expect(output.restored).toBe(true);
+  expect(output.requestVisible).toBe(true);
+  expect(output.clearedAfterReply).toBe(true);
+  expect(output.clearedAfterStop).toBe(true);
+  expect(output.stoppedPages).toEqual([0, 1]);
+  expect(output.loading).toBe(false);
 });
 
 test('deepseek files api uploads a photo once and later turns reference the same file_id', async () => {

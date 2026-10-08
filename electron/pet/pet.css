@@ -1,0 +1,16 @@
+* { box-sizing: border-box; }
+html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; background: transparent; }
+body { font-family: "Microsoft YaHei", "Segoe UI", sans-serif; user-select: none; }
+button { font: inherit; -webkit-app-region: no-drag; }
+#pet { position: relative; width: calc(240px * var(--pet-scale, 1)); height: calc(320px * var(--pet-scale, 1)); }
+#character { position: absolute; top: 25%; left: 15%; width: 70%; height: 64%; padding: 0; border: 0; background: none; cursor: grab; touch-action: none; }
+#character:active { cursor: grabbing; }
+#character img, #sprite { width: 100%; height: 100%; object-fit: contain; pointer-events: none; filter: drop-shadow(0 4px 3px #263d7233); }
+#character [hidden] { display: none; }
+.tools { position: absolute; right: 12%; top: 22%; z-index: 3; display: flex; gap: 4px; opacity: 0; transition: opacity .2s; }
+#pet:hover .tools, #pet:focus-within .tools { opacity: 1; }
+.tools button { width: 25px; height: 25px; border: 1px solid #d7defa; border-radius: 50%; color: #4b5bb4; background: #fffffff2; cursor: pointer; }
+#name { position: absolute; bottom: 3%; left: 12%; width: 76%; border: 1px solid #cad6ef; border-radius: 20px; padding: 5px; background: #f5f8fff2; color: #40548e; font-size: clamp(10px, 5vw, 14px); cursor: pointer; }
+#name span { color: #7b88a8; font-size: .8em; }
+#bubble { position: absolute; top: 3%; left: 8%; width: 84%; padding: 10px 12px; border: 1px solid #d6dffa; border-radius: 16px 16px 6px 16px; background: #ffffffef; color: #465785; font-size: clamp(11px, 5.5vw, 15px); line-height: 1.5; text-align: center; box-shadow: 0 3px 10px #3d58aa15; }
+button:focus-visible { outline: 2px solid #637de5; outline-offset: 2px; }

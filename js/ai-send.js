@@ -3,6 +3,40 @@
 // ═══════════════════════════════════════════════
 
 // ═══════════ Send/stop button handler ═══════════
+// 发送时编辑器附件会清空；把 PDF 进度保存在会话中，供聊天区重建时恢复。
+const _aiPdfSendProgress = new Map();
+
+function renderAiPdfSendProgress() {
+  const container = document.getElementById('aiMessages');
+  if (!container) return;
+  const existing = document.getElementById('aiPdfSendProgress');
+  const state = _aiPdfSendProgress.get(getActiveConvId());
+  if (!state) { if (existing) existing.remove(); return; }
+  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+  const pct = state.total > 0 ? Math.round(state.done / state.total * 100) : null;
+  const label = state.stage === 'request'
+    ? '正在发送 PDF 消息，等待 AI 响应…'
+    : `${state.mode === 'image' ? '正在准备 PDF 页面图片' : (state.mode === 'text' ? '正在提取 PDF 文字' : '正在上传并解析 PDF')}（${state.index}/${state.count}）`;
+  const html = `<div id="aiPdfSendProgress" class="ai-chat-msg assistant">
+    <div class="ai-chat-avatar">📄</div>
+    <div class="ai-chat-bubble" style="min-width:220px;max-width:100%;box-sizing:border-box;">
+      <div role="status" aria-live="polite">${escapeHtml(label)}</div>
+      <div style="font-size:12px;opacity:.7;overflow-wrap:anywhere;margin:6px 0;">${escapeHtml(state.name)}${pct === null ? '' : ` · ${state.done}/${state.total} 页 · ${pct}%`}</div>
+      <progress aria-label="PDF 发送进度" max="100"${pct === null || state.stage === 'request' ? '' : ` value="${pct}"`} style="display:block;width:100%;height:8px;accent-color:var(--primary);"></progress>
+      <div style="font-size:12px;opacity:.7;margin-top:6px;">可点击停止取消</div>
+    </div>
+  </div>`;
+  if (existing) existing.outerHTML = html;
+  else container.insertAdjacentHTML('beforeend', html);
+  if (nearBottom) container.scrollTop = container.scrollHeight;
+}
+
+function setAiPdfSendProgress(convId, state) {
+  if (state) _aiPdfSendProgress.set(convId, state);
+  else _aiPdfSendProgress.delete(convId);
+  if (getActiveConvId() === convId) renderAiPdfSendProgress();
+}
+
 function handleAiSendOrStop() {
   const convId = getActiveConvId();
   if (isAiLoading(convId)) {
@@ -252,26 +286,35 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
     }
   }
   if (isDebugMode()) console.log('[DEBUG sendAiMessage] isKimi:', isKimi, 'isVision:', isVision, 'attachments:', currentAttachments.length);
-  // 预览进度要按"附件在编辑器列表里的下标"更新徽标。
-  // 注意不能用 getAiAttachmentsSnapshot()：那是只读投影，不含 file 引用，无法与本次快照配对。
-  const previewList = typeof getAiAttachments === 'function' ? getAiAttachments() : currentAttachments;
+  const pdfAttachments = currentAttachments.filter(a => isPdfFile(a.file));
+  let pdfIndex = 0;
   // Collect vision file references (base64 data URLs) for multimodal content
   let visionFiles = [];
   for (const a of currentAttachments) {
     if (isAiStopRequested(conv.id)) break;
+    if (isPdfFile(a.file)) {
+      pdfIndex++;
+      setAiPdfSendProgress(conv.id, {
+        name: a.name, index: pdfIndex, count: pdfAttachments.length,
+        mode: isKimi && !(Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0) ? 'upload' : a.pdfMode,
+        stage: 'prepare', done: 0, total: 0
+      });
+    }
     try {
       // Kimi 未指定范围时保留原生 file-extract；指定范围后也走本地选页，避免把整份 PDF 发出。
       const hasPdfRange = isPdfFile(a.file) && (Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0);
       if ((!isKimi || hasPdfRange) && isPdfFile(a.file)) {
         const pdfRange = { startPage: a.pdfStartPage, endPage: a.pdfEndPage };
         // 进度/取消只在"页面图片"模式下有意义：逐页渲染是主线程重活（密集教材实测约 0.3–0.6 秒/页）。
-        const previewIdx = previewList.findIndex(item => item.file === a.file);
         const pdfRenderOpts = {
           onPage: info => {
             if (a && typeof a === 'object') {
               a._pdfRender = { rendering: true, done: info.done, total: info.total };
             }
-            if (previewIdx >= 0 && typeof updatePdfRenderStatus === 'function') updatePdfRenderStatus(previewIdx, info);
+            setAiPdfSendProgress(conv.id, {
+              name: a.name, index: pdfIndex, count: pdfAttachments.length,
+              mode: 'image', stage: 'prepare', done: info.done, total: info.total
+            });
           },
           isAborted: () => isAiStopRequested(conv.id)
         };
@@ -282,9 +325,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
           }
           const rendered = await renderPdfAttachmentPages(a.file, Object.assign({}, pdfRange, pdfRenderOpts));
           a.pdfInfo = rendered;
-          if (previewIdx >= 0 && typeof updatePdfRenderStatus === 'function') {
-            updatePdfRenderStatus(previewIdx, { rendering: false, aborted: !!rendered.aborted });
-          }
+          a._pdfRender = { rendering: false, done: rendered.renderedPages, total: rendered.renderedPages, aborted: !!rendered.aborted };
           if (rendered.aborted) {
             // 用户中途取消：半份页面发过去只会让模型看到残缺内容，直接不带这个附件。
             docTexts += `\n\n[附件：${a.name} — 页面渲染已取消，本次未发送]`;
@@ -456,6 +497,13 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
     }
   }
 
+  if (pdfAttachments.length > 0) {
+    if (isAiStopRequested(conv.id)) setAiPdfSendProgress(conv.id, null);
+    else setAiPdfSendProgress(conv.id, {
+      name: pdfAttachments.map(a => a.name).join('、'), stage: 'request', done: 0, total: 0
+    });
+  }
+
   // 图片附件的展示图：Files API 路径下 attach.dataUrl 是本地生成的小缩略图（原图只在服务端）
   for (const d of displayAttachments) {
     if (d.displayUrl) continue;
@@ -513,6 +561,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
         clearAiStreamingDraft(conv.id);
         return;
       }
+      setAiPdfSendProgress(conv.id, null);
       setAiStreamingDraft(conv.id, {
         content: snapshot.content,
         reasoning: snapshot.reasoning,
@@ -581,6 +630,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   }
 
   // Always reset loading state for this conversation
+  setAiPdfSendProgress(conv.id, null);
   setAiLoading(conv.id, false);
   setAiStopRequested(conv.id, false);
   clearAiStreamingDraft(conv.id, false);

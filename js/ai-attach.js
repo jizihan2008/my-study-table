@@ -905,6 +905,7 @@ async function renderPdfAttachmentPages(file, opts = {}) {
   let totalBytes = 0;
   const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   try {
+    if (onPage) { try { onPage({ done: 0, total: renderCount, pageNo: range.startPage }); } catch (e) {} }
     for (let pageNo = range.startPage; pageNo < range.startPage + renderCount; pageNo++) {
       if (isAborted && isAborted()) { aborted = true; break; }
       const page = await pdf.getPage(pageNo);

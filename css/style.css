@@ -1168,6 +1168,20 @@ body {
 .fmt-btn b { font-weight: 700; }
 .fmt-btn i { font-style: italic; }
 .fmt-btn s { text-decoration: line-through; }
+.fmt-heading-trigger { width: 42px; gap: 3px; }
+.fmt-heading-menu {
+  position: fixed; margin: 0; padding: 5px; min-width: 150px;
+  border: 1px solid var(--border); border-radius: 8px;
+  background: var(--card); color: var(--text); box-shadow: 0 6px 24px rgba(0,0,0,.18);
+}
+.fmt-heading-option {
+  display: flex; align-items: center; gap: 10px; width: 100%; padding: 7px 10px;
+  border: none; border-radius: 4px; background: transparent; color: inherit;
+  font: inherit; font-size: 13px; text-align: left; cursor: pointer;
+}
+.fmt-heading-option:hover, .fmt-heading-option:focus-visible { background: var(--hover-bg); }
+.fmt-heading-option[aria-checked="true"] { color: var(--primary); background: color-mix(in srgb, var(--primary) 15%, transparent); }
+.fmt-heading-option b { width: 22px; }
 .fmt-sep {
   width: 1px; height: 18px; background: var(--border);
   margin: 0 4px; flex-shrink: 0;
@@ -2107,13 +2121,15 @@ body {
   background: color-mix(in srgb, var(--path-bg) 72%, transparent); overflow: hidden;
 }
 .note-fold > summary {
-  display: flex; align-items: center; gap: 8px; padding: 9px 12px;
+  /* Keep text and inline formulas in one flow; flex gaps also space caret nodes. */
+  display: block; position: relative; padding: 9px 12px 9px 32px;
   cursor: pointer; user-select: text; font-weight: 600; color: var(--text);
   list-style: none; transition: background 0.16s ease, color 0.16s ease;
 }
 .note-fold > summary::-webkit-details-marker { display: none; }
 .note-fold > summary::before {
-  content: '›'; flex: 0 0 auto; color: var(--text-secondary); font-size: 18px;
+  content: '›'; position: absolute; left: 12px; top: 50%; margin-top: -9px;
+  color: var(--text-secondary); font-size: 18px;
   line-height: 1; transform-origin: center; transition: transform 0.16s ease;
 }
 .note-fold[open] > summary::before { transform: rotate(90deg); }
@@ -3355,6 +3371,17 @@ body {
 }
 .ai-exchange-footer .ai-msg-cand-pager:empty { display: none; }
 .ai-exchange-footer .ai-msg-regen { max-width: 100%; overflow-wrap: anywhere; }
+.ai-reply-chain, .ai-reply-chain-history {
+  display: flex; flex-direction: column; gap: 12px; width: 100%; min-width: 0;
+}
+.ai-reply-chain-toggle {
+  align-self: flex-start; margin-left: 42px; max-width: calc(100% - 42px);
+  display: flex; align-items: center; gap: 6px; padding: 6px 10px;
+  border: 1px solid var(--border); border-radius: 7px;
+  background: var(--card); color: var(--text-secondary); font: inherit; font-size: 12px;
+  text-align: left; cursor: pointer;
+}
+.ai-reply-chain-toggle:hover { background: var(--hover-bg); color: var(--primary); }
 .ai-msg-cand-nav {
   border: 1px solid var(--border); background: transparent;
   border-radius: 5px; padding: 2px 6px;
@@ -4077,6 +4104,9 @@ body.ai-message-immersive-open { overflow: hidden; }
 #helpTabs { overscroll-behavior-x: contain; }
 #helpTabs .settings-tab { flex: none; padding: 6px 10px; font-size: 12px; }
 .settings-field { display: flex; flex-direction: column; gap: 4px; }
+#desktopPetSettings[hidden] { display: none; }
+.desktop-pet-enable { display: flex; align-items: center; justify-content: space-between; gap: 16px; cursor: pointer; }
+#desktopPetToggle { width: 20px; height: 20px; accent-color: var(--primary); cursor: pointer; }
 .settings-field label { font-size: 13px; font-weight: 600; color: var(--text); }
 .settings-field input, .settings-field select {
   padding: 8px 12px; border: 2px solid var(--border);

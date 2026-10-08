@@ -679,6 +679,7 @@ function startFocusTimer(todoId) {
 function timerStart() {
   if (timerRunning) return;
   timerRunning = true;
+  if (typeof notifyDesktopPet === 'function') notifyDesktopPet('focus');
   timerSessionStart = Date.now();
   timerStartedThisSession = true;
   timerStaleNotice = null;
@@ -698,6 +699,7 @@ function timerStart() {
 
 function timerPause() {
   if (!timerRunning) return;
+  if (typeof notifyDesktopPet === 'function') notifyDesktopPet('pause');
   const now = Date.now();
   timerRunning = false;
   timerElapsed += now - timerSessionStart;
@@ -728,6 +730,7 @@ function normalizeTimerSessionsForRecord(sessions, totalMs) {
 }
 
 function timerStop() {
+  if ((timerRunning || timerElapsed >= 1000) && typeof notifyDesktopPet === 'function') notifyDesktopPet('rest');
   const now = Date.now();
   if (timerRunning) {
     timerElapsed += now - timerSessionStart;

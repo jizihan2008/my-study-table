@@ -873,6 +873,24 @@ test('streaming display preserves normal text around calls but removes a fake re
   assert.equal(renderCtx.sanitizeAiStreamingText(normal), '调用前\n\n调用后');
 });
 
+test('display hides multiline patch calls regardless of parse validity or tag representation', () => {
+  const ctx = harness();
+  // Literal newlines inside JSON strings reproduce malformed model output.
+  const body = '{"action":"patch_note","params":{"edits":[{"oldText":"首行\n公式前\n公式后","newText":"修复后的内容"}]}}';
+  for (const [open, close] of [
+    ['<tool_call>', '</tool_call>'],
+    ['<TOOL_CALL >', '</TOOL_CALL >'],
+    ['<tool_action>', '</tool_action>'],
+    ['&lt;tool_call&gt;', '&lt;/tool_call&gt;'],
+    ['\\<tool\\_call>', '\\</tool\\_call>']
+  ]) {
+    const raw = '正在整理。\n' + open + body + close + '\n正常回复。';
+    assert.equal(ctx.sanitizeAiToolRoundText(raw), '正在整理。\n\n正常回复。');
+    assert.equal(ctx.sanitizeAiStreamingText(raw), '正在整理。\n\n正常回复。');
+    assert.equal(ctx.sanitizeAiToolRoundText('正在整理。\n' + open + body), '正在整理。');
+  }
+});
+
 test('valid DSML executes through the existing tool loop without protocol failure', async () => {
   const ctx = harness();
   const conv = conversation(ctx);
@@ -1502,7 +1520,7 @@ test('PDF image mode reports per-page progress and stops between pages when canc
     }
   });
 
-  // 进度：每渲染完一页回调一次，顺序与页码一致，并回报最终体积与耗时。
+  // 进度：开始时回报总页数，再逐页更新，并回报最终体积与耗时。
   installCanvas();
   ctx.openPdfAttachment = async () => pdfStub(3);
   const progress = [];
@@ -1510,7 +1528,7 @@ test('PDF image mode reports per-page progress and stops between pages when canc
     maxPages: 3,
     onPage: info => progress.push(`${info.done}/${info.total}@${info.pageNo}`)
   });
-  assert.deepEqual(progress, ['1/3@1', '2/3@2', '3/3@3']);
+  assert.deepEqual(progress, ['0/3@1', '1/3@1', '2/3@2', '3/3@3']);
   assert.equal(done.aborted, false);
   assert.equal(done.renderedPages, 3);
   assert.equal(done.bytes, 3000);

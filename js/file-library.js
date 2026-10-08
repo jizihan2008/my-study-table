@@ -391,5 +391,14 @@
     });
   }
 
+  // 对话工具与文件库 UI 共用存储适配层，不暴露本机路径或二进制元数据。
+  global.aiFileLibrary = Object.freeze({
+    async list() {
+      return (await listFiles()).map(({ id, kind, parentId, name, size, type, createdAt, order }) =>
+        ({ id, kind: kind || 'file', parentId: parentId || null, name, size, type, createdAt, order }));
+    },
+    read: getFile
+  });
+
   initFileLibraryInteractions();
 })(window);

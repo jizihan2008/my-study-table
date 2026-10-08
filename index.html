@@ -22,7 +22,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
 <link rel="stylesheet" href="css/style.css?v=20261004-r6">
-<link rel="stylesheet" href="css/workspace.css?v=20260926-r4">
+<link rel="stylesheet" href="css/workspace.css?v=20261005-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -225,7 +225,16 @@
             <button class="fmt-btn" data-format="italic" onclick="formatText('italic')" title="斜体 (Ctrl+I)"><i>I</i></button>
             <button class="fmt-btn" data-format="strikethrough" onclick="formatText('strikethrough')" title="删除线"><s>S</s></button>
             <span class="fmt-sep"></span>
-            <button class="fmt-btn" onclick="formatText('heading')" title="标题"><b>H</b></button>
+            <button type="button" class="fmt-btn fmt-heading-trigger" id="notesHeadingButton" onclick="toggleNotesHeadingMenu()" title="标题级别" aria-label="标题级别" aria-haspopup="menu" aria-controls="notesHeadingMenu" aria-expanded="false"><b>H</b><span aria-hidden="true">▾</span></button>
+            <div class="fmt-heading-menu" id="notesHeadingMenu" popover="auto" role="menu" aria-label="标题级别">
+              <button type="button" class="fmt-heading-option" data-heading="0" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(0)">正文</button>
+              <button type="button" class="fmt-heading-option" data-heading="1" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(1)"><b>H1</b> 一级标题</button>
+              <button type="button" class="fmt-heading-option" data-heading="2" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(2)"><b>H2</b> 二级标题</button>
+              <button type="button" class="fmt-heading-option" data-heading="3" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(3)"><b>H3</b> 三级标题</button>
+              <button type="button" class="fmt-heading-option" data-heading="4" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(4)"><b>H4</b> 四级标题</button>
+              <button type="button" class="fmt-heading-option" data-heading="5" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(5)"><b>H5</b> 五级标题</button>
+              <button type="button" class="fmt-heading-option" data-heading="6" role="menuitemradio" aria-checked="false" onclick="applyNotesHeading(6)"><b>H6</b> 六级标题</button>
+            </div>
             <button class="fmt-btn" onclick="formatText('code')" title="行内代码">&lt;/&gt;</button>
             <button class="fmt-btn" onclick="formatText('codeblock')" title="代码块">{ }</button>
             <button class="fmt-btn" onclick="formatText('latex')" title="LaTeX 公式 (∑)">∑</button>
@@ -1254,6 +1263,14 @@
 
       <!-- Appearance Panel -->
       <div class="settings-tab-panel" id="settingsPanelAppearance">
+        <div class="settings-field" id="desktopPetSettings" hidden>
+          <div class="settings-section-title">🌱 时芽 · 桌面学习搭子</div>
+          <label class="desktop-pet-enable" for="desktopPetToggle">
+            <span>启用桌宠</span>
+            <input type="checkbox" role="switch" id="desktopPetToggle" onchange="toggleDesktopPet(this.checked)">
+          </label>
+          <span class="hint">启用后，时芽会悬浮在桌面陪伴学习，重启应用后保留此设置。可以拖动移动、点击互动、右键选择动作；主窗口收进托盘后仍会显示。</span>
+        </div>
         <div id="appearancePanelContent"></div>
       </div>
 
@@ -1831,6 +1848,7 @@
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20260929-r1"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
+<script src="js/desktop-pet.js?v=20261005-r1"></script>
 <script src="js/translation.js?v=20260922-r4"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->

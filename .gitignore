@@ -7,3 +7,4 @@ publish_log*.txt
 .codebuddy/tmp-commit-msg.txt
 test-results/
 playwright-report/
+.shiya-preview-profile/

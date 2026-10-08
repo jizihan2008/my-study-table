@@ -30,6 +30,31 @@ test.afterAll(async () => {
   if (server) await new Promise(resolve => server.close(resolve));
 });
 
+test('AI file tools read imported browser files and expose a selectable interface group', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await page.evaluate(() => switchTab('files'));
+  await page.locator('#fileLibraryInput').setInputFiles([
+    { name: 'ai-library.txt', mimeType: 'text/plain', buffer: Buffer.from('第一段\n第二段') }
+  ]);
+  await expect(page.locator('#fileLibraryList')).toContainText('ai-library.txt');
+  const result = await page.evaluate(async () => {
+    const listing = await executeToolCallStructured('list_library_files', { search: 'ai-library' });
+    const id = listing.data.items[0].id;
+    const first = await executeToolCallStructured('read_library_file', { fileId: id, limit: 4 });
+    const last = await executeToolCallStructured('read_library_file', { fileId: id, offset: first.data.nextOffset });
+    return { listing, first, last, group: AI_TOOL_GROUPS.find(group => group.key === 'file'),
+      disabled: selectAiToolsForConversation({ _toolGroups: ['note'] }, false, false).has('read_library_file') };
+  });
+  expect(result.listing.ok).toBe(true);
+  expect(result.listing.data.items[0].path).toBe('ai-library.txt');
+  expect(result.first.data.content + result.last.data.content).toBe('第一段\n第二段');
+  expect(result.last.data.hasMore).toBe(false);
+  expect(result.group.label).toBe('文件库');
+  expect(result.disabled).toBe(false);
+  await page.reload();
+  expect(await page.evaluate(async () => (await executeToolCallStructured('list_library_files', { search: 'ai-library' })).data.total)).toBe(1);
+});
+
 test('dragging reorders items, moves them into folders and back through breadcrumbs, and persists', async ({ page }) => {
   await page.goto(baseUrl + '/index.html');
   await page.evaluate(() => switchTab('files'));

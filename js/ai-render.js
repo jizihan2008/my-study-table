@@ -14,6 +14,7 @@ const AI_HISTORY_INITIAL_MIN = 6;
 const AI_HISTORY_INITIAL_SOURCE_BUDGET = 40000;
 const AI_HISTORY_BATCH_SIZE = 40;
 const _aiVisibleMessageCounts = new Map();
+const _aiExpandedReplyChains = new Set();
 let _aiPrependingHistory = false;
 const AI_FORMAT_CACHE_LIMIT = 160;
 const AI_FORMAT_CACHE_MAX_SOURCE_LENGTH = 50000;
@@ -80,23 +81,25 @@ function stripHallucinatedToolTranscriptForDisplay(value) {
 }
 
 function sanitizeAiToolRoundText(value) {
-  const text = stripHallucinatedToolTranscriptForDisplay(value);
+  let text = stripHallucinatedToolTranscriptForDisplay(value);
   if (typeof parseDsmlToolCalls === 'function') {
     const dsml = parseDsmlToolCalls(text);
-    if (dsml && dsml.valid) return dsml.cleanText;
+    if (dsml && dsml.valid) text = dsml.cleanText;
   }
   return text
-    .replace(/<(tool_call|tool_action)>[\s\S]*?<\/(?:tool_call|tool_action|call)>/g, '')
-    .replace(/\\?<tool\\?_(?:call|action)>[\s\S]*?\\?<\/(?:tool\\?_(?:call|action)|call)>/g, '')
+    // Display filtering must not depend on whether the enclosed JSON parses.
+    // Normalize only protocol tags, leaving ordinary escaped HTML untouched.
+    .replace(/&lt;(\s*\/?\s*(?:tool\\?_(?:call|action)|call_ai|memory|call)\b[^<>]*?)&gt;/gi, '<$1>')
+    .replace(/\\?<\s*(?:tool\\?_(?:call|action)|call_ai|memory)\b[^>]*>[\s\S]*?\\?<\s*\/\s*(?:tool\\?_(?:call|action)|call|call_ai|memory)\s*>/gi, '')
+    .replace(/\\?<\s*(tool\\?_(?:call|action))\s*>[\s\S]*?\\?<\s*\1\s*>/gi, '')
+    .replace(/\\?<\s*(?:tool\\?_(?:call|action)|call_ai|memory)\b[^>]*>[\s\S]*$/gi, '')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
 }
 
 function sanitizeAiStreamingText(value) {
   return sanitizeAiToolRoundText(value)
-    .replace(/<(tool_call|call_ai|memory)>[\s\S]*?<\/\1>/g, '')
-    .replace(/<(?:tool_call|call_ai|memory)>[\s\S]*$/g, '')
-    .replace(/<[a-z_]*$/i, '')
+    .replace(/(?:\\?<|&lt;)[a-z_\\\s]*$/i, '')
     .replace(/\n{3,}/g, '\n\n');
 }
 
@@ -146,8 +149,9 @@ function paintAiStreamingDraft(key) {
   const reasoningWrap = row.querySelector('.ai-streaming-reasoning');
   const reasoningText = row.querySelector('.ai-streaming-reasoning-text');
   updateStreamingTextNode(content, sanitizeAiStreamingText(draft.content));
-  updateStreamingTextNode(reasoningText, draft.reasoning);
-  if (reasoningWrap) reasoningWrap.style.display = draft.reasoning ? '' : 'none';
+  const reasoning = sanitizeAiStreamingText(draft.reasoning);
+  updateStreamingTextNode(reasoningText, reasoning);
+  if (reasoningWrap) reasoningWrap.style.display = reasoning ? '' : 'none';
   if (wasNearBottom && container) container.scrollTop = container.scrollHeight;
 }
 
@@ -607,6 +611,21 @@ function jumpToAiAffectedNote(noteId) {
   switchTab('notes');
 }
 
+function toggleAiReplyChain(button) {
+  const key = button?.dataset.chainKey;
+  if (!key) return;
+  const top = button.getBoundingClientRect().top;
+  if (_aiExpandedReplyChains.has(key)) _aiExpandedReplyChains.delete(key);
+  else _aiExpandedReplyChains.add(key);
+  renderAiMessages();
+  const container = document.getElementById('aiMessages');
+  const replacement = Array.from(container.querySelectorAll('.ai-reply-chain-toggle')).find(node => node.dataset.chainKey === key);
+  if (replacement) {
+    container.scrollTop += replacement.getBoundingClientRect().top - top;
+    replacement.focus({ preventScroll: true });
+  }
+}
+
 function renderAiMessages() {
   const container = document.getElementById('aiMessages');
   if (!container) return;
@@ -673,7 +692,8 @@ function renderAiMessages() {
   let exchangeStart = null;
   let exchangeEnd = null;
   let exchangeNotes = new Map();
-  const finishExchange = () => {
+  let exchangeMessages = [];
+  const finishExchange = (latest = false) => {
     if (!exchangeUser || !exchangeStart || !exchangeEnd) return;
     const siblings = isTreeConv(conv) ? siblingBranchIds(conv, exchangeStart.nodeId) : [];
     exchangeEnd.exchange = {
@@ -683,6 +703,14 @@ function renderAiMessages() {
       index: Math.max(1, siblings.indexOf(exchangeStart.nodeId) + 1),
       affectedNotes: [...exchangeNotes.values()]
     };
+    // Keep an in-progress chain visible. Earlier completed exchanges can still
+    // collapse while a later question is generating its answer.
+    if (exchangeMessages.length > 1 && !(latest && (isAiLoading(conv.id) || streamingDraft))) {
+      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1);
+      exchangeEnd.chainKey = encodeURIComponent(JSON.stringify([String(conv.id), exchangeUser.nodeId ?? exchangeUser.idx,
+        exchangeStart.nodeId ?? exchangeStart.idx, exchangeEnd.nodeId ?? exchangeEnd.idx]));
+      exchangeEnd.foldedMessages.forEach(item => { item.foldedIntoChain = true; });
+    }
   };
   for (const item of renderItems) {
     if (item.type === 'user') {
@@ -691,9 +719,11 @@ function renderAiMessages() {
       exchangeStart = null;
       exchangeEnd = null;
       exchangeNotes = new Map();
+      exchangeMessages = [];
     } else if (exchangeUser) {
       if (!exchangeStart) exchangeStart = item;
       exchangeEnd = item;
+      exchangeMessages.push(item);
       for (const outcome of item.msg._toolInfo?.outcomes || []) {
         if (!outcome.ok || !['success', 'duplicate'].includes(outcome.status)) continue;
         for (const note of outcome.affectedNotes || []) {
@@ -702,7 +732,7 @@ function renderAiMessages() {
       }
     }
   }
-  finishExchange();
+  finishExchange(true);
   if (streamingDraft) {
     renderItems.push({
       type: 'assistant',
@@ -715,15 +745,16 @@ function renderAiMessages() {
   }
 
   const visibilityKey = String(conv.id);
+  // Treat a completed chain as one history item so expanding it can reveal all
+  // its messages, including ones beyond the ordinary history page boundary.
+  const displayItems = renderItems.filter(item => !item.foldedIntoChain);
   let visibleCount = _aiVisibleMessageCounts.get(visibilityKey);
   if (!visibleCount) {
-    visibleCount = getInitialAiVisibleCount(renderItems);
+    visibleCount = getInitialAiVisibleCount(displayItems);
   }
-  const hiddenCount = Math.max(0, renderItems.length - visibleCount);
-  const visibleItems = hiddenCount ? renderItems.slice(hiddenCount) : renderItems;
-  container.innerHTML = (hiddenCount
-    ? `<button type="button" class="ai-history-more" onclick="showEarlierAiMessages()">加载更早消息（还有 ${hiddenCount} 条）</button>`
-    : '') + visibleItems.map(item => {
+  const hiddenCount = Math.max(0, displayItems.length - visibleCount);
+  const visibleItems = hiddenCount ? displayItems.slice(hiddenCount) : displayItems;
+  const renderItem = item => {
     const m = item.msg;
     if (!m) return ''; // safety: skip items without a message object
     const idx = item.idx;
@@ -736,17 +767,18 @@ function renderAiMessages() {
           const current = typeof notes !== 'undefined' ? notes.find(n => Number(n.id) === Number(note.id) && n.type === 'note') : null;
           return `<button type="button" class="ai-msg-regen" onclick="jumpToAiAffectedNote(${Number(note.id)})" title="跳转到笔记">📝 ${escapeHtml(current?.title || note.title || '未命名笔记')}</button>`;
         }).join('') : ''}</div>` : '';
+    const visibleReasoning = sanitizeAiStreamingText(m.reasoning);
     const reasoningHtml = m._streaming ? `
-      <div class="ai-streaming-reasoning"${m.reasoning ? '' : ' style="display:none"'}>
+      <div class="ai-streaming-reasoning"${visibleReasoning ? '' : ' style="display:none"'}>
         <span class="ai-streaming-reasoning-label">🧠 深度思考</span>
-        <span class="ai-streaming-reasoning-text">${escapeHtml(m.reasoning || '')}</span>
+        <span class="ai-streaming-reasoning-text">${escapeHtml(visibleReasoning)}</span>
       </div>
-    ` : m.reasoning ? `
+    ` : visibleReasoning ? `
       <div class="ai-reasoning-toggle" onclick="toggleReasoning(this)" data-idx="${idx}">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
         🧠 深度思考
       </div>
-      <div class="ai-reasoning-content">${formatAiContent(m.reasoning)}</div>
+      <div class="ai-reasoning-content">${formatAiContent(visibleReasoning)}</div>
     ` : '';
 
     // Render attachments in user messages
@@ -882,23 +914,17 @@ function renderAiMessages() {
 
     // Hide tool_call, call_ai, and memory tags from user-facing messages
     const hasToolCall = m._malformedToolProtocol === true || m._dsmlToolProtocol === true
-      || (typeof cleanContent === 'string' && /<tool_call>/.test(cleanContent));
+      || (typeof cleanContent === 'string' && /(?:\\?<|&lt;)\s*tool\\?_(?:call|action)\b/i.test(cleanContent));
     if (m._streaming) {
       cleanContent = sanitizeAiStreamingText(cleanContent);
     } else if (typeof cleanContent === 'string') {
       if (typeof m._toolRoundCleanText === 'string') {
-        cleanContent = m._toolRoundCleanText;
+        cleanContent = sanitizeAiStreamingText(m._toolRoundCleanText);
       } else if (hasToolCall) {
         const sanitized = sanitizeAiToolRoundText(cleanContent);
         cleanContent = m._malformedToolProtocol && sanitized === cleanContent ? '' : sanitized;
       } else {
-        cleanContent = cleanContent
-          .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-          .replace(/<tool_call>[\s\S]*?<tool_call>/g, '')
-          .replace(/<call_ai>[\s\S]*?<\/call_ai>/g, '')
-          .replace(/<memory>[\s\S]*?<\/memory>/g, '')
-          .replace(/\n{3,}/g, '\n\n') // 压缩移除标签后残留的空行
-          .trim();
+        cleanContent = sanitizeAiToolRoundText(cleanContent);
       }
     }
 
@@ -908,6 +934,7 @@ function renderAiMessages() {
     // 编辑模式：user 消息正在内联编辑时，气泡内容替换为 textarea + 操作按钮
     const isEditingMsg = item.type === 'user' && _aiMsgEditingUserId === item.nodeId;
     let contentHtml;
+    let isToolPlaceholder = false;
     if (isEditingMsg) {
       const rawText = typeof m.content === 'string' ? m.content : '';
       contentHtml = `
@@ -922,6 +949,7 @@ function renderAiMessages() {
     } else {
       contentHtml = formatAiContent(cleanContent);
       if (!contentHtml && isAssistant && hasToolCall) {
+        isToolPlaceholder = true;
         contentHtml = m._malformedToolProtocol
           ? '<span class="ai-tool-placeholder">⚠️ 工具指令格式错误，已返回给 AI 修正...</span>'
           : '<span class="ai-tool-placeholder">🔧 正在执行操作...</span>';
@@ -936,7 +964,7 @@ function renderAiMessages() {
     if (item.type === 'assistant') {
       const loading = isAiLoading(conv.id);
       // 沉浸查看仍按单条消息提供。
-      const immersiveBtn = !loading ? `<button class="ai-msg-immersive" onclick="openAiMessageImmersive(this)" title="沉浸查看这条回复">
+      const immersiveBtn = !loading && !isToolPlaceholder ? `<button class="ai-msg-immersive" onclick="openAiMessageImmersive(this)" title="沉浸查看这条回复">
         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
         沉浸查看
       </button>` : '';
@@ -982,6 +1010,20 @@ function renderAiMessages() {
         </div>
       </div>
     ` + exchangeFooter;
+  };
+  container.innerHTML = (hiddenCount
+    ? `<button type="button" class="ai-history-more" onclick="showEarlierAiMessages()">加载更早消息（还有 ${hiddenCount} 条）</button>`
+    : '') + visibleItems.map(item => {
+    if (!item.foldedMessages?.length) return renderItem(item);
+    const expanded = _aiExpandedReplyChains.has(item.chainKey);
+    const count = item.foldedMessages.length;
+    return `<div class="ai-reply-chain">
+      <button type="button" class="ai-reply-chain-toggle" data-chain-key="${escapeHtml(item.chainKey)}" aria-expanded="${expanded}" onclick="toggleAiReplyChain(this)">
+        <span aria-hidden="true">${expanded ? '▾' : '▸'}</span> ${expanded ? '收起 ' + count + ' 条消息' : '已折叠 ' + count + ' 条消息 · 展开查看'}
+      </button>
+      ${expanded ? `<div class="ai-reply-chain-history">${item.foldedMessages.map(renderItem).join('')}</div>` : ''}
+      ${renderItem(item)}
+    </div>`;
   }).join('');
   // Show typing indicator only when loading and there are no pending intermediate messages
   // (i.e., during the first API call before any tool results come back)
@@ -998,6 +1040,7 @@ function renderAiMessages() {
       `);
     }
   }
+  if (typeof renderAiPdfSendProgress === 'function') renderAiPdfSendProgress();
   // ── 渲染后滚动：仅在接近底部或强制时滚到底，否则保持原位置 ──
   if (_aiPrependingHistory) {
     container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
@@ -1272,11 +1315,7 @@ function renderAiTreePanel() {
 // 节点摘要：取内容前 28 字符（user 用原文，assistant 去掉隐藏标签）
 function summarizeNode(node) {
   if (!node || typeof node.content !== 'string') return '(空)';
-  let text = node.content
-    .replace(/<tool_call>[\s\S]*?<\/tool_call>/g, '')
-    .replace(/<call_ai>[\s\S]*?<\/call_ai>/g, '')
-    .replace(/<memory>[\s\S]*?<\/memory>/g, '')
-    .trim();
+  let text = sanitizeAiStreamingText(node.content).trim();
   if (!text) return '(工具调用)';
   return escapeHtml(text.length > 28 ? text.slice(0, 28) + '…' : text);
 }

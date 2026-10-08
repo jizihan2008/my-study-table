@@ -1,6 +1,15 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  petStatus: () => ipcRenderer.invoke('pet:status'),
+  petToggle: () => ipcRenderer.invoke('pet:toggle'),
+  petSetEnabled: enabled => ipcRenderer.invoke('pet:set-enabled', enabled),
+  petCue: cue => ipcRenderer.send('pet:cue', cue),
+  onPetState: callback => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('pet:state', listener);
+    return () => ipcRenderer.removeListener('pet:state', listener);
+  },
   showNotification: (payload) => ipcRenderer.invoke('show-notification', payload),
   onNotificationClick: (callback) => {
     const listener = (_event, target) => callback(target);

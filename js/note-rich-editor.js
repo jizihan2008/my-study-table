@@ -134,7 +134,9 @@
 
   function inline(node) {
     if (!node) return '';
-    if (node.nodeType === Node.TEXT_NODE) return escapeInline(node.textContent || '');
+    // HTML source line breaks collapse to spaces on the editing surface. Only
+    // explicit <br> elements below represent an authored inline line break.
+    if (node.nodeType === Node.TEXT_NODE) return escapeInline((node.textContent || '').replace(/[\t\r\n\f]+/g, ' '));
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const tag = node.tagName.toLowerCase();
     const children = () => Array.from(node.childNodes).map(inline).join('');
@@ -206,9 +208,10 @@
 
   function serializeList(list, depth) {
     const ordered = list.tagName === 'OL';
+    const start = ordered ? list.start : 1;
     return Array.from(list.children)
       .filter(child => child.tagName === 'LI')
-      .map((li, index) => listItem(li, ordered, index, depth || 0))
+      .map((li, index) => listItem(li, ordered, start + index - 1, depth || 0))
       .join('\n');
   }
 
@@ -227,6 +230,26 @@
     return output.join('\n');
   }
 
+  function serializeBlocks(nodes) {
+    const chunks = [];
+    let run = '';
+    const flush = () => {
+      if (run.trim()) chunks.push(run);
+      run = '';
+    };
+    Array.from(nodes).forEach(node => {
+      const isBlock = node.nodeType === Node.ELEMENT_NODE && (blockTags.has(node.tagName)
+        || node.matches('.markdown-math-display, .katex-display, .footnotes'));
+      if (isBlock) {
+        flush();
+        const value = block(node);
+        if (value) chunks.push(value);
+      } else run += inline(node);
+    });
+    flush();
+    return chunks.join('\n\n');
+  }
+
   function block(node) {
     if (!node) return '';
     if (node.nodeType === Node.TEXT_NODE) return escapeInline(node.textContent || '');
@@ -242,11 +265,7 @@
         ? Array.from(summary.childNodes).map(inline).join('').trim()
         : '折叠内容';
       const bodyNodes = body ? Array.from(body.childNodes) : Array.from(node.childNodes).filter(child => child !== summary);
-      const bodyMarkdown = bodyNodes
-        .map(child => child.nodeType === Node.ELEMENT_NODE && blockTags.has(child.tagName) ? block(child) : inline(child))
-        .filter(Boolean)
-        .join('\n\n')
-        .trim();
+      const bodyMarkdown = serializeBlocks(bodyNodes).trim();
       // An empty body is real document content (including in history), not a
       // request to create a fold. Never inject the new-fold placeholder here.
       return ':::fold ' + (title || '折叠内容') + '\n' + bodyMarkdown + '\n:::';
@@ -261,7 +280,7 @@
       return '```' + language + '\n' + (code?.textContent || node.textContent || '').replace(/\n$/, '') + '\n```';
     }
     if (tag === 'blockquote') {
-      const value = Array.from(node.childNodes).map(block).join('\n\n').trim();
+      const value = serializeBlocks(node.childNodes).trim();
       return value.split('\n').map(line => '> ' + line).join('\n');
     }
     if (tag === 'table') return serializeTable(node);
@@ -272,7 +291,7 @@
       return latex ? '$$\n' + latex.trim() + '\n$$' : '';
     }
     if (node.classList.contains('footnotes')) return '';
-    return Array.from(node.childNodes).map(child => blockTags.has(child.tagName) ? block(child) : inline(child)).join('');
+    return serializeBlocks(node.childNodes);
   }
 
   function focusHistoryChange(before, after) {
@@ -358,7 +377,7 @@
       }
     };
     mergeFormatting(source);
-    let markdown = Array.from(source.childNodes).map(block).join('\n\n').replace(/\n{3,}/g, '\n\n').trim();
+    let markdown = serializeBlocks(source.childNodes).replace(/\n{3,}/g, '\n\n').trim();
     if (footnoteDefinitions) markdown += (markdown ? '\n\n' : '') + footnoteDefinitions;
     currentMarkdown = markdown;
     return markdown;
@@ -386,16 +405,17 @@
     else if (typeof root.onRichNotesChange === 'function') root.onRichNotesChange(markdown, previous, change);
   }
 
-  function editMath(math) {
-    const latex = getLatexSource(math);
-    if (!latex || !root.katex?.renderToString || !root.DOMPurify) return;
+  function editMath(math, insertionRange = null) {
+    const inserting = !math;
+    const latex = inserting ? (insertionRange?.toString() || '').trim() : getLatexSource(math);
+    if ((!inserting && !latex) || !root.katex?.renderToString || !root.DOMPurify) return;
     closeMathEditor?.(false);
     const noteId = currentNoteId;
-    const displayMode = !!math.closest('.markdown-math-display, .katex-display');
+    const displayMode = !inserting && !!math.closest('.markdown-math-display, .katex-display');
     const dialog = document.createElement('dialog');
     dialog.className = 'note-math-dialog';
     dialog.setAttribute('aria-labelledby', 'noteMathEditorTitle');
-    dialog.innerHTML = '<div class="modal-header"><span class="modal-title" id="noteMathEditorTitle">编辑公式</span>'
+    dialog.innerHTML = '<div class="modal-header"><span class="modal-title" id="noteMathEditorTitle">' + (inserting ? '插入公式' : '编辑公式') + '</span>'
       + '<button type="button" class="modal-close" aria-label="关闭公式编辑器">✕</button></div>'
       + '<div class="note-math-editor-body"><label for="noteMathSource">LaTeX 源码</label>'
       + '<textarea id="noteMathSource" spellcheck="false" aria-describedby="noteMathHint noteMathError"></textarea>'
@@ -438,19 +458,28 @@
         range.collapse(true);
         host.focus({ preventScroll: true });
         restoreRange(range);
+      } else if (restoreFocus && inserting && noteId === currentNoteId
+        && host.contains(insertionRange?.startContainer) && host.contains(insertionRange?.endContainer)) {
+        host.focus({ preventScroll: true });
+        restoreRange(insertionRange);
       }
     };
     closeMathEditor = close;
     function commit() {
       renderPreview();
-      if (!replacement || noteId !== currentNoteId || !host.contains(math)) return;
+      if (!replacement || noteId !== currentNoteId) return;
+      if (inserting ? !host.contains(insertionRange?.startContainer) || !host.contains(insertionRange?.endContainer) : !host.contains(math)) return;
       const source = input.value.trim();
-      if (source === latex) { close(); return; }
+      if (!inserting && source === latex) { close(); return; }
       const updated = replacement.cloneNode(true);
       updated.dataset.latex = source;
       updated.setAttribute('contenteditable', 'false');
       updated.title = '双击编辑公式';
-      math.replaceWith(updated);
+      if (inserting) {
+        insertionRange.deleteContents();
+        insertionRange.insertNode(updated);
+        normalizeRenderedDom(host);
+      } else math.replaceWith(updated);
       math = updated;
       notifyChange({ historyBoundary: true });
       close();
@@ -538,7 +567,9 @@
     if (savedRange) restoreRange(savedRange);
     const simple = { bold: 'bold', italic: 'italic', strikethrough: 'strikeThrough', ul: 'insertUnorderedList', ol: 'insertOrderedList' };
     if (simple[type]) document.execCommand(simple[type], false, null);
-    else if (type === 'heading') {
+    else if (/^heading[1-6]$/.test(type) || type === 'paragraph') {
+      document.execCommand('formatBlock', false, type === 'paragraph' ? 'p' : 'h' + type.slice(-1));
+    } else if (type === 'heading') {
       const heading = selection?.anchorNode?.parentElement?.closest('h1,h2,h3,h4,h5,h6');
       document.execCommand('formatBlock', false, heading ? 'p' : 'h2');
     } else if (type === 'quote') document.execCommand('formatBlock', false, 'blockquote');
@@ -602,7 +633,15 @@
       return;
     } else if (type === 'hr') {
       document.execCommand('insertHorizontalRule', false, null);
-    } else if (type === 'latex' || type === 'footnote') {
+    } else if (type === 'latex') {
+      const range = savedRange || document.createRange();
+      if (!savedRange) {
+        range.selectNodeContents(host.lastElementChild || host);
+        range.collapse(false);
+      }
+      editMath(null, range);
+      return;
+    } else if (type === 'footnote') {
       // Complex source-oriented nodes keep the existing proven Markdown workflow.
       root.switchNoteView?.('edit');
       setTimeout(() => root.formatText?.(type), 0);
@@ -874,6 +913,23 @@
     return true;
   }
 
+  function enterQuoteLine() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return false;
+    const range = selection.getRangeAt(0);
+    const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    const endElement = range.endContainer.nodeType === Node.ELEMENT_NODE ? range.endContainer : range.endContainer.parentElement;
+    const quote = element.closest('blockquote');
+    if (!quote || !host.contains(quote) || endElement.closest('blockquote') !== quote
+      || element.closest('pre, table, li, summary') || endElement.closest('pre, table, li, summary')) return false;
+    // Keep an ordinary Enter in the current quote's inline flow. Lists, code,
+    // tables and fold titles inside a quote retain their own Enter behavior.
+    if (exitEmptyItem()) return true;
+    document.execCommand('insertLineBreak', false, null);
+    notifyChange();
+    return true;
+  }
+
   function removeSingleEmptyQuote() {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return false;
@@ -950,8 +1006,14 @@
       event.stopPropagation();
       editMath(math);
     });
+    const heading = caretElement()?.closest('h1,h2,h3,h4,h5,h6');
+    root.updateNotesHeadingState?.(heading ? Number(heading.tagName.slice(1)) : 0);
     host.addEventListener('beforeinput', event => {
       if (!event.isComposing && event.inputType === 'insertParagraph' && enterFoldBodyFromTitle()) {
+        event.preventDefault();
+        return;
+      }
+      if (!event.isComposing && event.inputType === 'insertParagraph' && enterQuoteLine()) {
         event.preventDefault();
         return;
       }
@@ -1027,7 +1089,7 @@
         return;
       }
       if (!modifier && !event.shiftKey && !event.altKey && !event.isComposing
-        && event.key === 'Enter' && (exitEmptyItem() || enterTaskItem())) {
+        && event.key === 'Enter' && (exitEmptyItem() || enterTaskItem() || enterQuoteLine())) {
         event.preventDefault();
         event.stopPropagation();
         return;
