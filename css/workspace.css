@@ -347,9 +347,7 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   box-shadow: var(--shadow-lg);
 }
 #section-notes.notes-immersive .notes-format-toolbar {
-  /* Keep the revealed toolbar below the 34px floating controls and their gap. */
-  top: calc(max(12px, env(safe-area-inset-top)) + 46px);
-  transform: translateY(calc(-100% - 60px - env(safe-area-inset-top)));
+  top: 0; transform: translateY(calc(-100% - 2px));
 }
 #section-notes.notes-immersive .notes-editor-footer {
   bottom: 0; transform: translateY(calc(100% + 2px));
@@ -485,6 +483,10 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   .notes-split-pane-bar { min-height: 40px; padding: 5px 8px; }
   .notes-split-pane-bar select { max-width: 48vw; }
   .notes-split-preview, .notes-split-rich-editor { padding: 20px 16px 56px; }
+}
+/* Revealing the toolbar puts the floating controls on the row below it. */
+#section-notes.notes-immersive.show-top-controls :is(.notes-immersive-zoom, .notes-immersive-exit, .notes-immersive-toc, .notes-immersive-split-toggle, .notes-split-primary-bar) {
+  top: calc(var(--notes-immersive-toolbar-height, 0px) + max(12px, env(safe-area-inset-top)));
 }
 .progress-bar-wrap { background: var(--input-bg); border: 1px solid var(--border); height: 24px; }
 .progress-bar-fill { background: color-mix(in srgb, var(--primary) 22%, var(--card)); }

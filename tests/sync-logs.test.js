@@ -53,6 +53,87 @@ function loadSyncLogs(seed = {}, options = {}) {
   return { SyncLogs: window.SyncLogs, values, context, state };
 }
 
+for (const different of [false, true]) {
+  test(`dirty log shards ${different ? 'retain real conflicts' : 'acknowledge identical content and clear old conflicts'}`, async () => {
+    const items = [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'two' }];
+    const timestamp = '2026-10-08T00:01:00Z';
+    const rows = items.map((item, index) => ({
+      kind: 'bk_qa', item_id: '7_p' + index, updated_at: timestamp,
+      data: { meta: { id: '7' }, items: [{ content: different && index === 1 ? 'changed' : item.content, role: item.role }] }
+    }));
+    const client = { from() { return {
+      select() { return this; }, eq() { return this; }, in() { return this; },
+      then(resolve, reject) { return Promise.resolve({ data: rows, error: null }).then(resolve, reject); }
+    }; } };
+    const { SyncLogs, values } = loadSyncLogs({
+      study_bk_qa_logs_v1: { '7': items },
+      study_sync_logs_dirty_v2: { 'bk_qa/7': true },
+      study_sync_logs_ts: { 'bk_qa/7': '2026-10-08T00:00:00Z' },
+      study_sync_logs_conflicts_v2: { 'bk_qa/7': { kind: 'bk_qa', itemId: '7', reason: 'both-changed' } }
+    }, { client });
+    const local = { kind: 'bk_qa', itemId: '7', meta: { id: '7' }, items };
+    const result = await SyncLogs.__test.uploadPreparedItem({ user: { id: 'u1' } }, client, local, [],
+      { groups: { 'bk_qa/7': rows }, set: new Set(['bk_qa/7_p0', 'bk_qa/7_p1']) }, false);
+    assert.equal(result.ok, !different);
+    assert.equal(SyncLogs.getPendingConflicts().length, different ? 1 : 0);
+    assert.deepEqual(JSON.parse(values.get('study_bk_qa_logs_v1')), { '7': items });
+    assert.equal(!!JSON.parse(values.get('study_sync_logs_dirty_v2'))['bk_qa/7'], different);
+    if (!different) assert.equal(JSON.parse(values.get('study_sync_logs_ts'))['bk_qa/7'], timestamp);
+  });
+}
+
+test('pull rechecks an identical pending conversation without redrawing the editor', async () => {
+  const conv = { id: 7, title: 'same', messages: [{ role: 'user', content: 'hello' }] };
+  const client = { from() { return {
+    select() { return this; }, eq() { return this; }, in() { return this; },
+    then(resolve, reject) { return Promise.resolve({ data: [{
+      kind: 'ai_conv', item_id: '7', updated_at: '2026-10-08T00:01:00Z',
+      data: { meta: { daily: false, autoTitled: false, createdAt: 0, systemPrompt: '', title: 'same', id: 7 }, items: conv.messages }
+    }], error: null }).then(resolve, reject); }
+  }; } };
+  const { SyncLogs, state, values } = loadSyncLogs({
+    study_ai_convs: [conv],
+    study_sync_logs_dirty_v2: { 'ai_conv/7': true },
+    study_sync_logs_conflicts_v2: { 'ai_conv/7': { kind: 'ai_conv', itemId: '7', reason: 'both-changed' } }
+  }, { client, aiConvs: [conv] });
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.equal(SyncLogs.getPendingConflicts().length, 0);
+  assert.equal(state.renders, 0);
+  assert.deepEqual(JSON.parse(values.get('study_sync_logs_dirty_v2')), {});
+});
+
+for (const mode of ['shards', 'local-deleted', 'corrupt']) {
+  test(`log conflict previews handle ${mode} without applying cloud content`, async () => {
+    const plain = value => ({ v: 1, c: 'plain', d: Buffer.from(JSON.stringify(value), 'utf8').toString('base64') });
+    const rows = [
+      { kind: 'bk_qa', item_id: '7_p0', updated_at: '2026-10-08T00:00:00Z', data: plain({ meta: { id: '7' }, items: [{ content: 'cloud one' }] }) },
+      { kind: 'bk_qa', item_id: '7_p1', updated_at: '2026-10-08T00:00:00Z', data: mode === 'corrupt' ? { v: 1, c: 'plain', d: 'broken' } : plain({ items: [{ content: 'cloud two' }] }) }
+    ];
+    const client = {
+      auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+      from() { return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        then(resolve, reject) { return Promise.resolve({ data: rows, error: null }).then(resolve, reject); }
+      }; }
+    };
+    const { SyncLogs, values, state } = loadSyncLogs({
+      study_bk_qa_logs_v1: { '7': [{ content: 'local' }] },
+      study_sync_logs_conflicts_v2: { 'bk_qa/7': { kind: 'bk_qa', itemId: '7', reason: 'both-changed' } },
+      study_sync_logs_tombstones_v2: mode === 'local-deleted' ? { 'bk_qa/7': { kind: 'bk_qa', itemId: '7' } } : {}
+    }, { client });
+    const before = [...values];
+    const result = await SyncLogs.getConflictDifferences('bk_qa', '7');
+    assert.equal(result.ok, mode !== 'corrupt', result.reason);
+    if (mode !== 'corrupt') {
+      assert.equal(result.remote.items.length, 2);
+      assert.equal(result.remote.items[1].content, 'cloud two');
+      assert.equal(result.localMissing, mode === 'local-deleted');
+    } else assert.match(result.reason, /损坏|不完整/);
+    assert.deepEqual([...values], before);
+    assert.equal(state.renders, 0);
+  });
+}
+
 test('conversation changes remain dirty while automatic cloud storage is off', () => {
   const { SyncLogs, values } = loadSyncLogs({
     study_ai_convs: [{ id: 1, title: '本地', messages: [] }]

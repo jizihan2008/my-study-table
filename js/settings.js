@@ -777,6 +777,8 @@ function _renderSyncConflictItem(item, canResolve, groupResolving) {
     '<div><dt>云端更新时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.remoteTimestamp, '未知')) + '</dd></div>' +
     '<div><dt>检测时间</dt><dd>' + escapeHtml(_formatSyncConflictTime(item.detectedAt, '未知')) + '</dd></div>' +
     '</dl>' +
+    '<button class="sync-conflict-btn sync-diff-button" data-key="' + escapeHtml(item.key) + '" onclick="SyncDiff.show(this,()=>Sync.getConflictDifferences(this.dataset.key))"' + disabledAttr + '>查看具体差异</button>' +
+    '<div class="sync-conflict-diff" hidden aria-live="polite"></div>' +
     '<div class="sync-conflict-actions">' +
     '<button class="sync-conflict-btn sync-conflict-btn-local" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'local\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="upload"></i> 保留本地并上传</button>' +
     '<button class="sync-conflict-btn sync-conflict-btn-remote" data-key="' + escapeHtml(item.key) + '" onclick="syncResolveConflict(this.dataset.key,\'remote\')" title="' + escapeHtml(buttonTitle) + '"' + disabledAttr + '><i data-lucide="cloud-download"></i> 使用云端并覆盖本地</button>' +

@@ -749,6 +749,8 @@
     const baseTimestamp = _deriveBaseTimestamp(item.kind, item.itemId, remoteRows);
     const dirty = _isItemDirty(item.kind, item.itemId);
     if (!force && dirty && _hasForeignRemoteAdvance(item.kind, remoteRows, baseTimestamp)) {
+      const rows = await _fetchRemoteItemRows(session, c, [{ kind: item.kind, itemId: item.itemId }]);
+      if (await _acceptSameLogContent(item.kind, item.itemId, rows)) return { ok: true, unchanged: true };
       _queueConflict(item.kind, item.itemId, {
         name: _itemName(item.kind, item),
         reason: baseTimestamp ? 'both-changed' : 'missing-sync-base',
@@ -1111,7 +1113,11 @@
       for (const key of Object.keys(grouped)) {
         const [kind, baseId] = key.split('/');
         const g = grouped[key];
-        if (_isItemDirty(kind, baseId) || _getTombstones()[key] || _isConflicted(kind, baseId)) continue;
+        if (_getTombstones()[key]) continue;
+        if (_isItemDirty(kind, baseId) || _isConflicted(kind, baseId)) {
+          await _acceptSameLogContent(kind, baseId, g.rows);
+          continue;
+        }
         const pieces = _selectCurrentRows(g.rows);
         if (!pieces.length) continue;
         const remoteUpdated = pieces.reduce((m, p) =>
@@ -1167,6 +1173,29 @@
       if (Array.isArray(obj.items)) items = items.concat(obj.items);
     }
     return { meta, tree, activePath, items, deleted };
+  }
+
+  function _logContent(item) {
+    return { meta: item.meta || null, tree: item.tree || null,
+      activePath: item.activePath || null, items: Array.isArray(item.items) ? item.items : [] };
+  }
+
+  async function _acceptSameLogContent(kind, itemId, rows) {
+    const key = _baseKey(kind, itemId);
+    const selected = _selectCurrentRows((rows || []).filter(row =>
+      row.kind === kind && _baseIdFromRemoteId(row.item_id) === String(itemId)));
+    if (!selected.length || _getTombstones()[key]) return false;
+    const built = await _rebuildPieces(selected);
+    if (!built || built.deleted) return false;
+    const currentItem = () => _extractAll().find(item => item.kind === kind && String(item.itemId) === String(itemId));
+    let local = currentItem();
+    if (!local || !policy.sameContent(_logContent(local), _logContent(built))) return false;
+    await _removeOutboxForBase(kind, itemId);
+    local = currentItem();
+    if (!local || _getTombstones()[key] || !policy.sameContent(_logContent(local), _logContent(built))) return false;
+    _setTs(key, _latestTimestamp(selected));
+    _recordPulledContent(kind, itemId);
+    return true;
   }
   // 写回本地对应 key（注意：不触发 SyncLogs.onLocalChange，靠 applyingRemote 防回环）
   function _applyToLocal(kind, itemId, built) {
@@ -1401,6 +1430,31 @@
     if (_autoSyncOn() && loggedIn && client) scheduleUpload();
   }
 
+  async function getConflictDifferences(kind, itemId) {
+    const key = _baseKey(kind, itemId);
+    if (!_getConflicts()[key]) return { ok: false, reason: '该对话冲突已不存在或已处理' };
+    try {
+      const session = await _session();
+      const c = _client();
+      if (!session || !c) throw new Error('请先登录同步账号');
+      const rows = await _fetchRemoteItemRows(session, c, [{ kind, itemId }]);
+      const selected = _selectCurrentRows(rows.filter(row => row.kind === kind && _baseIdFromRemoteId(row.item_id) === String(itemId)));
+      const built = selected.length ? await _rebuildPieces(selected) : null;
+      if (selected.length && !built) throw new Error('云端分片损坏或不完整，无法比较');
+      const local = _getTombstones()[key] ? null : _extractAll().find(item => item.kind === kind && String(item.itemId) === String(itemId));
+      return { ok: true, local: local && _logContent(local), remote: built && _logContent(built),
+        localMissing: !local, remoteMissing: !built || built.deleted,
+        remoteTimestamp: _latestTimestamp(selected) };
+    } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+  }
+
+  function showConflictDifferences(button) {
+    return global.SyncDiff.show(button, async () => {
+      const parsed = JSON.parse(decodeURIComponent(button.dataset.token));
+      return getConflictDifferences(parsed[0], parsed[1]);
+    });
+  }
+
   function resolveConflict(kind, itemId, choice) {
     return _enqueue(async () => {
       const key = _baseKey(kind, itemId);
@@ -1611,6 +1665,8 @@
             <div><dt>云端更新时间</dt><dd>${escapeHtml(_formatTime(conflict.remoteTimestamp, '未知'))}</dd></div>
             <div><dt>检测时间</dt><dd>${escapeHtml(_formatTime(conflict.detectedAt, '未知'))}</dd></div>
           </dl>
+          <button class="sync-conflict-btn sync-diff-button" data-token="${escapeHtml(token)}" onclick="SyncLogs.showConflictDifferences(this)">查看具体差异</button>
+          <div class="sync-conflict-diff" hidden aria-live="polite"></div>
           <div class="sync-conflict-actions">
             <button class="sync-conflict-btn sync-conflict-btn-local" onclick="SyncLogs.resolveConflictToken('${escapeHtml(token)}','local')"><i data-lucide="upload"></i> ${localChoice}</button>
             <button class="sync-conflict-btn sync-conflict-btn-remote" onclick="SyncLogs.resolveConflictToken('${escapeHtml(token)}','remote')"><i data-lucide="cloud-download"></i> 使用云端并覆盖本机</button>
@@ -2142,6 +2198,8 @@
     getUsage,
     getSyncProgress,
     getPendingConflicts,
+    getConflictDifferences,
+    showConflictDifferences,
     resolveConflict,
     resolveConflictToken,
     markItemDeleted,

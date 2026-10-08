@@ -151,6 +151,22 @@ function device(name, backend, userId = 'u1') {
 }
 
 async function run() {
+  for (const existingConflict of [false, true]) {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    await a.seed(base);
+    await b.syncNow();
+    a.edit([{ id: 1, text: 'same edit', nested: { x: 1, y: 2 } }]);
+    b.edit([{ nested: { y: 2, x: 1 }, text: 'same edit', id: 1 }]);
+    await a.syncNow();
+    if (existingConflict) {
+      const key = 'mst:item:v1:' + encodeURIComponent(KEY) + ':1';
+      b.setKeyRaw('study_sync_collection_conflicts_v1', { [key]: { key, collection: KEY, reason: 'both-changed' } });
+    }
+    await b.syncNow();
+    const actual = { local: b.get(), cloud: db.value('u1'), conflicts: b.sync.getPendingConflicts(), status: await b.sync.getStatus() };
+    check('same-record-content-' + (existingConflict ? 'clears-pending-conflict' : 'avoids-concurrent-conflict'), actual,
+      () => actual.local[0].text === 'same edit' && actual.cloud[0].text === 'same edit' && actual.conflicts.length === 0 && actual.status.pendingCount === 0);
+  }
   {
     const db = cloud(), a = device('A', db), b = device('B', db);
     await a.seed([{ id: 1, text: 'one' }, { id: 2, text: 'two' }]);

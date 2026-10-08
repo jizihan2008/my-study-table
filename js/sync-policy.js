@@ -22,6 +22,16 @@
     return leftMs > rightMs ? 1 : -1;
   }
 
+  // JSON object key order is insignificant; array order and value types are not.
+  function sameContent(left, right) {
+    if (left === right) return true;
+    if (left === null || right === null || typeof left !== 'object' || typeof right !== 'object') return false;
+    if (Array.isArray(left) !== Array.isArray(right)) return false;
+    const keys = Object.keys(left);
+    if (keys.length !== Object.keys(right).length) return false;
+    return keys.every(key => Object.prototype.hasOwnProperty.call(right, key) && sameContent(left[key], right[key]));
+  }
+
   // Decide which side is authoritative without performing any I/O.
   // A missing base timestamp means this device has never observed the cloud
   // version, so two non-empty copies must be treated as a conflict.
@@ -100,5 +110,5 @@
     };
   }
 
-  return { compareTimestamps, createRecurringTask, decideMerge };
+  return { compareTimestamps, sameContent, createRecurringTask, decideMerge };
 });

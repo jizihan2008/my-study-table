@@ -2330,7 +2330,9 @@ function updateNotesImmersiveControls(clientY){
   if(!notesImmersive||!section)return;
   const toolbar=document.getElementById('notesFormatToolbar');
   const footer=section.querySelector('.notes-editor-footer');
-  const topLimit=section.classList.contains('show-top-controls')?(toolbar?.offsetTop||0)+(toolbar?.offsetHeight||44)+12:18;
+  section.style.setProperty('--notes-immersive-toolbar-height',(toolbar?.offsetHeight||0)+'px');
+  const zoom=document.getElementById('notesImmersiveZoom');
+  const topLimit=section.classList.contains('show-top-controls')?Math.max((toolbar?.offsetTop||0)+(toolbar?.offsetHeight||0),(zoom?.offsetTop||0)+(zoom?.offsetHeight||0))+12:18;
   const bottomLimit=section.classList.contains('show-bottom-controls')?(footer?.offsetHeight||42)+12:18;
   section.classList.toggle('show-top-controls',clientY<=topLimit || !!document.getElementById('notesHeadingMenu')?.matches(':popover-open'));
   section.classList.toggle('show-bottom-controls',clientY>=window.innerHeight-bottomLimit);

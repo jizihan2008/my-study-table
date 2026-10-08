@@ -70,6 +70,10 @@
     return (h >>> 0).toString(16);
   }
   function deletedValue() { return { deleted: true }; }
+  function sameRecord(left, right) {
+    const content = value => value && value.deleted ? { deleted: true } : value && value.item;
+    return global.SyncPolicy.sameContent(content(left), content(right));
+  }
   function entry(item, index) { return { item, index, deleted: false }; }
   function readItems(collection) {
     const raw = localStorage.getItem(collection);
@@ -431,7 +435,6 @@
     let applied = false;
     for (const id of ids) {
       const key = cloudKey(collection, id);
-      if (conflicts()[key] && !force) continue;
       const current = local.get(id);
       const value = current || deletedValue();
       const latest = localMap(collection).get(id) || deletedValue();
@@ -445,22 +448,31 @@
       const oldRow = old.get(id);
       if (!force && cloudRow && legacy &&
           new Date(legacy.updated_at).getTime() > new Date(cloudRow.updated_at).getTime() &&
-          hash(oldRow ? oldRow.value : deletedValue()) !== hash(cloudRow.value)) {
+          !sameRecord(oldRow ? oldRow.value : deletedValue(), cloudRow.value)) {
         queueConflict(collection, id, value, cloudRow, 'legacy-device-change');
         continue;
       }
       const remoteValue = remote && remote.value;
+      const identical = !!remote && sameRecord(value, remoteValue);
+      if (!force && identical) {
+        clearConflict(key);
+        if (!remote.legacy) {
+          recordState(collection, id, value, remote.updated_at);
+          continue;
+        }
+      }
+      if (conflicts()[key] && !force) continue;
       const dirty = !!baseline && baseline.hash !== hash(value);
       const advanced = !!baseline && (!remote || remote.updated_at !== baseline.timestamp);
-      if (!baseline && current && remote && hash(value) !== hash(remoteValue) && !force) {
+      if (!baseline && current && remote && !identical && !force) {
         queueConflict(collection, id, value, remote, 'missing-sync-base');
         continue;
       }
-      if (dirty && advanced && !force) {
+      if (dirty && advanced && !identical && !force) {
         queueConflict(collection, id, value, remote, 'both-changed');
         continue;
       }
-      if (current && remote && !baseline && hash(value) === hash(remoteValue)) {
+      if (current && remote && !baseline && identical) {
         if (!remote.legacy) { recordState(collection, id, value, remote.updated_at); continue; }
       }
       if (remote && !dirty && (!current || baseline && advanced) && !force) {
@@ -507,6 +519,37 @@
     running = work.catch(() => {});
     return work;
   }
+  async function getConflictDifferences(key, session, client) {
+    if (!conflicts()[key]) return { ok: false, reason: '该冲突已不存在或已处理' };
+    if (!session || !client || !global.Sync.canSyncAccount(session.user.id)) return { ok: false, reason: '账号不可用' };
+    try {
+      const orderCollection = parseOrderKey(key);
+      const parsed = parseCloudKey(key);
+      if (!orderCollection && !parsed) throw new Error('旧版冲突的分类已不再支持，请重新同步');
+      const { data, error } = await client.from('user_data').select('value,updated_at')
+        .eq('user_id', session.user.id).eq('key', key).maybeSingle();
+      if (error) throw new Error(error.message || '读取云端内容失败');
+      if (orderCollection) {
+        if (data && !Array.isArray(data.value)) throw new Error('云端排序格式无效');
+        const items = readItems(orderCollection);
+        const labels = new Map(items.map(item => [String(item.id), String(item.title || item.text || item.name || '')]));
+        const label = id => (labels.get(String(id)) || '项目') + ' [ID ' + id + ']';
+        return { ok: true, local: items.map(item => label(item.id)), remote: data && data.value.map(label),
+          remoteMissing: !data, remoteTimestamp: data && data.updated_at };
+      }
+      const { collection, id } = parsed;
+      let remote = data;
+      if (!remote || conflicts()[key].reason === 'legacy-device-change') {
+        const legacy = await legacyRows(client, session.user.id);
+        remote = legacyMap(legacy.get(collection)).get(id);
+      }
+      const local = localMap(collection).get(id);
+      return { ok: true, local: local && local.item, remote: remote && remote.value && remote.value.item,
+        localMissing: !local, remoteMissing: !remote || !!(remote.value && remote.value.deleted),
+        remoteTimestamp: remote && remote.updated_at };
+    } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+  }
+
   async function resolveConflict(key, choice, session, client) {
     const orderCollection = parseOrderKey(key);
     if (orderCollection) {
@@ -666,7 +709,7 @@
   }
 
   global.SyncCollections = { isCollection, isCloudKey, onLocalChange, onRemoteChange, sync,
-    pendingCount, getPendingConflicts, resolveConflict, resolveConflicts,
+    pendingCount, getPendingConflicts, getConflictDifferences, resolveConflict, resolveConflicts,
     orphanConflictCollection, clearPendingConflicts };
   if (global.__MST_TEST__) global.SyncCollections.__test = { cloudKey, parseCloudKey, localMap };
 })(typeof window !== 'undefined' ? window : globalThis);

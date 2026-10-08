@@ -7,6 +7,62 @@ const path = require('node:path');
 const vm = require('node:vm');
 const policy = require('../js/sync-policy');
 
+test('content equality ignores object key order but preserves arrays and value types', () => {
+  assert.equal(policy.sameContent({ a: [{ x: 1, y: null }], b: true }, { b: true, a: [{ y: null, x: 1 }] }), true);
+  assert.equal(policy.sameContent([1, 2], [2, 1]), false);
+  assert.equal(policy.sameContent({ a: 1 }, { a: '1' }), false);
+  assert.equal(policy.sameContent({ a: null }, {}), false);
+  assert.equal(policy.sameContent([], {}), false);
+  assert.equal(policy.sameContent('hello ', 'hello'), false);
+});
+
+for (const mode of ['first-sync', 'concurrent-edit', 'existing-conflict', 'future-timestamp', 'upload-check']) {
+  test(`identical ordinary data is acknowledged without overwriting either copy: ${mode}`, async () => {
+    const key = 'study_taskline_v1';
+    const timestamp = '2026-10-08T00:01:00.000Z';
+    const raw = '{ "lines": [{"id":1,"text":"same"}], "flag": true }';
+    const values = new Map([
+      ['study_sync_config', JSON.stringify({ enabled: true, autoSync: false })],
+      [key, raw],
+      ['study_sync_dirty_v1', JSON.stringify({ [key]: true })]
+    ]);
+    if (mode !== 'first-sync') values.set('study_sync_local_ts', JSON.stringify({ [key]: mode === 'future-timestamp' ? '2099-01-01T00:00:00Z' : '2026-10-08T00:00:00Z' }));
+    if (mode === 'existing-conflict') values.set('study_sync_pending_conflicts_v1', JSON.stringify({ [key]: { key, reason: 'both-changed' } }));
+    const localStorage = {
+      getItem: key => values.has(key) ? values.get(key) : null,
+      setItem: (key, value) => values.set(key, String(value)),
+      removeItem: key => values.delete(key)
+    };
+    let reads = 0;
+    const client = {
+      auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+      from() { return {
+        select() { return this; }, eq() { return this; }, in() { return this; },
+        then(resolve, reject) {
+          reads++;
+          return Promise.resolve({ data: mode === 'upload-check' && reads === 1 ? [] :
+            [{ key, value: { flag: true, lines: [{ text: 'same', id: 1 }] }, updated_at: timestamp }], error: null }).then(resolve, reject);
+        }
+      }; }
+    };
+    const window = { SyncPolicy: policy };
+    vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'sync.js'), 'utf8'), {
+      window, localStorage, getSupabaseClient: () => client,
+      saveData() { assert.fail('equal content must not replace the local copy'); },
+      setTimeout() { return 1; }, clearTimeout() {},
+      console: { log() {}, warn() {}, error() {} }
+    });
+    window.Sync.init();
+    await window.Sync.getStatus();
+    const status = await window.Sync.manualSync();
+    assert.equal(status.lastError, '');
+    assert.equal(status.pendingCount, 0);
+    assert.equal(window.Sync.getPendingConflicts().length, 0);
+    assert.equal(values.get(key), raw);
+    assert.equal(JSON.parse(values.get('study_sync_local_ts'))[key], timestamp);
+  });
+}
+
 test('merge policy never silently overwrites two unknown non-empty copies', () => {
   assert.equal(policy.decideMerge({
     localEmpty: false,

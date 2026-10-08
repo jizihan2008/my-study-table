@@ -482,17 +482,19 @@
     if (!_accountMatches(session.user.id)) return { ok: false, reason: _lastPullError };
     try {
       const { data, error } = await c.from('user_data')
-        .select('key,updated_at')
+        .select('key,value,updated_at')
         .eq('user_id', session.user.id)
         .in('key', keys);
       if (error) return { ok: false, reason: error.message || '无法检查云端版本' };
       const remoteMap = {};
-      (data || []).forEach(row => { remoteMap[row.key] = row.updated_at; });
+      (data || []).forEach(row => { remoteMap[row.key] = row; });
       const localMap = _getLocalTs();
       const conflicts = new Map();
       for (const key of keys) {
-        const remoteTs = remoteMap[key];
+        const remoteRow = remoteMap[key];
+        const remoteTs = remoteRow && remoteRow.updated_at;
         if (!remoteTs) continue;
+        if (await _acceptSameContent(key, remoteRow)) continue;
         const baseTs = localMap[key];
         const compared = policy.compareTimestamps(remoteTs, baseTs);
         if (!baseTs || compared === null || compared > 0) conflicts.set(key, remoteTs);
@@ -548,6 +550,10 @@
           _queueConflict(key, remoteTimestamp, _getLocalTs()[key] ? 'cloud-newer-than-base' : 'missing-sync-base');
           const index = keys.indexOf(key);
           if (index >= 0) keys.splice(index, 1);
+        }
+        // Equal copies have already been acknowledged and need no cloud write.
+        for (let i = keys.length - 1; i >= 0; i--) {
+          if (!_isLocalDirty(keys[i])) keys.splice(i, 1);
         }
       }
 
@@ -637,6 +643,28 @@
     if (key in map) { delete map[key]; localStorage.setItem(DIRTY_KEY, JSON.stringify(map)); }
   }
   function _isLocalDirty(key) { return !!_getDirtyMap()[key]; }
+
+  function _matchesRemoteContent(key, row) {
+    if (!row || !Object.prototype.hasOwnProperty.call(row, 'value')) return false;
+    try {
+      const raw = localStorage.getItem(key);
+      return policy.sameContent(raw === null ? null : JSON.parse(raw), row.value);
+    } catch (_) { return false; }
+  }
+
+  async function _acceptSameContent(key, row) {
+    if (!_matchesRemoteContent(key, row)) return false;
+    await _outboxRemove(key);
+    // A local edit during the asynchronous outbox operation must stay dirty.
+    if (!_matchesRemoteContent(key, row)) return false;
+    _setRemoteTs(key, row.updated_at);
+    _setLocalTs(key, row.updated_at);
+    _clearLocalDirty(key);
+    dirtyKeys.delete(key);
+    _clearPendingConflict(key);
+    _logSync('same-content', { key, remoteTimestamp: row.updated_at });
+    return true;
+  }
   function _hydrateDirtyKeys() {
     const map = _getDirtyMap();
     Object.keys(map).filter(isSyncKey).forEach(key => dirtyKeys.add(key));
@@ -744,6 +772,26 @@
     return ordinary.concat(global.SyncCollections ? global.SyncCollections.getPendingConflicts() : []);
   }
 
+  async function getConflictDifferences(key) {
+    if (!getPendingConflicts().some(item => item.key === key)) return { ok: false, reason: '该冲突已不存在或已处理' };
+    try {
+      const session = await getSession();
+      const c = _client();
+      if (!session || !c) throw new Error('请先登录同步账号');
+      if (!_accountMatches(session.user.id)) throw new Error(_lastPullError);
+      if (global.SyncCollections && global.SyncCollections.isCloudKey(key)) {
+        return global.SyncCollections.getConflictDifferences(key, session, c);
+      }
+      if (!isSyncKey(key)) throw new Error('冲突标识无效');
+      const { data, error } = await c.from('user_data').select('key,value,updated_at')
+        .eq('user_id', session.user.id).eq('key', key).maybeSingle();
+      if (error) throw new Error(error.message || '读取云端内容失败');
+      const raw = localStorage.getItem(key);
+      return { ok: true, local: raw === null ? null : JSON.parse(raw), remote: data && data.value,
+        localMissing: raw === null, remoteMissing: !data, remoteTimestamp: data && data.updated_at };
+    } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
+  }
+
 
   // Safe merge cycle. force=true only waits for an active cycle; it never means
   // that the cloud may silently overwrite unsent local edits.
@@ -808,7 +856,7 @@
       for (const row of syncRows) {
         const localTs = localTsMap[row.key];
         const compared = policy.compareTimestamps(row.updated_at, localTs);
-        if (_isEmptyLocalValue(row.key) || _isLocalDirty(row.key) || !localTs ||
+        if (_conflictKeys.has(row.key) || _isEmptyLocalValue(row.key) || _isLocalDirty(row.key) || !localTs ||
           compared === null || compared !== 0 || _tsIsFuture(localTs, remoteMaxTs)) {
           needValueKeys.push(row.key);
         }
@@ -833,6 +881,7 @@
       for (const row of syncRows) {
         current++;
         const remoteRow = valueMap[row.key];
+        const sameContent = remoteRow && await _acceptSameContent(row.key, remoteRow);
         const localEmpty = _isEmptyLocalValue(row.key);
         const localDirty = _isLocalDirty(row.key);
         const localTs = localTsMap[row.key];
@@ -840,7 +889,9 @@
         const remoteHasData = !!remoteRow && !_isEmptyValue(remoteRow.value);
         let action;
 
-        if (!remoteRow) {
+        if (sameContent) {
+          action = 'noop';
+        } else if (!remoteRow) {
           const compared = policy.compareTimestamps(row.updated_at, localTs);
           action = localDirty ? 'upload' : (compared === 0 ? 'noop' : 'conflict');
         } else if (futureTimestamp) {
@@ -1561,6 +1612,7 @@
     uploadAll,
     getStatus,
     getPendingConflicts,
+    getConflictDifferences,
     canSyncAccount: _accountMatches,
     resolveConflict,
     resolveConflicts,
