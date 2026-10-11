@@ -6,8 +6,9 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-function loadTranslation() {
+function loadTranslation(history = []) {
   const values = new Map();
+  values.set('study_translation_history_v1', JSON.stringify(history));
   const window = {
     localStorage: {
       getItem: key => values.get(key) ?? null,
@@ -23,6 +24,39 @@ function loadTranslation() {
   vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'translation.js'), 'utf8'), context);
   return window.GlobalTranslation;
 }
+
+test('report vocabulary uses local activity dates and current flashcard state', () => {
+  const time = (day, hour = 12) => new Date(2026, 9, day, hour).toISOString();
+  const entry = (id, extra = {}) => ({ id, sourceText: id, result: { title: id, chineseMeaning: '释义' }, inVocabulary: true, ...extra });
+  const translation = loadTranslation([
+    entry('forgotten', { vocabularyAddedAt: time(7), lastReviewedAt: time(7), lastReviewRating: 'again', reviewCount: 3, reviewDueAt: time(7) }),
+    entry('remembered', { vocabularyAddedAt: time(8), lastReviewedAt: time(8), lastReviewRating: 'good', reviewCount: 1, reviewDueAt: time(9) }),
+    entry('new'),
+    entry('removed', { inVocabulary: false, lastReviewedAt: time(7) }),
+    entry('invalid-date', { vocabularyAddedAt: 'bad', lastReviewedAt: 'bad', reviewDueAt: 'bad' })
+  ]);
+  const morning = translation.getReportData('2026-10-07', new Date(2026, 9, 8, 18));
+  assert.equal(morning.vocabularyCount, 4);
+  assert.equal(morning.addedCount, 1);
+  assert.equal(morning.reviewedWordCount, 1);
+  assert.equal(morning.reviewRatings.again, 1);
+  assert.equal(morning.dueCount, 2);
+  assert.equal(morning.overdueCount, 1);
+  assert.equal(morning.unreviewedCount, 2);
+  assert.equal(morning.reviewedWords[0].word, 'forgotten');
+  const evening = translation.getReportData('2026-10-08', new Date(2026, 9, 8, 18));
+  assert.equal(evening.reviewRatings.good, 1);
+  assert.equal(evening.addedWords[0].word, 'remembered');
+  assert.equal(translation.getReportData('2026-10-06').reviewedWordCount, 0);
+});
+
+test('report lists are bounded while counts include the whole vocabulary', () => {
+  const history = Array.from({ length: 25 }, (_, i) => ({ id: String(i), sourceText: 'word', result: {}, inVocabulary: true }));
+  const data = loadTranslation(history).getReportData('2026-10-08');
+  assert.equal(data.dueCount, 25);
+  assert.equal(data.dueWords.length, 20);
+  assert.equal(loadTranslation().getReportData('2026-10-08').vocabularyCount, 0);
+});
 
 test('global translation only claims meaningful English selections', () => {
   const translation = loadTranslation();

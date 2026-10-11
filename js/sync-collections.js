@@ -8,7 +8,11 @@
     study_links_v3: '链接',
     study_calendar_events: '日历事件',
     study_habits_v2: '习惯',
-    study_books_v1: '教材'
+    study_books_v1: '教材',
+    study_todos_archive: '待办归档',
+    study_notes_archive: '笔记归档',
+    study_links_archive: '链接归档',
+    study_habits_archive: '习惯归档'
   };
   const STATE_KEY = 'study_sync_collection_state_v1';
   const ORDER_STATE_KEY = 'study_sync_collection_order_v1';
@@ -500,7 +504,8 @@
       if (global.Sync && global.Sync.canSyncAccount && !global.Sync.canSyncAccount(session.user.id)) {
         return { applied: false, blocked: true };
       }
-      const selected = force || full ? Object.keys(COLLECTIONS) : Array.from(pendingCollections);
+      const allowed = Array.isArray(options.collections) ? options.collections.filter(isCollection) : Object.keys(COLLECTIONS);
+      const selected = force || full ? allowed : Array.from(pendingCollections).filter(collection => allowed.includes(collection));
       if (!selected.length) return { applied: false, errors: [] };
       const legacy = await legacyRows(client, session.user.id);
       let applied = false;

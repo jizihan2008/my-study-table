@@ -1697,6 +1697,7 @@ body {
 .translation-page-tip .lucide-icon { width: 14px; height: 14px; color: var(--primary); }
 .translation-page-toolbar {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
   gap: 14px;
@@ -1705,6 +1706,7 @@ body {
 }
 .translation-page-tabs {
   display: inline-flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 3px;
   padding: 3px;
@@ -1775,6 +1777,13 @@ body {
   cursor: pointer;
 }
 .translation-page-search-clear[hidden] { display: none; }
+.translation-page-search[hidden] { display: none; }
+.translation-cet-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; padding: 14px 22px; border-bottom: 1px solid var(--border); }
+.translation-cet-levels { display: flex; gap: 6px; }
+.translation-cet-levels button { padding: 8px 14px; border: 1px solid var(--border); border-radius: 9px; color: var(--text-secondary); background: var(--card); font: inherit; font-size: 13px; cursor: pointer; }
+.translation-cet-levels button[aria-pressed="true"] { color: var(--primary); border-color: var(--primary); background: color-mix(in srgb, var(--primary) 8%, var(--card)); }
+.translation-cet-summary { color: var(--text-secondary); font-size: 12px; line-height: 1.6; }
+.translation-review-next { min-height: 38px; margin-bottom: 10px; padding: 0 15px; border: 0; border-radius: 10px; background: var(--primary); color: white; font: inherit; font-size: 13px; cursor: pointer; }
 .translation-page-search-clear:hover { background: var(--hover-bg); color: var(--text); }
 .translation-page-search-clear .lucide-icon { width: 13px; height: 13px; }
 .translation-history-list {
@@ -1922,7 +1931,7 @@ body {
 .translation-flashcard-phonetic { margin-top: 9px; color: var(--text-secondary); font-size: 15px; }
 .translation-flashcard-answer { width: min(530px, 100%); margin-top: 24px; padding-top: 22px; border-top: 1px solid var(--border); }
 .translation-flashcard-answer[hidden], .translation-review-ratings[hidden] { display: none; }
-.translation-flashcard-answer p { margin: 0; font-size: 15px; line-height: 1.65; }
+.translation-flashcard-answer p { margin: 0; font-size: 15px; line-height: 1.65; white-space: pre-line; }
 .translation-flashcard-answer p + p { margin-top: 8px; color: var(--text-secondary); font-size: 13.5px; }
 .translation-flashcard-answer blockquote { margin: 17px 0 0; padding: 11px 14px; border-radius: 10px; background: var(--hover-bg); color: var(--text-secondary); font-size: 13px; font-style: italic; line-height: 1.55; }
 .translation-flashcard-reveal { display: inline-flex; align-items: center; gap: 7px; margin-top: 30px; color: var(--primary); font-size: 13px; font-weight: 650; }
@@ -3971,6 +3980,20 @@ body.ai-message-immersive-open { overflow: hidden; }
   max-width: 160px; max-height: 120px; border-radius: 6px; cursor: zoom-in; display: block;
 }
 /* 点击缩略图后的全屏查看 */
+.msg-attachment-item { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.msg-attachment-reinsert {
+  border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px;
+  color: var(--primary); background: var(--path-bg); font-size: 12px; cursor: pointer;
+}
+.msg-attachment-reinsert:hover { border-color: var(--primary); }
+#aiConversationFilesPicker .file-library-picker-list button > span:first-child { flex: 1; }
+#aiConversationFilesPicker .file-library-picker-list button > span:last-child { flex: none; font-size: 12px; color: var(--primary); }
+@media (max-width: 650px) {
+  .ai-chat-input-wrap { flex-wrap: wrap; gap: 6px; }
+  .ai-chat-input-wrap textarea { flex: 1 0 100%; width: 100%; min-width: 0; box-sizing: border-box; }
+  .ai-chat-input-wrap .ai-attach-btn { width: 38px; height: 38px; }
+  .ai-chat-input-wrap .ai-chat-send-btn { width: 38px; height: 38px; margin-left: auto; }
+}
 .ai-image-overlay {
   position: fixed; inset: 0; z-index: 100000; background: rgba(0,0,0,0.82);
   display: flex; align-items: center; justify-content: center; padding: 24px; cursor: zoom-out;
@@ -6708,6 +6731,16 @@ i[data-lucide] {
   display: flex; align-items: center; gap: 8px;
   flex: 1; min-width: 0;
 }
+.stored-tree-toggle, .stored-tree-toggle-spacer {
+  width: 24px; height: 24px; flex: 0 0 24px;
+}
+.stored-tree-toggle {
+  display: inline-flex; align-items: center; justify-content: center;
+  padding: 0; border: 0; border-radius: 5px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+}
+.stored-tree-toggle:hover { background: var(--hover-bg); color: var(--text); }
+.stored-tree-toggle:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .trash-item-type-badge {
   font-size: 10px; font-weight: 600; padding: 2px 6px; border-radius: 4px;
   flex-shrink: 0; line-height: 1.4;

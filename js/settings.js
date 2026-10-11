@@ -555,6 +555,12 @@ async function renderSyncPanel() {
     return;
   }
   const st = await window.Sync.getStatus();
+  const moduleSelect = document.getElementById('syncModuleSelect');
+  if (moduleSelect && !moduleSelect.dataset.initialized && typeof window.Sync.getModules === 'function') {
+    moduleSelect.innerHTML = '<option value="all">全部常规模块</option>' + window.Sync.getModules()
+      .map(item => '<option value="' + escapeHtml(item.id) + '">' + escapeHtml(item.label) + '</option>').join('');
+    moduleSelect.dataset.initialized = 'true';
+  }
   if (enabledEl) enabledEl.checked = !!st.enabled;
   const autoEl = document.getElementById('syncAutoEnabled');
   if (autoEl) autoEl.checked = !!st.autoSync;
@@ -947,37 +953,59 @@ function toggleSyncAutoEnabled() {
 async function syncManualSync() {
   const stEl = document.getElementById('syncStatus');
   if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
-  if (stEl) { stEl.textContent = '正在同步…'; stEl.className = 'settings-status'; }
+  const selection = _selectedSyncModule();
+  _setSyncActionBusy(true);
+  let message = '';
+  if (stEl) { stEl.textContent = '正在同步' + selection.label + '…'; stEl.className = 'settings-status'; }
   _showSyncProgress('同步', 0);   // 立即显示进度条（防抖闪烁）
   try {
-    const res = await window.Sync.manualSync();
+    const res = await window.Sync.manualSync({ moduleId: selection.id });
     if (stEl) {
       const err = (res && res.lastError) || '';
-      stEl.textContent = err
-        ? '同步未完成：' + err
-        : (res && res.pendingConflictCount > 0 ? '同步暂停：请处理冲突选择。' : '同步完成。');
+      message = err
+        ? selection.label + '同步未完成：' + err
+        : (res && res.pendingConflictCount > 0 ? selection.label + '同步完成，仍有冲突需要处理。' : selection.label + '同步完成。');
     }
   } catch (e) {
-    if (stEl) stEl.textContent = '同步出错：' + (e && e.message || e);
+    message = selection.label + '同步出错：' + (e && e.message || e);
   } finally {
     _hideSyncProgress();
-    renderSyncPanel();
+    _setSyncActionBusy(false);
+    await renderSyncPanel();
+    if (stEl) stEl.textContent = message;
   }
 }
 
 async function syncUploadAll() {
   const stEl = document.getElementById('syncStatus');
   if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
-  if (stEl) { stEl.textContent = '正在上传全部数据…'; stEl.className = 'settings-status'; }
+  const selection = _selectedSyncModule();
+  _setSyncActionBusy(true);
+  let message = '';
+  if (stEl) { stEl.textContent = '正在上传' + selection.label + '的全部本地数据…'; stEl.className = 'settings-status'; }
   _showSyncProgress('上传', 0);
   try {
-    const res = await window.Sync.uploadAll();
-    if (stEl) stEl.textContent = '上传完成。';
+    const res = await window.Sync.uploadAll({ moduleId: selection.id });
+    message = res && res.lastError ? selection.label + '上传未完成：' + res.lastError : selection.label + '上传完成。';
   } catch (e) {
-    if (stEl) stEl.textContent = '上传出错：' + (e && e.message || e);
+    message = selection.label + '上传出错：' + (e && e.message || e);
   } finally {
     _hideSyncProgress();
-    renderSyncPanel();
+    _setSyncActionBusy(false);
+    await renderSyncPanel();
+    if (stEl) stEl.textContent = message;
+  }
+}
+
+function _selectedSyncModule() {
+  const select = document.getElementById('syncModuleSelect');
+  return { id: select && select.value || 'all', label: select && select.selectedOptions[0] && select.selectedOptions[0].textContent || '全部常规模块' };
+}
+
+function _setSyncActionBusy(busy) {
+  for (const id of ['syncModuleSelect', 'syncManualButton', 'syncUploadButton']) {
+    const element = document.getElementById(id);
+    if (element) element.disabled = busy;
   }
 }
 
@@ -3180,12 +3208,14 @@ const MIGRATION_KEYS = [
   // 待办 / 笔记
   'study_todos_v2', 'study_todos', 'study_notes_v2', 'study_notes', 'study_notes_folders',
   'study_todo_completed_log',
+  'study_todos_archive', 'study_notes_archive', 'study_links_archive', 'study_habits_archive',
   // 计时 / 习惯 / 任务线
   'study_timer_records', 'study_habits', 'study_habits_v1', 'study_taskline_v1',
   // 教材
   'study_books_v1', 'study_books_meta', 'study_bk_explain_logs_v1', 'study_bk_quiz_state_v1',
   // 日历 / 统计 / 目标
   'study_calendar_events', 'study_stats', 'study_longterm_goals', 'study_quick_access',
+  'study_translation_history_v1', 'study_translation_cet4_progress_v1', 'study_translation_cet6_progress_v1',
   // 打卡 / 今日 / 链接 / AI
   'study_checkin', 'study_today_focus', 'study_todo_queue', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
   'study_ai_usage_v1', 'study_ai_usage_v2',
@@ -4017,6 +4047,7 @@ function collectDailyReportData() {
   return {
     todayStr,
     yesterdayStr,
+    vocabularyFlashcards: typeof GlobalTranslation !== 'undefined' && typeof GlobalTranslation.getReportData === 'function' ? GlobalTranslation.getReportData(yesterdayStr) : null,
     aiConversationSummaries: typeof collectReportAiConversations === 'function' ? collectReportAiConversations(yesterdayStr) : [],
     calendarSnapshot: buildAiCalendarSnapshot([{ date: yesterdayStr, label: "昨天" }, { date: todayStr, label: "今天" }]),
     todoQueueSnapshot: typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '',
@@ -4477,6 +4508,7 @@ function collectEveningReportData() {
   return {
     todayStr,
     tomorrowStr,
+    vocabularyFlashcards: typeof GlobalTranslation !== 'undefined' && typeof GlobalTranslation.getReportData === 'function' ? GlobalTranslation.getReportData(todayStr) : null,
     calendarSnapshot: buildAiCalendarSnapshot([{ date: todayStr, label: "今天" }, { date: tomorrowStr, label: "明天" }]),
     aiConversationSummaries: typeof collectReportAiConversations === 'function' ? collectReportAiConversations(todayStr) : [],
     todoQueueSnapshot: typeof buildAiTodoQueueSnapshot === 'function' ? buildAiTodoQueueSnapshot() : '',

@@ -6,6 +6,7 @@
     'my-study-table-data',
     'my-study-table-extensions',
     'study-file-library',
+    'study-ai-attachments',
     'mst-backup',
     'mst-bgmedia',
     'mst-booktext',

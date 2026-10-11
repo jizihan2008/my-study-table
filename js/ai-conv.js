@@ -3,6 +3,7 @@
 // ═══════════════════════════════════════════════
 
 let aiToolSettingsModalOpen = false; // 「接口组与删除策略」窗口
+const _aiAttachmentDrafts = new Map(); // File 引用只在本次运行期间保存，按对话隔离。
 
 // ═══════════ Conversation Settings Modal ═══════════
 function openConvSettingsModal() {
@@ -193,6 +194,8 @@ function updateAiToolGroupsBtn() {
 
 // ═══════════ AI Chat: Conversation Management ═══════════
 function createNewConv() {
+  if (typeof saveAiDraft === 'function') saveAiDraft();
+  if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
   // Extract memory from current conv before leaving
   if (typeof scheduleMemoryExtract === 'function') {
     const oldConv = getActiveConv();
@@ -211,6 +214,7 @@ function createNewConv() {
   }
   aiConvs.push(conv);
   activeConvId = conv.id;
+  aiAttachments = [];
   localStorage.setItem('study_active_conv', activeConvId);
   safeSaveAiConvs();
   renderAiChat();
@@ -219,6 +223,7 @@ function createNewConv() {
 function switchConv(id) {
   // Save draft of current conv before switching
   saveAiDraft();
+  if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
   // Extract memory from current conv before switching
   if (typeof scheduleMemoryExtract === 'function') {
     const oldConv = getActiveConv();
@@ -255,6 +260,7 @@ function deleteConv(id, e) {
   if (aiConvs.length <= 1) {
     // Don't delete the last one, just clear it
     const lastConv = aiConvs[0];
+    releaseAiConversationFiles(lastConv.id);
     if (typeof resetConvTree === 'function') resetConvTree(lastConv);
     else lastConv.messages = [];
     lastConv.title = '默认对话';
@@ -289,6 +295,9 @@ function deleteConv(id, e) {
     if (window.SyncLogs && typeof window.SyncLogs.markItemDeleted === 'function') {
       window.SyncLogs.markItemDeleted('ai_conv', id);
     }
+    releaseAiConversationFiles(id);
+    _aiAttachmentDrafts.delete(id);
+    if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
     aiConvs = aiConvs.filter(c => c.id !== id);
     if (activeConvId === id) activeConvId = aiConvs[0].id;
     localStorage.setItem('study_active_conv', activeConvId);
@@ -300,6 +309,7 @@ function deleteConv(id, e) {
     } catch {}
     safeSaveAiConvs();
     renderAiChat();
+    restoreAiDraft();
   });
 }
 
@@ -314,6 +324,8 @@ function clearConvMessages(e) {
     if (!confirmed) return;
     const conv = getActiveConv();
     if (!conv) return;
+    releaseAiConversationFiles(conv.id);
+    if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
     if (typeof resetConvTree === 'function') resetConvTree(conv);
     else conv.messages = [];
     safeSaveAiConvs();
@@ -566,6 +578,7 @@ function saveAiDraft() {
   if (!input) return;
   const conv = getActiveConv();
   if (!conv) return;
+  _aiAttachmentDrafts.set(conv.id, aiAttachments.slice());
   try {
     const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
     drafts[conv.id] = input.value;
@@ -578,6 +591,8 @@ function restoreAiDraft() {
   if (!input) return;
   const conv = getActiveConv();
   if (!conv) return;
+  aiAttachments = (_aiAttachmentDrafts.get(conv.id) || []).slice();
+  renderAttachPreview();
   try {
     const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
     input.value = drafts[conv.id] || '';
@@ -589,6 +604,7 @@ function restoreAiDraft() {
 function clearAiDraft() {
   const conv = getActiveConv();
   if (!conv) return;
+  _aiAttachmentDrafts.delete(conv.id);
   try {
     const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
     delete drafts[conv.id];

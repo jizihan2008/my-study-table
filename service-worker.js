@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v196';
+const VERSION = 'mst-v200';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -15,7 +15,8 @@ const PRECACHE_URLS = [
   './index.html',
   './reset-site-data.html',
   './manifest.webmanifest?v=20260926-icon-v3',
-  './css/style.css?v=20261008-r1',
+  './css/style.css?v=20261010-r2',
+  './js/trash.js?v=20261010-r1',
   './css/workspace.css?v=20260926-r4',
   './css/appearance.css?v=20260929-r2',
   './js/theme-model.js?v=20260914-r5',
@@ -37,8 +38,9 @@ const PRECACHE_URLS = [
   './js/note-view-position.js?v=20261004-r1',
   './js/note-rich-editor.js?v=20261004-r2',
   './js/ai-tree.js?v=20260912-r3',
-  './js/ai-attach.js?v=20260920-r1',
-  './js/ai-render.js?v=20261004-r1',
+  './js/ai-conv.js?v=20261010-r1',
+  './js/ai-attach.js?v=20261010-r1',
+  './js/ai-render.js?v=20261010-r1',
   './js/ai-tools.js?v=20260922-r2',
   './js/notes.js?v=20261004-r4',
   './js/utils.js?v=20261004-r1',
@@ -53,8 +55,8 @@ const PRECACHE_URLS = [
   './js/ai-client.js?v=20260914-r3',
   './js/ai-stream.js?v=20260827-r1',
   './js/ai-api.js?v=20260916-r2',
-  './js/ai-send.js?v=20260915-r3',
-  './js/skills.js?v=20260916-r1',
+  './js/ai-send.js?v=20261010-r1',
+  './js/skills.js?v=20261010-r1',
   './js/prompts.js?v=20260912-r3',
   './js/env.js?v=20260911-r2',
   './js/core.js?v=20260929-r2',
@@ -62,13 +64,13 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20261008-r1',
-  './js/site-data-reset.js?v=20260929-r1',
+  './js/settings.js?v=20261010-r2',
+  './js/site-data-reset.js?v=20261010-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20261008-r1',
   './js/sync-diff.js?v=20261008-r1',
-  './js/sync-collections.js?v=20261008-r1',
-  './js/sync.js?v=20261008-r1',
+  './js/sync-collections.js?v=20261010-r2',
+  './js/sync.js?v=20261010-r2',
   './js/sync-logs.js?v=20261008-r1',
   './js/ai-utils.js?v=20260929-r1',
   './js/bg-media-idb.js?v=20260906-r2',
@@ -76,7 +78,8 @@ const PRECACHE_URLS = [
   './js/taskline.js?v=20260914-r14',
   './js/calendar.js?v=20260825-r10',
   './js/bootstrap.js?v=20260911-r1',
-  './js/translation.js?v=20260922-r4',
+  './lib/cet/vocabulary.js?v=20261008-r1',
+  './js/translation.js?v=20261008-r1',
   './icons/apple-touch-icon-v3.png',
   './icons/icon-192-v3.png',
   './icons/icon-512-v3.png'

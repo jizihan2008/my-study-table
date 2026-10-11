@@ -131,12 +131,24 @@ function device(name, backend, userId = 'u1') {
   const window = { SyncPolicy: policy };
   const context = {
     window, localStorage, getSupabaseClient: () => backend.client(state),
-    saveData: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
+    saveData: (key, value) => {
+      localStorage.setItem(key, JSON.stringify(value));
+      if (window.Sync) window.Sync.onLocalChange(key);
+      return true;
+    },
     setTimeout() { return 1; }, clearTimeout() {},
     console: { log() {}, warn() {}, error() {} }
   };
   vm.runInNewContext(collectionSource, context);
   vm.runInNewContext(source, context);
+  Object.assign(context, {
+    document: { getElementById: () => null, querySelector: () => null },
+    confirm: () => true,
+    activeNoteId: null, expandedTodoIds: new Set(), saveExpandedTodoIds() {},
+    renderNotes() {}, renderTodos() {}, renderLinks() {}, renderHabits() {},
+    saveHabits() { return context.saveData('study_habits_v2', context.habits); }
+  });
+  vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../../js/trash.js'), 'utf8'), context);
   window.Sync.init();
   return {
     state, sync: window.Sync,
@@ -145,12 +157,64 @@ function device(name, backend, userId = 'u1') {
     setKeyRaw(key, value) { localStorage.setItem(key, JSON.stringify(value)); },
     editKey(key, value) { localStorage.setItem(key, JSON.stringify(value)); window.Sync.onLocalChange(key); },
     edit(value) { localStorage.setItem(KEY, JSON.stringify(value)); window.Sync.onLocalChange(KEY); },
-    async syncNow() { await window.Sync.getStatus(); return window.Sync.manualSync(); },
+    archiveAction(module, sourceKey, action, id) {
+      context[module] = JSON.parse(localStorage.getItem(sourceKey)) || [];
+      vm.runInNewContext(action === 'archive'
+        ? `moveToArchive('${module}', ${module}.find(item => item.id === ${id}))`
+        : action === 'delete' ? `permanentlyDeleteFromArchive('${module}', ${id})`
+          : `restoreFromArchive('${module}', ${id})`, context);
+    },
+    async syncNow(moduleId) { await window.Sync.getStatus(); return window.Sync.manualSync({ moduleId }); },
     async seed(value) { this.edit(value); await window.Sync.getStatus(); await window.Sync.uploadAll(); }
   };
 }
 
 async function run() {
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    const skillKey = 'study_ai_skills_v1', noteKey = 'study_notes_v2';
+    a.editKey(skillKey, [{ id: 'a', name: 'one', content: 'first' }]);
+    a.editKey(noteKey, [{ id: 1, title: 'base note' }]);
+    await a.sync.uploadAll();
+    await b.syncNow();
+    a.editKey(skillKey, [{ id: 'a', name: 'one', content: 'first' }, { id: 'b', name: 'two', content: 'second' }]);
+    a.editKey(noteKey, [{ id: 1, title: 'local unsent note' }]);
+    await a.sync.uploadAll({ moduleId: 'skills' });
+    b.edit([{ id: 1, text: 'unsent todo' }]);
+    const cfgBefore = b.getKey('study_sync_config');
+    await b.syncNow('skills');
+    const cfgAfter = b.getKey('study_sync_config');
+    const actual = { skills: b.getKey(skillKey), cloudNotes: db.value('u1', noteKey), bTodoCloud: db.value('u1'),
+      pendingA: (await a.sync.getStatus()).pendingCount, pendingB: (await b.sync.getStatus()).pendingCount };
+    check('module-skills-sync-does-not-upload-other-dirty-modules', actual,
+      () => actual.skills.length === 2 && actual.cloudNotes[0].title === 'base note' && !actual.bTodoCloud && actual.pendingA > 0 && actual.pendingB > 0);
+    check('module-sync-preserves-global-reconcile-cursor', cfgAfter,
+      () => cfgBefore.syncCursor === cfgAfter.syncCursor && cfgBefore.lastFullReconcile === cfgAfter.lastFullReconcile);
+    await a.sync.uploadAll({ moduleId: 'notes' });
+    await b.syncNow('notes');
+    const afterNotesStatus = await b.sync.getStatus();
+    check('module-notes-sync-processes-records-without-other-pending-writes', b.getKey(noteKey),
+      () => b.getKey(noteKey)[0].title === 'local unsent note' && !db.value('u1') && afterNotesStatus.pendingCount > 0);
+    const dirty = b.getKey('study_sync_dirty_v1') || {};
+    check('module-notes-sync-preserves-pending-todo-record', dirty,
+      () => (b.get() || [])[0].text === 'unsent todo' && !db.value('u1'));
+  }
+  {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    const key = 'study_ai_skills_v1';
+    a.editKey(key, [{ id: '1', name: 'base', content: 'base' }]);
+    await a.sync.uploadAll();
+    await b.syncNow();
+    a.editKey(key, [{ id: '1', name: 'A', content: 'A edit' }]);
+    b.editKey(key, [{ id: '1', name: 'B', content: 'B edit' }]);
+    await a.sync.uploadAll({ moduleId: 'skills' });
+    const status = await b.syncNow('skills');
+    check('module-manual-sync-retains-real-conflicts', status,
+      () => status.pendingConflictCount === 1 && db.raw('u1', key)[0].content === 'A edit' && b.getKey(key)[0].content === 'B edit');
+    await b.sync.uploadAll({ moduleId: 'skills' });
+    check('module-upload-all-applies-selected-local-choice', b.sync.getPendingConflicts(),
+      () => b.sync.getPendingConflicts().length === 0 && db.raw('u1', key)[0].content === 'B edit');
+  }
   for (const existingConflict of [false, true]) {
     const db = cloud(), a = device('A', db), b = device('B', db);
     await a.seed(base);
@@ -505,6 +569,38 @@ async function run() {
     const actual = { accountA: db.value('account-A'), accountB: db.value('account-B') };
     check('account-switch', actual, () => actual.accountA[0].text === 'base' && !actual.accountB,
       { expectedAccountB: null });
+  }
+  for (const [module, sourceKey] of [['todos', KEY], ['notes', 'study_notes_v2'],
+    ['links', 'study_links_v3'], ['habits', 'study_habits_v2']]) {
+    const db = cloud(), a = device('A', db), b = device('B', db);
+    const archiveKey = 'study_' + module + '_archive';
+    const items = [{ id: 101, text: 'root', title: 'root', name: 'root', type: 'folder' }];
+    if (module === 'todos' || module === 'notes') items.push({ id: 102, parentId: 101, title: 'child', text: 'child' });
+    a.editKey(sourceKey, items);
+    await a.syncNow();
+    await b.syncNow();
+    a.archiveAction(module, sourceKey, 'archive', 101);
+    await a.syncNow();
+    await b.syncNow();
+    check(module + '-archive-cross-device', b.getKey(archiveKey), () =>
+      b.getKey(sourceKey).length === 0 && b.getKey(archiveKey).length === items.length &&
+      b.getKey(archiveKey).every(item => item.archivedAt));
+    b.archiveAction(module, sourceKey, 'restore', 101);
+    await b.syncNow();
+    await a.syncNow();
+    check(module + '-archive-restore-cross-device', a.getKey(sourceKey), () =>
+      a.getKey(sourceKey).length === items.length && a.getKey(archiveKey).length === 0 &&
+      a.getKey(sourceKey).every(item => !item.archivedAt));
+    // Old local-only archives must be discovered without a new edit notification.
+    a.setKeyRaw(archiveKey, [{ id: 201, title: 'old local archive', archivedAt: '2026-10-01' }]);
+    await a.syncNow();
+    await b.syncNow();
+    const oldArchiveUploaded = b.getKey(archiveKey).some(item => item.id === 201);
+    a.archiveAction(module, sourceKey, 'delete', 201);
+    await a.syncNow();
+    await b.syncNow();
+    check(module + '-legacy-archive-upload-and-delete', b.getKey(archiveKey), () =>
+      oldArchiveUploaded && db.raw('u1', 'mst:item:v1:' + archiveKey + ':201').deleted && b.getKey(archiveKey).length === 0);
   }
   if (failed) process.exitCode = 1;
 }

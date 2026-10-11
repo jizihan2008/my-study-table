@@ -451,6 +451,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   }
 
   prompt += '═══ 工具调用说明 ═══\n';
+  prompt += '【最后一条回复必须总结】本轮回复结束后，界面会自动折叠前面的过程消息，默认只展示最后一条。完成本轮请求时，必须发送一条不含工具调用的最终回复，简要总结关键结论、实际完成的操作及结果；如有失败、未完成事项或需要用户处理的问题，也要明确说明。最后一条必须能独立理解，不要只说「已完成」或让用户查看前文；不得把失败、回滚或未验证的操作说成已经成功。普通问答直接在最后一条给出完整答案即可。\n';
   if (_nativeLocalTools) {
     prompt += '请使用 API 提供的原生 function tools；不要在正文中输出 <tool_call>、DSML 或裸 JSON。\n\n';
   } else {

@@ -21,7 +21,7 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261008-r1">
+<link rel="stylesheet" href="css/style.css?v=20261010-r2">
 <link rel="stylesheet" href="css/workspace.css?v=20261005-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -1424,9 +1424,12 @@
           </div>
         </div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
-          <button class="btn-save-settings" onclick="syncManualSync()" style="background:#10b981;padding:6px 16px;width:auto;"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 立即同步</button>
-          <button class="btn-save-settings" onclick="syncUploadAll()" style="background:#6366f1;padding:6px 16px;width:auto;"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 上传全部</button>
+          <label for="syncModuleSelect" style="font-size:12px;color:var(--text-secondary);">处理模块</label>
+          <select id="syncModuleSelect" aria-label="选择同步模块" style="max-width:100%;padding:6px 10px;border:1px solid var(--border);border-radius:7px;background:var(--input-bg);color:var(--text);"><option value="all">全部常规模块</option></select>
+          <button id="syncManualButton" class="btn-save-settings" onclick="syncManualSync()" style="background:#10b981;padding:6px 16px;width:auto;"><i data-lucide="refresh-cw" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 立即同步</button>
+          <button id="syncUploadButton" class="btn-save-settings" onclick="syncUploadAll()" style="background:#6366f1;padding:6px 16px;width:auto;"><i data-lucide="upload" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 上传全部</button>
         </div>
+        <p class="hint" style="margin-top:8px;">两个按钮仅处理所选模块；“上传全部”会以该模块的本地内容覆盖云端。对话、教材讲解和问答日志使用下方独立同步入口。</p>
         <section id="syncConflictPanel" class="sync-conflict-panel" style="display:none;" aria-live="polite">
           <div class="sync-conflict-panel-title">
             <span><i data-lucide="git-merge" class="lucide-icon"></i> 待处理冲突</span>
@@ -1771,7 +1774,7 @@
 <script src="js/liquid-glass.js?v=20260929-r1"></script>
 <script src="js/nav-shortcuts.js?v=20260920-r1"></script>
 <script src="js/core.js?v=20260929-r2"></script>
-<script src="js/trash.js?v=20260923-r1"></script>
+<script src="js/trash.js?v=20261010-r1"></script>
 <script src="js/todos.js?v=20260922-r1"></script>
 <script src="js/notes.js?v=20261004-r4"></script>
 <script src="lib/file-library-order.js?v=20261004-r1"></script>
@@ -1781,16 +1784,16 @@
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20260929-r1"></script>
 <script src="js/ai-tree.js?v=20260912-r3"></script>
-<script src="js/ai-conv.js?v=20260929-r1"></script>
-<script src="js/ai-attach.js?v=20260928-r3"></script>
-<script src="js/ai-render.js?v=20261004-r1"></script>
+<script src="js/ai-conv.js?v=20261010-r1"></script>
+<script src="js/ai-attach.js?v=20261010-r1"></script>
+<script src="js/ai-render.js?v=20261010-r1"></script>
 <script src="js/ai-tools.js?v=20260924-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20260827-r1"></script>
 <script src="js/ai-api.js?v=20260923-r1"></script>
-<script src="js/ai-send.js?v=20260915-r3"></script>
-<script src="js/skills.js?v=20260916-r1"></script>
+<script src="js/ai-send.js?v=20261010-r1"></script>
+<script src="js/skills.js?v=20261010-r1"></script>
 <script src="js/prompts.js?v=20260923-r2"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260914-r5"></script>
@@ -1799,7 +1802,7 @@
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
 <script src="js/todo-queue.js?v=20261004-r3"></script>
-<script src="js/settings.js?v=20261008-r1"></script>
+<script src="js/settings.js?v=20261010-r2"></script>
 <script src="js/utils.js?v=20261004-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
@@ -1843,14 +1846,15 @@
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20261008-r1"></script>
 <script src="js/sync-diff.js?v=20261008-r1"></script>
-<script src="js/sync-collections.js?v=20261008-r1"></script>
+<script src="js/sync-collections.js?v=20261010-r2"></script>
 <script src="js/sync-dom.js?v=20260930-r1"></script>
-<script src="js/sync.js?v=20261008-r1"></script>
+<script src="js/sync.js?v=20261010-r2"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20261008-r1"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
 <script src="js/desktop-pet.js?v=20261005-r1"></script>
-<script src="js/translation.js?v=20260922-r4"></script>
+<script src="lib/cet/vocabulary.js?v=20261008-r1"></script>
+<script src="js/translation.js?v=20261008-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
 <div class="context-menu" id="notesContextMenu">

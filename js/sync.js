@@ -52,6 +52,10 @@
     'study_longterm_goals',    // 长期目标（实际存储 key）
     'study_links_v3',          // 快捷链接
     'study_quick_access',      // 快捷访问
+    'study_todos_archive',     // 归档内容使用独立的逐条集合同步
+    'study_notes_archive',
+    'study_links_archive',
+    'study_habits_archive',
     // 注：study_ai_convs / study_bk_explain_logs_v1 / study_bk_qa_logs_v1
     // 已剥离到独立通道 sync-logs.js（gzip 压缩 + 分片 + 配额），不再走普通同步
     'study_ai_memory',         // AI 记忆画像
@@ -59,8 +63,41 @@
     'study_prompt_templates_v1', // 共用提示词模板
     'study_bk_quiz_state_v1',  // 教材测验状态
     'study_translation_history_v1', // 划词翻译列表、生词本与闪卡进度
+    'study_translation_cet4_progress_v1', // 四级闪卡进度（词库随应用内置）
+    'study_translation_cet6_progress_v1', // 六级闪卡进度
     'study_todo_completed_log' // 待办完成日志（历史完成记录）
   ];
+
+  const SYNC_MODULES = [
+    { id: 'todos', label: '待办', keys: ['study_todos_v2', 'study_todos', 'study_todo_queue', 'study_todo_completed_log', 'study_todos_archive'] },
+    { id: 'notes', label: '笔记', keys: ['study_notes_v2', 'study_notes', 'study_notes_folders', 'study_notes_archive'] },
+    { id: 'links', label: '快捷链接', keys: ['study_links_v3', 'study_quick_access', 'study_links_archive'] },
+    { id: 'habits', label: '习惯与打卡', keys: ['study_habits_v2', 'study_habits', 'study_habits_v1', 'study_checkin', 'study_habits_archive'] },
+    { id: 'books', label: '教材', keys: ['study_books_v1', 'study_books_meta', 'study_bk_quiz_state_v1'] },
+    { id: 'calendar', label: '日历', keys: ['study_calendar_events'] },
+    { id: 'timer', label: '计时记录', keys: ['study_timer_records'] },
+    { id: 'taskline', label: '任务线与目标', keys: ['study_taskline_v1', 'study_longterm_goals', 'study_today_focus'] },
+    { id: 'stats', label: '学习统计', keys: ['study_stats'] },
+    { id: 'skills', label: 'AI 技能', keys: ['study_ai_skills_v1'] },
+    { id: 'memory', label: 'AI 记忆', keys: ['study_ai_memory'] },
+    { id: 'prompts', label: '提示词模板', keys: ['study_prompt_templates_v1'] },
+    { id: 'translation', label: '翻译与生词本', keys: ['study_translation_history_v1', 'study_translation_cet4_progress_v1', 'study_translation_cet6_progress_v1'] }
+  ];
+
+  function getModules() { return SYNC_MODULES.map(item => ({ ...item, keys: item.keys.slice() })); }
+  function _manualScope(options) {
+    const id = options && options.moduleId || 'all';
+    if (id === 'all') return null;
+    const module = SYNC_MODULES.find(item => item.id === id);
+    if (!module) throw new Error('同步模块无效');
+    return module;
+  }
+  async function _manualResult(scope) {
+    const status = await getStatus();
+    if (!scope) return status;
+    return { ...status, moduleId: scope.id, moduleLabel: scope.label,
+      pendingConflictCount: getPendingConflicts().filter(item => scope.keys.includes(item.collection || item.key)).length };
+  }
 
   // 明确排除的敏感 key（即使误加入也强制不进白名单）
   const SENSITIVE_KEYS = [
@@ -96,11 +133,17 @@
     'study_longterm_goals': '长期目标',
     'study_links_v3': '快捷链接',
     'study_quick_access': '快捷访问',
+    'study_todos_archive': '待办归档',
+    'study_notes_archive': '笔记归档',
+    'study_links_archive': '链接归档',
+    'study_habits_archive': '习惯归档',
     'study_ai_memory': 'AI 记忆画像',
     'study_ai_skills_v1': 'AI 技能',
     'study_prompt_templates_v1': '提示词模板',
     'study_bk_quiz_state_v1': '教材测验状态',
     'study_translation_history_v1': '划词翻译与生词本',
+    'study_translation_cet4_progress_v1': '四级闪卡进度',
+    'study_translation_cet6_progress_v1': '六级闪卡进度',
     'study_todo_completed_log': '待办完成日志'
   };
 
@@ -519,7 +562,8 @@
       if (global.SyncCollections) {
         const itemResult = await global.SyncCollections.sync({
           session: activeSession, client: _client(), force: forceUpload,
-          full: !!options.fullCollections
+          full: !!options.fullCollections,
+          collections: options.scope ? options.scope.keys : undefined
         });
         if (itemResult && itemResult.applied) _refreshUI();
         if (itemResult && itemResult.errors && itemResult.errors.length) {
@@ -535,7 +579,8 @@
       await _restoreOutboxDirtyKeys();
       // 取出当前所有脏 key 作为本次批次；本地变更/其他触发在本次执行期间新加入的 key
       // 会留在 dirtyKeys，由后续入队任务处理，不会丢失
-      const keys = Array.from(dirtyKeys).filter(key => isSyncKey(key) && !_conflictKeys.has(key));
+      const keys = Array.from(dirtyKeys).filter(key => isSyncKey(key) &&
+        (!options.scope || options.scope.keys.includes(key)) && (forceUpload || !_conflictKeys.has(key)));
       keys.forEach(key => dirtyKeys.delete(key));
       if (!keys.length) return;
       _logSync('upload-batch-start', { count: keys.length, forceUpload });
@@ -567,6 +612,7 @@
       for (const key of keys) {
         const res = results[key] || { ok: false, reason: 'missing-upload-result' };
         if (res.ok) {
+          if (forceUpload && res.unchanged !== false) _clearPendingConflict(key);
           okCount++;
           _logSync('upload-success', {
             key, action: 'upload', remoteTimestamp: res.updatedAt || null,
@@ -670,7 +716,11 @@
     Object.keys(map).filter(isSyncKey).forEach(key => dirtyKeys.add(key));
   }
 
+  let skillDraftBeforeRemoteApply = null;
   async function _applyRemoteValue(key, value, updatedAt) {
+    if (key === 'study_ai_skills_v1' && typeof aiSkillEditorChanged === 'function') {
+      try { skillDraftBeforeRemoteApply = !!aiSkillEditorChanged(); } catch (_) { skillDraftBeforeRemoteApply = true; }
+    }
     remoteApplyDepth++;
     try {
       saveData(key, value);
@@ -795,7 +845,7 @@
 
   // Safe merge cycle. force=true only waits for an active cycle; it never means
   // that the cloud may silently overwrite unsent local edits.
-  async function _pullAll(force, targetKeys) {
+  async function _pullAll(force, targetKeys, scope = null) {
     const pullTrigger = Array.isArray(targetKeys) && targetKeys.length ? 'realtime' : (force ? 'manual-or-startup' : 'scheduled');
     _logSync('pull-start', { trigger: pullTrigger, targeted: !!(targetKeys && targetKeys.length) });
     if (!enabled) { _lastPullError = '同步未开启'; _logSync('pull-skipped', { level: 'warning', reason: _lastPullError }); return false; }
@@ -835,7 +885,8 @@
       let metaQuery = c.from('user_data')
         .select('key,updated_at')
         .eq('user_id', session.user.id);
-      if (targeted) metaQuery = metaQuery.in('key', targetKeys.filter(isSyncKey));
+      if (scope) metaQuery = metaQuery.in('key', scope.keys.filter(isSyncKey));
+      else if (targeted) metaQuery = metaQuery.in('key', targetKeys.filter(isSyncKey));
       else if (incremental && typeof metaQuery.gte === 'function') metaQuery = metaQuery.gte('updated_at', cfg.syncCursor);
       const { data: meta, error } = await metaQuery;
       if (error) {
@@ -844,7 +895,7 @@
         return false;
       }
 
-      const syncRows = (meta || []).filter(row => isSyncKey(row.key));
+      const syncRows = (meta || []).filter(row => isSyncKey(row.key) && (!scope || scope.keys.includes(row.key)));
       const remoteKeys = new Set(syncRows.map(row => row.key));
       const localTsMap = _getLocalTs();
       let remoteMaxTs = '';
@@ -933,16 +984,19 @@
       }
 
       if (fullReconcile) {
-        for (const key of SYNC_KEYS) {
+        for (const key of scope ? scope.keys : SYNC_KEYS) {
           if (!isSyncKey(key) || remoteKeys.has(key) || _isEmptyLocalValue(key)) continue;
           _markLocalDirty(key);
           dirtyKeys.add(key);
         }
       }
 
-      if (remoteMaxTs) cfg.syncCursor = remoteMaxTs;
-      if (fullReconcile) cfg.lastFullReconcile = Date.now();
-      setConfig(cfg);
+      // A module-only reconciliation must not advance the global pull cursor.
+      if (!scope) {
+        if (remoteMaxTs) cfg.syncCursor = remoteMaxTs;
+        if (fullReconcile) cfg.lastFullReconcile = Date.now();
+        setConfig(cfg);
+      }
 
       _logSync('pull-complete', { trigger: pullTrigger, count: syncRows.length, fullReconcile });
 
@@ -954,7 +1008,7 @@
       return false;
     } finally {
       syncInProgress = false;
-      try { await _flush({ fullCollections: true }); } catch (e) { console.warn('[sync] 上传失败:', e); }
+      try { await _flush({ fullCollections: true, scope }); } catch (e) { console.warn('[sync] 上传失败:', e); }
       // Realtime 可能高频触发元数据检查；只有真正应用了远端值才重绘，
       // 避免无变更时打断正在输入的用户。
       if (appliedRemote) _refreshUI();
@@ -1331,8 +1385,14 @@
     }
     const calls = [
       'renderNotes', 'renderTodos', 'renderToday', 'renderLinks', 'renderCalendar',
-      'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats'
+      'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats', 'renderArchive'
     ];
+    try {
+      if (typeof refreshAiSkillViews === 'function' &&
+          (skillDraftBeforeRemoteApply !== null ? !skillDraftBeforeRemoteApply :
+            typeof aiSkillEditorChanged !== 'function' || !aiSkillEditorChanged())) refreshAiSkillViews();
+    } catch (_) {}
+    skillDraftBeforeRemoteApply = null;
     const syncedNote = editSnap && typeof notes !== 'undefined'
       ? notes.find(n => String(n.id) === String(editSnap.id)) : null;
     // Focus alone is not a draft. A clean, focused editor must receive cloud
@@ -1480,24 +1540,31 @@
   }
 
   // ── 手动触发 ────────────────────────────────────────
-  async function manualSync() {
+  async function manualSync(options = {}) {
+    const scope = _manualScope(options);
+    await getStatus();
     _logSync('manual-sync-requested', { trigger: 'manual' });
-    const completed = await _pullAll(true);
+    const completed = await _pullAll(true, undefined, scope);
     if (completed) {
       const cfg = getConfig();
       cfg.lastPull = Date.now();
       setConfig(cfg);
     }
     _emitStatus();
-    return getStatus();
+    return _manualResult(scope);
   }
-  async function uploadAll() {
+  async function uploadAll(options = {}) {
+    const scope = _manualScope(options);
+    await getStatus();
+    if (!enabled) throw new Error('请先开启同步');
+    if (!loggedIn || !_client()) throw new Error('请先登录同步账号');
+    _lastPullError = '';
     _logSync('force-upload-all-requested', { trigger: 'manual', forceUpload: true, level: 'warning' });
-    dirtyKeys = new Set(SYNC_KEYS.filter(k => localStorage.getItem(k) !== null));
-    dirtyKeys.forEach(_markLocalDirty);
-    await _flush({ forceUpload: true });
+    const keys = (scope ? scope.keys : SYNC_KEYS).filter(k => isSyncKey(k) && localStorage.getItem(k) !== null);
+    keys.forEach(key => { dirtyKeys.add(key); _markLocalDirty(key); });
+    await _flush({ forceUpload: true, scope });
     _emitStatus();
-    return getStatus();
+    return _manualResult(scope);
   }
 
   // ── 初始化 ──────────────────────────────────────────
@@ -1611,6 +1678,7 @@
     manualSync,
     uploadAll,
     getStatus,
+    getModules,
     getPendingConflicts,
     getConflictDifferences,
     canSyncAccount: _accountMatches,

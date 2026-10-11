@@ -16,6 +16,69 @@
   let pageMode = 'history';
   let pageQuery = '';
   let reviewSession = null;
+  let cetLevel = 'cet4';
+  const CET_SESSION_SIZE = 20;
+  const cetCards = new Map();
+
+  function cetProgressKey(level) {
+    return 'study_translation_' + level + '_progress_v1';
+  }
+
+  function loadCetProgress(level) {
+    try {
+      const value = global.StudyPlatform
+        ? global.StudyPlatform.storage.getJson(cetProgressKey(level), [])
+        : JSON.parse(global.localStorage.getItem(cetProgressKey(level)) || '[]');
+      return Array.isArray(value) ? value.filter(item => item && item.id).map(item => ({
+        id: item.id,
+        reviewStage: item.s ?? item.reviewStage,
+        reviewDueAt: item.d ?? item.reviewDueAt,
+        lastReviewedAt: item.t ?? item.lastReviewedAt,
+        reviewCount: item.c ?? item.reviewCount,
+        reviewLapses: item.l ?? item.reviewLapses,
+        lastReviewRating: item.r ?? item.lastReviewRating
+      })) : [];
+    } catch (_) { return []; }
+  }
+
+  function getCetEntries(level) {
+    if (!['cet4', 'cet6'].includes(level)) return [];
+    if (!cetCards.has(level)) {
+      cetCards.set(level, (global.CetVocabulary?.[level] || []).map(row => ({
+        id: level + ':' + row[0].toLowerCase(), sourceText: row[0],
+        result: { title: row[0], phonetic: row[1] ? '/' + row[1] + '/' : '', chineseMeaning: row[2], englishDefinition: row[3] }
+      })));
+    }
+    const progress = new Map(loadCetProgress(level).map(item => [item.id, item]));
+    return cetCards.get(level).map(card => ({ ...progress.get(card.id), ...card }));
+  }
+
+  function getCetReviewQueue(level, includeFuture) {
+    const now = Date.now();
+    return getCetEntries(level)
+      .filter(entry => includeFuture || !entry.reviewDueAt || new Date(entry.reviewDueAt).getTime() <= now)
+      // Review learned cards first, then introduce new words in dictionary order.
+      .sort((a, b) => Number(!!b.reviewCount) - Number(!!a.reviewCount)
+        || String(a.reviewDueAt || '').localeCompare(String(b.reviewDueAt || '')));
+  }
+
+  function isCetReview() { return pageMode === 'cet'; }
+
+  function currentReviewEntries() {
+    return isCetReview() ? getCetEntries(cetLevel) : loadHistory().filter(item => item.inVocabulary);
+  }
+
+  function currentReviewQueue(includeFuture) {
+    if (!isCetReview()) return getReviewQueue(includeFuture);
+    const cards = getCetReviewQueue(cetLevel, includeFuture);
+    if (includeFuture) {
+      for (let i = cards.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [cards[i], cards[j]] = [cards[j], cards[i]];
+      }
+    }
+    return cards.slice(0, CET_SESSION_SIZE);
+  }
 
   const REVIEW_INTERVALS = [1, 3, 7, 14, 30, 60, 120];
 
@@ -64,13 +127,13 @@
     catch (_) { return null; }
   }
 
-  function saveHistory(entries) {
+  function saveHistory(entries, key = HISTORY_KEY) {
     const safeEntries = Array.isArray(entries) ? entries : [];
-    if (typeof global.saveData === 'function') return global.saveData(HISTORY_KEY, safeEntries);
+    if (typeof global.saveData === 'function') return global.saveData(key, safeEntries);
     try {
       const result = typeof global.StudyPlatform !== 'undefined'
-        ? global.StudyPlatform.storage.setJson(HISTORY_KEY, safeEntries)
-        : (() => { global.localStorage.setItem(HISTORY_KEY, JSON.stringify(safeEntries)); return { ok: true }; })();
+        ? global.StudyPlatform.storage.setJson(key, safeEntries)
+        : (() => { global.localStorage.setItem(key, JSON.stringify(safeEntries)); return { ok: true }; })();
       return result.ok !== false;
     } catch (_) { return false; }
   }
@@ -413,13 +476,53 @@
       .sort((a, b) => String(a.reviewDueAt || '').localeCompare(String(b.reviewDueAt || '')));
   }
 
-  function gradeReview(entryId, rating, reviewedAt) {
-    const entries = loadHistory();
-    const index = entries.findIndex(item => item.id === String(entryId) && item.inVocabulary);
+  function getReportData(date, now = new Date()) {
+    const localDay = value => {
+      if (!value) return '';
+      const time = new Date(value);
+      if (Number.isNaN(time.getTime())) return '';
+      return `${time.getFullYear()}-${String(time.getMonth() + 1).padStart(2, '0')}-${String(time.getDate()).padStart(2, '0')}`;
+    };
+    const vocabulary = loadHistory().filter(entry => entry.inVocabulary);
+    const added = vocabulary.filter(entry => localDay(entry.vocabularyAddedAt) === date);
+    const reviewed = vocabulary.filter(entry => localDay(entry.lastReviewedAt) === date);
+    const due = vocabulary.filter(entry => !entry.reviewDueAt || new Date(entry.reviewDueAt).getTime() <= now.getTime());
+    const details = entries => entries.slice(0, 20).map(entry => ({
+      word: String(entry.result.title || entry.sourceText).slice(0, 200),
+      meaning: String(entry.result.chineseMeaning || '').slice(0, 300),
+      lastReviewRating: ({ again: '忘记', hard: '模糊', good: '记得' })[entry.lastReviewRating] || '未记录',
+      reviewDueAt: entry.reviewDueAt || '',
+      reviewCount: Math.max(0, Number(entry.reviewCount) || 0)
+    }));
+    return {
+      activityDate: date,
+      snapshotAt: now.toISOString(),
+      vocabularyCount: vocabulary.length,
+      addedCount: added.length,
+      addedWords: details(added),
+      reviewedWordCount: reviewed.length,
+      reviewRatings: {
+        again: reviewed.filter(entry => entry.lastReviewRating === 'again').length,
+        hard: reviewed.filter(entry => entry.lastReviewRating === 'hard').length,
+        good: reviewed.filter(entry => entry.lastReviewRating === 'good').length
+      },
+      reviewedWords: details(reviewed),
+      dueCount: due.length,
+      overdueCount: due.filter(entry => localDay(entry.reviewDueAt) && localDay(entry.reviewDueAt) < localDay(now)).length,
+      unreviewedCount: vocabulary.filter(entry => !(Number(entry.reviewCount) > 0)).length,
+      dueWords: details(due.sort((a, b) => String(a.reviewDueAt || '').localeCompare(String(b.reviewDueAt || '')))),
+      statisticsNote: '仅统计当前仍在生词本的词。新增按加入时间统计；复习按每个词最近一次复习的本地日期及结果统计，不代表当日全部复习次数，后续复习可能覆盖旧日期记录。待复习、逾期和未复习数为当前快照；逾期指到期日期早于今天。每份单词列表最多展示20个，计数包含全部词。'
+    };
+  }
+
+  function gradeReview(entryId, rating, reviewedAt, level) {
+    if (level && !['cet4', 'cet6'].includes(level)) return null;
+    const entries = level ? getCetEntries(level) : loadHistory();
+    const index = entries.findIndex(item => item.id === String(entryId) && (level || item.inVocabulary));
     if (index < 0) return null;
     const now = reviewedAt ? new Date(reviewedAt) : new Date();
     if (Number.isNaN(now.getTime())) return null;
-    const previousStage = Math.max(0, Number(entries[index].reviewStage) || 0);
+    const previousStage = Math.min(REVIEW_INTERVALS.length - 1, Math.max(0, Number(entries[index].reviewStage) || 0));
     let nextStage = previousStage;
     let delayMs;
     if (rating === 'again') {
@@ -442,13 +545,21 @@
       reviewLapses: Math.max(0, Number(entries[index].reviewLapses) || 0) + (rating === 'again' ? 1 : 0),
       lastReviewRating: rating
     };
-    if (!saveHistory(trimHistory(entries))) return null;
+    if (level) {
+      const progress = loadCetProgress(level).filter(item => item.id !== String(entryId));
+      const { id, reviewStage, reviewDueAt, lastReviewedAt, reviewCount, reviewLapses, lastReviewRating } = entries[index];
+      progress.push({ id, reviewStage, reviewDueAt, lastReviewedAt, reviewCount, reviewLapses, lastReviewRating });
+      // Compact field names keep a fully learned CET-6 deck within the cloud value limit.
+      const stored = progress.map(item => ({ id: item.id, s: item.reviewStage, d: item.reviewDueAt,
+        t: item.lastReviewedAt, c: item.reviewCount, l: item.reviewLapses, r: item.lastReviewRating }));
+      if (!saveHistory(stored, cetProgressKey(level))) return null;
+    } else if (!saveHistory(trimHistory(entries))) return null;
     return entries[index];
   }
 
   function startReviewSession(includeFuture) {
     reviewSession = {
-      ids: getReviewQueue(!!includeFuture).map(entry => entry.id),
+      ids: currentReviewQueue(!!includeFuture).map(entry => entry.id),
       index: 0,
       revealed: false,
       completed: 0
@@ -460,21 +571,25 @@
     const list = document.getElementById('translationHistoryList');
     if (!list) return;
     if (!reviewSession) {
-      reviewSession = { ids: getReviewQueue(false).map(entry => entry.id), index: 0, revealed: false, completed: 0 };
+      reviewSession = { ids: currentReviewQueue(false).map(entry => entry.id), index: 0, revealed: false, completed: 0 };
     }
-    const history = loadHistory();
-    const entry = history.find(item => item.id === reviewSession.ids[reviewSession.index] && item.inVocabulary);
+    const history = currentReviewEntries();
+    const entry = history.find(item => item.id === reviewSession.ids[reviewSession.index]);
     if (!entry) {
-      const vocabularyCount = history.filter(item => item.inVocabulary).length;
+      const vocabularyCount = history.length;
+      const cetRemaining = isCetReview() && getCetReviewQueue(cetLevel, false).length > 0;
       const finished = reviewSession.completed > 0;
       list.innerHTML = `
         <div class="translation-review-empty">
           <i data-lucide="${finished ? 'party-popper' : 'circle-check-big'}" class="lucide-icon" aria-hidden="true"></i>
           <strong>${finished ? '本轮复习完成' : '今天没有待复习闪卡'}</strong>
-          <p>${finished ? `你刚刚复习了 ${reviewSession.completed} 张闪卡。` : (vocabularyCount ? '所有生词都在按计划巩固中。' : '先把翻译结果加入生词本，就能开始闪卡复习。')}</p>
-          ${vocabularyCount ? '<button type="button" class="translation-review-all">复习全部生词</button>' : ''}
+          <p>${finished ? `你刚刚复习了 ${reviewSession.completed} 张闪卡。` : (vocabularyCount ? '所有单词都在按计划巩固中。' : (isCetReview() ? '词库未加载，请重新打开页面。' : '先把翻译结果加入生词本，就能开始闪卡复习。'))}</p>
+          ${cetRemaining ? '<button type="button" class="translation-review-next">继续练习下一组</button>' : ''}
+          ${vocabularyCount ? `<button type="button" class="translation-review-all">${isCetReview() ? '自由练习（20 张）' : '复习全部生词'}</button>` : ''}
         </div>`;
       list.querySelector('.translation-review-all')?.addEventListener('click', () => startReviewSession(true));
+      list.querySelector('.translation-review-next')?.addEventListener('click', () => startReviewSession(false));
+      updateReviewCounts();
       if (typeof global.lucide !== 'undefined') global.lucide.createIcons();
       return;
     }
@@ -499,7 +614,7 @@
         <div class="translation-review-ratings" ${reviewSession.revealed ? '' : 'hidden'} aria-label="复习结果">
           <button type="button" data-rating="again"><i data-lucide="rotate-ccw"></i><span>忘记<small>10 分钟后</small></span></button>
           <button type="button" data-rating="hard"><i data-lucide="brain"></i><span>模糊<small>明天</small></span></button>
-          <button type="button" data-rating="good"><i data-lucide="check"></i><span>记得<small>${REVIEW_INTERVALS[Math.max(0, Number(entry.reviewStage) || 0)]} 天后</small></span></button>
+          <button type="button" data-rating="good"><i data-lucide="check"></i><span>记得<small>${REVIEW_INTERVALS[Math.min(REVIEW_INTERVALS.length - 1, Math.max(0, Number(entry.reviewStage) || 0))]} 天后</small></span></button>
         </div>
       </div>`;
     list.querySelector('.translation-flashcard').addEventListener('click', () => {
@@ -510,11 +625,15 @@
     list.querySelector('.translation-review-ratings')?.addEventListener('click', event => {
       const button = event.target.closest('[data-rating]');
       if (!button) return;
-      gradeReview(entry.id, button.dataset.rating);
+      if (!gradeReview(entry.id, button.dataset.rating, undefined, isCetReview() ? cetLevel : undefined)) {
+        if (typeof global.showAiToast === 'function') global.showAiToast('保存复习进度失败，请重试');
+        return;
+      }
       reviewSession.index += 1;
       reviewSession.completed += 1;
       reviewSession.revealed = false;
       renderReviewSession();
+      updateReviewCounts();
     });
     if (typeof global.lucide !== 'undefined') global.lucide.createIcons();
   }
@@ -522,7 +641,7 @@
   function renderTranslationList() {
     const list = document.getElementById('translationHistoryList');
     if (!list) return;
-    if (pageMode === 'review') {
+    if (pageMode === 'review' || isCetReview()) {
       renderReviewSession();
       return;
     }
@@ -542,14 +661,28 @@
   }
 
   function setPageMode(mode) {
-    pageMode = ['vocabulary', 'review'].includes(mode) ? mode : 'history';
-    if (pageMode === 'review') reviewSession = null;
-    document.querySelectorAll('#translationApp .translation-page-tab').forEach(button => {
-      const active = button.dataset.mode === pageMode;
-      button.classList.toggle('active', active);
-      button.setAttribute('aria-selected', String(active));
-    });
-    renderTranslationList();
+    pageMode = ['vocabulary', 'review', 'cet'].includes(mode) ? mode : 'history';
+    reviewSession = null;
+    renderTranslationPage();
+  }
+
+  function updateReviewCounts() {
+    const app = document.getElementById('translationApp');
+    if (!app) return;
+    const badge = app.querySelector('[data-mode="review"] span');
+    if (badge) badge.textContent = getReviewQueue(false).length;
+    const pageSummary = app.querySelector('.translation-page-summary');
+    if (pageSummary) {
+      const history = loadHistory();
+      pageSummary.textContent = `${history.length} 条翻译记录 · ${history.filter(entry => entry.inVocabulary).length} 个生词 · ${getReviewQueue(false).length} 张待复习`;
+    }
+    const summary = app.querySelector('.translation-cet-summary');
+    if (summary) {
+      const cards = getCetEntries(cetLevel);
+      const learned = cards.filter(card => card.reviewCount).length;
+      const due = getCetReviewQueue(cetLevel, false).filter(card => card.reviewCount).length;
+      summary.textContent = `${cards.length} 个单词 · 已练 ${learned} · 待复习 ${due} · 未练 ${cards.length - learned} · 每组 20 张`;
+    }
   }
 
   function renderTranslationPage() {
@@ -571,18 +704,33 @@
           <button class="translation-page-tab ${pageMode === 'history' ? 'active' : ''}" type="button" role="tab" data-mode="history" aria-selected="${String(pageMode === 'history')}">翻译列表<span>${history.length}</span></button>
           <button class="translation-page-tab ${pageMode === 'vocabulary' ? 'active' : ''}" type="button" role="tab" data-mode="vocabulary" aria-selected="${String(pageMode === 'vocabulary')}">生词本<span>${vocabularyCount}</span></button>
           <button class="translation-page-tab ${pageMode === 'review' ? 'active' : ''}" type="button" role="tab" data-mode="review" aria-selected="${String(pageMode === 'review')}">闪卡复习<span>${dueCount}</span></button>
+          <button class="translation-page-tab ${isCetReview() ? 'active' : ''}" type="button" role="tab" data-mode="cet" aria-selected="${String(isCetReview())}">四六级闪卡</button>
         </div>
-        <label class="translation-page-search" ${pageMode === 'review' ? 'hidden' : ''}>
+        <label class="translation-page-search" ${pageMode === 'review' || isCetReview() ? 'hidden' : ''}>
           <i data-lucide="search" class="lucide-icon" aria-hidden="true"></i>
           <input type="search" id="translationPageSearch" value="${escapeTranslationHtml(pageQuery)}" placeholder="搜索单词或释义…" aria-label="搜索翻译列表">
           <button type="button" class="translation-page-search-clear" aria-label="清除搜索" ${pageQuery ? '' : 'hidden'}><i data-lucide="x" class="lucide-icon" aria-hidden="true"></i></button>
         </label>
       </div>
+      ${isCetReview() ? `<div class="translation-cet-toolbar">
+        <div class="translation-cet-levels" role="group" aria-label="选择四六级词库">
+          <button type="button" data-level="cet4" aria-pressed="${cetLevel === 'cet4'}">四级词汇</button>
+          <button type="button" data-level="cet6" aria-pressed="${cetLevel === 'cet6'}">六级词汇</button>
+        </div>
+        <span class="translation-cet-summary" aria-live="polite"></span>
+      </div>` : ''}
       <div class="translation-history-list" id="translationHistoryList"></div>`;
 
     app.querySelector('.translation-page-tabs').addEventListener('click', event => {
       const button = event.target.closest('.translation-page-tab');
       if (button) setPageMode(button.dataset.mode);
+    });
+    app.querySelector('.translation-cet-levels')?.addEventListener('click', event => {
+      const button = event.target.closest('[data-level]');
+      if (!button || button.dataset.level === cetLevel) return;
+      cetLevel = button.dataset.level;
+      reviewSession = null;
+      renderTranslationPage();
     });
     app.querySelector('#translationPageSearch').addEventListener('input', event => {
       pageQuery = event.target.value;
@@ -601,6 +749,7 @@
       if (button && card) setVocabulary(card.dataset.translationId);
     });
     renderTranslationList();
+    updateReviewCounts();
     if (typeof global.lucide !== 'undefined') global.lucide.createIcons();
   }
 
@@ -684,7 +833,10 @@
     recordResult: recordTranslation,
     toggleVocabulary: setVocabulary,
     getReviewQueue,
+    getReportData,
     gradeReview,
+    getCetReviewQueue,
+    gradeCetReview: (level, entryId, rating, reviewedAt) => gradeReview(entryId, rating, reviewedAt, level),
     renderPage: renderTranslationPage,
     translate: getTranslation,
     close: closePanel

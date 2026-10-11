@@ -5,6 +5,40 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require('@playwright/test');
 
+test('manual sync and upload all pass the selected module and restore controls after failures', async () => {
+  const browser = await chromium.launch({ ...(process.platform === 'win32' ? { channel: 'msedge' } : {}), headless: true });
+  try {
+    const page = await browser.newPage();
+    const index = fs.readFileSync(path.join(__dirname, '../index.html'), 'utf8');
+    const start = index.lastIndexOf('<div style="display:flex;', index.indexOf('id="syncModuleSelect"'));
+    const end = index.indexOf('</div>', index.indexOf('id="syncUploadButton"')) + 6;
+    await page.setContent('<div id="syncStatus"></div>' + index.slice(start, end));
+    for (const file of ['sync-policy.js', 'sync.js']) await page.addScriptTag({ path: path.join(__dirname, '../js', file) });
+    const settings = fs.readFileSync(path.join(__dirname, '../js/settings.js'), 'utf8');
+    await page.addScriptTag({ content: settings.slice(settings.indexOf('async function renderSyncPanel('), settings.indexOf('const SYNC_EVENT_LABELS')) +
+      settings.slice(settings.indexOf('async function syncManualSync('), settings.indexOf('// ═══════════ Extension Management')) });
+    await page.evaluate(() => {
+      const modules = Sync.getModules();
+      window.escapeHtml = value => String(value);
+      for (const name of ['renderSyncConflicts', 'renderSyncEventLog', 'ensureSyncProgressListener', 'ensureSyncStatusListener']) window[name] = () => {};
+      window.operationCalls = [];
+      window.Sync = { getModules: () => modules, getStatus: async () => ({ enabled: true, autoSync: false, loggedIn: false, dirtyKeys: [] }),
+        manualSync: async options => { window.operationCalls.push(['sync', options.moduleId]); return { pendingConflictCount: 0 }; },
+        uploadAll: async options => { window.operationCalls.push(['upload', options.moduleId]); throw new Error('offline'); } };
+      return renderSyncPanel();
+    });
+    await page.getByLabel('选择同步模块').selectOption('skills');
+    await page.getByRole('button', { name: '立即同步' }).click();
+    await page.getByText('AI 技能同步完成。', { exact: true }).waitFor();
+    await page.getByRole('button', { name: '上传全部' }).click();
+    await page.getByText('AI 技能上传出错：offline', { exact: true }).waitFor();
+    assert.deepEqual(await page.evaluate(() => window.operationCalls), [['sync', 'skills'], ['upload', 'skills']]);
+    assert.equal(await page.getByLabel('选择同步模块').inputValue(), 'skills');
+    assert.equal(await page.getByLabel('选择同步模块').isEnabled(), true);
+    assert.equal(await page.getByRole('button', { name: '立即同步' }).isEnabled(), true);
+  } finally { await browser.close(); }
+});
+
 test('conflict details load on demand, escape content, refresh and fit light/dark narrow layouts', async (t) => {
   let browser;
   try {

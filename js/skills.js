@@ -18,7 +18,12 @@ function getAiSkill(id) {
 }
 
 function saveAiSkills(items) {
-  localStorage.setItem(AI_SKILLS_KEY, JSON.stringify(items));
+  const raw = JSON.stringify(items);
+  if (localStorage.getItem(AI_SKILLS_KEY) === raw) return;
+  localStorage.setItem(AI_SKILLS_KEY, raw);
+  if (typeof window.Sync !== 'undefined' && typeof window.Sync.onLocalChange === 'function') {
+    try { window.Sync.onLocalChange(AI_SKILLS_KEY); } catch (_) { /* 保存成功不受同步故障影响 */ }
+  }
 }
 
 function refreshAiSkillViews() {

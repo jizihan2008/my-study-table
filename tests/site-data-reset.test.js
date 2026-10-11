@@ -49,6 +49,7 @@ test('site reset clears browser storage and every known or discovered database',
   assert.deepEqual(cleared, ['local', 'session']);
   assert.ok(deletedDatabases.includes('my-study-table-data'));
   assert.ok(deletedDatabases.includes('mst-sync-logs'));
+  assert.ok(deletedDatabases.includes('study-ai-attachments'));
   assert.ok(deletedDatabases.includes('future-mst-store'));
   assert.equal(report.caches[0].ok, true);
   assert.equal(report.serviceWorkers[0].ok, true);

@@ -296,7 +296,9 @@ test('switching conversations during attachment reading preserves the new draft 
     const originalConfig = window.getEffectiveApiConfig;
     const originalTitle = window.isAutoTitleEnabled;
     let release;
-    window.FileReader = class { readAsText() { release = () => this.onload({ target: { result: '附件正文' } }); } };
+    let started;
+    const readStarted = new Promise(resolve => { started = resolve; });
+    window.FileReader = class { readAsText() { release = () => this.onload({ target: { result: '附件正文' } }); started(); } };
     window.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'test', name: '附件测试', baseUrl: 'https://attachment-test.invalid/v1' });
     window.isAutoTitleEnabled = () => false;
     try {
@@ -305,6 +307,7 @@ test('switching conversations during attachment reading preserves the new draft 
       window.addAiAttachmentFiles([new File(['first'], 'first.txt', { type: 'text/plain' })]);
       document.getElementById('aiInput').value = '分析附件';
       const sending = window.sendAiMessage();
+      await readStarted;
       const lockedDuringRead = window.isAiLoading(origin.id);
       window.createNewConv();
       const targetId = window.getActiveConvId();

@@ -480,6 +480,37 @@ test('reply-chain controls appear once after tools and before the next user', ()
   assert.equal(container.innerHTML.includes('class="ai-msg-regen"'), false);
 });
 
+test('extracted attachment text appears only inside its fold while API content stays intact', () => {
+  for (const header of ['PDF附件（提取文字）：讲义.pdf，第 1–2 页 / 共 2 页', '附件：讲义.pdf', '附件(OCR)：扫描.png']) {
+    for (const typedText of ['请解释这份资料', '']) {
+      const ctx = harness();
+      const conv = { id: 'attachment-fold' };
+      ctx.initTreeOnConv(conv);
+      const extracted = 'EXTRACTED_PDF_TEXT';
+      const content = `${typedText}\n\n[${header}]\n${extracted}`;
+      ctx.appendMessage(conv, {
+        role: 'user', content,
+        attachments: [{ name: '讲义.pdf', content: extracted }]
+      });
+      const container = { innerHTML: '', scrollTop: 0, scrollHeight: 100, clientHeight: 100 };
+      ctx.document.getElementById = id => id === 'aiMessages' ? container : null;
+      ctx.getActiveConv = () => conv;
+      ctx.formatAiContent = text => text || '';
+      ctx.escapeHtml = text => String(text || '');
+      ctx.escapeAttr = text => String(text || '').replace(/"/g, '&quot;');
+      ctx.renderAiMessages();
+      assert.equal((container.innerHTML.match(/EXTRACTED_PDF_TEXT/g) || []).length, 1, header);
+      assert.ok(container.innerHTML.includes(`<pre>${extracted}</pre></details>`));
+      const outsideFold = container.innerHTML.replace(/<details class="file-content">[\s\S]*?<\/details>/g, '');
+      assert.equal(outsideFold.includes(extracted), false);
+      assert.equal(outsideFold.includes(`[${header}]`), false);
+      if (typedText) assert.ok(outsideFold.includes(typedText));
+      assert.equal(conv.messages[0].content, content);
+      assert.ok(ctx.buildApiMessages(conv, [], ctx.getEffectiveApiConfig()).some(m => String(m.content).includes(extracted)));
+    }
+  }
+});
+
 test('tree panel branch selection restores the existing continuation', () => {
   const ctx = harness();
   const conv = conversation(ctx);

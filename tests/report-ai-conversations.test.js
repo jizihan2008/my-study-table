@@ -64,6 +64,7 @@ test('preview and the actual legacy prompt both carry the conversation data', ()
 test('morning and evening collectors pass yesterday and today into report prompt data', () => {
   const context = load([{ id: 1, messages: [msg(7, '昨日讨论'), msg(8, '今日讨论')] }]);
   Object.assign(context, {
+    GlobalTranslation: { getReportData: date => ({ activityDate: date, vocabularyCount: 2 }) },
     todos: [], notes: [], getTodayStr: () => '2026-10-08', getPastDateStr: () => '2026-10-07',
     loadCheckinData: () => ({ dates: [] }), getFocusItemsForDate: () => ({ items: [] }),
     getTodayFocusItems: () => ({ items: [] }), collectReportLongTermGoals: () => [],
@@ -84,6 +85,21 @@ test('morning and evening collectors pass yesterday and today into report prompt
   assert.equal(evening[0].date, '2026-10-08');
   assert.match(evening[0].excerpts, /今日讨论/);
   assert.doesNotMatch(evening[0].excerpts, /昨日讨论/);
+  assert.equal(context.collectDailyReportData().vocabularyFlashcards.activityDate, '2026-10-07');
+  assert.equal(context.collectEveningReportData().vocabularyFlashcards.activityDate, '2026-10-08');
+});
+
+test('vocabulary data reaches both prompt preview and actual report input', () => {
+  const context = vm.createContext({});
+  vm.runInContext(fs.readFileSync('js/prompts.js', 'utf8'), context);
+  const data = { vocabularyFlashcards: { vocabularyCount: 12, reviewedWordCount: 3 } };
+  for (const type of ['morning', 'evening']) {
+    assert.match(context.reportPromptData(type, data), /"vocabularyCount": 12/);
+    const actual = context.reportPromptData(type, data, '📊 **日报数据**\n其他数据\n---\n建议');
+    assert.match(actual, /生词本与闪卡/);
+    assert.match(actual, /"reviewedWordCount": 3/);
+    assert.doesNotMatch(actual, /建议/);
+  }
 });
 
 test('tree writes date new messages and preserves dates through trimming and migration', () => {

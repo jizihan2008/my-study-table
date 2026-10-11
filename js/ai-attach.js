@@ -314,7 +314,7 @@ function addAiAttachmentFiles(fileList) {
           : '支持 PDF 与文本类文件（.txt / .md / .json / 代码文件等），图片需切换到支持看图的模型'));
       continue;
     }
-    const attach = { name: file.name, file: file, size: file.size };
+    const attach = { name: file.name, file: file, originalFile: file, size: file.size };
     if (isPdf) {
       attach.pdfStartPage = null;
       attach.pdfEndPage = null;
@@ -625,6 +625,185 @@ initAiPasteZone();
 // 这里保留 file 引用，发送路径要靠它把本次快照与预览下标配对，才能就地刷新渲染进度。
 function getAiAttachments() {
   return aiAttachments.slice();
+}
+
+// 原文件单独保存在本机 IndexedDB，消息只保存引用，避免把 PDF/base64 塞进对话存储。
+// 图片预处理可能替换 file，因此使用添加附件时保留的 originalFile。
+const _aiOriginalFileFallback = new Map();
+
+function openAiAttachmentDb() {
+  return new Promise((resolve, reject) => {
+    let blocked = false;
+    const request = indexedDB.open('study-ai-attachments', 1);
+    request.onupgradeneeded = () => {
+      const store = request.result.createObjectStore('files', { keyPath: 'id' });
+      store.createIndex('convId', 'convId');
+    };
+    request.onsuccess = () => { if (blocked) request.result.close(); else resolve(request.result); };
+    request.onerror = () => reject(request.error);
+    request.onblocked = () => { blocked = true; reject(new Error('附件存储被占用')); };
+  });
+}
+
+async function aiAttachmentStore(mode, action) {
+  const db = await openAiAttachmentDb();
+  try {
+    return await new Promise((resolve, reject) => {
+      const tx = db.transaction('files', mode);
+      const request = action(tx.objectStore('files'));
+      tx.oncomplete = () => resolve(request?.result);
+      tx.onerror = tx.onabort = () => reject(tx.error || new Error('附件存储失败'));
+    });
+  } finally { db.close(); }
+}
+
+async function retainAiAttachmentFile(attach, convId) {
+  const file = attach.originalFile || attach.file;
+  if (!file) return {};
+  const id = attach.originalConvId === convId && attach.originalFileId
+    ? attach.originalFileId
+    : 'attach_' + (globalThis.crypto?.randomUUID?.() || Date.now() + '_' + Math.random().toString(36).slice(2));
+  const row = { id, convId, blob: file, name: attach.name, type: file.type || '', lastModified: file.lastModified || 0 };
+  let localOnly = false;
+  try {
+    await aiAttachmentStore('readwrite', store => store.put(row));
+    _aiOriginalFileFallback.delete(id);
+  } catch (_) {
+    // 本机存储不可用时仍允许发送，并在当前运行期间保留重插入能力。
+    _aiOriginalFileFallback.set(id, row);
+    localOnly = true;
+    if (typeof showAiToast === 'function') showAiToast('原附件暂未保存到本机，重启后需重新上传');
+  }
+  attach.originalFileId = id;
+  attach.originalConvId = convId;
+  return { originalFileId: id, localOnly, pdfMode: attach.pdfMode,
+    pdfStartPage: attach.pdfStartPage || null, pdfEndPage: attach.pdfEndPage || null, ocrMode: attach.ocrMode };
+}
+
+async function releaseAiConversationFiles(convId) {
+  for (const [id, row] of _aiOriginalFileFallback) {
+    if (row.convId === convId) _aiOriginalFileFallback.delete(id);
+  }
+  try {
+    await aiAttachmentStore('readwrite', store => {
+      const request = store.index('convId').openKeyCursor(convId);
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (cursor) { store.delete(cursor.primaryKey); cursor.continue(); }
+      };
+    });
+  } catch (_) { /* 清理失败不影响删除对话 */ }
+}
+
+function getAiConversationAttachments(conv = getActiveConv()) {
+  if (!conv) return [];
+  const messages = conv.tree ? Object.values(conv.tree) : (conv.messages || []);
+  const seen = new Set();
+  const entries = [];
+  for (const message of messages) {
+    if (message.role !== 'user') continue;
+    (message.attachments || []).forEach((attachment, index) => {
+      // 复用同一原文件时合并；同名但内容不同的文件保留各自入口。
+      const key = attachment.originalFileId
+        ? JSON.stringify([attachment.originalFileId, attachment.pdfMode, attachment.pdfStartPage, attachment.pdfEndPage, attachment.ocrMode])
+        : String(message.id ?? messages.indexOf(message)) + ':' + index;
+      if (!seen.has(key)) { seen.add(key); entries.push({ attachment, time: message.time || '' }); }
+    });
+  }
+  return entries.reverse();
+}
+
+async function reinsertAiAttachment(attachment, convId) {
+  let row = _aiOriginalFileFallback.get(attachment.originalFileId);
+  try {
+    if (!row && attachment.originalFileId) {
+      row = await aiAttachmentStore('readonly', store => store.get(attachment.originalFileId));
+    }
+  } catch (_) { /* 下面统一提示原文件不可用 */ }
+  if (getActiveConvId() !== convId) return false;
+  if (!row || row.convId !== convId) {
+    alert('原文件未保存在本机。旧消息或从其他设备同步的附件需要重新上传原文件。');
+    return false;
+  }
+  const page = value => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null;
+  const startPage = page(attachment.pdfStartPage);
+  const endPage = page(attachment.pdfEndPage);
+  const mode = attachment.pdfMode === 'image' && !isMultimodalModel() ? 'text' : attachment.pdfMode;
+  if (aiAttachments.some(a => a.originalFileId === row.id
+    && (a.pdfStartPage || null) === startPage
+    && (a.pdfEndPage || null) === endPage
+    && a.pdfMode === mode && a.ocrMode === attachment.ocrMode)) {
+    if (typeof showAiToast === 'function') showAiToast('该附件已在输入框中');
+    return true;
+  }
+  const file = new File([row.blob], row.name, { type: row.type, lastModified: row.lastModified });
+  const before = aiAttachments.length;
+  if (!addAiAttachmentFiles([file]).length) return false;
+  const added = aiAttachments[before];
+  added.originalFileId = row.id;
+  added.originalConvId = convId;
+  if (isPdfFile(file)) {
+    added.pdfStartPage = startPage;
+    added.pdfEndPage = endPage;
+    if (mode === 'text' || mode === 'image') {
+      added.pdfMode = mode;
+    }
+  }
+  if (added.ocrMode !== undefined && typeof attachment.ocrMode === 'boolean') added.ocrMode = attachment.ocrMode;
+  renderAttachPreview();
+  document.getElementById('aiInput')?.focus();
+  if (typeof showAiToast === 'function') showAiToast('已再次插入：' + row.name);
+  return true;
+}
+
+function insertAiMessageAttachment(button) {
+  const conv = getActiveConv();
+  if (!conv || String(conv.id) !== button.dataset.convId) return;
+  const message = conv.tree?.[button.dataset.nodeId];
+  const attachment = message?.attachments?.[Number(button.dataset.attachmentIndex)];
+  if (attachment) return reinsertAiAttachment(attachment, conv.id);
+}
+
+function closeAiConversationFiles() {
+  document.getElementById('aiConversationFilesPicker')?.remove();
+}
+
+function openAiConversationFiles() {
+  closeAiConversationFiles();
+  const convId = getActiveConvId();
+  const entries = getAiConversationAttachments();
+  const overlay = document.createElement('div');
+  overlay.id = 'aiConversationFilesPicker';
+  overlay.className = 'timer-picker-overlay';
+  overlay.innerHTML = `<div class="timer-picker ai-context-picker file-library-picker" role="dialog" aria-modal="true" aria-label="本对话文件">
+    <div class="todo-picker-header"><span>本对话文件（${entries.length}）</span><button type="button" class="todo-picker-close" aria-label="关闭">×</button></div>
+    <div class="todo-picker-search"><input type="search" placeholder="搜索文件名" aria-label="搜索本对话文件"></div>
+    <div class="file-library-picker-list"></div></div>`;
+  const list = overlay.querySelector('.file-library-picker-list');
+  const render = query => {
+    const matches = entries.map((entry, index) => ({ ...entry, index }))
+      .filter(entry => String(entry.attachment.name || '').toLowerCase().includes(query.toLowerCase()));
+    list.innerHTML = matches.length ? matches.map(({ attachment: a, time, index }) =>
+      `<button type="button" data-attachment-index="${index}"><span><strong>${escapeHtml(a.name)}</strong><small>${escapeHtml(time)} · ${formatFileSize(a.size)}${a.originalFileId ? (a.localOnly ? ' · 暂存于本次运行' : '') : ' · 原文件需重新上传'}${a.pdfStartPage || a.pdfEndPage ? escapeHtml(' · 页 ' + (a.pdfStartPage || 1) + '–' + (a.pdfEndPage || '末页')) : ''}</small></span><span>再次插入</span></button>`).join('')
+      : '<div class="file-library-empty"><strong>' + (entries.length ? '没有匹配的文件' : '本对话还没有发送文件') + '</strong></div>';
+  };
+  render('');
+  const search = overlay.querySelector('input');
+  search.addEventListener('input', () => render(search.value));
+  list.addEventListener('click', async event => {
+    const button = event.target.closest('button[data-attachment-index]');
+    if (!button || button.disabled) return;
+    button.disabled = true;
+    try {
+      if (await reinsertAiAttachment(entries[Number(button.dataset.attachmentIndex)].attachment, convId)) closeAiConversationFiles();
+    } finally { button.disabled = false; }
+  });
+  overlay.querySelector('.todo-picker-close').onclick = closeAiConversationFiles;
+  overlay.addEventListener('click', event => { if (event.target === overlay) closeAiConversationFiles(); });
+  overlay.addEventListener('keydown', event => { if (event.key === 'Escape') { event.stopPropagation(); closeAiConversationFiles(); } });
+  document.body.appendChild(overlay);
+  overlay.style.display = 'flex';
+  search.focus();
 }
 
 // 只读快照（供测试/诊断查看待发附件；aiAttachments 是 settings.js 的 let 绑定，不在 window 上）

@@ -47,7 +47,7 @@ function loadArchive(module) {
 }
 
 function saveArchive(module, data) {
-  try { localStorage.setItem(ARCHIVE_KEYS[module], JSON.stringify(data)); } catch (e) { console.error('saveArchive error:', e); }
+  return saveData(ARCHIVE_KEYS[module], data);
 }
 
 // ── 移到回收站 ──
@@ -115,8 +115,11 @@ function moveToArchive(module, item) {
   const archive = loadArchive(module);
   
   if (module === 'todos') {
-    archive.unshift({ ...item, archivedAt: new Date().toISOString() });
-    todos = todos.filter(t => t.id !== item.id);
+    const ids = new Set(collectStoredDescendantIds(todos, item.id));
+    const archivedAt = new Date().toISOString();
+    todos.filter(t => ids.has(t.id)).forEach(t => archive.unshift({ ...t, archivedAt }));
+    if (!saveArchive(module, archive)) return false;
+    todos = todos.filter(t => !ids.has(t.id));
     saveData('study_todos_v2', todos);
     expandedTodoIds.delete(item.id);
     saveExpandedTodoIds();
@@ -126,6 +129,7 @@ function moveToArchive(module, item) {
       : new Set([item.id]);
     const archivedAt = new Date().toISOString();
     notes.filter(n => ids.has(n.id)).forEach(n => archive.unshift({ ...n, archivedAt }));
+    if (!saveArchive(module, archive)) return false;
     notes = notes.filter(n => !ids.has(n.id));
     if (ids.has(activeNoteId)) {
       activeNoteId = (notes.find(n => n.type === 'note') || notes[0])?.id || null;
@@ -135,17 +139,19 @@ function moveToArchive(module, item) {
     renderNotes();
   } else if (module === 'links') {
     archive.unshift({ ...item, archivedAt: new Date().toISOString() });
+    if (!saveArchive(module, archive)) return false;
     links = links.filter(l => l.id !== item.id);
     saveData('study_links_v3', links);
     renderLinks();
   } else if (module === 'habits') {
     archive.unshift({ ...item, archivedAt: new Date().toISOString() });
+    if (!saveArchive(module, archive)) return false;
     habits = habits.filter(h => h.id !== item.id);
     if (typeof saveHabits === 'function') saveHabits();
     if (typeof renderHabits === 'function') renderHabits();
   }
   
-  saveArchive(module, archive);
+  return true;
 }
 
 function collectStoredDescendantIds(items, id) {
@@ -182,6 +188,48 @@ function orderedStoredTree(items) {
   (children.get(null) || []).forEach(item => visit(item, 0));
   items.forEach(item => visit(item, 0)); // Legacy data may contain cycles.
   return result;
+}
+
+// 折叠状态仅属于当前设备；归档和回收站、各模块分别记忆。
+const STORED_TREE_COLLAPSED_KEY = 'study_stored_tree_collapsed_v1';
+function storedTreeFoldKey(view, module, id) {
+  return JSON.stringify([view, module, String(id)]);
+}
+function loadStoredTreeCollapsed() {
+  try {
+    const keys = JSON.parse(localStorage.getItem(STORED_TREE_COLLAPSED_KEY) || '[]');
+    return new Set(Array.isArray(keys) ? keys : []);
+  } catch (_) { return new Set(); }
+}
+function toggleStoredTree(view, module, id) {
+  const collapsed = loadStoredTreeCollapsed();
+  const key = storedTreeFoldKey(view, module, id);
+  if (collapsed.has(key)) collapsed.delete(key);
+  else collapsed.add(key);
+  try { localStorage.setItem(STORED_TREE_COLLAPSED_KEY, JSON.stringify([...collapsed])); }
+  catch (_) { return; }
+  if (view === 'archive') renderArchive();
+  else renderTrash();
+}
+function visibleStoredTree(items, view, module) {
+  const rows = orderedStoredTree(items);
+  const collapsed = loadStoredTreeCollapsed();
+  const visible = [];
+  let hiddenBelow = null;
+  rows.forEach((row, index) => {
+    if (hiddenBelow !== null && row.depth > hiddenBelow) return;
+    hiddenBelow = null;
+    const hasChildren = !!rows[index + 1] && rows[index + 1].depth > row.depth;
+    const folded = hasChildren && collapsed.has(storedTreeFoldKey(view, module, row.item.id));
+    visible.push({ ...row, hasChildren, folded });
+    if (folded) hiddenBelow = row.depth;
+  });
+  return visible;
+}
+function storedTreeToggle(view, module, item, hasChildren, folded) {
+  if (!hasChildren) return '<span class="stored-tree-toggle-spacer" aria-hidden="true"></span>';
+  const action = escapeHtml(`toggleStoredTree(${JSON.stringify(view)},${JSON.stringify(module)},${JSON.stringify(item.id)})`);
+  return `<button type="button" class="stored-tree-toggle" onclick="${action}" aria-expanded="${!folded}" aria-label="${folded ? '展开子项' : '折叠子项'}" title="${folded ? '展开子项' : '折叠子项'}"><i data-lucide="${folded ? 'chevron-right' : 'chevron-down'}" class="lucide-icon" style="width:14px;height:14px;"></i></button>`;
 }
 
 // ── 从回收站恢复 ──
@@ -402,10 +450,11 @@ function renderTrash() {
       <div class="trash-items">`;
     
     if (module === 'todos') {
-      orderedStoredTree(trash).forEach(({ item, depth }) => {
+      visibleStoredTree(trash, 'trash', module).forEach(({ item, depth, hasChildren, folded }) => {
         const deletedDate = formatDate(new Date(item.deletedAt));
         html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
+            ${storedTreeToggle('trash', module, item, hasChildren, folded)}
             <span class="trash-item-type-badge todo">待办</span>
             <span class="trash-item-name">${escapeHtml(item.text ? item.text.slice(0, 60) : item.title || '（无标题）')}</span>
             <span class="trash-item-date">删除于 ${deletedDate}</span>
@@ -417,11 +466,12 @@ function renderTrash() {
         </div>`;
       });
     } else if (module === 'notes') {
-      orderedStoredTree(trash).forEach(({ item, depth }) => {
+      visibleStoredTree(trash, 'trash', module).forEach(({ item, depth, hasChildren, folded }) => {
         const isFolder = item.type === 'folder';
         const deletedDate = formatDate(new Date(item.deletedAt));
         html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
+            ${storedTreeToggle('trash', module, item, hasChildren, folded)}
             <span class="trash-item-type-badge note">${isFolder ? '文件夹' : '笔记'}</span>
             <span class="trash-item-name">${escapeHtml(item.title || '（无标题）')}</span>
             <span class="trash-item-date">删除于 ${deletedDate}</span>
@@ -552,10 +602,11 @@ function renderArchive() {
       <div class="trash-items">`;
     
     if (module === 'todos') {
-      orderedStoredTree(archive).forEach(({ item, depth }) => {
+      visibleStoredTree(archive, 'archive', module).forEach(({ item, depth, hasChildren, folded }) => {
         const archivedDate = formatDate(new Date(item.archivedAt));
         html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
+            ${storedTreeToggle('archive', module, item, hasChildren, folded)}
             <span class="trash-item-type-badge todo">待办</span>
             <span class="trash-item-name">${escapeHtml(item.text ? item.text.slice(0, 60) : item.title || '（无标题）')}</span>
             <span class="trash-item-date">归档于 ${archivedDate}</span>
@@ -567,11 +618,12 @@ function renderArchive() {
         </div>`;
       });
     } else if (module === 'notes') {
-      orderedStoredTree(archive).forEach(({ item, depth }) => {
+      visibleStoredTree(archive, 'archive', module).forEach(({ item, depth, hasChildren, folded }) => {
         const isFolder = item.type === 'folder';
         const archivedDate = formatDate(new Date(item.archivedAt));
         html += `<div class="trash-item" style="--tree-depth:${depth}">
           <div class="trash-item-info">
+            ${storedTreeToggle('archive', module, item, hasChildren, folded)}
             <span class="trash-item-type-badge note">${isFolder ? '文件夹' : '笔记'}</span>
             <span class="trash-item-name">${escapeHtml(item.title || '（无标题）')}</span>
             <span class="trash-item-date">归档于 ${archivedDate}</span>

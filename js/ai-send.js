@@ -269,7 +269,11 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   updateAiSendButton();
 
   // 附件在消息里的展示信息（displayUrl 在下面处理附件时补上：可能是 Files API 的小缩略图）
-  const displayAttachments = currentAttachments.map(a => ({ name: a.name, size: a.size, displayUrl: a.dataUrl || '' }));
+  const displayAttachments = [];
+  for (const a of currentAttachments) {
+    const original = await retainAiAttachmentFile(a, conv.id);
+    displayAttachments.push({ name: a.name, size: a.size, displayUrl: a.dataUrl || '', ...original });
+  }
 
   // Process attachments: Kimi uses its file API; other models use local PDF conversion or text/image input.
   let docTexts = '';
