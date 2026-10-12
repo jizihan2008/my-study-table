@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v210';
+const VERSION = 'mst-v211';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -59,7 +59,7 @@ const PRECACHE_URLS = [
   './js/skills.js?v=20261010-r1',
   './js/prompts.js?v=20260912-r3',
   './js/env.js?v=20260911-r2',
-  './js/core.js?v=20261012-protocol-r2',
+  './js/core.js?v=20261012-storage-r1',
   './js/timer.js?v=20261012-types',
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
@@ -69,7 +69,7 @@ const PRECACHE_URLS = [
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20261008-r1',
   './js/sync-diff.js?v=20261008-r1',
-  './js/sync-collections.js?v=20261010-r2',
+  './js/sync-collections.js?v=20261012-storage-r1',
   './js/sync.js?v=20261010-r2',
   './js/sync-logs.js?v=20261008-r1',
   './js/ai-utils.js?v=20261012-protocol-r2-timer',

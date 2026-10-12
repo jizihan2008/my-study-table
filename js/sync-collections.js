@@ -274,7 +274,7 @@
     applyingRemote = true;
     try {
       if (typeof saveData === 'function') {
-        if (!saveData(collection, items)) throw new Error('保存远端记录到本地失败');
+        if (!saveData(collection, items)) throw new Error('保存远端记录到本地失败' + (saveData.lastError ? '：' + saveData.lastError : ''));
       } else writeJson(collection, items);
     } finally { applyingRemote = false; }
   }
@@ -292,7 +292,7 @@
     applyingRemote = true;
     try {
       if (typeof saveData === 'function') {
-        if (!saveData(collection, ordered)) throw new Error('保存云端排序失败');
+        if (!saveData(collection, ordered)) throw new Error('保存云端排序失败' + (saveData.lastError ? '：' + saveData.lastError : ''));
       } else writeJson(collection, ordered);
     } finally { applyingRemote = false; }
     return true;

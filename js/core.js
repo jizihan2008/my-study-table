@@ -59,7 +59,35 @@ function compactStoredAiConversations() {
 // 旧版本已经写入的重复消息不会等到下一次聊天保存才释放空间。
 // 在同步模块启动前立即原位压缩，确保冲突处理有空间写入必要的状态。
 compactStoredAiConversations();
-function saveData(key, data) {
+function isStorageQuotaError(error) {
+  return !!error && (error.name === 'QuotaExceededError' || error.name === 'NS_ERROR_DOM_QUOTA_REACHED'
+    || error.code === 22 || error.code === 1014 || /quota|storage.*full/i.test(error.message || ''));
+}
+function recoverStorageSpace() {
+  // Only reconstructable caches and diagnostic metadata may be reduced here.
+  // Never touch notes, attachments, pending conflicts, dirty flags or outboxes.
+  let freed = compactStoredAiConversations();
+  for (const key of ['study_sync_event_log_v1', 'study_sync_conflict_history']) {
+    try {
+      const raw = localStorage.getItem(key);
+      if (!raw) continue;
+      const entries = JSON.parse(raw);
+      if (!Array.isArray(entries) || entries.length <= 10) continue;
+      const smaller = JSON.stringify(entries.slice(0, 10));
+      if (smaller.length >= raw.length) continue;
+      localStorage.setItem(key, smaller);
+      freed += raw.length - smaller.length;
+    } catch (_) { /* Recovery cannot make a failed save destructive. */ }
+  }
+  return freed;
+}
+function storageSaveErrorMessage(error) {
+  if (isStorageQuotaError(error)) return '浏览器本地存储空间不足，自动释放缓存后仍无法保存；请先导出备份，再检查本地存储用量。原有数据和待处理冲突已保留';
+  if (error && error.name === 'SecurityError') return '浏览器禁止访问本地存储，请检查浏览器的网站存储权限';
+  return String(error && error.message || error || '本地存储写入失败');
+}
+function saveData(key, data, quotaRetry = false) {
+  saveData.lastError = '';
   try {
     const persistedData = key === 'study_ai_convs' ? compactAiConversationsForStorage(data)
       : key === 'study_notes_v2' && Array.isArray(data) ? data.map(note => {
@@ -87,7 +115,11 @@ function saveData(key, data) {
     }
     return true;
   } catch (e) {
-    console.error('[saveData] 保存失败 (' + key + '):', e.message);
+    if (!quotaRetry && isStorageQuotaError(e) && recoverStorageSpace() > 0) {
+      return saveData(key, data, true);
+    }
+    saveData.lastError = storageSaveErrorMessage(e);
+    console.error('[saveData] 保存失败 (' + key + '):', e && e.message);
     // Fallback: try removing problematic _rawLogs and _ prefixed fields before retry
     // 注意：必须保留 _dailyReport/_hasUnread/_hasUnreadAuto 等关键标记字段，否则日报对话标记会丢失导致重复新建
     // 同理保留对话级 AI 设置 _toolGroups（接口组勾选）/_deletePolicy（删除策略）
@@ -95,6 +127,7 @@ function saveData(key, data) {
       try {
         const cleaned = compactAiConversationsForStorage(data);
         localStorage.setItem(key, JSON.stringify(cleaned));
+        saveData.lastError = '';
         console.warn('[saveData] 已压缩 AI 对话后重试成功');
         return true;
       } catch (e2) {
