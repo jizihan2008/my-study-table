@@ -946,6 +946,27 @@
     return true;
   }
 
+  function removeEmptyLineBesideFold(backward) {
+    const element = caretElement();
+    const paragraph = element?.closest('p, div');
+    if (!paragraph || paragraph === host || paragraph.matches('.note-fold-body')
+      || !isEmptyEditingNode(paragraph)
+      || paragraph.querySelector('details, summary, input, [contenteditable="false"]')) return false;
+    const fold = backward ? paragraph.previousElementSibling : paragraph.nextElementSibling;
+    if (!fold?.matches('details.note-fold') || fold.open) return false;
+    const summary = Array.from(fold.children).find(node => node.matches('summary'));
+    if (!summary) return false;
+    // Native deletion across a closed details boundary can remove its hidden
+    // body. Remove only the empty line and put the caret in the visible title.
+    paragraph.remove();
+    const range = document.createRange();
+    range.selectNodeContents(summary);
+    range.collapse(!backward);
+    restoreRange(range);
+    notifyChange({ historyBoundary: true });
+    return true;
+  }
+
   function getEditableFoldSummary(event) {
     const summary = event.target?.closest?.('summary');
     const fold = summary?.parentElement;
@@ -1018,7 +1039,7 @@
         return;
       }
       if (!event.isComposing && ['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)
-        && removeSingleEmptyQuote()) event.preventDefault();
+        && (removeEmptyLineBesideFold(event.inputType === 'deleteContentBackward') || removeSingleEmptyQuote())) event.preventDefault();
     });
     if (host.id === 'notesRichEditor' && typeof root.onNotePreviewScroll === 'function') {
       host.addEventListener('scroll', root.onNotePreviewScroll);
@@ -1078,7 +1099,8 @@
         return;
       }
       if (!modifier && !event.altKey && !event.shiftKey && !event.isComposing
-        && (event.key === 'Backspace' || event.key === 'Delete') && removeSingleEmptyQuote()) {
+        && (event.key === 'Backspace' || event.key === 'Delete')
+        && (removeEmptyLineBesideFold(event.key === 'Backspace') || removeSingleEmptyQuote())) {
         event.preventDefault();
         event.stopPropagation();
         return;

@@ -313,8 +313,9 @@ test('tool groups are chosen by the conversation and cover every tool', () => {
   const groupKeys = inVm('AI_TOOL_GROUPS.map(g => g.key)');
   const allTools = inVm('Object.keys(AI_TOOLS)');
   const grouped = inVm('AI_TOOL_GROUPS.flatMap(g => g.tools)');
-  // 每个工具恰好属于一个组；接口组目录 = 全部工具
-  assert.deepEqual([...grouped].sort(), [...allTools].sort());
+  // 业务工具恰好属于一个组；用户已发送的本对话图片有独立的只读复查入口。
+  const visualTools = inVm('AI_CONVERSATION_VISUAL_TOOLS');
+  assert.deepEqual([...grouped, ...visualTools].sort(), [...allTools].sort());
   assert.equal(new Set(grouped).size, grouped.length);
 
   // 未设置过 → 沿用记住的选择；再没有 → 全部开放
@@ -478,6 +479,52 @@ test('reply-chain controls appear once after tools and before the next user', ()
   ctx.setAiLoading(conv.id, true);
   ctx.renderAiMessages();
   assert.equal(container.innerHTML.includes('class="ai-msg-regen"'), false);
+});
+
+test('visual tool messages remain in one reply chain and never become editable questions', () => {
+  for (const role of ['tool', 'system']) {
+    const ctx = harness();
+    ctx.atob = atob;
+    const conv = { id: 'visual-chain' };
+    ctx.initTreeOnConv(conv);
+    const user = ctx.appendMessage(conv, { role: 'user', content: '查看图片和PDF' });
+    ctx.appendMessage(conv, { role: 'assistant', content: '正在读取' });
+    const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=';
+    for (const tool of ['read_library_pdf_page', 'read_conversation_image']) {
+      ctx.appendMessage(conv, { role, content: '读取成功', _toolInfo: { toolNames: tool } });
+      ctx.appendMessage(conv, { role: 'user', content: '工具视觉资料', visionFiles: [{ type: 'image_url', dataUrl: png, name: '第2页' }],
+        _toolInfo: { toolNames: tool, pageImages: true } });
+    }
+    const visual = conv.messages.at(-1).id;
+    ctx.appendMessage(conv, { role: 'assistant', content: '最终结论' });
+    assert.equal(ctx.lastUserNodeIdInActivePath(conv), user);
+    assert.equal(ctx.branchInfoAt(conv, visual), null);
+    assert.equal(ctx.collectNestedUserIds(conv, user).length, 0);
+    assert.equal(ctx.createBranchFromEdit(conv, visual, '不要编辑工具资料'), null);
+    const container = { innerHTML: '', scrollTop: 0, scrollHeight: 100, clientHeight: 100 };
+    ctx.document.getElementById = id => id === 'aiMessages' ? container : null;
+    ctx.getActiveConv = () => conv;
+    ctx.formatAiContent = text => text || '';
+    ctx.escapeHtml = text => String(text || '');
+    ctx.escapeAttr = text => String(text || '').replace(/"/g, '&quot;');
+    ctx.renderAiMessages();
+    assert.equal((container.innerHTML.match(/class="ai-reply-chain-toggle"/g) || []).length, 1);
+    assert.equal((container.innerHTML.match(/class="ai-msg-regen"/g) || []).length, 1);
+    assert.equal((container.innerHTML.match(/class="ai-chat-msg user"/g) || []).length, 1);
+    assert.match(container.innerHTML, /最终结论/);
+    assert.match(container.innerHTML, new RegExp(`regenerateAiMessage\\(${user}\\)`));
+    vm.runInContext(`_aiExpandedReplyChains.add(encodeURIComponent(JSON.stringify(['visual-chain', ${user}, ${conv.messages[1].id}, ${conv.messages.at(-1).id}])))`, ctx);
+    ctx.renderAiMessages();
+    assert.match(container.innerHTML, /PDF 页面读取/);
+    assert.match(container.innerHTML, /重新读取对话图片/);
+    assert.equal((container.innerHTML.match(/class="ai-tool-visual-images"/g) || []).length, 2);
+    assert.equal((container.innerHTML.match(/class="ai-chat-msg user"/g) || []).length, 1);
+    const api = ctx.buildApiMessages(conv, null, { model: 'deepseek-flash', contextBudget: 32768 });
+    assert.equal(api.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : []).length, 2);
+    assert.equal(ctx.trimConvMessages(conv, 3), true);
+    assert.equal(ctx.lastUserNodeIdInActivePath(conv), conv.messages[0].id);
+    assert.equal(ctx.isAiUserQuestion(conv.messages[0]), true);
+  }
 });
 
 test('extracted attachment text appears only inside its fold while API content stays intact', () => {
@@ -1537,6 +1584,14 @@ test('PDF image mode renders every page by default and honors an explicit diagno
   assert.deepEqual(rendered, [2, 3]);
   assert.deepEqual(Array.from(selected.pageNumbers), [2, 3]);
   assert.equal(selected.truncated, false);
+  rendered.length = 0;
+  destroyed = false;
+  await assert.rejects(ctx.renderPdfAttachmentPages({}, { startPage: 5, endPage: 5, strictRange: true }), /页码超出范围/);
+  assert.deepEqual(rendered, []);
+  assert.equal(destroyed, true);
+  const page = await ctx.renderPdfAttachmentPages({}, { startPage: 3, endPage: 3, strictRange: true });
+  assert.deepEqual(rendered, [3]);
+  assert.deepEqual(Array.from(page.pageNumbers), [3]);
 });
 
 // 逐页渲染是主线程重活：必须逐页回报进度，并且能在页间被取消，

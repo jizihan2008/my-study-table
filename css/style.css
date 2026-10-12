@@ -3981,6 +3981,8 @@ body.ai-message-immersive-open { overflow: hidden; }
 }
 /* 点击缩略图后的全屏查看 */
 .msg-attachment-item { display: inline-flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.ai-tool-visual-images { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.ai-tool-visual-images .msg-attachment-item { max-width: 180px; font-size: 12px; overflow-wrap: anywhere; }
 .msg-attachment-reinsert {
   border: 1px solid var(--border); border-radius: 6px; padding: 3px 7px;
   color: var(--primary); background: var(--path-bg); font-size: 12px; cursor: pointer;
@@ -4771,6 +4773,25 @@ body.ai-message-immersive-open { overflow: hidden; }
 .timer-centered .timer-btn-manual {
   display: none;
 }
+.timer-activity-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+.timer-activity-field select {
+  padding: 6px 10px;
+  border: 1px solid var(--primary);
+  border-radius: 8px;
+  background: var(--todo-bg);
+  color: var(--text);
+  font: inherit;
+}
+.timer-activity-field select:focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+}
 .timer-context-row {
   width: min(100%, 720px);
   display: flex;
@@ -5176,8 +5197,11 @@ body.ai-message-immersive-open { overflow: hidden; }
 }
 .timer-no-focus-badge {
   margin-left: 4px;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: var(--border);
   font-size: 11px;
-  opacity: 0.8;
+  white-space: nowrap;
 }
 .timer-manual-badge {
   margin-left: 3px;
@@ -5261,12 +5285,21 @@ body.ai-message-immersive-open { overflow: hidden; }
   background: rgba(79,110,247,0.04);
 }
 .timer-history-name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
   color: var(--text);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   text-align: left;
 }
+.timer-history-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.timer-history-name > .timer-no-focus-badge { flex-shrink: 0; }
 .timer-history-time {
   color: var(--text);
   font-weight: 600;
@@ -12442,3 +12475,8 @@ html.env-pwa .electron-only { display: none; }
 .prompt-report-collapse-hint::after { content: '展开'; }
 .prompt-report-field[open] > summary .prompt-report-collapse-hint::after { content: '折叠'; }
 .prompt-report-field-content { padding-top: 10px; }
+
+@media (max-width: 560px) {
+  #timerContainer .timer-history-item { grid-template-columns: minmax(0, 1fr) auto; }
+  #timerContainer .timer-history-time { grid-column: auto; text-align: right; }
+}

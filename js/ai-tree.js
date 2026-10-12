@@ -9,6 +9,15 @@
 // ═══════════════════════════════════════════════
 
 // 判断某 conv 是否已采用树结构（迁移过）
+// API 要求工具图片使用 user 角色传输，但它不是用户提问，不能切断回复链。
+function isAiToolVisualMessage(message) {
+  return !!(message && message.role === 'user' && message._toolInfo?.pageImages);
+}
+
+function isAiUserQuestion(message) {
+  return !!(message && message.role === 'user' && !isAiToolVisualMessage(message));
+}
+
 function isTreeConv(conv) {
   return !!(conv && conv.tree && conv.activePath);
 }
@@ -39,7 +48,7 @@ function mergeDuplicateUserBranches(conv) {
     const seen = new Map();
     for (const childId of [...parent.children]) {
       const child = tree[childId];
-      if (!child || child.role !== 'user') continue;
+      if (!isAiUserQuestion(child)) continue;
       const key = signature(child);
       const existingId = seen.get(key);
       if (existingId == null) {
@@ -86,7 +95,7 @@ function reattachContinuationAfterStoppedSibling(conv) {
   if (!conv || !conv.tree || !Array.isArray(conv.activePath)) return false;
   const tree = conv.tree;
   const path = conv.activePath;
-  const isContinuation = node => node && node.role === 'user'
+  const isContinuation = node => isAiUserQuestion(node)
     && /^(?:请)?(?:继续|接着(?:说|写|完成)?|往下(?:说|写)?|continue|go on)[\s.!。！]*$/i.test(String(node.content || '').trim());
   let changed = false;
 
@@ -97,7 +106,7 @@ function reattachContinuationAfterStoppedSibling(conv) {
     // 找到该继续消息所属交换的最上层 user，以及当前路径从它进入的 assistant 分支。
     let questionIndex = -1;
     for (let j = i - 1; j >= 1; j--) {
-      if (tree[path[j]] && tree[path[j]].role === 'user') { questionIndex = j; break; }
+      if (isAiUserQuestion(tree[path[j]])) { questionIndex = j; break; }
     }
     if (questionIndex < 0) continue;
     const question = tree[path[questionIndex]];
@@ -146,7 +155,7 @@ function activePathNodes(conv) {
 
 // 取活跃路径上"非系统"的用户/助手消息（供标题生成等使用，兼容旧语义）
 function activePathUserAssistantNodes(conv) {
-  return activePathNodes(conv).filter(n => n.role === 'user' || n.role === 'assistant');
+  return activePathNodes(conv).filter(n => isAiUserQuestion(n) || n.role === 'assistant');
 }
 
 // ── 迁移：把旧线性 conv（含 _candidates）转换为树 ──
@@ -169,10 +178,10 @@ function migrateConvToTree(conv) {
     if (!m || typeof m !== 'object') continue;
 
     // 跳过逻辑：在候选 user 之后、遇到下一个 user 之前，跳过所有独立消息
-    if (skipUntilUser && m.role !== 'user') continue;
+    if (skipUntilUser && !isAiUserQuestion(m)) continue;
 
     // 有候选的 user 消息：把每个候选的整条链作为兄弟分支展开
-    if (m.role === 'user' && Array.isArray(m._candidates) && m._candidates.length > 0) {
+    if (isAiUserQuestion(m) && Array.isArray(m._candidates) && m._candidates.length > 0) {
       skipUntilUser = true;
       // 1) 先在 prevId 下创建该 user 消息节点本身
       const userNodeId = genId();
@@ -204,7 +213,11 @@ function migrateConvToTree(conv) {
             timestamp: cm.timestamp ?? cm.createdAt ?? null,
             reasoning: cm.reasoning,
             keyName: cm.keyName,
-            tool_calls: cm.tool_calls,
+            tool_calls:cm.tool_calls,
+            tool_call_id:cm.tool_call_id,
+            _apiContent:cm._apiContent,
+            reasoning_content:cm.reasoning_content,
+            _malformedToolProtocol:cm._malformedToolProtocol,
             _toolInfo: cm._toolInfo,
             _kimiSearch: cm._kimiSearch,
             _kimiSearchResult: cm._kimiSearchResult,
@@ -221,7 +234,7 @@ function migrateConvToTree(conv) {
     }
 
     // 普通消息：直接挂在 prevId 下（遇到 user 时结束跳过）
-    if (m.role === 'user') skipUntilUser = false;
+    if (isAiUserQuestion(m)) skipUntilUser = false;
     const nodeId = genId();
     tree[nodeId] = {
       id: nodeId,
@@ -234,6 +247,10 @@ function migrateConvToTree(conv) {
       attachments: m.attachments,
       visionFiles: m.visionFiles,
       tool_calls: m.tool_calls,
+      tool_call_id:m.tool_call_id,
+      reasoning_content:m.reasoning_content,
+      _malformedToolProtocol:m._malformedToolProtocol,
+      _apiContent:m._apiContent,
       _toolInfo: m._toolInfo,
       _kimiSearch: m._kimiSearch,
       _kimiSearchResult: m._kimiSearchResult,
@@ -353,7 +370,7 @@ function createBranch(conv, baseNodeId, msg) {
 function createBranchFromEdit(conv, baseUserId, newContent, extraFields) {
   ensureTree(conv);
   const baseUser = conv.tree[baseUserId];
-  if (!conv.tree || !baseUser || baseUser.role !== 'user') return null;
+  if (!conv.tree || !isAiUserQuestion(baseUser)) return null;
   const parentId = baseUser.parentId;
   if (!conv.tree[parentId]) return null;
   const nodeId = genId();
@@ -433,7 +450,7 @@ function branchTipNodeId(conv, nodeId) {
 function branchInfoAt(conv, nodeId) {
   if (!isTreeConv(conv) || !conv.tree[nodeId]) return null;
   const node = conv.tree[nodeId];
-  if (node.role !== 'user') return null;
+  if (!isAiUserQuestion(node)) return null;
   if (!node.children || node.children.length < 2) return null;
   // 活跃路径上当前接续的 child
   let activeChild = null;
@@ -459,7 +476,7 @@ function lastUserNodeIdInActivePath(conv) {
   if (!isTreeConv(conv)) return null;
   for (let i = conv.activePath.length - 1; i >= 0; i--) {
     const n = conv.tree[conv.activePath[i]];
-    if (n && n.role === 'user') return n.id;
+    if (isAiUserQuestion(n)) return n.id;
   }
   return null;
 }
@@ -480,7 +497,7 @@ function collectNestedUserIds(conv, userId) {
     const cid = stack.pop();
     if (!tree[cid] || seen.has(cid)) continue;
     seen.add(cid);
-    if (tree[cid].role === 'user') out.push(cid);
+    if (isAiUserQuestion(tree[cid])) out.push(cid);
     for (let i = (tree[cid].children || []).length - 1; i >= 0; i--) stack.push(tree[cid].children[i]);
   }
   const depthOf = (id) => { let d = 0, cur = id; while (cur && tree[cur]) { if (tree[cur].role === 'root') break; d++; cur = tree[cur].parentId; } return d; };
@@ -503,7 +520,9 @@ function trimConvMessages(conv, maxLen) {
     if (p && p.children && p.children.length > 1) return false; // 有分叉，不裁剪
   }
 
-  const keep = nodes.slice(-maxLen).map(n => ({ role: n.role, content: n.content, time: n.time, reasoning: n.reasoning, keyName: n.keyName, attachments: n.attachments, visionFiles: n.visionFiles, tool_calls: n.tool_calls, _toolInfo: n._toolInfo, _malformedToolProtocol: n._malformedToolProtocol, _dsmlToolProtocol: n._dsmlToolProtocol, _toolRoundCleanText: n._toolRoundCleanText, _kimiSearch: n._kimiSearch, _kimiSearchResult: n._kimiSearchResult }));
+  let start = Math.max(0, nodes.length - maxLen);
+  while (start > 0 && !isAiUserQuestion(nodes[start])) start--; // Keep complete call/result batches.
+  const keep = nodes.slice(start).map(n => ({ tool_call_id:n.tool_call_id, _apiContent:n._apiContent, reasoning_content:n.reasoning_content, role: n.role, content: n.content, time: n.time, reasoning: n.reasoning, keyName: n.keyName, attachments: n.attachments, visionFiles: n.visionFiles, tool_calls: n.tool_calls, _toolInfo: n._toolInfo, _malformedToolProtocol: n._malformedToolProtocol, _dsmlToolProtocol: n._dsmlToolProtocol, _toolRoundCleanText: n._toolRoundCleanText, _kimiSearch: n._kimiSearch, _kimiSearchResult: n._kimiSearchResult }));
   keep.forEach((message, index) => {
     const original = nodes[nodes.length - keep.length + index];
     message.timestamp = Object.prototype.hasOwnProperty.call(original, 'timestamp')

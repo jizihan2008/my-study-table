@@ -53,6 +53,7 @@ function safeSaveAiConvs() {
           // 对话级 AI 设置（接口组 / 删除策略）也必须保留
           if (c._toolGroups !== undefined) copy._toolGroups = c._toolGroups;
           if (c._deletePolicy !== undefined) copy._deletePolicy = c._deletePolicy;
+          if (c._rawLogDropped || c._rawLogs?.length) copy._rawLogDropped = (c._rawLogDropped || 0) + (c._rawLogs?.length || 0);
           return copy;
         }
         return c;
@@ -76,7 +77,8 @@ function safeSaveAiConvs() {
         ...(c._hasUnread ? { _hasUnread: true } : {}),
         ...(c._hasUnreadAuto ? { _hasUnreadAuto: true } : {}),
         ...(Array.isArray(c._toolGroups) ? { _toolGroups: c._toolGroups } : {}),
-        ...(c._deletePolicy ? { _deletePolicy: c._deletePolicy } : {})
+        ...(c._deletePolicy ? { _deletePolicy:c._deletePolicy } : {}),
+        ...((c._rawLogDropped || c._rawLogs?.length) ? { _rawLogDropped:(c._rawLogDropped || 0) + (c._rawLogs?.length || 0) } : {})
       }));
       try {
         const minimalJson = JSON.stringify(minimal);
@@ -200,6 +202,7 @@ function getTodoTimerStr(todoId) {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
     let timerMs = 0;
     for (const rec of records) {
+      if (rec.affectsFocus === false) continue;
       const rid = rec.targetId || rec.todoId;
       if (rid && allIds.includes(rid)) timerMs += rec.totalMs;
     }

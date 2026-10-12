@@ -713,6 +713,68 @@ function getAiConversationAttachments(conv = getActiveConv()) {
   return entries.reverse();
 }
 
+// 只索引当前分支中的视觉资料；不把缩略图当成可阅读的原图，也不按同名文件猜测身份。
+function getAiConversationVisualResources(conv) {
+  const resources = [];
+  (conv?.messages || []).forEach((message, messageIndex) => {
+    (message.visionFiles || []).forEach((vf, imageIndex) => {
+      if (!vf || vf.conversationImageId || !['image_url', 'file'].includes(vf.type)) return;
+      const name = String(vf.name || '图片');
+      const pdfMatch = name.match(/（PDF 第 (\d+)\/(\d+) 页）$/);
+      const sourceName = vf.sourceName || (pdfMatch ? name.slice(0, pdfMatch.index) : name);
+      const attachment = (message.attachments || []).find(a => vf.originalFileId
+        ? a.originalFileId === vf.originalFileId
+        : a.name === sourceName);
+      resources.push({
+        imageId: 'visual_' + encodeURIComponent(String(message.id ?? messageIndex)) + '_' + imageIndex,
+        name, sourceName, kind: vf.pdfPage || pdfMatch ? 'pdf_page' : 'image',
+        pdfPage: vf.pdfPage || (pdfMatch ? Number(pdfMatch[1]) : null),
+        pageCount: vf.pageCount || (pdfMatch ? Number(pdfMatch[2]) : null),
+        originalFileId: vf.originalFileId || attachment?.originalFileId || null,
+        message, visionFile: vf
+      });
+    });
+  });
+  return resources;
+}
+
+function getAiVisualResourceMetadata(resource) {
+  return { imageId: resource.imageId, name: resource.name, sourceName: resource.sourceName,
+    kind: resource.kind, pdfPage: resource.pdfPage, pageCount: resource.pageCount };
+}
+
+async function readAiConversationVisualResource(resource, conv, apiCfg) {
+  const vf = resource.visionFile;
+  let images = [];
+  // 内联图片和 PDF 页面缓存保留的是发送分辨率，可直接重新提供视觉输入。
+  if (vf.type === 'image_url' && vf.dataUrl && inspectInlineImageForApi(vf.dataUrl).ok) {
+    images = [{ ...vf }];
+  } else {
+    let row = _aiOriginalFileFallback.get(resource.originalFileId);
+    if (!row && resource.originalFileId) {
+      try { row = await aiAttachmentStore('readonly', store => store.get(resource.originalFileId)); }
+      catch (_) { /* 下面统一报告缺少原文件 */ }
+    }
+    if (!row || row.convId !== conv.id) throw new Error('原文件未保存在本机，需要重新上传原文件；不能用预览缩略图替代');
+    const file = new File([row.blob], row.name, { type: row.type, lastModified: row.lastModified });
+    if (resource.kind === 'pdf_page') {
+      const rendered = await renderPdfAttachmentPages(file, { startPage: resource.pdfPage, endPage: resource.pdfPage,
+        strictRange: true, isAborted: () => typeof isAiStopRequested === 'function' && isAiStopRequested(conv.id) });
+      if (rendered.aborted || rendered.dataUrls.length !== 1) throw new Error('页面读取已取消或不完整');
+      images = [{ type: 'image_url', dataUrl: rendered.dataUrls[0], name: resource.name }];
+    } else {
+      const split = await splitTallImageForApi(file);
+      const urls = split ? split.dataUrls : [(await downscaleImageForApi(file)).dataUrl];
+      images = urls.map((dataUrl, index) => ({ type: 'image_url', dataUrl,
+        name: urls.length > 1 ? `${resource.name}（第 ${index + 1}/${urls.length} 段）` : resource.name }));
+    }
+  }
+  if (typeof isAiStopRequested === 'function' && isAiStopRequested(conv.id)) throw new Error('图片读取已取消');
+  if (images.some(image => !inspectInlineImageForApi(image.dataUrl).ok)) throw new Error('图片格式或尺寸不兼容，请重新上传');
+  // 工具回传的图片不要再次注册为新来源，原文件身份始终不变。
+  return images.map(image => ({ ...image, conversationImageId: resource.imageId }));
+}
+
 async function reinsertAiAttachment(attachment, convId) {
   let row = _aiOriginalFileFallback.get(attachment.originalFileId);
   try {
@@ -1084,6 +1146,10 @@ async function renderPdfAttachmentPages(file, opts = {}) {
   let totalBytes = 0;
   const startedAt = (typeof performance !== 'undefined' && performance.now) ? performance.now() : Date.now();
   try {
+    if (opts.strictRange && (!Number.isSafeInteger(opts.startPage) || !Number.isSafeInteger(opts.endPage)
+      || opts.startPage < 1 || opts.endPage < opts.startPage || opts.endPage > pdf.numPages)) {
+      throw new Error(`PDF 页码超出范围（共 ${pdf.numPages} 页）`);
+    }
     if (onPage) { try { onPage({ done: 0, total: renderCount, pageNo: range.startPage }); } catch (e) {} }
     for (let pageNo = range.startPage; pageNo < range.startPage + renderCount; pageNo++) {
       if (isAborted && isAborted()) { aborted = true; break; }

@@ -107,3 +107,11 @@ test('daily report timer label falls back to 自由计时 only when nothing is k
   assert.equal(reportLabel({ name: '晨读英语' }), '⏱ 晨读英语');
   assert.equal(reportLabel({}), '自由计时');
 });
+
+
+test('non-focus records show readable types in history and daily reports', () => {
+  const rest = { id: 5, date: localDateStr(new Date()), name: '午休', totalMs: 60000, activityType: 'rest', affectsFocus: false };
+  assert.match(renderHistory([rest]), /title="不计入专注时间">休息/);
+  assert.equal(reportLabel(rest), '休息（非专注） · ⏱ 午休');
+  assert.equal(reportLabel({ affectsFocus: false }), '其它（非专注） · 自由计时');
+});

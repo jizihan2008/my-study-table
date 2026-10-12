@@ -1471,6 +1471,8 @@ function openSettingsModal() {
   document.getElementById('settingsDeveloperMode').checked = s.developerMode;
   document.getElementById('settingsDebug').checked = isDebugMode();
   loadWebSearchSettings();
+  const libraryPdfSizeInput = document.getElementById('settingsLibraryPdfMaxMiB');
+  if (libraryPdfSizeInput) libraryPdfSizeInput.value = getAiLibraryPdfMaxMiB();
   loadEveningReportSettings();
   loadDayReportSettings();
   loadMorningReportSettings();
@@ -1512,6 +1514,17 @@ function openSettingsModal() {
   if (focusInput) focusInput.value = Math.max(2, Math.min(5, maxFocusCount));
   // Load books KB settings
   loadBooksKbSettings();
+}
+
+function saveLibraryPdfSizeSetting() {
+  const input = document.getElementById('settingsLibraryPdfMaxMiB');
+  if (!input) return;
+  const value = Number(input.value);
+  const valid = input.value.trim() !== '' && Number.isSafeInteger(value) && value >= 0
+    && Number.isSafeInteger(value * 1024 * 1024);
+  input.setCustomValidity(valid ? '' : '请输入非负整数，0 表示不限文件大小');
+  if (!valid) { input.reportValidity(); return; }
+  localStorage.setItem('study_ai_library_pdf_max_mib', String(value));
 }
 
 function closeSettingsModal(e) {
@@ -1694,7 +1707,8 @@ function _checkIdleReminder() {
   }
 
   // 正在专注：空闲计时器归零并保持为零（不累加、不提醒）
-  const isFocusing = (typeof timerRunning !== 'undefined' && timerRunning);
+  const isFocusing = (typeof timerRunning !== 'undefined' && timerRunning)
+    && (typeof timerActivityType === 'undefined' || timerActivityType === 'focus');
   if (isFocusing) {
     if (accum !== 0) _resetIdleAccum();
     return;
@@ -3936,7 +3950,11 @@ function formatDailyReportTimerLabel(record) {
     if (task && task.title) parts.push('🗺️ ' + task.title);
   }
 
-  return parts.length > 0 ? parts.join(' · ') : '自由计时';
+  const label = parts.length > 0 ? parts.join(' · ') : '自由计时';
+  if (record.affectsFocus === false) {
+    return (record.activityType === 'rest' ? '休息' : '其它') + '（非专注） · ' + label;
+  }
+  return label;
 }
 
 function collectDailyReportData() {

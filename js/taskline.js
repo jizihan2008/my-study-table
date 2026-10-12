@@ -207,6 +207,7 @@ function tlCheckCondition(cond) {
         const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
         let total = 0;
         for (const r of records) {
+          if (r.affectsFocus === false) continue;
           const wantedType = cond.targetType || 'todo';
           const targetId = wantedType === 'goal'
             ? (r.goalId ?? (r.targetType === 'goal' ? r.targetId : null))
@@ -507,6 +508,7 @@ function tlTimerProgress(cond) {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
     let total = 0;
     for (const r of records) {
+      if (r.affectsFocus === false) continue;
       const wantedType = cond.targetType || 'todo';
       const targetId = wantedType === 'goal'
         ? (r.goalId ?? (r.targetType === 'goal' ? r.targetId : null))

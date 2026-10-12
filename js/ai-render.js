@@ -654,7 +654,9 @@ function renderAiMessages() {
     if (!n || !n.role || n.role === 'root') continue;
     const m = n; // 树节点即消息（含全部字段 + nodeId）
     const nodeId = n.id;
-    if (m.role === 'user') {
+    if (isAiToolVisualMessage(m)) {
+      renderItems.push({ type: 'system', msg: m, idx, nodeId });
+    } else if (isAiUserQuestion(m)) {
       // 用户消息处的分支 = 编辑产生的"不同问题"分支（同父下的 user 兄弟数，含自己）
       // 渲染层用现有 siblingNodeIds 过滤 role 计算，不改底层逻辑
       // curIndex：当前 user 在同父 user 兄弟中的序号（从 1 开始）
@@ -662,7 +664,7 @@ function renderAiMessages() {
       if (isTreeConv(conv)) {
         const parentId = conv.tree[nodeId] ? conv.tree[nodeId].parentId : null;
         const allSib = parentId && conv.tree[parentId] ? conv.tree[parentId].children : [];
-        const userSibs = allSib.filter(sid => conv.tree[sid] && conv.tree[sid].role === 'user');
+        const userSibs = allSib.filter(sid => isAiUserQuestion(conv.tree[sid]));
         userSib = userSibs.length || 1;
         userCur = userSibs.indexOf(nodeId) >= 0 ? userSibs.indexOf(nodeId) + 1 : 1;
       }
@@ -684,12 +686,12 @@ function renderAiMessages() {
         asstCur = asstSibs.indexOf(nodeId) >= 0 ? asstSibs.indexOf(nodeId) + 1 : 1;
       }
       renderItems.push({ type: 'assistant', msg: m, idx, nodeId, branchCount: sib, branchCurIndex: asstCur });
-    } else if (m.role === 'system') {
+    } else if (m.role === 'system' || m.role === 'tool') {
       renderItems.push({ type: 'system', msg: m, idx, nodeId });
     }
   }
   const streamingDraft = _aiStreamingDrafts.get(String(conv.id));
-  // 一次提问后的全部非 user 消息属于同一回复链。操作栏只放在链尾，
+  // 一次真实提问后的全部回复和工具资料属于同一回复链。操作栏只放在链尾，
   // 候选导航仍指向 user 下的首节点，而不是最后一次工具调用后的回复。
   let exchangeUser = null;
   let exchangeStart = null;
@@ -840,6 +842,11 @@ function renderAiMessages() {
     // For system messages with tool call info, render as friendly notification
     if (m._toolInfo) {
       const friendlyLabels = {
+        'list_conversation_images': '🖼️ 本对话图片清单',
+        'read_conversation_image': '🖼️ 重新读取对话图片',
+        'list_library_files': '📁 文件库列表',
+        'read_library_file': '📄 文件内容读取',
+        'read_library_pdf_page': '📕 PDF 页面读取',
         'list_todos': '📋 待办事项列表',
         'get_todo_detail': '📋 待办详情',
         'get_today_status': '📅 今日状态',
@@ -896,6 +903,10 @@ function renderAiMessages() {
       dataContent = dataContent.replace(/\n{3,}/g, '\n\n'); // 压缩多余空行
       dataContent = dataContent.replace(/\n+$/, ''); // trim trailing newlines
       dataContent = escapeHtml(dataContent);
+      const visualHtml = isAiToolVisualMessage(m)
+        ? '<div class="ai-tool-visual-images">' + (m.visionFiles || [])
+          .filter(vf => typeof vf?.dataUrl === 'string' && /^data:image\//i.test(vf.dataUrl))
+          .map(vf => `<span class="msg-attachment-item"><span class="msg-attachment-img"><img src="${escapeAttr(vf.dataUrl)}" alt="${escapeAttr(vf.name || '工具图片')}" onclick="openAiAttachmentImage(this)"></span><span>${escapeHtml(vf.name || '工具图片')}</span></span>`).join('') + '</div>' : '';
       const statusHtml = (m._toolInfo.outcomes || []).map(outcome => {
         const icon = outcome.status === 'success' ? '✅' : (outcome.status === 'duplicate' ? '🛡️' : outcome.status === 'skipped' ? '⏹️' : '❌');
         const duration = outcome.durationMs ? ` · ${outcome.durationMs}ms` : '';
@@ -907,10 +918,10 @@ function renderAiMessages() {
           <div class="ai-chat-bubble ai-chat-tool-call">
             <div class="ai-tool-call-toggle" onclick="toggleToolCallData(this)">
               <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="6 9 12 15 18 9"/></svg>
-              ${label}
+              ${label}${isAiToolVisualMessage(m) ? ' · 图片资料' : ''}
             </div>
             ${statusHtml ? `<div class="ai-tool-status-row">${statusHtml}</div>` : ''}
-            <div class="ai-tool-call-data">${dataContent}</div>
+            <div class="ai-tool-call-data">${dataContent}${visualHtml}</div>
           </div>
         </div>
       ` + exchangeFooter;
@@ -1035,7 +1046,7 @@ function renderAiMessages() {
     const lastMsg = conv.messages[conv.messages.length - 1];
     // Show typing indicator if the last message is from user (waiting for first AI response)
     // or if the last message is a tool result (waiting for AI to process it)
-    if (lastMsg.role === 'user' || (lastMsg.role === 'system' && lastMsg._toolInfo)) {
+    if (lastMsg.role === 'user' || (['system','tool'].includes(lastMsg.role) && lastMsg._toolInfo)) {
       container.insertAdjacentHTML('beforeend', `
         <div class="ai-chat-msg assistant">
           <div class="ai-chat-avatar">🤖</div>
@@ -1193,7 +1204,7 @@ function renderAiTreePanel() {
     let guard = 0;
     while (cur && tree[cur] && guard++ < 300) {
       const n = tree[cur];
-      if (n.role === 'user') break; // 嵌套交换起点，停止折叠
+      if (isAiUserQuestion(n)) break; // 嵌套交换起点，停止折叠
       if (n.role === 'assistant' && n.content && String(n.content).trim()) {
         lastReply = { nodeId: cur, content: n.content };
       }
@@ -1283,7 +1294,7 @@ function renderAiTreePanel() {
       let guard2 = 0;
       while (cur2 && tree[cur2] && guard2++ < 300) {
         const n2 = tree[cur2];
-        if (n2.role === 'user') break;
+        if (isAiUserQuestion(n2)) break;
         endNodeId = cur2;
         const kids2 = n2.children || [];
         if (kids2.length === 0) break;
@@ -1293,7 +1304,7 @@ function renderAiTreePanel() {
       if (endNode && endNode.children) {
         for (const kid of endNode.children) {
           const k = tree[kid];
-          if (k && k.role === 'user') {
+          if (isAiUserQuestion(k)) {
             html += renderExchangeGroup(k.id, depth + 1);
           }
         }

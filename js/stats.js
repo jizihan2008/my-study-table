@@ -39,6 +39,7 @@ function collectTimerStats(days) {
   const dailyMinutes = {}, dailySessions = {};
   range.forEach(d => { dailyMinutes[d] = 0; dailySessions[d] = 0; });
   records.forEach(r => {
+    if (r.affectsFocus === false) return;
     // timer records use { date: "2026-07-24", totalMs: number }
     const d = (r.date || '').slice(0, 10);
     if (dailyMinutes[d] !== undefined) {
@@ -75,11 +76,12 @@ function collectOverallStats() {
   const notes = JSON.parse(localStorage.getItem('study_notes_v2') || '[]');
   const checkin = JSON.parse(localStorage.getItem('study_checkin') || '{"dates":[],"streak":0}');
   const habits = JSON.parse(localStorage.getItem('study_habits_v2') || '[]');
-  const totalMin = records.reduce((s, r) => s + (r.totalMs || 0) / 60000, 0);
-  const activeDays = new Set(records.map(r => (r.date || '').slice(0, 10)).filter(Boolean)).size;
+  const focusRecords = records.filter(r => r.affectsFocus !== false);
+  const totalMin = focusRecords.reduce((s, r) => s + (r.totalMs || 0) / 60000, 0);
+  const activeDays = new Set(focusRecords.map(r => (r.date || '').slice(0, 10)).filter(Boolean)).size;
   return {
     totalTodos: todos.length, completedTodos: todos.filter(t => t.done).length,
-    totalMin, totalSessions: records.length,
+    totalMin, totalSessions: focusRecords.length,
     totalNotes: notes.filter(n => n.type === 'note').length, activeDays,
     streak: checkin.streak || 0, totalHabits: habits.length
   };
@@ -314,7 +316,7 @@ function renderHeatmap(cId) {
   const todos = JSON.parse(localStorage.getItem('study_todos_v2') || '[]');
   const activityMap = {};
   for (let i = 0; i < days; i++) activityMap[getPastDateStr(i)] = 0;
-  records.forEach(r => { const d = (r.date || '').slice(0, 10); if (activityMap[d] !== undefined) activityMap[d] += (r.totalMs || 0) / 60000; });
+  records.forEach(r => { if (r.affectsFocus === false) return; const d = (r.date || '').slice(0, 10); if (activityMap[d] !== undefined) activityMap[d] += (r.totalMs || 0) / 60000; });
   todos.forEach(t => { if (t.done && t.completedAt) { const d = t.completedAt.slice(0, 10); if (activityMap[d] !== undefined) activityMap[d] += 15; } });
   const allVals = Object.values(activityMap).filter(v => v > 0); const maxVal = Math.max(1, ...allVals);
   const cs = 14, cg = 3, lw = 24;

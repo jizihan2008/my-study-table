@@ -136,6 +136,62 @@ test('candidate switching keeps reply-chain messages and expansion state separat
   await expect(page.locator('#aiMessages')).not.toContainText('第一候选');
 });
 
+for (const native of [false, true]) test(`visual tool results fold into the original exchange and preserve candidate navigation (${native ? 'native' : 'tag'})`, async ({}, testInfo) => {
+  await page.evaluate(native => {
+    switchTab('ai'); createNewConv();
+    const conv = getActiveConv();
+    const user = appendMessage(conv, { role: 'user', content: '视觉资料提问' });
+    appendMessage(conv, { role: 'assistant', content: '第一候选最终结果' });
+    createBranch(conv, user, { role: 'assistant', content: '第二候选开始读取' });
+    const canvas = document.createElement('canvas'); canvas.width = 320; canvas.height = 180;
+    const context = canvas.getContext('2d'); context.fillStyle = '#dbeafe'; context.fillRect(0, 0, 320, 180);
+    context.fillStyle = '#1e40af'; context.font = '24px sans-serif'; context.fillText('PDF Page 2', 60, 90);
+    for (const tool of ['read_library_pdf_page', 'read_conversation_image']) {
+      appendMessage(conv, { role: native ? 'tool' : 'system', content: '读取完成',
+        _toolInfo: { toolNames: tool, outcomes: [{ action: tool, ok: true, status: 'success' }] } });
+      appendMessage(conv, { role: 'user', content: '工具返回的视觉资料',
+        visionFiles: [{ type: 'image_url', dataUrl: canvas.toDataURL(), name: '教材第2页' }],
+        _toolInfo: { toolNames: tool, pageImages: true } });
+    }
+    appendMessage(conv, { role: 'assistant', content: '第二候选最终结论' });
+    setAiLoading(conv.id, false); renderAiMessages();
+  }, native);
+  const toggle = page.locator('#aiMessages .ai-reply-chain-toggle');
+  await expect(toggle).toHaveCount(1);
+  await expect(page.locator('#aiMessages .ai-exchange-footer')).toHaveCount(1);
+  await expect(page.locator('#aiMessages .ai-chat-msg.user')).toHaveCount(1);
+  await expect(page.locator('#aiMessages')).toContainText('第二候选最终结论');
+  await expect(page.locator('#aiMessages .ai-chat-tool-call')).toHaveCount(0);
+  await toggle.click();
+  await expect(page.locator('#aiMessages .ai-tool-visual-images img')).toHaveCount(2);
+  await expect(page.locator('#aiMessages .ai-chat-msg.user')).toHaveCount(1);
+  await expect(page.locator('#aiMessages')).toContainText('PDF 页面读取');
+  await expect(page.locator('#aiMessages')).toContainText('重新读取对话图片');
+  await expect(page.locator('#aiMessages .ai-exchange-footer')).toHaveCount(1);
+  await page.locator('#aiMessages').evaluate(async element => {
+    await Promise.all(element.getAnimations({ subtree: true }).filter(animation =>
+      animation.effect.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})));
+  });
+  await page.screenshot({ path: testInfo.outputPath('visual-reply-chain-expanded.png') });
+  await page.locator('#aiMessages .ai-exchange-footer button[title="上一个候选"]').click();
+  await expect(page.locator('#aiMessages')).toContainText('第一候选最终结果');
+  await expect(page.locator('#aiMessages')).not.toContainText('第二候选最终结论');
+  await page.locator('#aiMessages .ai-exchange-footer button[title="下一个候选"]').click();
+  await expect(page.locator('#aiMessages')).toContainText('第二候选最终结论');
+  await expect(page.locator('#aiMessages .ai-tool-visual-images img')).toHaveCount(2);
+  await page.evaluate(() => openAiTreeFloat());
+  await expect(page.locator('#aiTreeFloatBody .ai-tree-exchange-group')).toHaveCount(2);
+  await expect(page.locator('#aiTreeFloatBody')).toContainText('第二候选最终结论');
+  await page.evaluate(() => closeAiTreeFloat());
+  await toggle.click();
+  await expect(page.locator('#aiMessages .ai-tool-visual-images img')).toHaveCount(0);
+  await page.locator('#aiMessages').evaluate(async element => {
+    await Promise.all(element.getAnimations({ subtree: true }).filter(animation =>
+      animation.effect.getComputedTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => {})));
+  });
+  await page.screenshot({ path: testInfo.outputPath('visual-reply-chain-collapsed.png') });
+});
+
 test('multiline tool protocol stays hidden in cached replies, reasoning and streaming drafts', async () => {
   const result = await page.evaluate(async () => {
     switchTab('ai');
@@ -832,4 +888,44 @@ test('deepseek files api uploads a photo once and later turns reference the same
   const allInline = chatBodies[1].messages.flatMap(m => Array.isArray(m.content) ? m.content : [])
     .filter(part => part.type === 'image_url');
   expect(allInline.length).toBe(0);
+});
+
+
+test('native protocol recovers from invalid JSON, writes once and preserves pairs and logs after reload', async()=>{
+  const out=await page.evaluate(async()=>{
+    document.getElementById('settingsModal')?.classList.remove('open');switchTab('ai');createNewConv();const conv=getActiveConv();conv._toolGroups=['todo'];
+    appendMessage(conv,{role:'user',content:'创建一个“原生协议验证待办”'});
+    const original=window.fetch;let round=0,pairs=true;const bodies=[];
+    const call=(id,name,args)=>({id,type:'function',function:{name,arguments:typeof args==='string'?args:JSON.stringify(args)}});
+    window.fetch=async(url,options)=>{
+      if(!String(url).includes('/chat/completions'))return original(url,options);
+      const body=JSON.parse(options.body);bodies.push(body);round++;
+      const expected=body.messages.filter(m=>m.tool_calls).flatMap(m=>m.tool_calls.map(c=>c.id));
+      const actual=body.messages.filter(m=>m.role==='tool').map(m=>m.tool_call_id);
+      pairs=pairs && JSON.stringify(expected)===JSON.stringify(actual);
+      const calls=round===1?[call('read','list_todos',{search:'原生协议验证待办'})]:round===2?[call('bad','add_todo','{"text":')]:round===3?[call('create','add_todo',{text:'原生协议验证待办'})]:null;
+      return new Response(JSON.stringify({choices:[{message:calls?{content:'',reasoning_content:'核对参数后执行',tool_calls:calls}:{content:'原生协议验证完成。',reasoning_content:'已核对成功回执'},finish_reason:calls?'tool_calls':'stop'}]}),{status:200,headers:{'content-type':'application/json'}});
+    };
+    try{
+      const output=await runToolCallLoop({apiKey:'fake',model:'deepseek-flash',baseUrl:'https://api.deepseek.com',deepThink:true,contextBudget:131072},conv,null,()=>{});
+      appendMessage(conv,{role:'assistant',content:output.finalCleanText,reasoning:output.finalReasoning});safeSaveAiConvs();renderAiChat();
+      return {id:conv.id,round,pairs,created:todos.filter(t=>t.text==='原生协议验证待办').length,error:output.outcomes.find(o=>!o.ok)?.code,
+        tagsInRequest:bodies.some(b=>b.messages.some(m=>m.role==='assistant' && String(m.content).includes('<tool_call>'))),
+        repair:bodies[2].messages.find(m=>m.tool_call_id==='bad')?.content,
+        logs:conv._rawLogs.length,hasTasks:!!conv._aiTask,taskModule:typeof executeAiTaskTool};
+    }finally{window.fetch=original;}
+  });
+  expect(out.round).toBe(4);expect(out.pairs).toBe(true);expect(out.created).toBe(1);expect(out.error).toBe('INVALID_ARGUMENT_JSON');
+  expect(out.tagsInRequest).toBe(false);expect(out.repair).toContain('保持原生协议');expect(out.logs).toBe(4);
+  expect(out.hasTasks).toBe(false);expect(out.taskModule).toBe('undefined');
+  await expect(page.locator('#aiMessages')).toContainText('原生协议验证完成');
+  await page.reload();await page.waitForFunction(()=>typeof getActiveConv==='function'&&getActiveConv()?.tree);
+  const restored=await page.evaluate(id=>{
+    activeConvId=id;switchTab('ai');renderAiChat();const conv=getActiveConv();
+    const messages=buildApiMessages(conv,null,{model:'deepseek-flash',baseUrl:'https://api.deepseek.com',deepThink:true,contextBudget:131072});
+    return {calls:messages.filter(m=>m.tool_calls).flatMap(m=>m.tool_calls.map(c=>c.id)),results:messages.filter(m=>m.role==='tool').map(m=>m.tool_call_id),
+      logs:conv._rawLogs.length,requestTools:conv._rawLogs[0].request.tools.length,reasoning:messages.filter(m=>m.role==='assistant').every(m=>Object.hasOwn(m,'reasoning_content'))};
+  },out.id);
+  expect(restored.calls).toEqual(['read','bad','create']);expect(restored.results).toEqual(restored.calls);
+  expect(restored.logs).toBe(4);expect(restored.requestTools).toBeGreaterThan(0);expect(restored.reasoning).toBe(true);
 });

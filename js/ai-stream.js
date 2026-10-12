@@ -63,6 +63,7 @@
     if (!response || !response.body || typeof response.body.getReader !== 'function') {
       throw new Error('当前运行环境不支持流式响应读取');
     }
+    let sawDone = false;
     const state = { content: '', reasoning: '', toolCalls: [], finishReason: '', usage: null };
     const emit = (contentDelta, reasoningDelta) => {
       if (typeof onDelta === 'function') {
@@ -78,7 +79,7 @@
       }
     };
     const parser = createSseParser(data => {
-      if (data === '[DONE]') return;
+      if (data === '[DONE]') { sawDone = true; return; }
       let chunk;
       try { chunk = JSON.parse(data); }
       catch (error) { throw new Error('流式响应包含无效 JSON：' + error.message); }
@@ -110,6 +111,7 @@
       }
       parser.feed(decoder.decode());
       parser.flush();
+      if (!sawDone && !state.finishReason) throw new Error('流式连接提前结束，未收到完成标记，工具操作未执行');
       return state;
     } finally {
       try { reader.releaseLock(); } catch {}

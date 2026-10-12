@@ -427,3 +427,55 @@ test('时间轴中插入了其他计时记录时，前后相同记录也不会�
   assert.equal(merged.length, 3);
   assert.equal(merged.filter(record => record.name === 'A').length, 2);
 });
+
+
+test('休息类型刷新恢复后保存仍为非专注记录', () => {
+  const now = Date.now();
+  const harness = restore({ savedState: {
+    running: false, elapsed: 60000, name: '午休', activityType: 'rest',
+    sessions: [{ start: now - 60000, end: now }], savedAt: now
+  } });
+  assert.equal(vm.runInContext('timerActivityType', harness.ctx), 'rest');
+  vm.runInContext('timerSave()', harness.ctx);
+  assert.equal(harness.getRecords()[0].activityType, 'rest');
+  assert.equal(harness.getRecords()[0].affectsFocus, false);
+  assert.equal(harness.getRecords()[0].totalMs, 60000);
+});
+
+test('旧计时状态没有分类时仍保存为专注', () => {
+  const now = Date.now();
+  const harness = restore({ savedState: {
+    running: false, elapsed: 60000,
+    sessions: [{ start: now - 60000, end: now }], savedAt: now
+  } });
+  vm.runInContext('timerSave()', harness.ctx);
+  assert.equal(harness.getRecords()[0].activityType, 'focus');
+  assert.equal(harness.getRecords()[0].affectsFocus, true);
+});
+
+test('运行中切换类型先保存原来的专注并继续休息计时', () => {
+  const harness = createContext();
+  vm.runInContext(`
+    timerRunning = true;
+    timerSessionStart = Date.now() - 60000;
+    timerSessionName = '复习';
+    setTimerActivityType('rest');
+  `, harness.ctx);
+  const record = harness.getRecords()[0];
+  assert.equal(record.activityType, 'focus');
+  assert.equal(record.affectsFocus, true);
+  assert.ok(record.totalMs >= 60000);
+  assert.equal(vm.runInContext('timerActivityType', harness.ctx), 'rest');
+  assert.equal(timerState(harness).running, true);
+  assert.equal(timerState(harness).elapsed, 0);
+  assert.equal(harness.state().activityType, 'rest');
+});
+
+test('相同名称的休息与其它时段不会自动合并', () => {
+  const { ctx } = createContext();
+  const records = [
+    { id: 1, name: '间歇', date: '2026-10-12', activityType: 'rest', affectsFocus: false, totalMs: 1000, sessions: [{ start: 1000, end: 2000 }] },
+    { id: 2, name: '间歇', date: '2026-10-12', activityType: 'other', affectsFocus: false, totalMs: 1000, sessions: [{ start: 2000, end: 3000 }] }
+  ];
+  assert.equal(ctx.mergeAdjacentTimerRecords(records).length, 2);
+});

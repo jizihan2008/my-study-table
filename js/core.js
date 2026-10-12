@@ -30,7 +30,7 @@ function saveExpandedTodoIds() {
 // 两者同时落盘会把 AI 正文保存两遍，很快耗尽 localStorage 的站点配额。
 function compactAiConversationsForStorage(data) {
   if (!Array.isArray(data)) return data;
-  const KEEP_UNDERSCORE = new Set(['_dailyReport', '_hasUnread', '_hasUnreadAuto', '_toolGroups', '_deletePolicy']);
+  const KEEP_UNDERSCORE = new Set(['_dailyReport', '_hasUnread', '_hasUnreadAuto', '_toolGroups', '_deletePolicy', '_rawLogs', '_rawLogDropped']);
   return data.map(conv => {
     if (!conv || typeof conv !== 'object') return conv;
     const compact = {};

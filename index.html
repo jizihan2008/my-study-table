@@ -21,7 +21,7 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261010-r2">
+<link rel="stylesheet" href="css/style.css?v=20261012-visual-fold-r1">
 <link rel="stylesheet" href="css/workspace.css?v=20261005-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -262,7 +262,7 @@
             <div class="notes-rich-editor" id="notesRichEditor" contenteditable="true"
                  role="textbox" aria-multiline="true" aria-label="笔记正文"
                  data-placeholder="在这里记录你的想法、笔记、备忘……"
-                 spellcheck="true" onscroll="onNotePreviewScroll()"></div>
+                 spellcheck="false" onscroll="onNotePreviewScroll()"></div>
             <textarea class="notes-editor-textarea" id="notesTextarea"
                       placeholder="在这里记录你的想法、笔记、备忘……&#10;内容会自动保存 ✨"
                       spellcheck="false"
@@ -296,7 +296,7 @@
             <div class="notes-split-preview notes-editor-preview active" id="notesSplitPreview"></div>
             <div class="notes-rich-editor notes-split-rich-editor" id="notesSplitRichEditor"
                  contenteditable="true" role="textbox" aria-multiline="true" aria-label="右栏笔记富文本编辑器"
-                 data-placeholder="在这里编辑第二篇笔记" spellcheck="true"></div>
+                 data-placeholder="在这里编辑第二篇笔记" spellcheck="false"></div>
           </section>
           <div class="notes-editor-footer">
             <span id="notesWordCount">0 字</span>
@@ -973,6 +973,14 @@
         </div>
 
         <button class="btn-save-settings" onclick="showApiKeyForm()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;margin-bottom:12px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加 Key</button>
+
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title">文件库 PDF 读取</div>
+        <div class="settings-field" style="margin-bottom:8px;">
+          <label for="settingsLibraryPdfMaxMiB">PDF 文件大小上限（MiB）</label>
+          <input type="number" id="settingsLibraryPdfMaxMiB" min="0" step="1" value="64" onchange="saveLibraryPdfSizeSetting()">
+          <span class="hint">修改后自动保存，适用于所有 AI 的文件库 PDF 文字和页面图片读取。默认 64 MiB，填 0 表示不限文件大小；按整个 PDF 的大小检查，较大的文件会占用更多内存。每次图片读取仍最多 49 页。</span>
+        </div>
 
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title"><i data-lucide="image-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 图片附件上传</div>
@@ -1764,7 +1772,7 @@
 <script src="js/markdown.js?v=20261004-r3"></script>
 <script src="js/note-reading-renderer.js?v=20261004-r2"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261004-r2"></script>
+<script src="js/note-rich-editor.js?v=20261012-r1"></script>
 <script src="js/platform.js?v=20260826-r2"></script>
 <script src="js/secrets.js?v=20260827-r2"></script>
 <script src="js/data-store.js?v=20260930-r1"></script>
@@ -1773,7 +1781,7 @@
 <script src="js/theme-model.js?v=20260914-r5"></script>
 <script src="js/liquid-glass.js?v=20260929-r1"></script>
 <script src="js/nav-shortcuts.js?v=20260920-r1"></script>
-<script src="js/core.js?v=20260929-r2"></script>
+<script src="js/core.js?v=20261012-protocol-r2"></script>
 <script src="js/trash.js?v=20261010-r1"></script>
 <script src="js/todos.js?v=20260922-r1"></script>
 <script src="js/notes.js?v=20261004-r4"></script>
@@ -1782,17 +1790,17 @@
 <script src="js/links.js?v=20260813-r1"></script>
 <script src="js/today.js?v=20261004-r2"></script>
 <!-- AI 模块（按依赖顺序加载） -->
-<script src="js/ai-utils.js?v=20260929-r1"></script>
-<script src="js/ai-tree.js?v=20260912-r3"></script>
-<script src="js/ai-conv.js?v=20261010-r1"></script>
-<script src="js/ai-attach.js?v=20261010-r1"></script>
-<script src="js/ai-render.js?v=20261010-r1"></script>
-<script src="js/ai-tools.js?v=20260924-r1"></script>
+<script src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
+<script src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
+<script src="js/ai-conv.js?v=20261012-protocol-r2"></script>
+<script src="js/ai-attach.js?v=20261012-vision-r1"></script>
+<script src="js/ai-render.js?v=20261012-visual-fold-r1"></script>
+<script src="js/ai-tools.js?v=20261012-vision-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
-<script src="js/ai-stream.js?v=20260827-r1"></script>
-<script src="js/ai-api.js?v=20260923-r1"></script>
-<script src="js/ai-send.js?v=20261010-r1"></script>
+<script src="js/ai-stream.js?v=20261012-protocol-r2"></script>
+<script src="js/ai-api.js?v=20261012-vision-r1"></script>
+<script src="js/ai-send.js?v=20261012-visual-fold-r1"></script>
 <script src="js/skills.js?v=20261010-r1"></script>
 <script src="js/prompts.js?v=20260923-r2"></script>
 <script src="js/music.js"></script>
@@ -1802,7 +1810,7 @@
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
 <script src="js/todo-queue.js?v=20261004-r3"></script>
-<script src="js/settings.js?v=20261010-r2"></script>
+<script src="js/settings.js?v=20261012-timer-types"></script>
 <script src="js/utils.js?v=20261004-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
@@ -1822,10 +1830,10 @@
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
 <script src="js/calendar.js?v=20260825-r10"></script>
-<script src="js/taskline.js?v=20260914-r14"></script>
-<script src="js/timer.js?v=20261004-r1"></script>
+<script src="js/taskline.js?v=20261012-focus"></script>
+<script src="js/timer.js?v=20261012-types"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
-<script src="js/stats.js?v=20260923-hover"></script>
+<script src="js/stats.js?v=20261012-focus"></script>
 <script src="js/updater.js?v=20260802-r1"></script>
 <!-- 好友系统 -->
 <script src="lib/supabase/supabase.js"></script>

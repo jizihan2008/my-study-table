@@ -105,3 +105,63 @@ test('legacy messages explain that the original file needs uploading', async ({ 
   expect(alertMessage).toContain('重新上传原文件');
   await expect(page.locator('#aiAttachPreview')).toBeHidden();
 });
+
+test('after reload and context eviction the AI can read a PDF page and original uploaded image through native tools', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await setup(page);
+  await page.evaluate(() => createNewConv());
+  await page.locator('#aiFileInput').setInputFiles({ name: '视觉教材.pdf', mimeType: 'application/pdf', buffer: buildTestPdf(3) });
+  await page.evaluate(() => { toggleAttachPdfMode(0); return sendAiMessage(); });
+  await page.evaluate(async () => {
+    // 建立一张可辨识的原图，上传路径历史只留小缩略图和 file_id。
+    const canvas = document.createElement('canvas'); canvas.width = 800; canvas.height = 600;
+    const context = canvas.getContext('2d'); context.fillStyle = 'red'; context.fillRect(0, 0, 800, 600);
+    const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+    const file = new File([blob], '红色图.png', { type: 'image/png' });
+    const reference = await retainAiAttachmentFile({ name: file.name, file }, getActiveConvId());
+    const thumb = await downscaleImageForApi(file, { maxEdge: 32 });
+    appendMessage(getActiveConv(), { role: 'user', content: '这张图', attachments: [{ name: file.name, ...reference }],
+      visionFiles: [{ name: file.name, type: 'file', fileId: 'old-provider-id', dataUrl: thumb.dataUrl, originalFileId: reference.originalFileId }] });
+    appendMessage(getActiveConv(), { role: 'assistant', content: '第一轮回复' });
+    safeSaveAiConvs();
+  });
+  await page.reload();
+  const result = await page.evaluate(async () => {
+    const cfg = { apiKey: 'fake', model: 'deepseek-flash', name: '视觉测试', baseUrl: 'https://api.deepseek.com/v1', contextLimit: 1, contextBudget: 32768 };
+    window.getEffectiveApiConfig = () => cfg;
+    window.buildConversationSystemPrompt = () => 'Read visual material before answering.';
+    const conv = getActiveConv();
+    conv._toolGroups = [];
+    appendMessage(conv, { role: 'user', content: '重新看红色图和教材第2页' });
+    const resources = getAiConversationVisualResources(conv);
+    const targets = [resources.find(resource => resource.name === '红色图.png'), resources.find(resource => resource.pdfPage === 2)];
+    const requests = [];
+    window.callAiApi = async messages => {
+      requests.push(messages);
+      return requests.length === 1
+        ? { cleanText: '', rawReply: '', finishReason: 'tool_calls', toolCalls: targets.map((resource, index) => ({ action: 'read_conversation_image', params: { imageId: resource.imageId }, native: true, callId: 'read-image-' + index })) }
+        : { cleanText: '重新看到了图片和第2页', rawReply: '重新看到了图片和第2页', toolCalls: [], finishReason: 'stop' };
+    };
+    const output = await runToolCallLoop(cfg, conv);
+    const pictureParts = messages => messages.flatMap(message => Array.isArray(message.content) ? message.content.filter(part => part.type === 'image_url') : []);
+    const images = pictureParts(requests[1]);
+    const sizes = await Promise.all(images.map(async part => {
+      const image = new Image(); image.src = part.image_url.url; await image.decode(); return [image.width, image.height];
+    }));
+    return { answer: output.finalCleanText, calls: requests.length, firstPictures: pictureParts(requests[0]).length,
+      notice: requests[0].find(message => String(message.content).startsWith('【历史视觉资料'))?.content,
+      sizes, toolReplies: requests[1].filter(message => message.role === 'tool').length,
+      finalResources: getAiConversationVisualResources(conv).length };
+  });
+  expect(result.calls).toBe(2);
+  expect(result.firstPictures).toBe(0);
+  expect(result.notice).toContain('视觉教材.pdf');
+  expect(result.notice).toContain('红色图.png');
+  expect(result.notice).toContain('read_conversation_image');
+  expect(result.toolReplies).toBe(2);
+  expect(result.sizes).toHaveLength(2);
+  expect(result.sizes[0]).toEqual([800, 600]);
+  expect(result.sizes[1][0]).toBeGreaterThan(500);
+  expect(result.finalResources).toBe(4);
+  expect(result.answer).toBe('重新看到了图片和第2页');
+});

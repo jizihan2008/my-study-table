@@ -414,6 +414,8 @@ function exportConvLog() {
         log.push(`  ${typeof m.content === 'string' ? m.content : safeJsonStringify(m.content)}`);
       }
 
+      if (m.tool_call_id) log.push('  tool_call_id：' + m.tool_call_id);
+      if (m.tool_calls) log.push('  原生 tool_calls：' + safeJsonStringify(m.tool_calls));
       if (m.reasoning) {
         log.push('');
         log.push('  🧠 深度思考：');
@@ -477,6 +479,7 @@ function exportConvLog() {
     });
 
     // ── Raw API Call Logs ──
+    log.push('原始请求日志按容量保留；已淘汰或存储降级省略 ' + (conv._rawLogDropped || 0) + ' 条。');
     const rawLogs = conv._rawLogs || [];
     if (rawLogs.length > 0) {
       log.push('='.repeat(70));

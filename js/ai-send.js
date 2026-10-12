@@ -295,6 +295,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   // Collect vision file references (base64 data URLs) for multimodal content
   let visionFiles = [];
   for (const a of currentAttachments) {
+    const visionStart = visionFiles.length;
     if (isAiStopRequested(conv.id)) break;
     if (isPdfFile(a.file)) {
       pdfIndex++;
@@ -340,6 +341,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
           rendered.dataUrls.forEach((dataUrl, index) => visionFiles.push({
             dataUrl,
             name: `${a.name}（PDF 第 ${rendered.pageNumbers[index]}/${rendered.pageCount} 页）`,
+            pdfPage: rendered.pageNumbers[index], pageCount: rendered.pageCount,
             type: 'image_url'
           }));
           if (rendered.truncated) {
@@ -496,6 +498,10 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
         const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
         if (idx >= 0) displayAttachments[idx].content = truncated;
       }
+      for (const vf of visionFiles.slice(visionStart)) {
+        vf.originalFileId = a.originalFileId || null;
+        vf.sourceName = a.name;
+      }
     } catch (err) {
       docTexts += `\n\n[附件：${a.name} — 读取失败: ${err.message}]`;
     }
@@ -542,9 +548,9 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   }
 
   // AI Auto-title — regenerate after every exchange
-  const shouldAutoTitle = conv.messages.filter(m => m.role === 'user').length >= 1;
+  const shouldAutoTitle = conv.messages.filter(isAiUserQuestion).length >= 1;
 
-  if (conv.title.startsWith('新对话 ') && conv.messages.filter(m => m.role === 'user').length === 1) {
+  if (conv.title.startsWith('新对话 ') && conv.messages.filter(isAiUserQuestion).length === 1) {
     conv.title = text ? (text.length > 20 ? text.slice(0, 20) + '…' : text) : '附件对话';
     safeSaveAiConvs();
     if (getActiveConvId() === conv.id) renderAiChat();
@@ -705,12 +711,12 @@ async function regenerateAiMessage(nodeId) {
       let cur = nodeId;
       while (cur && conv.tree[cur]) {
         const n = conv.tree[cur];
-        if (n.role === 'user') { userNodeId = cur; break; }
+        if (isAiUserQuestion(n)) { userNodeId = cur; break; }
         cur = n.parentId;
       }
     }
   }
-  if (!isTreeConv(conv) || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
+  if (!isTreeConv(conv) || !isAiUserQuestion(conv.tree[userNodeId])) return;
 
   await regenerateFromUserNode(conv, userNodeId);
 }
@@ -718,7 +724,7 @@ async function regenerateAiMessage(nodeId) {
 // 核心：从指定 user 节点重新生成回复（在其下新建分支）。
 // 被 regenerateAiMessage（换一条）与 sendEditedMessage（编辑后发送）复用。
 async function regenerateFromUserNode(conv, userNodeId, config) {
-  if (!conv || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
+  if (!conv || !isAiUserQuestion(conv.tree[userNodeId])) return;
   if (isAiLoading(conv.id)) return;
   const apiCfg = { ...(config || getEffectiveApiConfig()) };
   if (!apiCfg.apiKey) return;
@@ -803,12 +809,12 @@ async function sendEditedMessage(nodeId, newText) {
       let cur = nodeId;
       while (cur && conv.tree[cur]) {
         const n = conv.tree[cur];
-        if (n.role === 'user') { userNodeId = cur; break; }
+        if (isAiUserQuestion(n)) { userNodeId = cur; break; }
         cur = n.parentId;
       }
     }
   }
-  if (!isTreeConv(conv) || !conv.tree[userNodeId] || conv.tree[userNodeId].role !== 'user') return;
+  if (!isTreeConv(conv) || !isAiUserQuestion(conv.tree[userNodeId])) return;
 
   // 内容没有变化时不创建“看不出区别”的 user 分支。旧行为会显示 1/2，
   // 并把其中一条回复藏在另一版本下，用户会误以为聊天记录丢失。
@@ -1074,7 +1080,7 @@ function resumePendingAiReply(pending) {
   ensureTree(conv);
   const userNode = conv.tree && conv.tree[pending.userNodeId];
   // 仅当该节点确为 user 且其下尚无 assistant 回复（含工具中间消息）才续传，避免重复消耗 token
-  if (!userNode || userNode.role !== 'user') return;
+  if (!isAiUserQuestion(userNode)) return;
   const kids = userNode.children || [];
   const hasAssistantReply = kids.some(kid => conv.tree[kid] && conv.tree[kid].role === 'assistant');
   if (hasAssistantReply) return;
