@@ -22,7 +22,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
 <link rel="stylesheet" href="css/style.css?v=20261012-visual-fold-r1">
-<link rel="stylesheet" href="css/workspace.css?v=20261005-r1">
+<link rel="stylesheet" href="css/workspace.css?v=20261012-goal-notes-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -449,6 +449,17 @@
             <span class="today-section-title"><i data-lucide="timer" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 今日计时记录</span>
             <button type="button" class="today-timer-link" onclick="switchTab('timer')">查看全部 →</button>
           </div>
+          <div class="today-timer-toolbar">
+            <label class="today-timer-filter">时段类型
+              <select id="todayTimerTypeFilter" aria-label="今日计时记录时段类型" onchange="setTodayTimerTypeFilter(this.value)">
+                <option value="all">全部</option>
+                <option value="focus">专注</option>
+                <option value="rest">休息</option>
+                <option value="other">其它</option>
+              </select>
+            </label>
+            <button type="button" id="todayTimerExpand" class="today-timer-link" onclick="toggleTodayTimerRecordsExpanded()" aria-expanded="false" aria-controls="todayTimerRecords">展开全部</button>
+          </div>
           <div id="todayTimerRecords" class="today-timer-records"></div>
         </div>
         <div class="today-focus-card" id="todayFocusCard">
@@ -509,7 +520,10 @@
         <div class="today-schedule-card" id="todayScheduleCard">
           <div class="today-schedule-header">
             <span class="today-section-title"><i data-lucide="calendar-days" class="lucide-icon" aria-hidden="true"></i> 近日安排</span>
+            <div class="today-schedule-header-actions">
+              <button type="button" class="today-schedule-more" id="todayScheduleToggle" onclick="toggleTodayScheduleCollapsed()" aria-expanded="true" aria-controls="todayScheduleList" title="收起，仅显示今天的日程">收起</button>
             <button type="button" class="today-schedule-more" onclick="switchTab('calendar')">查看日历<i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
+            </div>
           </div>
           <div class="today-schedule-list" id="todayScheduleList"></div>
         </div>
@@ -1788,21 +1802,21 @@
 <script src="lib/file-library-order.js?v=20261004-r1"></script>
 <script src="js/file-library.js?v=20261004-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20261004-r2"></script>
+<script src="js/today.js?v=20261012-goal-notes-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
 <script src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
 <script src="js/ai-conv.js?v=20261012-protocol-r2"></script>
 <script src="js/ai-attach.js?v=20261012-vision-r1"></script>
 <script src="js/ai-render.js?v=20261012-visual-fold-r1"></script>
-<script src="js/ai-tools.js?v=20261012-vision-r1"></script>
+<script src="js/ai-tools.js?v=20261012-goal-notes-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20261012-protocol-r2"></script>
 <script src="js/ai-api.js?v=20261012-vision-r1"></script>
 <script src="js/ai-send.js?v=20261012-visual-fold-r1"></script>
 <script src="js/skills.js?v=20261010-r1"></script>
-<script src="js/prompts.js?v=20260923-r2"></script>
+<script src="js/prompts.js?v=20261012-goal-notes-r1"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260914-r5"></script>
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
@@ -1810,7 +1824,7 @@
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
 <script src="js/todo-queue.js?v=20261004-r3"></script>
-<script src="js/settings.js?v=20261012-timer-types"></script>
+<script src="js/settings.js?v=20261012-goal-notes-r1"></script>
 <script src="js/utils.js?v=20261004-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>

@@ -201,6 +201,15 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .today-dashboard .empty-state { padding: 24px 10px; }
 .today-timer-link { border: 0; background: transparent; color: var(--primary); font: inherit; font-size: 12px; cursor: pointer; flex-shrink: 0; padding: 4px; }
 .today-timer-records { max-height: 320px; overflow-y: auto; }
+.today-timer-records.expanded { max-height: none; overflow: visible; }
+.today-timer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.today-timer-filter { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
+.today-timer-filter select { width: auto; margin: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); color: var(--text); font: inherit; }
+.today-timer-toolbar :is(select, button):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.today-schedule-header { flex-wrap: wrap; }
+.today-schedule-header-actions { display: flex; align-items: center; gap: 12px; }
+.today-schedule-header-actions button { padding: 4px; border-radius: 6px; }
+.today-schedule-header-actions button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .today-timer-records .timer-history-item { grid-template-columns: minmax(0, 1fr) auto; }
 .today-timer-records .timer-history-name { white-space: normal; overflow-wrap: anywhere; }
 .today-timer-records .timer-history-session { overflow-wrap: anywhere; }
@@ -214,6 +223,23 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .today-focus-add-btn { font-size: 12px; padding: 11px; border-radius: 9px; background: var(--input-bg); }
 .today-focus-count, .today-review-count, .today-streak { font-size: 10px; padding: 3px 8px; border-radius: 6px; }
 .today-focus-item, .today-goal-item { border-radius: 9px; }
+.today-goal-item { flex-direction: column; align-items: stretch; gap: 4px; }
+.today-goal-main { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
+.today-goal-body { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
+.goal-note-edit { display: flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 3px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--primary); cursor: pointer; }
+.goal-note-edit .lucide-icon { width: 12px; height: 12px; }
+.goal-note-edit:hover { background: var(--accent-soft); border-color: var(--primary); }
+.goal-note-edit:focus-visible, .today-goal-note-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.today-goal-main :is(.todo-edit, .todo-delete) { opacity: 1; }
+@media (max-width: 600px) {
+  .today-goal-main { display: grid; grid-template-columns: 20px minmax(0, 1fr) repeat(3, 24px); align-items: start; }
+  .today-goal-check { grid-column: 1; grid-row: 1; margin-top: 2px; }
+  .today-goal-body { grid-column: 2; grid-row: 1; min-width: 0; }
+  .today-goal-main .goal-note-edit { grid-column: 3; grid-row: 1; }
+  .today-goal-main .todo-edit { grid-column: 4; grid-row: 1; }
+  .today-goal-main .todo-delete { grid-column: 5; grid-row: 1; }
+  .today-goal-main :is(.today-goal-due, .today-goal-timer) { grid-column: 2 / -1; }
+}
 
 /* 宽屏也使用自动隐藏抽屉，显隐统一由 .sidebar.open 控制。 */
 @media (min-width: 1101px) {

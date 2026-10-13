@@ -3877,6 +3877,7 @@ function collectReportLongTermGoals() {
       text: goal.text || '未命名目标',
       done: !!goal.done,
       dueDate: goal.dueDate || null,
+      note: String(goal.note || '').trim().slice(0, 160),
       content: String(goal.content || '').replace(/\s+/g, ' ').trim().slice(0, 500)
     }));
   } catch { return []; }
@@ -3886,7 +3887,8 @@ function formatReportLongTermGoals(goals) {
   if (!goals || goals.length === 0) return '  （尚未设置长期目标）';
   return goals.map(goal => `  - ${goal.done ? '✅' : '⬜'} ${goal.text}`
     + (goal.dueDate ? `（截止 ${goal.dueDate}）` : '')
-    + (goal.content ? `：${goal.content}` : '')).join('\n');
+    + (goal.content ? `：${goal.content}` : '')
+    + (goal.note ? `｜备注：${goal.note}` : '')).join('\n');
 }
 
 // ── Helper: collect yesterday's data for the daily report ──
@@ -3986,6 +3988,7 @@ function collectDailyReportData() {
 
   // Timer records for yesterday — with session details
   let ydayTimerMs = 0;
+  const ydayTimerTypeMs = { focus: 0, rest: 0, other: 0 };
   const ydayTimerSessions = []; // [{ timeRange, duration, targetName }]
   function formatTimeOnly(ts) {
     const d = new Date(ts);
@@ -4002,7 +4005,12 @@ function collectDailyReportData() {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
     for (const r of records) {
       if (r.date === yesterdayStr) {
-        ydayTimerMs += r.totalMs || 0;
+        const activityType = typeof getTimerActivityType === 'function' ? getTimerActivityType(r)
+          : (r.activityType === 'rest' || r.activityType === 'other' ? r.activityType : r.affectsFocus === false ? 'other' : 'focus');
+        const activityLabel = activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注';
+        const totalMs = Math.max(0, Number(r.totalMs) || 0);
+        ydayTimerMs += totalMs;
+        ydayTimerTypeMs[activityType] += totalMs;
         // Collect session details
         if (r.sessions && r.sessions.length > 0) {
           const targetName = formatDailyReportTimerLabel(r);
@@ -4010,12 +4018,12 @@ function collectDailyReportData() {
             const startStr = formatTimeOnly(s.start);
             const endStr = formatTimeOnly(s.end);
             const dur = s.end - s.start;
-            ydayTimerSessions.push({ timeRange: `${startStr} — ${endStr}`, duration: fmtTimer(dur), targetName });
+            ydayTimerSessions.push({ timeRange: `${startStr} — ${endStr}`, duration: fmtTimer(dur), targetName, activityType, activityLabel });
           }
         } else {
           // Record without session breakdown (e.g. debug mode)
           const targetName = formatDailyReportTimerLabel(r);
-          ydayTimerSessions.push({ timeRange: '全天', duration: fmtTimer(r.totalMs || 0), targetName });
+          ydayTimerSessions.push({ timeRange: '全天', duration: fmtTimer(totalMs), targetName, activityType, activityLabel });
         }
       }
     }
@@ -4089,6 +4097,10 @@ function collectDailyReportData() {
     ydayEditedNotes: ydayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     ydayTimerStr: ydayTimerMs > 0 ? fmtTimer(ydayTimerMs) : '无',
     ydayTimerSessions,
+    ydayTimerTypeTotals: Object.entries(ydayTimerTypeMs).map(([activityType, totalMs]) => ({
+      activityType, activityLabel: activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注',
+      totalMs, duration: totalMs > 0 ? fmtTimer(totalMs) : '0 分钟'
+    })),
     prevReport,
     isCheckedInToday: checkinData.dates.includes(todayStr),
     // Review data（getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象，须解包 .note）
@@ -4259,7 +4271,8 @@ ${longTermGoalLines}
 【昨日完成待办】${data.yesterdayDoneTodos.length} 项
 ${doneTodoLines}
 【昨日计时】${data.ydayTimerStr}
-${data.ydayTimerSessions.length > 0 ? data.ydayTimerSessions.map(s => `  - ${s.timeRange}  ${s.duration}  ${s.targetName}`).join('\n') : ''}
+【按时段类型汇总】${(data.ydayTimerTypeTotals || []).map(t => `${t.activityLabel}：${t.duration}`).join('；')}
+${data.ydayTimerSessions.length > 0 ? data.ydayTimerSessions.map(s => `  - ${s.timeRange}  ${s.duration}  [${s.activityLabel || '专注'}] ${s.targetName}`).join('\n') : ''}
 【逾期未完成】${data.overdueTodos.length} 项
 ${overdueLines}
 【今日截止】${data.todayDueTodos.length} 项
@@ -4483,6 +4496,7 @@ function collectEveningReportData() {
 
   // Timer records for today
   let todayTimerMs = 0;
+  const todayTimerTypeMs = { focus: 0, rest: 0, other: 0 };
   const todayTimerSessions = [];
   function fmtTimeOnly(ts) {
     const d = new Date(ts);
@@ -4499,18 +4513,23 @@ function collectEveningReportData() {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
     for (const r of records) {
       if (r.date === todayStr) {
-        todayTimerMs += r.totalMs || 0;
+        const activityType = typeof getTimerActivityType === 'function' ? getTimerActivityType(r)
+          : (r.activityType === 'rest' || r.activityType === 'other' ? r.activityType : r.affectsFocus === false ? 'other' : 'focus');
+        const activityLabel = activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注';
+        const totalMs = Math.max(0, Number(r.totalMs) || 0);
+        todayTimerMs += totalMs;
+        todayTimerTypeMs[activityType] += totalMs;
         if (r.sessions && r.sessions.length > 0) {
           const targetName = formatDailyReportTimerLabel(r);
           for (const s of r.sessions) {
             const startStr = fmtTimeOnly(s.start);
             const endStr = fmtTimeOnly(s.end);
             const dur = s.end - s.start;
-            todayTimerSessions.push({ timeRange: `${startStr} — ${endStr}`, duration: fmtDuration(dur), targetName });
+            todayTimerSessions.push({ timeRange: `${startStr} — ${endStr}`, duration: fmtDuration(dur), targetName, activityType, activityLabel });
           }
         } else {
           const targetName = formatDailyReportTimerLabel(r);
-          todayTimerSessions.push({ timeRange: '全天', duration: fmtDuration(r.totalMs || 0), targetName });
+          todayTimerSessions.push({ timeRange: '全天', duration: fmtDuration(totalMs), targetName, activityType, activityLabel });
         }
       }
     }
@@ -4553,6 +4572,10 @@ function collectEveningReportData() {
     todayEditedNotes: todayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     todayTimerStr: todayTimerMs > 0 ? fmtDuration(todayTimerMs) : '无',
     todayTimerSessions,
+    todayTimerTypeTotals: Object.entries(todayTimerTypeMs).map(([activityType, totalMs]) => ({
+      activityType, activityLabel: activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注',
+      totalMs, duration: totalMs > 0 ? fmtDuration(totalMs) : '0 分钟'
+    })),
     prevReport,
     // Review data（getNotesDueForReview 返回 {note, reviewCount, nextReviewDate} 包装对象，须解包 .note）
     reviewDisabled: typeof isReviewDisabled === 'function' ? isReviewDisabled() : false,
@@ -4690,7 +4713,8 @@ ${archivedTodoLines}` : ''}
 【今日截止】${data.todayDueTodos.length} 项
 ${dueLines}
 【今日计时】${data.todayTimerStr}
-${data.todayTimerSessions.length > 0 ? data.todayTimerSessions.map(s => `  - ${s.timeRange}  ${s.duration}  ${s.targetName}`).join('\n') : ''}
+【按时段类型汇总】${(data.todayTimerTypeTotals || []).map(t => `${t.activityLabel}：${t.duration}`).join('；')}
+${data.todayTimerSessions.length > 0 ? data.todayTimerSessions.map(s => `  - ${s.timeRange}  ${s.duration}  [${s.activityLabel || '专注'}] ${s.targetName}`).join('\n') : ''}
 【逾期未完成】${data.overdueTodos.length} 项
 ${overdueLines}
 【明天截止】${data.tomorrowDueTodos.length} 项

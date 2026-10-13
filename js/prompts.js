@@ -213,16 +213,17 @@ const PROMPT_DATA_LABELS = {
   todayStr: '日期', yesterdayStr: '昨日日期', focusItems: '昨日聚焦', todayFocusItems: '今日聚焦', tomorrowFocusItems: '明日聚焦',
   focusDone: '已完成聚焦', focusTotal: '聚焦总数', longTermGoals: '长期目标', yesterdayDoneTodos: '昨日完成待办', todayDoneTodos: '今日完成待办',
   todayArchived: '今日归档', overdueTodos: '逾期待办', todayDueTodos: '今日截止', tomorrowDueTodos: '明日截止', 
-  totalDone: '已完成待办总数', totalTodos: '待办总数', ydayTimerStr: '昨日专注时长', todayTimerStr: '今日专注时长',
-  ydayTimerSessions: '昨日专注记录', todayTimerSessions: '今日专注记录', ydayCreatedNotes: '昨日创建笔记', ydayEditedNotes: '昨日编辑笔记', todayCreatedNotes: '今日创建笔记', todayEditedNotes: '今日编辑笔记',
+  totalDone: '已完成待办总数', totalTodos: '待办总数', ydayTimerStr: '昨日计时总时长', todayTimerStr: '今日计时总时长',
+  ydayTimerSessions: '昨日计时记录', todayTimerSessions: '今日计时记录', ydayTimerTypeTotals: '昨日各类型时长', todayTimerTypeTotals: '今日各类型时长', activityType: '时段类型代码', activityLabel: '时段类型', totalMs: '总时长（毫秒）', ydayCreatedNotes: '昨日创建笔记', ydayEditedNotes: '昨日编辑笔记', todayCreatedNotes: '今日创建笔记', todayEditedNotes: '今日编辑笔记',
   totalNotes: '笔记总数', reviewDueNotes: '待复习笔记', overdueReviewCount: '逾期复习数', reviewDisabled: '复习功能已关闭',
   habitsOverview: '习惯详情', habitsCount: '习惯总数', habitsDoneYesterday: '昨日完成习惯', habitsDoneToday: '今日完成习惯',
   taskline: '任务线', prevReport: '上一份日报', text: '内容', title: '标题', name: '名称', done: '已完成', dueDate: '截止日期',
-  tags: '标签', timeRange: '时间段', duration: '时长', targetName: '专注目标', activeCount: '激活任务数', activeNames: '激活任务',
+  tags: '标签', timeRange: '时间段', duration: '时长', targetName: '计时名称及关联项', activeCount: '激活任务数', activeNames: '激活任务',
   doneCount: '已完成任务数', currentMain: '当前主线', mainProgress: '主线进度', ydayDone: '近期完成任务'
 };
 
 function friendlyPromptLabel(key) {
+  if (key === 'note') return '备注';
   return PROMPT_DATA_LABELS[key] || String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2');
 }
 

@@ -1087,7 +1087,8 @@ function reviewFloatMarkDone(idx) {
 
 // ═══════════ Today: Long-term Goals ═══════════
 // Data stored in localStorage as: study_longterm_goals
-// Each goal: { id, text, done, createdAt }
+// Each goal: { id, text, done, content, note, dueDate, createdAt }
+let goalNoteEditingId = null;
 function loadGoals() {
   try { return JSON.parse(localStorage.getItem('study_longterm_goals') || '[]'); }
   catch { return []; }
@@ -1096,9 +1097,10 @@ function loadGoals() {
 function saveGoals(goals) {
   // 走 saveData → 触发 Sync.onLocalChange → 长期目标跨设备同步
   if (typeof saveData === 'function') {
-    saveData('study_longterm_goals', goals);
+    return saveData('study_longterm_goals', goals);
   } else {
     localStorage.setItem('study_longterm_goals', JSON.stringify(goals));
+    return true;
   }
 }
 
@@ -1108,7 +1110,7 @@ function addGoal() {
   const text = input.value.trim();
   if (!text) return;
   const goals = loadGoals();
-  goals.push({ id: genId(), text, done: false, content: '', dueDate: null, createdAt: new Date().toISOString() });
+  goals.push({ id: genId(), text, done: false, content: '', note: '', dueDate: null, createdAt: new Date().toISOString() });
   saveGoals(goals);
   input.value = '';
   document.getElementById('todayGoalsInputWrap').style.display = 'none';
@@ -1157,8 +1159,12 @@ function openEditGoalModal(id) {
       <input type="date" id="editGoalDue" value="${goal.dueDate || ''}">
     </div>
     <div class="modal-field">
-      <label>正文 / 备注</label>
+      <label>正文 / 详细说明</label>
       <textarea id="editGoalContent" placeholder="补充说明、备注等..." onkeydown="if(event.ctrlKey&&event.key==='Enter')saveEditGoal(${id})">${escapeHtml(goal.content || '')}</textarea>
+    </div>
+    <div class="modal-field">
+      <label for="editGoalNote">一句话备注</label>
+      <input type="text" id="editGoalNote" maxlength="160" value="${escapeAttr(goal.note || '')}" placeholder="写一句话提醒自己…">
     </div>
     ${isDebugMode() ? `
     <div class="modal-field">
@@ -1181,6 +1187,7 @@ function saveEditGoal(id) {
   goal.text = text;
   goal.dueDate = document.getElementById('editGoalDue').value || null;
   goal.content = document.getElementById('editGoalContent').value.trim();
+  goal.note = document.getElementById('editGoalNote').value.trim().slice(0, 160);
   // Save timer ms in debug mode
   if (isDebugMode()) {
     const timerInput = document.getElementById('editGoalTimerMs');
@@ -1222,7 +1229,56 @@ function formatTimerDisplay(ms) {
   return `${m}min`;
 }
 
+function editTodayGoalNote(id) {
+  document.activeElement?.blur();
+  if (!loadGoals().some(goal => goal.id === id)) return;
+  goalNoteEditingId = id;
+  renderGoals();
+  requestAnimationFrame(() => {
+    const input = document.getElementById('todayGoalNoteInput-' + id);
+    if (input) { input.focus(); input.select(); }
+  });
+}
+
+function saveTodayGoalNote(id, value) {
+  const goals = loadGoals();
+  const goal = goals.find(item => item.id === id);
+  if (!goal) { goalNoteEditingId = null; renderGoals(); return; }
+  goal.note = String(value || '').trim().slice(0, 160);
+  if (!saveGoals(goals)) {
+    if (typeof showMiniToast === 'function') showMiniToast('备注保存失败', 'error');
+    return;
+  }
+  goalNoteEditingId = null;
+  renderGoals();
+}
+
+function handleTodayGoalNoteKeydown(event, id) {
+  if (event.isComposing) return;
+  if (event.key === 'Enter') {
+    event.preventDefault();
+    event.currentTarget.blur();
+  } else if (event.key === 'Escape') {
+    event.preventDefault();
+    goalNoteEditingId = null;
+    event.currentTarget.onblur = null;
+    renderGoals();
+  }
+}
+
 function renderGoals() {
+  // 编辑期间延后刷新，保留草稿、选区和输入法组合态。
+  const activeInput = document.activeElement;
+  if (activeInput && goalNoteEditingId != null && activeInput.id === 'todayGoalNoteInput-' + goalNoteEditingId) {
+    if (!activeInput._goalRefreshPending) {
+      activeInput._goalRefreshPending = true;
+      activeInput.addEventListener('blur', () => {
+        activeInput._goalRefreshPending = false;
+        setTimeout(() => renderGoals(), 0);
+      }, { once: true });
+    }
+    return;
+  }
   const list = document.getElementById('todayGoalsList');
   if (!list) return;
   const goals = loadGoals();
@@ -1231,6 +1287,8 @@ function renderGoals() {
     return;
   }
   list.innerHTML = goals.map(g => {
+    const note = String(g.note || '').trim();
+    const isEditingNote = goalNoteEditingId === g.id;
     const dueHtml = g.dueDate ? `<span class="today-goal-due" style="font-size:11px;color:${new Date(g.dueDate) < new Date(new Date().toDateString()) && !g.done ? 'var(--danger)' : 'var(--text-secondary)'};flex-shrink:0;">📅 ${g.dueDate}</span>` : '';
     let timerHtml = '';
     const timerMs = getGoalTimerMs(g.id);
@@ -1239,6 +1297,7 @@ function renderGoals() {
     }
     return `
       <div data-sync-id="goal-${g.id}" class="today-goal-item${g.done ? ' done' : ''}">
+        <div class="today-goal-main">
         <div class="today-goal-check${g.done ? ' done' : ''}" onclick="toggleGoal(${g.id})" title="标记完成"></div>
         <div class="today-goal-body" onclick="openEditGoalModal(${g.id})" title="编辑">
           <span class="today-goal-text${g.done ? ' completed' : ''}">${escapeHtml(g.text)}</span>
@@ -1246,12 +1305,21 @@ function renderGoals() {
         </div>
         ${dueHtml}
         ${timerHtml}
-        <span style="flex:1;min-width:0;"></span>
+        <button type="button" class="goal-note-edit" onclick="event.stopPropagation();editTodayGoalNote(${g.id})" title="${note ? '编辑备注' : '添加备注'}" aria-label="${note ? '编辑备注' : '添加备注'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>
         <button class="todo-edit" onclick="event.stopPropagation();openEditGoalModal(${g.id})" ondblclick="event.stopPropagation()" title="编辑">✎</button>
         <button class="todo-delete" onclick="event.stopPropagation();deleteGoal(${g.id})" ondblclick="event.stopPropagation()" title="删除">✕</button>
+        </div>
+        ${isEditingNote ? `<div class="today-focus-note-row today-goal-note-row editing">
+          <input class="today-focus-note-input" id="todayGoalNoteInput-${g.id}" type="text" maxlength="160"
+            value="${escapeAttr(note)}" placeholder="写一句话提醒自己…" aria-label="长期目标备注"
+            onkeydown="handleTodayGoalNoteKeydown(event, ${g.id})" onblur="saveTodayGoalNote(${g.id}, this.value)">
+        </div>` : (note ? `<button type="button" class="today-focus-note-row today-goal-note-row" onclick="editTodayGoalNote(${g.id})" title="点击编辑备注">
+          <i data-lucide="message-square" class="lucide-icon"></i><span>${escapeHtml(note)}</span>
+        </button>` : '')}
       </div>
     `;
   }).join('');
+  if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
 function renderToday() {
@@ -1268,25 +1336,60 @@ function renderToday() {
   updateDebugPanel();
 }
 
+let todayTimerTypeFilter = 'all';
+let todayTimerRecordsExpanded = false;
+
+function setTodayTimerTypeFilter(type) {
+  todayTimerTypeFilter = ['focus', 'rest', 'other'].includes(type) ? type : 'all';
+  renderTodayTimerRecords();
+}
+
+function toggleTodayTimerRecordsExpanded() {
+  todayTimerRecordsExpanded = !todayTimerRecordsExpanded;
+  renderTodayTimerRecords();
+}
+
 function renderTodayTimerRecords(records) {
   const list = document.getElementById('todayTimerRecords');
   if (!list || typeof loadTimerRecords !== 'function' || typeof renderTimerHistory !== 'function') return;
   const today = getTodayStr();
-  const items = (records || loadTimerRecords()).filter(record => record.date === today);
+  const items = (records || loadTimerRecords()).filter(record => record.date === today
+    && (todayTimerTypeFilter === 'all' || getTimerActivityType(record) === todayTimerTypeFilter));
+  list.classList.toggle('expanded', todayTimerRecordsExpanded);
+  const filter = document.getElementById('todayTimerTypeFilter');
+  if (filter) filter.value = todayTimerTypeFilter;
+  const expand = document.getElementById('todayTimerExpand');
+  if (expand) {
+    expand.textContent = todayTimerRecordsExpanded ? '收起' : '展开全部';
+    expand.setAttribute('aria-expanded', String(todayTimerRecordsExpanded));
+  }
   list.innerHTML = renderTimerHistory(items, { readOnly: true })
-    || '<div class="today-goals-empty">今天还没有计时记录，完成计时或手动补记后会显示在这里。</div>';
+    || `<div class="today-goals-empty">${todayTimerTypeFilter === 'all' ? '今天还没有计时记录，完成计时或手动补记后会显示在这里。' : '今天还没有此类型的计时记录。'}</div>`;
+}
+
+let todayScheduleCollapsed = false;
+
+function toggleTodayScheduleCollapsed() {
+  todayScheduleCollapsed = !todayScheduleCollapsed;
+  renderTodaySchedule();
 }
 
 function renderTodaySchedule() {
   const list = document.getElementById('todayScheduleList');
   if (!list) return;
+  const toggle = document.getElementById('todayScheduleToggle');
+  if (toggle) {
+    toggle.textContent = todayScheduleCollapsed ? '展开' : '收起';
+    toggle.title = todayScheduleCollapsed ? '展开未来 5 天的日程' : '收起，仅显示今天的日程';
+    toggle.setAttribute('aria-expanded', String(!todayScheduleCollapsed));
+  }
   if (typeof loadCalendarEvents !== 'function' || typeof getCalendarEventsOnDate !== 'function') {
     list.innerHTML = '<div class="today-schedule-empty">日历正在加载…</div>';
     return;
   }
   const events = loadCalendarEvents();
   const days = [];
-  for (let offset = 0; offset < 5; offset++) {
+  for (let offset = 0; offset < (todayScheduleCollapsed ? 1 : 5); offset++) {
     const date = new Date();
     date.setHours(12, 0, 0, 0);
     date.setDate(date.getDate() + offset);
@@ -1295,7 +1398,7 @@ function renderTodaySchedule() {
     if (items.length) days.push({ date, dateStr, items, offset });
   }
   if (!days.length) {
-    list.innerHTML = '<button type="button" class="today-schedule-empty" onclick="switchTab(\'calendar\')">未来 5 天还没有日程，去日历添加一项</button>';
+    list.innerHTML = `<button type="button" class="today-schedule-empty" onclick="switchTab('calendar')">${todayScheduleCollapsed ? '今天还没有日程' : '未来 5 天还没有日程'}，去日历添加一项</button>`;
     return;
   }
   list.innerHTML = days.map(day => {

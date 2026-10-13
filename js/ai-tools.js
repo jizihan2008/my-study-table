@@ -602,6 +602,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
           prompt += `   [ID:${goal.id}] ${goal.done ? '✅' : '⬜'} ${goal.text || '未命名目标'}`
             + (goal.dueDate ? ` 📅${goal.dueDate}` : '')
             + (detail ? `｜说明：${detail}${String(goal.content || '').replace(/\s+/g, ' ').trim().length > 500 ? '…' : ''}` : '')
+            + (goal.note ? `｜备注：${String(goal.note).trim().slice(0, 160)}` : '')
             + '\n';
         });
       }
