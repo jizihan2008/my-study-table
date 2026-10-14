@@ -256,7 +256,7 @@ function onNoteTitleChange() {
   if (status && titleInput.value !== (note.title || '')) status.textContent = '编辑标题中…';
 }
 
-function commitNoteTitleChange() {
+async function commitNoteTitleChange() {
   const note = getActiveNote();
   const titleInput = document.getElementById('noteTitleInput');
   if (!note || !titleInput) return;
@@ -273,7 +273,7 @@ function commitNoteTitleChange() {
   note.updatedAt = new Date().toISOString();
   note._summaryFresh = false;
   updateLastEditedDisplay(note);
-  if (saveData('study_notes_v2', notes) !== true) {
+  if (await saveDataDurable('study_notes_v2', notes) !== true) {
     note.title = previousTitle;
     titleInput.value = previousTitle;
     const status = document.getElementById('notesStatus');
@@ -304,17 +304,19 @@ function onNotesChange() {
   document.getElementById('notesStatus').textContent = '保存中…';
   updateLastEditedDisplay(note);
   if (notesDebounceId) clearTimeout(notesDebounceId);
-  notesDebounceId = setTimeout(() => {
+  notesDebounceId = setTimeout(async () => {
     note._summaryFresh = false;
     // 编辑笔记不再重置复习周期（改为右键菜单手动「重置复习周期」）
-    if (saveData('study_notes_v2', notes) === true) {
+    const savingContent = note.content;
+    if (await saveDataDurable('study_notes_v2', notes) === true) {
+      if (note.content !== savingContent) return;
       document.getElementById('notesStatus').textContent = '已保存';
       note._dirtyContent = false;
       const current = notes.find(n => n.id === note.id);
       if (current) current._dirtyContent = false;
       renderNoteList();
     } else {
-      document.getElementById('notesStatus').textContent = '保存失败，内容仍保留在当前页';
+      document.getElementById('notesStatus').textContent = '保存失败，内容仍保留在当前页：' + (saveData.lastError || '未知原因');
     }
   }, 500);
 }
@@ -341,16 +343,18 @@ function onRichNotesChange(markdown, previousMarkdown, change = {}) {
   updateLastEditedDisplay(note);
   renderNoteToc();
   if (notesDebounceId) clearTimeout(notesDebounceId);
-  notesDebounceId = setTimeout(() => {
+  notesDebounceId = setTimeout(async () => {
     note._summaryFresh = false;
-    if (saveData('study_notes_v2', notes) === true) {
+    const savingContent = note.content;
+    if (await saveDataDurable('study_notes_v2', notes) === true) {
+      if (note.content !== savingContent) return;
       if (status) status.textContent = '已保存';
       note._dirtyContent = false;
       const current = notes.find(n => n.id === note.id);
       if (current) current._dirtyContent = false;
       renderNoteList();
     } else if (status) {
-      status.textContent = '保存失败，内容仍保留在当前页';
+      status.textContent = '保存失败，内容仍保留在当前页：' + (saveData.lastError || '未知原因');
     }
   }, 500);
 }

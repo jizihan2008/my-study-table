@@ -1209,7 +1209,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     }
     const runtimeWriteFailure = toolCalls.some((tc, index) => !isAiReadOnlyTool(tc.action) && roundOutcomes[index]?.ok === false);
     if (roundTransaction && runtimeWriteFailure) {
-      if (typeof rollbackAiToolTransaction === 'function') rollbackAiToolTransaction(roundTransaction);
+      if (typeof rollbackAiToolTransaction === 'function') await rollbackAiToolTransaction(roundTransaction);
       for (let index = 0; index < toolCalls.length; index++) {
         if (isAiReadOnlyTool(toolCalls[index].action) || !['success','duplicate'].includes(roundOutcomes[index]?.status)) continue;
         roundOutcomes[index].ok = false;

@@ -260,7 +260,8 @@
     });
     return map;
   }
-  function applyRemote(collection, id, value) {
+  async function applyRemote(collection, id, value) {
+    const previousRaw = localStorage.getItem(collection);
     const items = readItems(collection);
     const existingIndex = items.findIndex(item => String(item.id) === String(id));
     if (existingIndex >= 0) items.splice(existingIndex, 1);
@@ -275,11 +276,18 @@
     applyingRemote = true;
     try {
       if (typeof saveData === 'function') {
-        if (!saveData(collection, items)) throw new Error('保存远端记录到本地失败' + (saveData.lastError ? '：' + saveData.lastError : ''));
-      } else writeJson(collection, items);
+        if (!(typeof saveDataDurable === 'function' ? await saveDataDurable(collection, items) : saveData(collection, items))) throw new Error('保存远端记录到本地失败' + (saveData.lastError ? '：' + saveData.lastError : ''));
+      } else { writeJson(collection, items); if (global.StudyData?.flush) await global.StudyData.flush([collection]); }
+    } catch (error) {
+      if (localStorage.getItem(collection) !== previousRaw) {
+        try { if (previousRaw === null) localStorage.removeItem(collection); else localStorage.setItem(collection, previousRaw); }
+        catch (restoreError) { error.message += '；恢复本地视图失败：' + restoreError.message; }
+      }
+      throw error;
     } finally { applyingRemote = false; }
   }
-  function applyOrder(collection, wantedIds) {
+  async function applyOrder(collection, wantedIds) {
+    const previousRaw = localStorage.getItem(collection);
     const items = readItems(collection);
     const byId = new Map(items.map(item => [String(item.id), item]));
     const ordered = [];
@@ -293,8 +301,14 @@
     applyingRemote = true;
     try {
       if (typeof saveData === 'function') {
-        if (!saveData(collection, ordered)) throw new Error('保存云端排序失败' + (saveData.lastError ? '：' + saveData.lastError : ''));
-      } else writeJson(collection, ordered);
+        if (!(typeof saveDataDurable === 'function' ? await saveDataDurable(collection, ordered) : saveData(collection, ordered))) throw new Error('保存云端排序失败' + (saveData.lastError ? '：' + saveData.lastError : ''));
+      } else { writeJson(collection, ordered); if (global.StudyData?.flush) await global.StudyData.flush([collection]); }
+    } catch (error) {
+      if (localStorage.getItem(collection) !== previousRaw) {
+        try { if (previousRaw === null) localStorage.removeItem(collection); else localStorage.setItem(collection, previousRaw); }
+        catch (restoreError) { error.message += '；恢复本地视图失败：' + restoreError.message; }
+      }
+      throw error;
     } finally { applyingRemote = false; }
     return true;
   }
@@ -341,7 +355,7 @@
     clearConflict(key);
     let applied = false;
     if (remoteIds && (!baseline || !localChanged || remoteChanged)) {
-      applied = applyOrder(collection, remoteIds);
+      applied = await applyOrder(collection, remoteIds);
     }
     const desired = readItems(collection).map(item => String(item.id));
     const cloudOrder = remoteIds && remoteIds.join('\u0000');
@@ -481,7 +495,7 @@
         if (!remote.legacy) { recordState(collection, id, value, remote.updated_at); continue; }
       }
       if (remote && !dirty && (!current || baseline && advanced) && !force) {
-        applyRemote(collection, id, remoteValue);
+        await applyRemote(collection, id, remoteValue);
         applied = true;
         if (!remote.legacy) { recordState(collection, id, remoteValue, remote.updated_at); continue; }
       }
@@ -572,7 +586,7 @@
         let timestamp = remote.updated_at;
         if (choice === 'remote') {
           ids = remote.value.map(String);
-          applyOrder(orderCollection, ids);
+          await applyOrder(orderCollection, ids);
         } else if (choice === 'local') {
           ids = readItems(orderCollection).map(item => String(item.id));
           const result = await client.from('user_data').update({ value: ids })
@@ -612,10 +626,10 @@
         if (remote.legacy) {
           const result = await writeItem(client, session.user.id, collection, id, remote.value, null, true);
           if (result.conflict) throw new Error('云端记录已变化，请重试');
-          applyRemote(collection, id, remote.value);
+          await applyRemote(collection, id, remote.value);
           recordState(collection, id, remote.value, result.timestamp);
         } else {
-          applyRemote(collection, id, remote.value);
+          await applyRemote(collection, id, remote.value);
           recordState(collection, id, remote.value, remote.updated_at);
         }
       } else return { ok: false, reason: '无效的处理方式' };
@@ -687,10 +701,10 @@
             if (remote.legacy) {
               const written = await writeItem(client, session.user.id, collection, target.id, remote.value, null, true);
               if (written.conflict) throw new Error('云端记录已变化，请重试');
-              applyRemote(collection, target.id, remote.value);
+              await applyRemote(collection, target.id, remote.value);
               recordState(collection, target.id, remote.value, written.timestamp);
             } else {
-              applyRemote(collection, target.id, remote.value);
+              await applyRemote(collection, target.id, remote.value);
               recordState(collection, target.id, remote.value, remote.updated_at);
             }
             clearConflict(target.key);

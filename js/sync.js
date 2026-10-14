@@ -720,12 +720,20 @@
 
   let skillDraftBeforeRemoteApply = null;
   async function _applyRemoteValue(key, value, updatedAt) {
+    const previousRaw = localStorage.getItem(key);
     if (key === 'study_ai_skills_v1' && typeof aiSkillEditorChanged === 'function') {
       try { skillDraftBeforeRemoteApply = !!aiSkillEditorChanged(); } catch (_) { skillDraftBeforeRemoteApply = true; }
     }
     remoteApplyDepth++;
     try {
-      saveData(key, value);
+      const saved = typeof saveDataDurable === 'function' ? await saveDataDurable(key, value) : saveData(key, value);
+      if (!saved) throw new Error('保存远端记录到本地失败：' + (saveData.lastError || '未知存储错误'));
+    } catch (error) {
+      if (localStorage.getItem(key) !== previousRaw) {
+        try { if (previousRaw === null) localStorage.removeItem(key); else localStorage.setItem(key, previousRaw); }
+        catch (restoreError) { error.message += '；恢复本地视图失败：' + restoreError.message; }
+      }
+      throw error;
     } finally {
       remoteApplyDepth--;
     }

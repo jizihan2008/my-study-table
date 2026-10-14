@@ -1463,7 +1463,7 @@ function beginAiToolTransaction(action) {
   return { globals, storage };
 }
 
-function rollbackAiToolTransaction(snapshot) {
+async function rollbackAiToolTransaction(snapshot) {
   if (!snapshot) return;
   if (snapshot.globals.todos) todos = snapshot.globals.todos;
   if (snapshot.globals.notes) notes = snapshot.globals.notes;
@@ -1476,6 +1476,7 @@ function rollbackAiToolTransaction(snapshot) {
     } else if (value === null) localStorage.removeItem(key);
     else localStorage.setItem(key, value);
   }
+  if (window.StudyData?.flush) await window.StudyData.flush(Object.keys(snapshot.storage));
   if (typeof refreshAiSkillViews === 'function') refreshAiSkillViews();
 }
 
@@ -1486,18 +1487,34 @@ async function executeToolCallStructured(action, params, context = {}) {
   let transaction = null;
   try {
     transaction = beginAiToolTransaction(action);
+    if (transaction && typeof saveData !== 'undefined') saveData.lastError = '';
     const value = await executeToolCall(action, checked.params, context);
     const result = normalizeAiToolResult(action, value, Date.now() - startedAt);
-    if (!result.ok) rollbackAiToolTransaction(transaction);
+    if (result.ok && transaction && window.StudyData?.flush) {
+      try { await window.StudyData.flush(Object.keys(transaction.storage)); }
+      catch (error) {
+        const reason = typeof storageSaveErrorMessage === 'function' ? storageSaveErrorMessage(error) : (error.name + '：' + error.message);
+        Object.assign(result, { ok: false, status: 'failed', code: 'SAVE_FAILED', changed: false, data: null, error: reason, text: '❌ 本地保存失败：' + reason });
+      }
+    }
+    if (!result.ok) {
+      if (typeof saveData !== 'undefined' && saveData.lastError) {
+        result.error = (result.error || '保存失败') + '：' + saveData.lastError;
+        result.text += '\n底层原因：' + saveData.lastError;
+      }
+      try { await rollbackAiToolTransaction(transaction); }
+      catch (error) { result.error += '；回滚保存失败：' + error.message; result.text += '\n⚠️ 回滚未能持久保存，请保留当前页面：' + error.message; }
+    }
     if (result.ok && transaction?.globals.notes && typeof notes !== 'undefined') {
       const before = new Map(transaction.globals.notes.map(note => [note.id, JSON.stringify(note)]));
       const affectedNotes = notes.filter(note => note.type === 'note' && before.get(note.id) !== JSON.stringify(note))
         .map(note => ({ id: note.id, title: note.title || '未命名笔记' }));
       if (affectedNotes.length) result.data = { ...(result.data || {}), affectedNotes };
     }
+    result.durationMs = Date.now() - startedAt;
     return result;
   } catch (error) {
-    rollbackAiToolTransaction(transaction);
+    try { await rollbackAiToolTransaction(transaction); } catch (rollbackError) { error.message += "；回滚保存失败：" + rollbackError.message; }
     return normalizeAiToolResult(action, { ok: false, status: 'failed', text: `❌ ${action} 执行失败：${error.message}`, error: error.message }, Date.now() - startedAt);
   }
 }

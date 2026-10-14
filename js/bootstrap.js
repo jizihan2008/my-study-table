@@ -19,6 +19,8 @@
 
   platform.registerInitializer('theme', () => {
     if (typeof applyTheme === 'function' && typeof getTheme === 'function') applyTheme(getTheme());
+    if (typeof applyUiZoom === 'function') applyUiZoom();
+    if (typeof renderMobileTabbar === 'function') renderMobileTabbar('');
   }, 10);
 
   platform.registerInitializer('sidebar', () => {

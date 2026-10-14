@@ -2237,7 +2237,7 @@
   }
 
   // 页面加载后自动初始化
-  if (typeof global.addEventListener === 'function') {
+  if (typeof global.addEventListener === 'function' && global.document?.readyState !== 'complete') {
     global.addEventListener('load', function () { setTimeout(init, 800); });
   } else {
     setTimeout(init, 1200);

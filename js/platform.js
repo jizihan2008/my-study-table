@@ -30,7 +30,7 @@
       try {
         if (localStorage.getItem(key) === raw) return { ok: true, changed: false };
         localStorage.setItem(key, raw);
-        if (global.StudyData) global.StudyData.put(key, raw);
+        if (global.StudyData && !global.StudyData.isManaged?.(key)) global.StudyData.put(key, raw);
         return { ok: true, changed: true };
       } catch (error) {
         // localStorage is the synchronous compatibility cache read by the UI and
@@ -46,7 +46,7 @@
         raw = JSON.stringify(value);
         if (localStorage.getItem(key) === raw) return { ok: true, changed: false };
         localStorage.setItem(key, raw);
-        if (global.StudyData) global.StudyData.put(key, raw);
+        if (global.StudyData && !global.StudyData.isManaged?.(key)) global.StudyData.put(key, raw);
         return { ok: true, changed: true };
       } catch (error) {
         // Never acknowledge a split-brain write. See setRaw above.
@@ -56,7 +56,7 @@
     remove(key) {
       try {
         localStorage.removeItem(key);
-        if (global.StudyData) global.StudyData.remove(key);
+        if (global.StudyData && !global.StudyData.isManaged?.(key)) global.StudyData.remove(key);
         return true;
       } catch (_) { return false; }
     }

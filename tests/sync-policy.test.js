@@ -426,7 +426,7 @@ test('choosing the cloud version resolves and records a pending conflict', async
     window,
     localStorage,
     getSupabaseClient: () => client,
-    saveData: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
+    saveData: (key, value) => { localStorage.setItem(key, JSON.stringify(value)); return true; },
     setTimeout() { return 1; },
     clearTimeout() {},
     console: { log() {}, warn() {}, error() {} }
@@ -488,7 +488,7 @@ test('a full conflict-history store cannot keep an already resolved conflict pen
   vm.runInNewContext(code, {
     window, localStorage,
     getSupabaseClient: () => client,
-    saveData: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
+    saveData: (key, value) => { localStorage.setItem(key, JSON.stringify(value)); return true; },
     setTimeout() { return 1; }, clearTimeout() {},
     console: { log() {}, warn(...args) { warnings.push(args.join(' ')); }, error() {} }
   });
@@ -543,7 +543,7 @@ test('a conflict category can resolve multiple cloud versions in one operation',
     window,
     localStorage,
     getSupabaseClient: () => client,
-    saveData: (key, value) => localStorage.setItem(key, JSON.stringify(value)),
+    saveData: (key, value) => { localStorage.setItem(key, JSON.stringify(value)); return true; },
     setTimeout() { return 1; },
     clearTimeout() {},
     console: { log() {}, warn() {}, error() {} }

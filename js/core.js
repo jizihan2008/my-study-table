@@ -82,8 +82,9 @@ function recoverStorageSpace() {
   return freed;
 }
 function storageSaveErrorMessage(error) {
-  if (isStorageQuotaError(error)) return '浏览器本地存储空间不足，自动释放缓存后仍无法保存；请先导出备份，再检查本地存储用量。原有数据和待处理冲突已保留';
-  if (error && error.name === 'SecurityError') return '浏览器禁止访问本地存储，请检查浏览器的网站存储权限';
+  const details = error ? `（${error.name || 'Error'}：${error.message || String(error)}）` : '';
+  if (isStorageQuotaError(error)) return '浏览器本地存储空间不足；请先导出备份，再检查本地存储用量。此前已保存的数据和待处理冲突已保留' + details;
+  if (error && error.name === 'SecurityError') return '浏览器禁止访问本地存储，请检查浏览器的网站存储权限' + details;
   return String(error && error.message || error || '本地存储写入失败');
 }
 function saveData(key, data, quotaRetry = false) {
@@ -106,13 +107,18 @@ function saveData(key, data, quotaRetry = false) {
     if (!result.ok) throw result.error;
     // Unchanged data is already durably present, so this is still a successful save.
     if (result.changed === false) return true;
-    // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步）
-    if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
-      try { window.Sync.onLocalChange(key); } catch (e) { /* 同步层错误不影响主流程 */ }
-    }
-    if (typeof StudyPlatform !== 'undefined') {
-      StudyPlatform.events.emit('storage:changed', { key, value: data });
-    }
+    const notify = () => {
+      // 同步钩子：通知 sync.js 该 key 发生本地变更（PWA/云同步）
+      if (typeof window.Sync !== 'undefined' && window.Sync.onLocalChange) {
+        try { window.Sync.onLocalChange(key); } catch (e) { /* 同步层错误不影响主流程 */ }
+      }
+      if (typeof StudyPlatform !== 'undefined') {
+        StudyPlatform.events.emit('storage:changed', { key, value: data });
+      }
+    };
+    if (window.StudyData?.isManaged?.(key)) {
+      window.StudyData.flush([key]).then(notify).catch(() => {});
+    } else notify();
     return true;
   } catch (e) {
     if (!quotaRetry && isStorageQuotaError(e) && recoverStorageSpace() > 0) {
@@ -136,6 +142,17 @@ function saveData(key, data, quotaRetry = false) {
     }
     // Never replace the user's last good value with an empty/error placeholder.
     // Callers receive false and can roll back their in-memory mutation instead.
+    return false;
+  }
+}
+
+async function saveDataDurable(key, data) {
+  if (!saveData(key, data)) return false;
+  try {
+    if (window.StudyData?.flush) await window.StudyData.flush([key]);
+    return true;
+  } catch (error) {
+    saveData.lastError = storageSaveErrorMessage(error);
     return false;
   }
 }

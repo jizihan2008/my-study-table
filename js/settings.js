@@ -251,7 +251,7 @@ function renderHelpModal() {
     </div>
     <div style="padding:10px 14px;background:var(--path-bg);border-radius:8px;border-left:3px solid var(--primary);">
       <p style="margin:0;font-size:12px;color:var(--text-secondary);">
-        💡 <b>提示</b>：所有数据仅保存在浏览器本地（localStorage），不会上传到任何服务器。建议定期使用数据导出功能进行备份。
+        💡 <b>提示</b>：所有数据仅保存在浏览器本地（IndexedDB 和 localStorage），不会上传到任何服务器。建议定期使用数据导出功能进行备份。
       </p>
     </div>
   `;
@@ -514,6 +514,7 @@ let _settingsTab = 'api';
 
 function switchSettingsTab(tab) {
   _settingsTab = tab;
+  if (tab === 'data' && typeof refreshStorageUsage === 'function') refreshStorageUsage();
   document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
   document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
   const tabEl = document.getElementById('settingsTab' + tab.charAt(0).toUpperCase() + tab.slice(1));
@@ -3331,7 +3332,7 @@ function importAllData(e) {
   const file = e.target.files[0];
   if (!file) return;
   const reader = new FileReader();
-  reader.onload = function(ev) {
+  reader.onload = async function(ev) {
     try {
       const data = JSON.parse(ev.target.result);
       let count = 0;
@@ -3341,9 +3342,10 @@ function importAllData(e) {
           count++;
         }
       }
+      if (window.StudyData?.flush) await window.StudyData.flush();
       showMigrateMsg('✅ 已导入 ' + count + ' 项数据，请刷新页面', '#6366f1');
-    } catch {
-      showMigrateMsg('❌ 文件格式错误', '#ef4444');
+    } catch (error) {
+      showMigrateMsg('❌ 导入失败：' + error.message, '#ef4444');
     }
   };
   reader.readAsText(file);
@@ -3421,6 +3423,7 @@ async function performAutoBackup() {
   backups.push({ time: new Date().toISOString(), data: data });
   if (backups.length > maxFiles) backups.splice(0, backups.length - maxFiles);
   localStorage.setItem('study_backups', JSON.stringify(backups));
+  if (window.StudyData?.flush) await window.StudyData.flush(['study_backups']);
   localStorage.setItem('study_last_backup_time', Date.now().toString());
   updateBackupHints();
 }
@@ -3576,6 +3579,7 @@ async function restoreIdbBackup(time) {
       const val = data[key];
       if (val !== undefined && val !== null) { localStorage.setItem(key, val); restored++; }
     }
+    if (window.StudyData?.flush) await window.StudyData.flush();
     showMigrateMsg('✅ 已恢复备份（' + restored + ' 项），刷新页面生效', '#10b981');
   } catch (e) {
     showMigrateMsg('❌ 恢复失败：' + e.message, '#ef4444');
