@@ -22,7 +22,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
 <link rel="stylesheet" href="css/style.css?v=20261012-visual-fold-r1">
-<link rel="stylesheet" href="css/workspace.css?v=20261012-goal-notes-r1">
+<link rel="stylesheet" href="css/workspace.css?v=20261013-today-manual-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -447,8 +447,12 @@
         <div class="today-timer-card">
           <div class="today-checkin-header">
             <span class="today-section-title"><i data-lucide="timer" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 今日计时记录</span>
-            <button type="button" class="today-timer-link" onclick="switchTab('timer')">查看全部 →</button>
+            <div class="today-timer-header-actions">
+              <button type="button" id="todayTimerManual" class="today-timer-link" onclick="toggleManualRecordForm('today')" aria-expanded="false" aria-controls="todayTimerManualForm">＋ 手动记录</button>
+              <button type="button" class="today-timer-link" onclick="switchTab('timer')">查看全部 →</button>
+            </div>
           </div>
+          <div id="todayTimerManualForm"></div>
           <div class="today-timer-toolbar">
             <label class="today-timer-filter">时段类型
               <select id="todayTimerTypeFilter" aria-label="今日计时记录时段类型" onchange="setTodayTimerTypeFilter(this.value)">
@@ -546,6 +550,13 @@
             <span class="today-review-filter-hint" id="todayReviewFilterHint" style="display:none;font-size:11px;color:var(--text-secondary);">待复习笔记都还没有标签，给笔记加上标签后即可按标签筛选</span>
           </div>
           <div class="today-review-list" id="todayReviewList"></div>
+        </div>
+        <div class="today-review-card today-flashcard-card" id="todayFlashcardCard">
+          <div class="today-review-header">
+            <span class="today-section-title"><i data-lucide="layers" class="lucide-icon" aria-hidden="true"></i> 待复习闪卡</span>
+            <span class="today-review-count" id="todayFlashcardCount">0 张</span>
+          </div>
+          <div id="todayFlashcardList" aria-live="polite"></div>
         </div>
           </div>
         </div>
@@ -821,11 +832,12 @@
           <input type="checkbox" id="calEventAutoRecord" onchange="syncCalEventAutoTimerEnabled()">
           <span>自动计入当天计时记录</span>
         </label>
-        <label class="cal-event-check-label" id="calEventAutoTimerLabel" title="计时记录计入专注时间统计（关闭后该记录不计入专注时间）">
+        <label style="display:none" class="cal-event-check-label" id="calEventAutoTimerLabel" title="计时记录计入专注时间统计（关闭后该记录不计入专注时间）">
           <input type="checkbox" id="calEventAutoTimer" checked>
           <span>计入计时器专注时间</span>
         </label>
       </div>
+      <div class="timer-activity-controls"><label class="timer-activity-field">计时类型<select id="calEventActivityType" aria-label="日历自动录入计时类型" onchange="syncCalEventAutoTimerEnabled()"></select></label><button type="button" class="today-timer-link" onclick="openTimerTypeManager()">管理类型</button></div>
       <div class="cal-event-hint" id="calEventAutoHint">事件时段结束后自动补记一条计时记录（需要填写结束时间）</div>
       <div class="cal-event-color-row">
         <span class="cal-event-color-label">颜色：</span>
@@ -981,9 +993,10 @@
           </div>
           <div style="display:flex;gap:8px;justify-content:flex-end;">
             <button onclick="cancelApiKeyForm()" style="background:var(--border);color:var(--text);border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">取消</button>
-            <button onclick="submitApiKeyForm()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">保存</button>
+            <button id="apiKeyFormSave" onclick="submitApiKeyForm()" style="background:var(--primary);color:#fff;border:none;border-radius:6px;padding:5px 12px;cursor:pointer;font-size:12px;">保存</button>
           </div>
           <input type="hidden" id="apiKeyFormEditId" value="">
+          <div id="apiKeyFormStatus" role="status" aria-live="polite" style="color:var(--danger);font-size:12px;margin-top:8px;"></div>
         </div>
 
         <button class="btn-save-settings" onclick="showApiKeyForm()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;margin-bottom:12px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加 Key</button>
@@ -1786,9 +1799,9 @@
 <script src="js/markdown.js?v=20261004-r3"></script>
 <script src="js/note-reading-renderer.js?v=20261004-r2"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261012-r1"></script>
+<script src="js/note-rich-editor.js?v=20261013-r1"></script>
 <script src="js/platform.js?v=20260826-r2"></script>
-<script src="js/secrets.js?v=20260827-r2"></script>
+<script src="js/secrets.js?v=20261014-key-save-r1"></script>
 <script src="js/data-store.js?v=20260930-r1"></script>
 <script src="js/diagnostics.js?v=20260825-r1"></script>
 <script src="js/env.js?v=20260911-r2"></script>
@@ -1802,29 +1815,30 @@
 <script src="lib/file-library-order.js?v=20261004-r1"></script>
 <script src="js/file-library.js?v=20261004-r1"></script>
 <script src="js/links.js?v=20260813-r1"></script>
-<script src="js/today.js?v=20261012-goal-notes-r1"></script>
+<script src="js/timer-types.js?v=20261013-custom-types-r1"></script>
+<script src="js/today.js?v=20261013-custom-types-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
 <script src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
 <script src="js/ai-conv.js?v=20261012-protocol-r2"></script>
-<script src="js/ai-attach.js?v=20261012-vision-r1"></script>
+<script src="js/ai-attach.js?v=20261013-text-history-r1"></script>
 <script src="js/ai-render.js?v=20261012-visual-fold-r1"></script>
-<script src="js/ai-tools.js?v=20261012-goal-notes-r1"></script>
+<script src="js/ai-tools.js?v=20261013-attachment-group-r1"></script>
 <script src="js/ai-search.js"></script>
 <script src="js/ai-client.js?v=20260914-r3"></script>
 <script src="js/ai-stream.js?v=20261012-protocol-r2"></script>
-<script src="js/ai-api.js?v=20261012-vision-r1"></script>
+<script src="js/ai-api.js?v=20261013-attachment-group-r1"></script>
 <script src="js/ai-send.js?v=20261012-visual-fold-r1"></script>
 <script src="js/skills.js?v=20261010-r1"></script>
-<script src="js/prompts.js?v=20261012-goal-notes-r1"></script>
+<script src="js/prompts.js?v=20261013-timer-union-r1"></script>
 <script src="js/music.js"></script>
 <script src="js/memory.js?v=20260914-r5"></script>
 <script src="js/bg-media-idb.js?v=20260906-r2"></script>
 <script src="js/appearance.js?v=20260929-r1"></script>
 <script src="js/backup-idb.js?v=20260812-r1"></script>
 <script src="js/habit-status-text.js?v=20260920-r1"></script>
-<script src="js/todo-queue.js?v=20261004-r3"></script>
-<script src="js/settings.js?v=20261012-goal-notes-r1"></script>
+<script src="js/todo-queue.js?v=20261013-check-r1"></script>
+<script src="js/settings.js?v=20261014-key-save-r1"></script>
 <script src="js/utils.js?v=20261004-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script src="js/qq-chats.js?v=20260827-r2"></script>
@@ -1843,9 +1857,9 @@
 <script src="js/books-annot.js?v=20260914-r5"></script>
 <script src="js/keywords.js?v=20260818-r1"></script>
 <script src="js/books-study.js?v=20260821-r2"></script>
-<script src="js/calendar.js?v=20260825-r10"></script>
+<script src="js/calendar.js?v=20261013-custom-types-r1"></script>
 <script src="js/taskline.js?v=20261012-focus"></script>
-<script src="js/timer.js?v=20261012-types"></script>
+<script src="js/timer.js?v=20261013-time-order-r1"></script>
 <script src="js/habits.js?v=20260724-r1"></script>
 <script src="js/stats.js?v=20261012-focus"></script>
 <script src="js/updater.js?v=20260802-r1"></script>
@@ -1868,15 +1882,15 @@
 <!-- 手机端 PWA：数据同步 + WebRTC PDF 传输 -->
 <script src="js/sync-policy.js?v=20261008-r1"></script>
 <script src="js/sync-diff.js?v=20261008-r1"></script>
-<script src="js/sync-collections.js?v=20261012-storage-r1"></script>
+<script src="js/sync-collections.js?v=20261013-custom-types-r1"></script>
 <script src="js/sync-dom.js?v=20260930-r1"></script>
-<script src="js/sync.js?v=20261010-r2"></script>
+<script src="js/sync.js?v=20261013-custom-types-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script src="js/sync-logs.js?v=20261008-r1"></script>
 <script src="js/bootstrap.js?v=20260911-r1"></script>
 <script src="js/desktop-pet.js?v=20261005-r1"></script>
 <script src="lib/cet/vocabulary.js?v=20261008-r1"></script>
-<script src="js/translation.js?v=20261008-r1"></script>
+<script src="js/translation.js?v=20261013-flashcards-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
 <div class="context-menu" id="notesContextMenu">

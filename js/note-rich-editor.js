@@ -932,7 +932,7 @@
 
   function removeSingleEmptyQuote() {
     const selection = window.getSelection();
-    if (!selection?.rangeCount) return false;
+    if (!selection?.rangeCount || !selection.isCollapsed) return false;
     const anchor = selection.anchorNode;
     const element = anchor.nodeType === Node.ELEMENT_NODE ? anchor : anchor.parentElement;
     const quote = element?.closest('blockquote');
@@ -965,6 +965,48 @@
     restoreRange(range);
     notifyChange({ historyBoundary: true });
     return true;
+  }
+
+  function protectClosedFoldBoundary(backward) {
+    const element = caretElement();
+    if (!element) return false;
+    const selection = window.getSelection();
+    const caret = selection.getRangeAt(0);
+    // Walk out through inline wrappers and nested blocks only while the caret
+    // is at their boundary. A quote/list wrapper must not hide an adjacent fold.
+    for (let node = element; node && node !== host; node = node.parentElement) {
+      const edge = document.createRange();
+      edge.selectNodeContents(node);
+      if (backward) edge.setEnd(caret.startContainer, caret.startOffset);
+      else edge.setStart(caret.startContainer, caret.startOffset);
+      const contents = edge.cloneContents();
+      if (contents.textContent.replace(/\u200b/g, '')
+        || contents.querySelector('br, img, video, audio, input, hr, table, details, [contenteditable="false"]')) return false;
+
+      // Delete at the end of a closed title also crosses into its hidden body.
+      if (!backward && node.matches('summary') && node.parentElement.matches('details.note-fold')
+        && !node.parentElement.open) return true;
+
+      let adjacent = backward ? node.previousSibling : node.nextSibling;
+      while (adjacent?.nodeType === Node.TEXT_NODE && !adjacent.textContent.trim()) {
+        adjacent = backward ? adjacent.previousSibling : adjacent.nextSibling;
+      }
+      if (!adjacent) continue;
+      if (adjacent.nodeType !== Node.ELEMENT_NODE || !adjacent.matches('details.note-fold') || adjacent.open) return false;
+      const summary = Array.from(adjacent.children).find(child => child.matches('summary'));
+      if (!summary) return true;
+      const range = document.createRange();
+      range.selectNodeContents(summary);
+      range.collapse(!backward);
+      restoreRange(range);
+      return true;
+    }
+    return false;
+  }
+
+  function handleBoundaryDeletion(backward) {
+    return removeEmptyLineBesideFold(backward)
+      || protectClosedFoldBoundary(backward) || removeSingleEmptyQuote();
   }
 
   function getEditableFoldSummary(event) {
@@ -1038,8 +1080,8 @@
         event.preventDefault();
         return;
       }
-      if (!event.isComposing && ['deleteContentBackward', 'deleteContentForward'].includes(event.inputType)
-        && (removeEmptyLineBesideFold(event.inputType === 'deleteContentBackward') || removeSingleEmptyQuote())) event.preventDefault();
+      if (!event.isComposing && /^delete(?:Content|Word|SoftLine|HardLine)(Backward|Forward)$/.test(event.inputType)
+        && handleBoundaryDeletion(event.inputType.endsWith('Backward'))) event.preventDefault();
     });
     if (host.id === 'notesRichEditor' && typeof root.onNotePreviewScroll === 'function') {
       host.addEventListener('scroll', root.onNotePreviewScroll);
@@ -1100,7 +1142,7 @@
       }
       if (!modifier && !event.altKey && !event.shiftKey && !event.isComposing
         && (event.key === 'Backspace' || event.key === 'Delete')
-        && (removeEmptyLineBesideFold(event.key === 'Backspace') || removeSingleEmptyQuote())) {
+        && handleBoundaryDeletion(event.key === 'Backspace')) {
         event.preventDefault();
         event.stopPropagation();
         return;

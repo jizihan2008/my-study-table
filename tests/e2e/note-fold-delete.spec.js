@@ -70,3 +70,115 @@ test('ordinary empty paragraph Backspace still merges into preceding text', asyn
   await expect(page.locator('#notesRichEditor > p')).toHaveText('普通正文');
   await expect(page.locator('.note-fold-body')).toHaveText('第二正文');
 });
+
+const boundaryCases = [
+  { name: 'quote', html: '<blockquote><p id="edge">引用正文</p><p>下一行</p></blockquote>' },
+  { name: 'direct quote text', html: '<blockquote id="edge">引用正文</blockquote>' },
+  { name: 'nested quote', html: '<blockquote><blockquote><p id="edge"><strong>引用正文</strong></p></blockquote></blockquote>', selector: '#edge strong' },
+  { name: 'paragraph', html: '<p id="edge">普通正文</p>' },
+  { name: 'heading', html: '<h2 id="edge">标题正文</h2>' },
+  { name: 'list', html: '<ul><li id="edge">列表正文</li><li>第二项</li></ul>' },
+  { name: 'code', html: '<pre><code id="edge">代码正文</code></pre>' },
+  { name: 'table', html: '<table><tbody><tr><td id="edge">表格正文</td></tr></tbody></table>' },
+  { name: 'following fold title', html: '<details class="note-fold"><summary id="edge">下一标题</summary><div class="note-fold-body"><p>下一正文</p></div></details>' },
+  { name: 'nested fold body', html: '<blockquote><details class="note-fold"><summary>内层</summary><div class="note-fold-body"><p>隐藏正文</p></div></details><p id="edge">引用正文</p></blockquote>', nested: true }
+];
+
+for (const secondary of [false, true]) {
+  for (const input of ['keyboard', 'beforeinput']) {
+    for (const scenario of boundaryCases) {
+      test(`${secondary ? 'split' : 'primary'} ${scenario.name} Backspace via ${input} preserves hidden body`, async ({ page }) => {
+        await setup(page, secondary);
+        await page.evaluate(scenario => {
+          const host = document.activeElement;
+          host.querySelector('#gap').remove();
+          host.querySelector('details:last-child').remove();
+          if (scenario.nested) host.innerHTML = scenario.html;
+          else host.insertAdjacentHTML('beforeend', scenario.html);
+          const range = document.createRange();
+          range.selectNodeContents(host.querySelector(scenario.selector || '#edge'));
+          range.collapse(true);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+        }, scenario);
+        const before = await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML));
+        const text = await page.locator('#edge').textContent();
+        if (input === 'keyboard') await page.keyboard.press('Backspace');
+        else await page.evaluate(() => document.activeElement.dispatchEvent(new InputEvent('beforeinput', {
+          inputType: 'deleteContentBackward', bubbles: true, cancelable: true
+        })));
+        expect(await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML))).toEqual(before);
+        await expect(page.locator('#edge')).toHaveText(text);
+        expect(await page.evaluate(() => editor.getMarkdown())).toContain(scenario.nested ? '隐藏正文' : '**第一正文**');
+      });
+    }
+  }
+}
+
+for (const secondary of [false, true]) {
+  for (const input of ['keyboard', 'beforeinput']) {
+    for (const inTitle of [false, true]) {
+      test(`${secondary ? 'split' : 'primary'} Delete ${inTitle ? 'at closed title end' : 'before closed fold'} via ${input} preserves hidden body`, async ({ page }) => {
+        await setup(page, secondary);
+        await page.evaluate(inTitle => {
+          const host = document.activeElement;
+          if (!inTitle) host.insertAdjacentHTML('afterbegin', '<blockquote><p id="edge">引用正文</p></blockquote>');
+          const range = document.createRange();
+          range.selectNodeContents(host.querySelector(inTitle ? 'summary' : '#edge'));
+          range.collapse(false);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+        }, inTitle);
+        const before = await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML));
+        if (input === 'keyboard') await page.keyboard.press('Delete');
+        else await page.evaluate(() => document.activeElement.dispatchEvent(new InputEvent('beforeinput', {
+          inputType: 'deleteContentForward', bubbles: true, cancelable: true
+        })));
+        expect(await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML))).toEqual(before);
+        if (!inTitle) await expect(page.locator('#edge')).toHaveText('引用正文');
+      });
+    }
+  }
+}
+
+for (const scenario of [
+  { name: 'Backspace inside quote', key: 'Backspace', offset: 2, expected: '引正文' },
+  { name: 'Delete inside quote', key: 'Delete', offset: 1, expected: '引正文' },
+  { name: 'selected quote text', key: 'Backspace', offset: 1, end: 3, expected: '引文' },
+  { name: 'later quote paragraph', key: 'Backspace', offset: 0, later: true, expected: '引用正文' }
+]) {
+  test(`${scenario.name} retains normal text editing beside a closed fold`, async ({ page }) => {
+    await setup(page, false);
+    await page.evaluate(scenario => {
+      const host = document.activeElement;
+      host.querySelector('#gap').outerHTML = '<blockquote><p>引用正文</p>' + (scenario.later ? '<p id="edge">下一行</p>' : '') + '</blockquote>';
+      const text = host.querySelector(scenario.later ? '#edge' : 'blockquote p').firstChild;
+      const range = document.createRange();
+      range.setStart(text, scenario.offset);
+      range.setEnd(text, scenario.end ?? scenario.offset);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    }, scenario);
+    const before = await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML));
+    await page.keyboard.press(scenario.key);
+    expect(await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML))).toEqual(before);
+    await expect(page.locator('blockquote')).toHaveText(scenario.expected + (scenario.later ? '下一行' : ''));
+  });
+}
+
+test('word Backspace at the quote boundary is protected through beforeinput', async ({ page }) => {
+  await setup(page, false);
+  await page.evaluate(() => {
+    const host = document.activeElement;
+    host.querySelector('#gap').outerHTML = '<blockquote><p>引用正文</p></blockquote>';
+    const range = document.createRange();
+    range.setStart(host.querySelector('blockquote p').firstChild, 0);
+    range.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  const before = await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML));
+  await page.keyboard.press('Control+Backspace');
+  expect(await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML))).toEqual(before);
+  await expect(page.locator('blockquote')).toHaveText('引用正文');
+});

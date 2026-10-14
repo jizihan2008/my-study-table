@@ -3,6 +3,55 @@ const { _electron: electron } = require('playwright');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+test('队列点击和键盘勾选同步原待办、子待办及今日聚焦，并持久化完成状态', async () => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-queue-complete-'));
+  let app;
+  try {
+    app = await electron.launch({args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'], env: {...process.env, MST_E2E: '1', MST_USER_DATA_PATH: profile}});
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => typeof renderTodoQueue === 'function' && document.querySelector('#nav-today[aria-current="page"]'));
+    await page.evaluate(() => {
+      todos = [
+        {id: 401, text: '队列父任务', parentId: null, done: false, tags: [], createdAt: Date.now()},
+        {id: 402, text: '队列子任务', parentId: 401, done: false, tags: [], createdAt: Date.now()}
+      ];
+      saveData('study_todos_v2', todos);
+      saveData('study_today_focus', {days: {[getTodayStr()]: {items: [{todoId: 401, text: '队列父任务', done: false}]}}});
+      saveTodoQueue([401, 402]);
+      switchTab('today');
+    });
+    const parentCheck = page.locator('.todo-queue-item[data-todo-id="401"] [role="checkbox"]');
+    await expect(parentCheck).toHaveAttribute('aria-checked', 'false');
+    await parentCheck.click();
+    await expect(parentCheck).toHaveAttribute('aria-checked', 'true');
+    await expect(page.locator('.todo-queue-item.completed')).toHaveCount(2);
+    await expect(page.locator('#todayFocusCount')).toHaveText('1/1');
+    expect(await page.evaluate(() => JSON.parse(localStorage.getItem('study_todos_v2')).every(todo => todo.done && todo.completedAt === getTodayStr()))).toBe(true);
+    expect(await page.evaluate(() => loadTodoQueue())).toEqual([401, 402]);
+    await page.reload();
+    await page.waitForFunction(() => typeof renderTodoQueue === 'function');
+    await page.evaluate(() => switchTab('today'));
+    await expect(parentCheck).toHaveAttribute('aria-checked', 'true');
+    await parentCheck.focus();
+    await parentCheck.press('Space');
+    await expect(parentCheck).toHaveAttribute('aria-checked', 'false');
+    await expect(page.locator('#todayFocusCount')).toHaveText('0/1');
+    expect(await page.evaluate(() => findTodo(402).done)).toBe(true);
+    expect(await page.evaluate(() => findTodo(401).completedAt)).toBeUndefined();
+    await page.locator('#todayTodoQueueHideDone').click();
+    await expect(page.locator('.todo-queue-item')).toHaveCount(1);
+    await parentCheck.focus();
+    await parentCheck.press('Enter');
+    await expect(page.locator('.todo-queue-item')).toHaveCount(0);
+    await expect(page.locator('#todayTodoQueueCount')).toHaveText('0 / 2 项');
+    await expect(page.locator('.todo-queue-empty')).toContainText('均已完成');
+    expect(await page.evaluate(() => loadTodoQueue())).toEqual([401, 402]);
+  } finally {
+    if (app) await app.close();
+    await fs.rm(profile, {recursive: true, force: true});
+  }
+});
+
 test('队列拖拽允许左右偏离、经过空隙和移出后返回，取消时不改排序', async () => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-queue-drag-'));
   let app;
@@ -128,7 +177,7 @@ test('待办右键入队、折叠、拖拽和跨日聚焦', async () => {
   try {
     app = await electron.launch({args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'], env: {...process.env, MST_E2E: '1', MST_USER_DATA_PATH: profile}});
     const page = await app.firstWindow();
-    await page.waitForFunction(() => typeof renderTodoQueue === 'function' && document.querySelector('#nav-today[aria-current="page"]'));
+    await page.waitForFunction(() => typeof renderTodoQueue === 'function' && document.getElementById('todoContextMenu') && document.querySelector('#nav-today[aria-current="page"]'));
     await page.evaluate(() => {
       todos = Array.from({length: 7}, (_,i) => ({id: i+101, text: '队列任务 '+(i+1), parentId:null, done:false, tags:[], createdAt:Date.now()}));
       saveData('study_todos_v2', todos); saveData('study_today_focus', {days:{}});

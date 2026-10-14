@@ -55,20 +55,55 @@ function normalizeTimerRecordBindings(record) {
 }
 
 // 旧记录沿用 affectsFocus；未分类的非专注记录归为「其它」。
-function getTimerActivityType(record) {
-  if (record?.activityType === 'rest' || record?.activityType === 'other') return record.activityType;
-  return record?.affectsFocus === false ? 'other' : 'focus';
+
+
+// 统计时合并重叠区间，不修改原始记录或吞掉暂停间隔。
+function getTimerIntervalUnionMs(intervals) {
+  const sorted = intervals.filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start)
+    .map(s => ({ start: s.start, end: s.end })).sort((a, b) => a.start - b.start);
+  let totalMs = 0;
+  let end = -Infinity;
+  for (const interval of sorted) {
+    totalMs += Math.max(0, interval.end - Math.max(interval.start, end));
+    end = Math.max(end, interval.end);
+  }
+  return totalMs;
 }
 
-function getTimerActivityLabel(type) {
-  return type === 'rest' ? '休息' : type === 'other' ? '其它' : '专注';
+function getTimerRecordsDurationSummary(records, dateStr) {
+  const ids = loadTimerActivityTypes().filter(type => !type.disabled).map(type => type.id);
+  const intervals = Object.fromEntries(ids.map(id => [id, []]));
+  const unlocatedTypeMs = Object.fromEntries(ids.map(id => [id, 0]));
+  const dayStart = new Date(dateStr + 'T00:00:00');
+  const nextDay = new Date(dayStart);
+  nextDay.setDate(nextDay.getDate() + 1);
+  for (const record of Array.isArray(records) ? records : []) {
+    if (!record || record.date !== dateStr) continue;
+    const type = getTimerActivityType(record);
+    if (!Object.prototype.hasOwnProperty.call(intervals, type)) { intervals[type] = []; unlocatedTypeMs[type] = 0; }
+    const valid = (Array.isArray(record.sessions) ? record.sessions : [])
+      .filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start);
+    if (valid.length) {
+      for (const session of valid) {
+        const start = Math.max(session.start, dayStart.getTime());
+        const end = Math.min(session.end, nextDay.getTime());
+        if (end > start) intervals[type].push({ start, end });
+      }
+    } else {
+      // 没有起止时间的旧记录无法判断重叠，单独保留其时长并向日报说明。
+      const duration = Number(record.totalMs);
+      if (Number.isFinite(duration) && duration > 0) unlocatedTypeMs[type] += duration;
+    }
+  }
+  const typeMs = Object.fromEntries(Object.entries(intervals).map(([type, sessions]) =>
+    [type, getTimerIntervalUnionMs(sessions) + unlocatedTypeMs[type]]));
+  const unlocatedMs = Object.values(unlocatedTypeMs).reduce((sum, ms) => sum + ms, 0);
+  return {
+    totalMs: getTimerIntervalUnionMs(Object.values(intervals).flat()) + unlocatedMs,
+    typeMs, unlocatedMs
+  };
 }
 
-function renderTimerActivityOptions(type) {
-  return ['focus', 'rest', 'other'].map(value =>
-    `<option value="${value}"${value === type ? ' selected' : ''}>${getTimerActivityLabel(value)}</option>`
-  ).join('');
-}
 
 function timerRecordsHaveSameIdentity(a, b) {
   if (!a || !b || a.date !== b.date) return false;
@@ -143,9 +178,9 @@ function loadTimerRecords() {
   for (const rec of records) {
     if (!rec.id) { rec.id = genTimerRecordId(); changed = true; }
     const activityType = getTimerActivityType(rec);
-    if (rec.activityType !== activityType || rec.affectsFocus !== (activityType === 'focus')) {
+    if (rec.activityType !== activityType || typeof rec.affectsFocus !== 'boolean') {
       rec.activityType = activityType;
-      rec.affectsFocus = activityType === 'focus';
+      if (typeof rec.affectsFocus !== 'boolean') rec.affectsFocus = getTimerActivityAffectsFocus(activityType);
       changed = true;
     }
     if (rec.manual == null) { rec.manual = false; changed = true; }
@@ -340,6 +375,7 @@ if (typeof window !== 'undefined' && window.electronAPI && typeof window.electro
 
 // Manual record state
 let timerManualFormOpen = false;
+let timerManualFormSource = 'timer';
 let timerEditingRecordId = null; // null = add mode, id = edit mode
 let manualRecSelectedTodoId = null; // selected todo for the manual record form
 let manualRecSelectedTaskId = null;
@@ -352,11 +388,7 @@ function getTimerTask(taskId) {
 }
 
 function getTodayTimerTotalMs(records, todayStr) {
-  return (Array.isArray(records) ? records : []).reduce((total, record) => {
-    if (!record || record.date !== todayStr) return total;
-    const duration = Number(record.totalMs);
-    return total + (Number.isFinite(duration) && duration > 0 ? duration : 0);
-  }, 0);
+  return getTimerRecordsDurationSummary(records, todayStr).totalMs;
 }
 
 function renderTimer() {
@@ -459,12 +491,12 @@ function renderTimer() {
 
   container.innerHTML = `
     <div class="timer-panel">
-      <label class="timer-activity-field">
+      <div class="timer-activity-controls"><label class="timer-activity-field">
         <span>时段类型</span>
         <select id="timerActivityType" aria-label="时段类型" onchange="setTimerActivityType(this.value)">
           ${renderTimerActivityOptions(timerActivityType)}
         </select>
-      </label>
+      </label><button type="button" class="today-timer-link" onclick="openTimerTypeManager()">管理类型</button></div>
       ${pickerHtml}
       ${resumeNoticeHtml}
       <div class="timer-display" id="timerDisplay">${display}</div>
@@ -478,9 +510,9 @@ function renderTimer() {
           : `<button class="timer-btn timer-btn-pause" onclick="timerPause()"><i data-lucide="pause-circle" class="lucide-icon"></i><span class="timer-btn-label">暂停</span></button>
              <button class="timer-btn timer-btn-stop" onclick="timerStop()"><i data-lucide="stop-circle" class="lucide-icon"></i><span class="timer-btn-label">停止并保存</span></button>`
         }
-        ${!isCentered ? `<button class="timer-btn timer-btn-manual${timerManualFormOpen ? ' active' : ''}" onclick="toggleManualRecordForm()"><span class="timer-btn-icon">📝</span><span class="timer-btn-label">${timerManualFormOpen ? '取消' : '手动记录'}</span></button>` : ''}
+        ${!isCentered ? `<button class="timer-btn timer-btn-manual${timerManualFormOpen && timerManualFormSource === 'timer' ? ' active' : ''}" onclick="toggleManualRecordForm()"><span class="timer-btn-icon">📝</span><span class="timer-btn-label">${timerManualFormOpen && timerManualFormSource === 'timer' ? '取消' : '手动记录'}</span></button>` : ''}
       </div>
-      ${!isCentered && timerManualFormOpen ? renderManualRecordForm() : ''}
+      ${!isCentered && timerManualFormOpen && timerManualFormSource === 'timer' ? renderManualRecordForm() : ''}
     </div>
     <div class="timer-history" id="timerHistory">
       ${renderTimerHistory(records)}
@@ -582,8 +614,17 @@ function renderTimerHistory(records, options = {}) {
 
   let bodyHtml = '';
   for (const dateStr of sortedDates) {
-    const items = dateMap[dateStr];
-    let dayTotal = 0;
+    // 按时段排列，不依赖记录的保存顺序；无起止时间的旧记录放在最后。
+    const items = dateMap[dateStr].map(record => {
+      const sessions = (Array.isArray(record.sessions) ? record.sessions : [])
+        .filter(session => session && Number.isFinite(session.start) && Number.isFinite(session.end));
+      return {
+        record,
+        start: sessions.length ? Math.min(...sessions.map(session => session.start)) : Infinity,
+        end: sessions.length ? Math.max(...sessions.map(session => session.end)) : -Infinity
+      };
+    }).sort((a, b) => (a.start - b.start) || (b.end - a.end)).map(item => item.record);
+    const dayTotal = getTimerRecordsDurationSummary(items, dateStr).totalMs;
     const itemHtml = [];
     for (const rec of items) {
       normalizeTimerRecordBindings(rec);
@@ -606,11 +647,10 @@ function renderTimerHistory(records, options = {}) {
       const name = sessionName
         ? (targetName ? `⏱ ${sessionName} · ${targetName}` : `⏱ ${sessionName}`)
         : (targetName || (getTimerActivityType(rec) === 'focus' ? '⏱ 自由计时' : '⏱ ' + getTimerActivityLabel(getTimerActivityType(rec))));
-      dayTotal += rec.totalMs;
       if (rec.totalMs >= 1000) {
         let sessionDetail = '';
         if (rec.sessions && rec.sessions.length > 0) {
-          const sorted = [...rec.sessions].sort((a, b) => a.start - b.start);
+          const sorted = [...rec.sessions].sort((a, b) => (a.start - b.start) || (b.end - a.end));
           const detailItems = sorted.map(s =>
             `<div class="timer-history-session">${formatTimeOnly(s.start)} — ${formatTimeOnly(s.end)} (${formatTimerTime(s.end - s.start)})</div>`
           ).join('');
@@ -619,7 +659,7 @@ function renderTimerHistory(records, options = {}) {
         itemHtml.push(`<div class="timer-history-item${(!rec.affectsFocus) ? ' no-focus' : ''}">
           <span class="timer-history-name">
             <span class="timer-history-label" title="${escapeAttr(name)}">${escapeHtml(name)}</span>
-            ${getTimerActivityType(rec) !== 'focus' ? `<span class="timer-no-focus-badge" title="不计入专注时间">${getTimerActivityLabel(getTimerActivityType(rec))}</span>` : ''}
+            <span class="timer-activity-badge${rec.affectsFocus === false ? ' timer-no-focus-badge' : ''}" title="${rec.affectsFocus === false ? '不计入专注时间' : '计入专注时间'}">${escapeHtml(getTimerActivityLabel(getTimerActivityType(rec)))}</span>
             ${rec.manual ? '<span class="timer-manual-badge" title="手动添加">✍</span>' : ''}
             ${rec.auto ? '<span class="timer-auto-badge" title="由日历事件自动计入（删除日历事件不会删除此记录）">📅</span>' : ''}
           </span>
@@ -679,7 +719,7 @@ function setTimerSessionName(value) {
 }
 
 function setTimerActivityType(value) {
-  if (!['focus', 'rest', 'other'].includes(value) || value === timerActivityType) return;
+  if (!loadTimerActivityTypes().some(type => type.id === value && !type.disabled) || value === timerActivityType) return;
   const wasRunning = timerRunning;
   // 先封存旧类型，避免切换类型时把已累计的时间重新分类。
   if (timerRunning || timerElapsed > 0) timerStop();
@@ -722,13 +762,13 @@ function startFocusTimer(todoId) {
 function timerStart() {
   if (timerRunning) return;
   timerRunning = true;
-  if (typeof notifyDesktopPet === 'function') notifyDesktopPet(timerActivityType === 'focus' ? 'focus' : 'rest');
+  if (typeof notifyDesktopPet === 'function') notifyDesktopPet(getTimerActivityAffectsFocus(timerActivityType) ? 'focus' : 'rest');
   timerSessionStart = Date.now();
   timerStartedThisSession = true;
   timerStaleNotice = null;
   timerHistoryExpanded = false;
   // 专注开始：空闲计时器归零（空闲提醒逻辑）
-  if (timerActivityType === 'focus' && typeof resetIdleTimerOnFocus === 'function') { try { resetIdleTimerOnFocus(); } catch (e) {} }
+  if (getTimerActivityAffectsFocus(timerActivityType) && typeof resetIdleTimerOnFocus === 'function') { try { resetIdleTimerOnFocus(); } catch (e) {} }
   timerInterval = setInterval(function() {
     updateTimerTick();
     saveTimerState();
@@ -787,7 +827,7 @@ function timerStop() {
     const todayStr = formatDate(new Date());
     const rawSessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
     const sessions = normalizeTimerSessionsForRecord(rawSessions, timerElapsed);
-    const baseRecord = normalizeTimerRecordBindings({ id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, activityType: timerActivityType, affectsFocus: timerActivityType === 'focus', manual: false, todoId: timerLinkedTodoId, goalId: timerLinkedGoalId, taskId: timerLinkedTaskId });
+    const baseRecord = normalizeTimerRecordBindings({ id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, activityType: timerActivityType, affectsFocus: getTimerActivityAffectsFocus(timerActivityType), manual: false, todoId: timerLinkedTodoId, goalId: timerLinkedGoalId, taskId: timerLinkedTaskId });
     records.push(baseRecord);
     saveTimerRecords(records);
   }
@@ -808,7 +848,7 @@ function timerSave() {
   const todayStr = formatDate(new Date());
   const rawSessions = timerSessions.length > 0 ? [...timerSessions] : [{ start: timerSessionStart, end: now }];
   const sessions = normalizeTimerSessionsForRecord(rawSessions, timerElapsed);
-  const baseRecord = normalizeTimerRecordBindings({ id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, activityType: timerActivityType, affectsFocus: timerActivityType === 'focus', manual: false, todoId: timerLinkedTodoId, goalId: timerLinkedGoalId, taskId: timerLinkedTaskId });
+  const baseRecord = normalizeTimerRecordBindings({ id: genTimerRecordId(), name: timerSessionName.trim(), date: todayStr, totalMs: timerElapsed, sessions, activityType: timerActivityType, affectsFocus: getTimerActivityAffectsFocus(timerActivityType), manual: false, todoId: timerLinkedTodoId, goalId: timerLinkedGoalId, taskId: timerLinkedTaskId });
   records.push(baseRecord);
   saveTimerRecords(records);
   timerElapsed = 0;
@@ -1158,12 +1198,26 @@ function renderManualRecordSessionRow(session, index, total) {
   </div>`;
 }
 
-function toggleManualRecordForm() {
-  timerManualFormOpen = !timerManualFormOpen;
+function renderTodayManualRecordForm() {
+  const host = document.getElementById('todayTimerManualForm');
+  const button = document.getElementById('todayTimerManual');
+  const open = timerManualFormOpen && timerManualFormSource === 'today';
+  if (host) host.innerHTML = open ? renderManualRecordForm() : '';
+  if (button) {
+    button.textContent = open ? '取消补记' : '＋ 手动记录';
+    button.setAttribute('aria-expanded', String(open));
+  }
+}
+
+function toggleManualRecordForm(source = 'timer') {
+  timerManualFormOpen = timerManualFormSource !== source || !timerManualFormOpen;
+  timerManualFormSource = source;
   timerEditingRecordId = null;
   manualRecSelectedTodoId = null;
   manualRecSelectedTaskId = null;
   renderTimer();
+  renderTodayManualRecordForm();
+  if (timerManualFormOpen && source === 'today') document.getElementById('manualRecName')?.focus();
 }
 
 function renderManualRecordForm() {
@@ -1224,12 +1278,12 @@ function renderManualRecordForm() {
         <div class="timer-manual-field">
           <label for="manualRecActivityType">时段类型</label>
           <select id="manualRecActivityType">${renderTimerActivityOptions(defaultActivityType)}</select>
-          <span class="hint">休息和其它时段不计入专注时间统计</span>
+          <span class="hint">是否计入专注统计由所选类型决定</span>
         </div>
       </div>
       <div class="timer-manual-actions">
         <button class="timer-btn timer-btn-start" onclick="saveManualRecord()">💾 ${isEdit ? '保存修改' : '添加记录'}</button>
-        <button class="timer-btn timer-btn-reset" onclick="toggleManualRecordForm()">取消</button>
+        <button class="timer-btn timer-btn-reset" onclick="toggleManualRecordForm('${timerManualFormSource}')">取消</button>
       </div>
     </div>`;
 }
@@ -1350,7 +1404,7 @@ function saveManualRecord() {
   const goalId = goalEl ? parseInt(goalEl.value) || null : null;
   const taskId = taskEl ? parseInt(taskEl.value) || null : null;
   const activityType = getTimerActivityType({ activityType: activityEl?.value || 'focus' });
-  const affectsFocus = activityType === 'focus';
+  const affectsFocus = getTimerActivityAffectsFocus(activityType);
   const name = nameEl ? nameEl.value.trim().slice(0, 80) : '';
 
   const records = loadTimerRecords();
@@ -1364,7 +1418,9 @@ function saveManualRecord() {
         name, todoId, goalId, taskId,
         date: dateStr, totalMs,
         sessions: normalizedSessions,
-        activityType, affectsFocus, manual: true
+        activityType,
+        affectsFocus: getTimerActivityType(records[idx]) === activityType ? records[idx].affectsFocus : affectsFocus,
+        manual: true
       });
     }
   } else {
@@ -1385,14 +1441,17 @@ function saveManualRecord() {
   manualRecSelectedTodoId = null;
   manualRecSelectedTaskId = null;
   renderTimer();
+  renderTodayManualRecordForm();
 }
 
 function editTimerRecord(recordId) {
+  timerManualFormSource = 'timer';
   timerEditingRecordId = recordId;
   timerManualFormOpen = true;
   // 编辑入口必须展开历史区域；否则专注进行时折叠的布局会把表单一并藏起。
   timerHistoryExpanded = true;
   renderTimer();
+  renderTodayManualRecordForm();
 }
 
 function deleteTimerRecord(recordId) {
@@ -1484,7 +1543,7 @@ function createTimerFloat() {
   ball.innerHTML = `
     <div class="tf-header">
       <span class="tf-icon">⏱</span>
-      <span class="tf-title" id="tfTitle">${getTimerActivityLabel(timerActivityType)}计时</span>
+      <span class="tf-title" id="tfTitle">${escapeHtml(getTimerActivityLabel(timerActivityType))}计时</span>
       <button class="tf-close" onclick="event.stopPropagation(); closeTimerFloat()" title="关闭浮窗">✕</button>
     </div>
     <div class="tf-body" onclick="timerFloatGo()">

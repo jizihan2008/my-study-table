@@ -7,7 +7,8 @@ const fs = require('node:fs');
 const path = require('node:path');
 const vm = require('node:vm');
 
-const timerSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'timer.js'), 'utf8')
+const timerTypesSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'timer-types.js'), 'utf8');
+const timerSource = timerTypesSource + '\n' + fs.readFileSync(path.join(__dirname, '..', 'js', 'timer.js'), 'utf8')
   .split('// Restore timer state on page load')[0];
 
 const HOUR = 60 * 60 * 1000;

@@ -70,7 +70,8 @@ function addCalendarEvent(date, title, time, color, note, times, auto) {
     weekdays,
     skippedDates: [],
     autoRecord: !!(auto && auto.autoRecord),
-    autoTimer: auto ? auto.autoTimer !== false : false,
+    autoTimer: auto?.autoActivityType ? getTimerActivityAffectsFocus(auto.autoActivityType) : auto ? auto.autoTimer !== false : false,
+    autoActivityType: getCalendarTimerActivityType(auto),
     createdAt: now
   });
   saveCalendarEvents(events);
@@ -142,7 +143,8 @@ function updateCalendarEvent(id, updates) {
     ev.endTime = nextEnd;
   }
   if (updates.autoRecord !== undefined) ev.autoRecord = !!updates.autoRecord;
-  if (updates.autoTimer !== undefined) ev.autoTimer = !!updates.autoTimer;
+  if (updates.autoTimer !== undefined) { ev.autoTimer = !!updates.autoTimer; ev.autoActivityType = ev.autoTimer ? 'focus' : 'other'; }
+  if (updates.autoActivityType !== undefined) { ev.autoActivityType = getTimerActivityType({ activityType: updates.autoActivityType }); ev.autoTimer = getTimerActivityAffectsFocus(ev.autoActivityType); }
   // 关掉自动计入后清掉记账水位，重新开启时按当前时段重新判定
   if (ev.allDay) ev.autoRecord = false;
   if (ev.autoRecord !== true) ev.lastAutoRecordEnd = 0;
@@ -461,7 +463,8 @@ function runCalendarAutoRecords(now) {
         date: _formatCalAutoDate(item.range.endTs),
         totalMs,
         sessions: [{ start: item.range.startTs, end: item.range.endTs }],
-        affectsFocus: ev.autoTimer !== false,
+        activityType: getCalendarTimerActivityType(ev),
+        affectsFocus: ev.autoActivityType ? getTimerActivityAffectsFocus(ev.autoActivityType) : ev.autoTimer !== false,
         manual: false,
         auto: true,
         sourceEventId: ev.id,
@@ -716,7 +719,7 @@ function renderCalendarTodoList() {
       const timeLabel = formatCalEventTimeRange(ev, '—');
       const recurring = isCalEventRecurring(ev);
       const autoTitle = ev.autoRecord === true
-        ? ' · 结束后自动计入当天计时记录' + (ev.autoTimer === false ? '（不计入专注时间）' : '')
+        ? ' · 自动计入：' + getTimerActivityLabel(getCalendarTimerActivityType(ev)) + ((ev.autoActivityType ? !getTimerActivityAffectsFocus(ev.autoActivityType) : ev.autoTimer === false) ? '（不计入专注时间）' : '')
         : '';
       const repeatTitle = recurring ? ' · ' + calEventRepeatLabel(ev) + '重复' : '';
       html += `<div class="cal-event-item" style="border-left-color:${c.dot}" title="${escapeHtml((ev.note || '') + autoTitle + repeatTitle)}"
@@ -920,6 +923,8 @@ function openCalEventModal(dateStr, eventId) {
       endInput.value = normalizeCalTime(ev.endTime);
       autoRecordInput.checked = ev.autoRecord === true;
       autoTimerInput.checked = ev.autoTimer !== false;
+      const typeSelect = document.getElementById('calEventActivityType');
+      if (typeSelect) { typeSelect.innerHTML = renderTimerActivityOptions(getCalendarTimerActivityType(ev)); typeSelect.value = getCalendarTimerActivityType(ev); }
       noteInput.value = ev.note || '';
       repeatSelect.value = isCalEventRecurring(ev) ? 'weekly' : 'none';
       setCalEventWeekdaySelection(isCalEventRecurring(ev) ? getCalEventWeekdays(ev) : []);
@@ -939,6 +944,8 @@ function openCalEventModal(dateStr, eventId) {
     endInput.value = '';
     autoRecordInput.checked = false;
     autoTimerInput.checked = true;
+    const typeSelect = document.getElementById('calEventActivityType');
+    if (typeSelect) { typeSelect.innerHTML = renderTimerActivityOptions('focus'); typeSelect.value = 'focus'; }
     noteInput.value = '';
     repeatSelect.value = 'none';
     // 新建时默认勾选「这一天是星期几」，切到每周重复就直接可用
@@ -1048,6 +1055,8 @@ function syncCalEventAutoTimerEnabled() {
   const allDay = !!document.getElementById('calEventAllDay')?.checked;
   const on = autoRecordInput.checked && !allDay;
   autoTimerInput.disabled = !on;
+  const typeSelect = document.getElementById('calEventActivityType');
+  if (typeSelect) { typeSelect.disabled = !on; autoTimerInput.checked = getTimerActivityAffectsFocus(typeSelect.value || 'focus'); }
   const label = document.getElementById('calEventAutoTimerLabel');
   if (label) label.classList.toggle('disabled', !on);
   const hint = document.getElementById('calEventAutoHint');
@@ -1150,7 +1159,8 @@ function submitCalEvent() {
 
   const auto = {
     autoRecord: !allDay && !!(autoRecordInput && autoRecordInput.checked),
-    autoTimer: autoTimerInput ? autoTimerInput.checked !== false : true
+    autoTimer: autoTimerInput ? autoTimerInput.checked !== false : true,
+    autoActivityType: document.getElementById('calEventActivityType')?.value || 'focus'
   };
 
   const repeatSelect = document.getElementById('calEventRepeat');

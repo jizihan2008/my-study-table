@@ -5,7 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 
 // 计时记录展示：待办显示完整父级路径；已命名的记录不再补「自由计时」。
-const timerSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'timer.js'), 'utf8')
+const timerTypesSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'timer-types.js'), 'utf8');
+const timerSource = timerTypesSource + '\n' + fs.readFileSync(path.join(__dirname, '..', 'js', 'timer.js'), 'utf8')
   .split('// Restore timer state on page load')[0];
 
 const settingsSource = fs.readFileSync(path.join(__dirname, '..', 'js', 'settings.js'), 'utf8');

@@ -108,6 +108,11 @@ function toggleTodoQueue() {
   renderTodoQueue();
 }
 
+function toggleQueueTodo(id) {
+  toggleTodo(id);
+  renderFocusList();
+}
+
 function setTodoQueueHideDone(hidden) {
   try {
     localStorage.setItem('study_todo_queue_hide_done', String(hidden));
@@ -280,7 +285,7 @@ function renderTodoQueue() {
       ondragstart="startTodoQueueDrag(event, ${id})" ondragend="endTodoQueueDrag()">
       <div class="today-focus-main">
       <span class="todo-queue-grip" title="拖拽排序 · 第 ${index + 1} 项">⠿</span>
-      <span class="focus-check${todo.done ? ' done' : ''} disabled" title="${todo.done ? '已完成' : '未完成'}" aria-label="${todo.done ? '已完成' : '未完成'}"></span>
+      <button type="button" class="focus-check${todo.done ? ' done' : ''}" style="padding:0" role="checkbox" aria-checked="${todo.done}" title="${todo.done ? '取消完成' : '标记完成'}" aria-label="${todo.done ? '取消完成' : '标记完成'}" onclick="event.stopPropagation(); toggleQueueTodo(${id})"></button>
       <span class="focus-text${todo.done ? ' completed' : ''}" title="${escapeAttr(path.full)}">
         ${path.parents.length ? '<span class="focus-parent-path">' + path.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>') + '</span>' : ''}
         <span class="focus-title">${escapeHtml(todo.text)}</span>

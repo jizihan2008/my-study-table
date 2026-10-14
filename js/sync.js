@@ -37,6 +37,7 @@
     'study_notes_v2',          // 笔记（当前版）
     'study_notes',             // 笔记（旧版备份）
     'study_notes_folders',     // 笔记文件夹结构
+    'study_timer_activity_types', // 自定义计时类型
     'study_timer_records',     // 专注计时记录
     'study_taskline_v1',       // 任务线（学习任务进度）
     'study_habits_v2',         // 习惯打卡（当前版 v2，habits.js HABITS_KEY）
@@ -75,7 +76,7 @@
     { id: 'habits', label: '习惯与打卡', keys: ['study_habits_v2', 'study_habits', 'study_habits_v1', 'study_checkin', 'study_habits_archive'] },
     { id: 'books', label: '教材', keys: ['study_books_v1', 'study_books_meta', 'study_bk_quiz_state_v1'] },
     { id: 'calendar', label: '日历', keys: ['study_calendar_events'] },
-    { id: 'timer', label: '计时记录', keys: ['study_timer_records'] },
+    { id: 'timer', label: '计时记录', keys: ['study_timer_records', 'study_timer_activity_types'] },
     { id: 'taskline', label: '任务线与目标', keys: ['study_taskline_v1', 'study_longterm_goals', 'study_today_focus'] },
     { id: 'stats', label: '学习统计', keys: ['study_stats'] },
     { id: 'skills', label: 'AI 技能', keys: ['study_ai_skills_v1'] },
@@ -119,6 +120,7 @@
     'study_notes': '笔记（旧版）',
     'study_notes_folders': '笔记文件夹',
     'study_timer_records': '计时记录',
+    'study_timer_activity_types': '计时类型',
     'study_taskline_v1': '任务线',
     'study_habits': '习惯打卡',
     'study_habits_v2': '习惯打卡（当前版）',

@@ -1322,6 +1322,27 @@ function renderGoals() {
   if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 
+function renderTodayFlashcards() {
+  const list = document.getElementById('todayFlashcardList');
+  if (!list || typeof GlobalTranslation === 'undefined') return;
+  const groups = GlobalTranslation.getTodayReviewGroups();
+  const dueCount = groups.reduce((sum, group) => sum + group.dueCount, 0);
+  document.getElementById('todayFlashcardCount').textContent = `${dueCount} 张`;
+  list.innerHTML = groups.map(group => `
+    <div class="today-flashcard-row">
+      <div class="today-flashcard-info">
+        <div class="today-flashcard-title">${escapeHtml(group.label)}<span>${group.dueCount} 张待复习</span></div>
+        <div class="today-flashcard-preview">${group.words.length ? escapeHtml(group.words.join(' · ')) : (group.total ? '当前没有到期闪卡' : '还没有收藏生词')}</div>
+        ${group.unreviewedCount ? `<div class="today-flashcard-meta">${group.unreviewedCount} 个${group.id === 'vocabulary' ? '生词尚未复习' : '单词尚未学习'}</div>` : ''}
+      </div>
+      <button type="button" class="today-review-toggle" data-flashcard-group="${group.id}" aria-label="${group.dueCount ? '开始复习' : '查看'}${escapeHtml(group.label)}闪卡">${group.dueCount ? '开始复习' : '查看闪卡'}<i data-lucide="arrow-up-right" class="lucide-icon" aria-hidden="true"></i></button>
+    </div>`).join('');
+  list.querySelectorAll('[data-flashcard-group]').forEach(button => {
+    button.addEventListener('click', () => GlobalTranslation.openReviewFromToday(button.dataset.flashcardGroup));
+  });
+  if (typeof lucide !== 'undefined') lucide.createIcons();
+}
+
 function renderToday() {
   const welcomeDate = document.getElementById('todayWelcomeDate');
   if (welcomeDate) welcomeDate.textContent = new Intl.DateTimeFormat('zh-CN', { month: 'long', day: 'numeric', weekday: 'long' }).format(new Date());
@@ -1330,6 +1351,7 @@ function renderToday() {
   renderFocusList();
   renderTodoQueue();
   renderReviewCard();
+  renderTodayFlashcards();
   renderGoals();
   renderTodaySchedule();
   renderTodayTimerRecords();
@@ -1340,7 +1362,7 @@ let todayTimerTypeFilter = 'all';
 let todayTimerRecordsExpanded = false;
 
 function setTodayTimerTypeFilter(type) {
-  todayTimerTypeFilter = ['focus', 'rest', 'other'].includes(type) ? type : 'all';
+  todayTimerTypeFilter = type === 'all' || loadTimerActivityTypes().some(item => item.id === type) || loadTimerRecords().some(record => getTimerActivityType(record) === type) ? type : 'all';
   renderTodayTimerRecords();
 }
 
@@ -1353,16 +1375,23 @@ function renderTodayTimerRecords(records) {
   const list = document.getElementById('todayTimerRecords');
   if (!list || typeof loadTimerRecords !== 'function' || typeof renderTimerHistory !== 'function') return;
   const today = getTodayStr();
-  const items = (records || loadTimerRecords()).filter(record => record.date === today
-    && (todayTimerTypeFilter === 'all' || getTimerActivityType(record) === todayTimerTypeFilter));
+  const todayRecords = (records || loadTimerRecords()).filter(record => record.date === today);
   list.classList.toggle('expanded', todayTimerRecordsExpanded);
   const filter = document.getElementById('todayTimerTypeFilter');
-  if (filter) filter.value = todayTimerTypeFilter;
+  if (filter) {
+    const ids = new Set((records || loadTimerRecords()).filter(record => record.date === today).map(getTimerActivityType));
+    const types = loadTimerActivityTypes().filter(type => !type.disabled || ids.has(type.id));
+    for (const id of ids) if (!types.some(type => type.id === id)) types.push({ id, label: getTimerActivityLabel(id) });
+    if (!types.some(type => type.id === todayTimerTypeFilter)) todayTimerTypeFilter = 'all';
+    filter.innerHTML = '<option value="all">全部</option>' + types.map(type => `<option value="${escapeAttr(type.id)}">${escapeHtml(type.label)}</option>`).join('');
+    filter.value = todayTimerTypeFilter;
+  }
   const expand = document.getElementById('todayTimerExpand');
   if (expand) {
     expand.textContent = todayTimerRecordsExpanded ? '收起' : '展开全部';
     expand.setAttribute('aria-expanded', String(todayTimerRecordsExpanded));
   }
+  const items = todayRecords.filter(record => todayTimerTypeFilter === 'all' || getTimerActivityType(record) === todayTimerTypeFilter);
   list.innerHTML = renderTimerHistory(items, { readOnly: true })
     || `<div class="today-goals-empty">${todayTimerTypeFilter === 'all' ? '今天还没有计时记录，完成计时或手动补记后会显示在这里。' : '今天还没有此类型的计时记录。'}</div>`;
 }

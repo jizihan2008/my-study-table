@@ -200,9 +200,39 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .today-section-title svg { margin-right: 5px; }
 .today-dashboard .empty-state { padding: 24px 10px; }
 .today-timer-link { border: 0; background: transparent; color: var(--primary); font: inherit; font-size: 12px; cursor: pointer; flex-shrink: 0; padding: 4px; }
+.today-flashcard-card .today-review-header { gap: 8px; flex-wrap: wrap; }
+.today-flashcard-row { display: flex; align-items: center; gap: 12px; padding: 12px 0; border-top: 1px solid var(--border); }
+.today-flashcard-row:first-child { border-top: 0; padding-top: 0; }
+.today-flashcard-row:last-child { padding-bottom: 0; }
+.today-flashcard-info { flex: 1; min-width: 0; }
+.today-flashcard-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; font-size: 13px; font-weight: 600; }
+.today-flashcard-title span, .today-flashcard-meta { font-size: 11px; font-weight: 400; color: var(--text-secondary); }
+.today-flashcard-preview { font-size: 12px; color: var(--text-secondary); margin-top: 5px; overflow-wrap: anywhere; }
+.today-flashcard-meta { margin-top: 4px; }
+.today-flashcard-row button { flex-shrink: 0; }
+.today-flashcard-row button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
 .today-timer-records { max-height: 320px; overflow-y: auto; }
 .today-timer-records.expanded { max-height: none; overflow: visible; }
 .today-timer-toolbar { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; margin-bottom: 12px; }
+.today-timer-header-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.today-timer-card .today-checkin-header { flex-wrap: wrap; gap: 8px; }
+.today-timer-header-actions button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+#todayTimerManualForm .timer-manual-form { margin: 0 0 12px; }
+#todayTimerManualForm .timer-manual-session-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); }
+#todayTimerManualForm .timer-manual-session-index { width: auto; grid-column: 1 / -1; }
+#todayTimerManualForm .timer-manual-session-row .timer-manual-field { min-width: 0; }
+#todayTimerManualForm .timer-manual-session-date { grid-column: 1 / -1; }
+#todayTimerManualForm .timer-manual-session-remove { grid-column: 2; justify-self: end; }
+#todayTimerManualForm .timer-manual-actions { flex-wrap: wrap; }
+.timer-activity-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.timer-activity-controls select { max-width: 180px; }
+.timer-type-manager { width: min(560px, calc(100vw - 32px)); }
+.timer-types-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.timer-type-row { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 10px; background: var(--input-bg); border: 1px solid var(--border); border-radius: 8px; }
+.timer-type-name { flex: 1; min-width: 100px; width: 120px; padding: 6px 8px; color: var(--text); background: var(--card); border: 1px solid var(--border); border-radius: 6px; }
+.timer-type-row label, .timer-new-type-focus { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--text-secondary); }
+.timer-activity-badge { display: inline-block; padding: 1px 5px; border-radius: 4px; font-size: 10px; line-height: 1.5; background: var(--accent-soft); color: var(--text-secondary); white-space: normal; overflow-wrap: anywhere; }
+#timerTypeManager { z-index: 12000; }
 .today-timer-filter { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: 12px; }
 .today-timer-filter select { width: auto; margin: 0; padding: 5px 8px; border: 1px solid var(--border); border-radius: 8px; background: var(--input-bg); color: var(--text); font: inherit; }
 .today-timer-toolbar :is(select, button):focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }

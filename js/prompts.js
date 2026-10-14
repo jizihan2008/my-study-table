@@ -223,6 +223,7 @@ const PROMPT_DATA_LABELS = {
 };
 
 function friendlyPromptLabel(key) {
+  if (key === 'ydayTimerStatisticsNote' || key === 'todayTimerStatisticsNote') return '计时时长统计口径';
   if (key === 'note') return '备注';
   return PROMPT_DATA_LABELS[key] || String(key).replace(/([a-z0-9])([A-Z])/g, '$1 $2');
 }

@@ -313,9 +313,8 @@ test('tool groups are chosen by the conversation and cover every tool', () => {
   const groupKeys = inVm('AI_TOOL_GROUPS.map(g => g.key)');
   const allTools = inVm('Object.keys(AI_TOOLS)');
   const grouped = inVm('AI_TOOL_GROUPS.flatMap(g => g.tools)');
-  // 业务工具恰好属于一个组；用户已发送的本对话图片有独立的只读复查入口。
-  const visualTools = inVm('AI_CONVERSATION_VISUAL_TOOLS');
-  assert.deepEqual([...grouped, ...visualTools].sort(), [...allTools].sort());
+  // 所有工具恰好属于一个可勾选的接口组。
+  assert.deepEqual([...grouped].sort(), [...allTools].sort());
   assert.equal(new Set(grouped).size, grouped.length);
 
   // 未设置过 → 沿用记住的选择；再没有 → 全部开放

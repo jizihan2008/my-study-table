@@ -26,7 +26,7 @@ function harness() {
 }
 
 function visualConversation(ctx, count = 12) {
-  const conv = { id: 'origin', messages: [], _toolGroups: [] };
+  const conv = { id: 'origin', messages: [], _toolGroups: ['attachment'] };
   ctx.initTreeOnConv(conv);
   ctx.appendMessage(conv, { role: 'user', content: '解释教材', attachments: [{ name: '教材.pdf', pdfMode: 'image' }],
     visionFiles: Array.from({ length: count }, (_, i) => ({ type: 'image_url', dataUrl: png,
@@ -37,6 +37,136 @@ function urls(messages) {
   return messages.flatMap(message => Array.isArray(message.content)
     ? message.content.filter(part => part.type === 'image_url').map(part => part.image_url.url) : []);
 }
+
+async function textConversation(ctx, text = '全文'.repeat(6000) + '文件末尾') {
+  const conv = { id: 'origin', messages: [], _toolGroups: ['attachment'] };
+  ctx.initTreeOnConv(conv);
+  const file = new File([text], '历史资料.md');
+  ctx.aiAttachmentStore = async () => { throw new Error('test fallback'); };
+  const reference = await ctx.retainAiAttachmentFile({ name: file.name, file }, conv.id);
+  ctx.appendMessage(conv, { role: 'user', content: '请看这个附件\n' + text.slice(0, 180),
+    attachments: [{ name: file.name, ...reference, content: text.slice(0, 8000) + '\n[内容过长，已截断...]' }] });
+  for (let i = 0; i < 20; i++) {
+    ctx.appendMessage(conv, { role: 'assistant', content: '回答' });
+    ctx.appendMessage(conv, { role: 'user', content: '继续 ' + i });
+  }
+  return { conv, text };
+}
+
+test('text attachment name and ID survive context eviction; paginated reads recover the entire original', async () => {
+  const ctx = harness(), { conv, text } = await textConversation(ctx);
+  const cfg = { ...config, contextLimit: 2 };
+  const messages = ctx.buildApiMessages(conv, null, cfg);
+  const notice = messages.find(message => String(message.content).startsWith('【历史文字附件清单'));
+  assert.ok(notice);
+  assert.match(notice.content, /历史资料.md/);
+  assert.match(notice.content, /read_conversation_file/);
+  const tools = [...ctx.selectAiToolsForConversation(conv, false, false, cfg)];
+  assert.deepEqual(tools.sort(), ['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image']);
+  const listed = await ctx.executeToolCallStructured('list_conversation_files', { search: '历史', pageSize: 1 }, { conv });
+  assert.equal(listed.data.total, 1);
+  const fileId = listed.data.items[0].fileId;
+  assert.ok(notice.content.includes(fileId));
+  let recovered = '', offset = 0;
+  while (offset !== null) {
+    const result = await ctx.executeToolCallStructured('read_conversation_file', { fileId, offset, limit: 3000 }, { conv });
+    assert.equal(result.ok, true);
+    assert.equal(result.data.totalChars, text.length);
+    recovered += result.data.content;
+    offset = result.data.nextOffset;
+    assert.equal(result.data.complete, offset === null);
+  }
+  assert.equal(recovered, text);
+  assert.equal(ctx.getAiToolMetadata('read_conversation_file').effect, 'read');
+  assert.equal(ctx.beginAiToolTransaction('read_conversation_file'), null);
+  assert.equal(ctx.getAiToolJsonSchema('read_conversation_file').properties.offset.type, 'integer');
+});
+
+test('same-name text attachments are distinct; other conversations, branches and truncated legacy previews fail explicitly', async () => {
+  const ctx = harness(), { conv } = await textConversation(ctx);
+  ctx.appendMessage(conv, { role: 'user', content: '另一份', attachments: [{ name: '历史资料.md', content: '另一份全文' }] });
+  const resources = ctx.getAiConversationTextResources(conv);
+  assert.equal(resources.length, 2);
+  assert.notEqual(resources[0].fileId, resources[1].fileId);
+  const result = await ctx.executeToolCallStructured('read_conversation_file', { fileId: resources[1].fileId }, { conv });
+  assert.equal(result.data.content, '另一份全文');
+  assert.equal((await ctx.executeToolCallStructured('read_conversation_file', { fileId: resources[0].fileId },
+    { conv: { id: 'other', messages: [resources[0].message] } })).ok, false);
+  assert.equal((await ctx.executeToolCallStructured('read_conversation_file', { fileId: resources[0].fileId },
+    { conv: { id: conv.id, messages: [] } })).ok, false);
+  ctx.appendMessage(conv, { role: 'user', content: '', attachments: [{ name: '旧记录.txt', content: '预览\n[内容过长，已截断...]' }] });
+  const legacy = ctx.getAiConversationTextResources(conv).at(-1);
+  const failed = await ctx.executeToolCallStructured('read_conversation_file', { fileId: legacy.fileId }, { conv });
+  assert.equal(failed.ok, false);
+  assert.match(failed.text, /重新上传/);
+  for (const params of [{ fileId: '../secret' }, { fileId: legacy.fileId, offset: -1 },
+    { fileId: legacy.fileId, limit: 8001 }, { fileId: legacy.fileId, extra: true }]) {
+    assert.equal(ctx.validateAiToolCall('read_conversation_file', params).ok, false);
+  }
+});
+
+test('mixed omitted text and visual catalogs share the reserved context budget', async () => {
+  const ctx = harness(), { conv } = await textConversation(ctx);
+  ctx.appendMessage(conv, { role: 'user', content: '图片资料', visionFiles: [{ type: 'image_url', name: '扫描.png', dataUrl: png }] });
+  ctx.appendMessage(conv, { role: 'assistant', content: '回答' });
+  ctx.appendMessage(conv, { role: 'user', content: '阅读历史资料' });
+  const messages = ctx.buildApiMessages(conv, null, { ...config, contextLimit: 2 });
+  const notices = messages.filter(message => /^【历史(?:文字附件清单|视觉资料)/.test(String(message.content)));
+  assert.equal(notices.length, 2);
+  assert.ok(notices.reduce((sum, message) => sum + ctx.estimateAiTokens(message.content) + 12, 0) <= 1600);
+  assert.match(notices.map(message => message.content).join('\n'), /历史资料.md/);
+  assert.throws(() => ctx.buildAiOmittedTextNotice(ctx.getAiConversationTextResources(conv), { messages: [] }, 30), /预算不足/);
+});
+
+test('attachment group controls all four tools and disabled catalogs retain filenames without unavailable calls', async () => {
+  const ctx = harness(), { conv } = await textConversation(ctx);
+  const expected = ['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image'];
+  const nativeCfg = { ...config, baseUrl: 'https://api.deepseek.com/v1' };
+  assert.deepEqual(Array.from(ctx.selectedNativeLocalTools(conv, nativeCfg), item => item.function.name).sort(), expected);
+  assert.deepEqual([...ctx.selectAiToolsForConversation(conv, false, false, { model: 'deepseek-v4-pro' })].sort(), expected.filter(name => name !== 'read_conversation_image'));
+  ctx.setConversationToolGroups(conv, []);
+  assert.equal(ctx.selectAiToolsForConversation(conv, false, false, config).size, 0);
+  assert.equal(ctx.selectedNativeLocalTools(conv, nativeCfg).length, 0);
+  const messages = ctx.buildApiMessages(conv, null, { ...config, contextLimit: 2 });
+  const notice = messages.find(message => String(message.content).startsWith('【历史文字附件清单')).content;
+  assert.match(notice, /历史资料.md/);
+  assert.match(notice, /未开放「对话附件」/);
+  assert.equal(notice.includes('read_conversation_file'), false);
+  const visualNotice = ctx.buildAiOmittedVisionNotice(ctx.getAiConversationVisualResources(visualConversation(ctx, 1)), { messages: [] }, config, 1000, false);
+  assert.match(visualNotice, /未开放「对话附件」/);
+  assert.equal(visualNotice.includes('read_conversation_image'), false);
+});
+
+for (const native of [false, true]) test(`disabled attachment group blocks actual tool execution (${native ? 'native' : 'tag'})`, async () => {
+  const ctx = harness(), { conv } = await textConversation(ctx);
+  const fileId = ctx.getAiConversationTextResources(conv)[0].fileId;
+  ctx.setConversationToolGroups(conv, []);
+  const cfg = { ...config, contextLimit: 2, baseUrl: native ? 'https://api.deepseek.com/v1' : config.baseUrl };
+  let rounds = 0, executions = 0;
+  ctx.executeToolCallStructured = async () => { executions++; throw new Error('must not execute'); };
+  ctx.callAiApi = async () => ({ toolCalls: ++rounds === 1 ? [{ action: 'read_conversation_file', params: { fileId },
+    ...(native ? { native: true, callId: 'blocked-text' } : {}) }] : [], cleanText: '完成', rawReply: '完成', finishReason: 'stop' });
+  await ctx.runToolCallLoop(cfg, conv);
+  assert.equal(executions, 0);
+  assert.ok(conv.messages.some(message => message._toolInfo?.outcomes?.some(outcome => outcome.code === 'TOOL_NOT_ENABLED')));
+});
+
+for (const native of [false, true]) test(`tool loop restores cropped text to the next API request (${native ? 'native' : 'tag'} protocol)`, async () => {
+  const ctx = harness(), { conv, text } = await textConversation(ctx, '第一段原文及全文末尾');
+  const fileId = ctx.getAiConversationTextResources(conv)[0].fileId;
+  const cfg = { ...config, contextLimit: 2, baseUrl: native ? 'https://api.deepseek.com/v1' : config.baseUrl };
+  const requests = [];
+  ctx.callAiApi = async messages => {
+    requests.push(messages);
+    const calls = requests.length === 1 ? [{ action: 'read_conversation_file', params: { fileId },
+      ...(native ? { native: true, callId: 'text-read' } : {}) }] : [];
+    return { toolCalls: calls, cleanText: '已读取', rawReply: '已读取', finishReason: 'stop' };
+  };
+  const result = await ctx.runToolCallLoop(cfg, conv);
+  assert.equal(result.finalCleanText, '已读取');
+  assert.equal(requests.length, 2);
+  assert.ok(requests[1].some(message => message.role === (native ? 'tool' : 'user') && String(message.content).includes(text)));
+});
 
 test('token eviction names every image-PDF page and exposes only same-conversation read tools', () => {
   const ctx = harness(), conv = visualConversation(ctx);
@@ -52,7 +182,7 @@ test('token eviction names every image-PDF page and exposes only same-conversati
   assert.match(notice.content, /"pdfPage":3/);
   assert.equal(notice.content.includes('data:image'), false);
   const tools = ctx.selectAiToolsForConversation(conv, false, false, config);
-  assert.deepEqual([...tools].sort(), ['list_conversation_images', 'read_conversation_image']);
+  assert.deepEqual([...tools].sort(), ['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image']);
   assert.equal(ctx.selectAiToolsForConversation({ messages: [], _toolGroups: [] }, false, false, config).size, 0);
 });
 

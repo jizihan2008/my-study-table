@@ -58,15 +58,38 @@
   function set(key, value) {
     const safeKey = assertKey(key);
     const raw = String(value == null ? '' : value);
-    cache.set(safeKey, raw);
     const api = global.electronAPI;
     if (api && typeof api.secretSet === 'function') {
+      const previous = cache.has(safeKey) ? cache.get(safeKey) : undefined;
+      cache.set(safeKey, raw);
       return api.secretSet({ key: safeKey, value: raw }).then(result => {
-        if (result && result.ok) localStorage.removeItem(safeKey);
+        if (!result || !result.ok) throw new Error('凭据存储未确认保存成功');
+        try { localStorage.removeItem(safeKey); } catch (_) {}
         return result;
+      }).catch(error => {
+        if (cache.get(safeKey) === raw) {
+          if (previous === undefined) cache.delete(safeKey);
+          else cache.set(safeKey, previous);
+        }
+        throw error;
       });
     }
-    localStorage.setItem(safeKey, raw);
+    try {
+      localStorage.setItem(safeKey, raw);
+    } catch (error) {
+      // Reuse the app's bounded cache recovery; user data and credentials stay intact.
+      try {
+        if (typeof global.isStorageQuotaError !== 'function' || !global.isStorageQuotaError(error)
+          || typeof global.recoverStorageSpace !== 'function' || global.recoverStorageSpace() <= 0) {
+          return Promise.reject(error);
+        }
+        localStorage.setItem(safeKey, raw);
+      } catch (retryError) {
+        return Promise.reject(retryError);
+      }
+    }
+    // Web/PWA callers must never see a value that failed to persist.
+    cache.set(safeKey, raw);
     return Promise.resolve({ ok: true, secure: false });
   }
 

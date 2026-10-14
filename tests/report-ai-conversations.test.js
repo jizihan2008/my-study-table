@@ -63,6 +63,7 @@ test('preview and the actual legacy prompt both carry the conversation data', ()
 
 test('morning and evening collectors pass yesterday and today into report prompt data', () => {
   const context = load([{ id: 1, messages: [msg(7, '昨日讨论'), msg(8, '今日讨论')] }]);
+  vm.runInContext(fs.readFileSync('js/timer-types.js', 'utf8'), context);
   Object.assign(context, {
     GlobalTranslation: { getReportData: date => ({ activityDate: date, vocabularyCount: 2 }) },
     todos: [], notes: [], getTodayStr: () => '2026-10-08', getPastDateStr: () => '2026-10-07',

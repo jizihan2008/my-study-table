@@ -31,6 +31,70 @@ async function setup(page) {
   });
 }
 
+test('text originals remain readable after sending, reload and context compression', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await setup(page);
+  await page.evaluate(() => createNewConv());
+  const convId = await page.evaluate(() => getActiveConvId());
+  const text = '完整文字资料\n'.repeat(2000) + '全文最后一行';
+  await page.locator('#aiFileInput').setInputFiles({ name: '全文资料.txt', mimeType: 'text/plain', buffer: Buffer.from(text) });
+  await page.locator('#aiInput').fill('阅读附件');
+  await page.evaluate(() => sendAiMessage());
+  await page.reload();
+  await setup(page);
+  const result = await page.evaluate(async id => {
+    switchConv(id);
+    const conv = getActiveConv();
+    const attachment = conv.messages.find(message => message.attachments?.length).attachments[0];
+    for (let i = 0; i < 25; i++) {
+      appendMessage(conv, { role: 'user', content: '后续问题 ' + i });
+      appendMessage(conv, { role: 'assistant', content: '后续回答' });
+    }
+    appendMessage(conv, { role: 'user', content: '重新读取文字文件' });
+    const cfg = { model: 'deepseek-flash', contextLimit: 2, contextBudget: 32768 };
+    const messages = buildApiMessages(conv, null, cfg);
+    const list = await executeToolCallStructured('list_conversation_files', { search: '全文资料' }, { conv });
+    const fileId = list.data.items[0].fileId;
+    let recovered = '', offset = 0;
+    do {
+      const part = await executeToolCallStructured('read_conversation_file', { fileId, offset, limit: 3000 }, { conv });
+      if (!part.ok) throw new Error(part.text);
+      recovered += part.data.content;
+      offset = part.data.nextOffset;
+    } while (offset !== null);
+    return { recovered, preview: attachment.content,
+      notice: messages.find(message => String(message.content).startsWith('【历史文字附件清单'))?.content,
+      fileId, storedId: attachment.originalFileId };
+  }, convId);
+  expect(result.preview).toContain('已截断');
+  expect(result.storedId).toBeTruthy();
+  expect(result.recovered).toBe(text);
+  expect(result.notice).toContain('全文资料.txt');
+  expect(result.notice).toContain(result.fileId);
+});
+
+test('conversation attachment group appears in settings and controls all four tool entries', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await setup(page);
+  await page.evaluate(() => createNewConv());
+  await page.evaluate(() => openAiToolSettingsModal());
+  const group = page.locator('#aiToolSettingsGroups .ai-tool-group-item').filter({ hasText: '对话附件' });
+  await expect(group).toBeVisible();
+  await expect(group.locator('.ai-tool-group-count')).toHaveText('4');
+  const checkbox = group.locator('input');
+  await checkbox.check();
+  const available = () => page.evaluate(() => [...selectAiToolsForConversation(getActiveConv(), false, false, getEffectiveApiConfig())]
+    .filter(name => /^(list|read)_conversation_(files?|images?)$/.test(name)).sort());
+  expect(await available()).toEqual(['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image']);
+  await checkbox.uncheck();
+  expect(await available()).toEqual([]);
+  await page.reload();
+  await setup(page);
+  await page.evaluate(() => openAiToolSettingsModal());
+  await expect(checkbox).not.toBeChecked();
+  expect(await available()).toEqual([]);
+});
+
 test('sent PDF and image can be inserted after reload, while drafts stay in their conversation', async ({ page }) => {
   await page.goto(baseUrl + '/index.html');
   await setup(page);

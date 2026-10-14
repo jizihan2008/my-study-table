@@ -80,6 +80,7 @@ function createContext(options) {
     document: documentStub,
     window: { addEventListener: () => {}, innerWidth: 1200, innerHeight: 800 }
   });
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'timer-types.js'), 'utf8'), context);
   vm.runInContext(calendarSource, context);
 
   return {

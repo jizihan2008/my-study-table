@@ -373,8 +373,14 @@ function loadApiKeys() {
   try { return JSON.parse(localStorage.getItem('study_api_keys')) || []; } catch { return []; }
 }
 function saveApiKeys(keys) {
-  if (typeof SecretVault !== 'undefined') SecretVault.setJson('study_api_keys', keys).catch(console.warn);
-  else localStorage.setItem('study_api_keys', JSON.stringify(keys));
+  if (typeof SecretVault !== 'undefined') {
+    const pending = SecretVault.setJson('study_api_keys', keys);
+    // Existing synchronous callers still get an observed rejection; the form awaits it.
+    pending.catch(() => console.warn('[API Key] 凭据保存失败'));
+    return pending;
+  }
+  localStorage.setItem('study_api_keys', JSON.stringify(keys));
+  return Promise.resolve({ ok: true });
 }
 function getActiveApiKeyId() {
   return localStorage.getItem('study_active_api_key_id') || '';
@@ -751,6 +757,7 @@ const SYNC_CONFLICT_CATEGORIES = {
   study_todo_queue: { id: 'planning', label: '待办队列' },
   study_longterm_goals: { id: 'planning', label: '学习规划' },
   study_timer_records: { id: 'records', label: '学习记录' },
+  study_timer_activity_types: { id: 'records', label: '计时类型' },
   study_stats: { id: 'records', label: '学习记录' },
   study_ai_memory: { id: 'ai', label: 'AI 配置与记忆' },
   study_ai_skills_v1: { id: 'ai', label: 'AI 配置与记忆' },
@@ -1708,7 +1715,7 @@ function _checkIdleReminder() {
 
   // 正在专注：空闲计时器归零并保持为零（不累加、不提醒）
   const isFocusing = (typeof timerRunning !== 'undefined' && timerRunning)
-    && (typeof timerActivityType === 'undefined' || timerActivityType === 'focus');
+    && (typeof timerActivityType === 'undefined' || getTimerActivityAffectsFocus(timerActivityType));
   if (isFocusing) {
     if (accum !== 0) _resetIdleAccum();
     return;
@@ -2187,7 +2194,9 @@ function toggleApiFormMore() {
   icon.textContent = isOpen ? '▸' : '▾';
 }
 
-function submitApiKeyForm() {
+let apiKeyFormSaving = false;
+async function submitApiKeyForm() {
+  if (apiKeyFormSaving) return;
   const editId = document.getElementById('apiKeyFormEditId').value;
   const name = document.getElementById('apiKeyFormName').value.trim();
   const key = document.getElementById('apiKeyFormKey').value.trim();
@@ -2222,7 +2231,6 @@ function submitApiKeyForm() {
     k.contextLimit = Math.max(5, contextLimit);
     k.contextBudget = contextBudget;
     k.titleContextCount = Math.max(2, titleContextCount);
-    showSettingsStatus('✅ Key 已更新');
   } else {
     keys.push({
       id: 'key_' + genId(),
@@ -2235,13 +2243,34 @@ function submitApiKeyForm() {
       titleContextCount: Math.max(2, titleContextCount),
       createdAt: new Date().toISOString()
     });
-    showSettingsStatus('✅ 已添加 Key：' + name);
   }
 
-  saveApiKeys(keys);
+  const button = document.getElementById('apiKeyFormSave');
+  const status = document.getElementById('apiKeyFormStatus');
+  if (status) status.textContent = '';
+  apiKeyFormSaving = true;
+  if (button) { button.disabled = true; button.textContent = '保存中…'; }
+  try {
+    const result = await saveApiKeys(keys);
+    if (!result || !result.ok) throw new Error('凭据存储未确认保存成功');
+  } catch (error) {
+    const reason = error && error.name === 'QuotaExceededError'
+      ? '本地存储空间不足'
+      : error && error.name === 'SecurityError'
+        ? '浏览器不允许访问本地存储'
+        : '本地凭据存储不可用';
+    const message = 'API Key 未保存：' + reason + '。输入已保留，请重试。';
+    if (status) status.textContent = message;
+    showSettingsStatus(message, true);
+    return;
+  } finally {
+    apiKeyFormSaving = false;
+    if (button) { button.disabled = false; button.textContent = '保存'; }
+  }
   document.getElementById('apiKeyForm').style.display = 'none';
   renderApiKeyList();
   switchActiveKey(getActiveApiKeyId());
+  showSettingsStatus(editId ? '✅ Key 已更新' : '✅ 已添加 Key：' + name);
 }
 
 function setActiveApiKey(id) {
@@ -3224,7 +3253,7 @@ const MIGRATION_KEYS = [
   'study_todo_completed_log',
   'study_todos_archive', 'study_notes_archive', 'study_links_archive', 'study_habits_archive',
   // 计时 / 习惯 / 任务线
-  'study_timer_records', 'study_habits', 'study_habits_v1', 'study_taskline_v1',
+  'study_timer_records', 'study_timer_activity_types', 'study_habits', 'study_habits_v1', 'study_taskline_v1',
   // 教材
   'study_books_v1', 'study_books_meta', 'study_bk_explain_logs_v1', 'study_bk_quiz_state_v1',
   // 日历 / 统计 / 目标
@@ -3954,7 +3983,7 @@ function formatDailyReportTimerLabel(record) {
 
   const label = parts.length > 0 ? parts.join(' · ') : '自由计时';
   if (record.affectsFocus === false) {
-    return (record.activityType === 'rest' ? '休息' : '其它') + '（非专注） · ' + label;
+    return (typeof getTimerActivityLabel === 'function' ? getTimerActivityLabel(getTimerActivityType(record)) : record.activityType === 'rest' ? '休息' : '其它') + '（非专注） · ' + label;
   }
   return label;
 }
@@ -3988,7 +4017,8 @@ function collectDailyReportData() {
 
   // Timer records for yesterday — with session details
   let ydayTimerMs = 0;
-  const ydayTimerTypeMs = { focus: 0, rest: 0, other: 0 };
+  let ydayTimerTypeMs = { focus: 0, rest: 0, other: 0 };
+  let ydayTimerUnlocatedMs = 0;
   const ydayTimerSessions = []; // [{ timeRange, duration, targetName }]
   function formatTimeOnly(ts) {
     const d = new Date(ts);
@@ -4003,14 +4033,16 @@ function collectDailyReportData() {
   }
   try {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
+    const durationSummary = getTimerRecordsDurationSummary(records, yesterdayStr);
+    ydayTimerMs = durationSummary.totalMs;
+    ydayTimerTypeMs = durationSummary.typeMs;
+    ydayTimerUnlocatedMs = durationSummary.unlocatedMs;
     for (const r of records) {
       if (r.date === yesterdayStr) {
         const activityType = typeof getTimerActivityType === 'function' ? getTimerActivityType(r)
           : (r.activityType === 'rest' || r.activityType === 'other' ? r.activityType : r.affectsFocus === false ? 'other' : 'focus');
-        const activityLabel = activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注';
+        const activityLabel = getTimerActivityLabel(activityType);
         const totalMs = Math.max(0, Number(r.totalMs) || 0);
-        ydayTimerMs += totalMs;
-        ydayTimerTypeMs[activityType] += totalMs;
         // Collect session details
         if (r.sessions && r.sessions.length > 0) {
           const targetName = formatDailyReportTimerLabel(r);
@@ -4097,8 +4129,10 @@ function collectDailyReportData() {
     ydayEditedNotes: ydayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     ydayTimerStr: ydayTimerMs > 0 ? fmtTimer(ydayTimerMs) : '无',
     ydayTimerSessions,
+    ydayTimerStatisticsNote: '各类型分别按当天时段并集统计，总时长按全部类型的时段并集统计；不同类型可同时发生，分类时长之和可能大于总时长。'
+      + (ydayTimerUnlocatedMs > 0 ? '缺少有效起止时间的记录按原时长额外计入，无法去除这部分的重叠。' : ''),
     ydayTimerTypeTotals: Object.entries(ydayTimerTypeMs).map(([activityType, totalMs]) => ({
-      activityType, activityLabel: activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注',
+      activityType, activityLabel: getTimerActivityLabel(activityType),
       totalMs, duration: totalMs > 0 ? fmtTimer(totalMs) : '0 分钟'
     })),
     prevReport,
@@ -4272,6 +4306,7 @@ ${longTermGoalLines}
 ${doneTodoLines}
 【昨日计时】${data.ydayTimerStr}
 【按时段类型汇总】${(data.ydayTimerTypeTotals || []).map(t => `${t.activityLabel}：${t.duration}`).join('；')}
+${data.ydayTimerStatisticsNote || ''}
 ${data.ydayTimerSessions.length > 0 ? data.ydayTimerSessions.map(s => `  - ${s.timeRange}  ${s.duration}  [${s.activityLabel || '专注'}] ${s.targetName}`).join('\n') : ''}
 【逾期未完成】${data.overdueTodos.length} 项
 ${overdueLines}
@@ -4496,7 +4531,8 @@ function collectEveningReportData() {
 
   // Timer records for today
   let todayTimerMs = 0;
-  const todayTimerTypeMs = { focus: 0, rest: 0, other: 0 };
+  let todayTimerTypeMs = { focus: 0, rest: 0, other: 0 };
+  let todayTimerUnlocatedMs = 0;
   const todayTimerSessions = [];
   function fmtTimeOnly(ts) {
     const d = new Date(ts);
@@ -4511,14 +4547,16 @@ function collectEveningReportData() {
   }
   try {
     const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
+    const durationSummary = getTimerRecordsDurationSummary(records, todayStr);
+    todayTimerMs = durationSummary.totalMs;
+    todayTimerTypeMs = durationSummary.typeMs;
+    todayTimerUnlocatedMs = durationSummary.unlocatedMs;
     for (const r of records) {
       if (r.date === todayStr) {
         const activityType = typeof getTimerActivityType === 'function' ? getTimerActivityType(r)
           : (r.activityType === 'rest' || r.activityType === 'other' ? r.activityType : r.affectsFocus === false ? 'other' : 'focus');
-        const activityLabel = activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注';
+        const activityLabel = getTimerActivityLabel(activityType);
         const totalMs = Math.max(0, Number(r.totalMs) || 0);
-        todayTimerMs += totalMs;
-        todayTimerTypeMs[activityType] += totalMs;
         if (r.sessions && r.sessions.length > 0) {
           const targetName = formatDailyReportTimerLabel(r);
           for (const s of r.sessions) {
@@ -4572,8 +4610,10 @@ function collectEveningReportData() {
     todayEditedNotes: todayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     todayTimerStr: todayTimerMs > 0 ? fmtDuration(todayTimerMs) : '无',
     todayTimerSessions,
+    todayTimerStatisticsNote: '各类型分别按当天时段并集统计，总时长按全部类型的时段并集统计；不同类型可同时发生，分类时长之和可能大于总时长。'
+      + (todayTimerUnlocatedMs > 0 ? '缺少有效起止时间的记录按原时长额外计入，无法去除这部分的重叠。' : ''),
     todayTimerTypeTotals: Object.entries(todayTimerTypeMs).map(([activityType, totalMs]) => ({
-      activityType, activityLabel: activityType === 'rest' ? '休息' : activityType === 'other' ? '其它' : '专注',
+      activityType, activityLabel: getTimerActivityLabel(activityType),
       totalMs, duration: totalMs > 0 ? fmtDuration(totalMs) : '0 分钟'
     })),
     prevReport,
@@ -4714,6 +4754,7 @@ ${archivedTodoLines}` : ''}
 ${dueLines}
 【今日计时】${data.todayTimerStr}
 【按时段类型汇总】${(data.todayTimerTypeTotals || []).map(t => `${t.activityLabel}：${t.duration}`).join('；')}
+${data.todayTimerStatisticsNote || ''}
 ${data.todayTimerSessions.length > 0 ? data.todayTimerSessions.map(s => `  - ${s.timeRange}  ${s.duration}  [${s.activityLabel || '专注'}] ${s.targetName}`).join('\n') : ''}
 【逾期未完成】${data.overdueTodos.length} 项
 ${overdueLines}

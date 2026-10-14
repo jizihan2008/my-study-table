@@ -189,6 +189,7 @@
       reviewDueAt: inVocabulary ? (entries[index].reviewDueAt || new Date().toISOString()) : entries[index].reviewDueAt
     };
     if (!saveHistory(trimHistory(entries))) return false;
+    refreshTodayFlashcards();
     if (activeEntryId === String(entryId)) updatePanelVocabularyButton(entries[index]);
     const page = document.getElementById('translationApp');
     if (page && page.closest('.section.active')) renderTranslationPage();
@@ -476,6 +477,32 @@
       .sort((a, b) => String(a.reviewDueAt || '').localeCompare(String(b.reviewDueAt || '')));
   }
 
+  function refreshTodayFlashcards() {
+    if (typeof global.renderTodayFlashcards === 'function') global.renderTodayFlashcards();
+  }
+
+  function getTodayReviewGroups() {
+    const vocabulary = loadHistory().filter(entry => entry.inVocabulary);
+    const summarize = (id, label, entries, due) => ({
+      id, label, total: entries.length, dueCount: due.length,
+      unreviewedCount: entries.filter(entry => !entry.reviewCount).length,
+      words: due.slice(0, 3).map(entry => entry.result.title || entry.sourceText)
+    });
+    return [summarize('vocabulary', '生词本', vocabulary, getReviewQueue(false)),
+      ...['cet4', 'cet6'].map(level => summarize(level, level === 'cet4' ? '四级词库' : '六级词库',
+        getCetEntries(level), getCetReviewQueue(level, false).filter(entry => entry.reviewCount)))];
+  }
+
+  function openReviewFromToday(group) {
+    if (!['vocabulary', 'cet4', 'cet6'].includes(group)) return;
+    pageMode = group === 'vocabulary' ? 'review' : 'cet';
+    if (group !== 'vocabulary') cetLevel = group;
+    pageQuery = '';
+    reviewSession = null;
+    if (typeof global.switchTab === 'function') global.switchTab('translation');
+    renderTranslationPage();
+  }
+
   function getReportData(date, now = new Date()) {
     const localDay = value => {
       if (!value) return '';
@@ -554,6 +581,7 @@
         t: item.lastReviewedAt, c: item.reviewCount, l: item.reviewLapses, r: item.lastReviewRating }));
       if (!saveHistory(stored, cetProgressKey(level))) return null;
     } else if (!saveHistory(trimHistory(entries))) return null;
+    refreshTodayFlashcards();
     return entries[index];
   }
 
@@ -833,6 +861,8 @@
     recordResult: recordTranslation,
     toggleVocabulary: setVocabulary,
     getReviewQueue,
+    getTodayReviewGroups,
+    openReviewFromToday,
     getReportData,
     gradeReview,
     getCetReviewQueue,
@@ -841,6 +871,8 @@
     translate: getTranslation,
     close: closePanel
   });
+
+  refreshTodayFlashcards();
 
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindEvents, { once: true });
   else bindEvents();

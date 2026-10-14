@@ -85,6 +85,24 @@ test('today timer expands and filters; both reports include types and totals', a
     await expect(list).toContainText('今天还没有计时记录');
     const zero = await page.evaluate(() => collectEveningReportData().todayTimerTypeTotals);
     expect(zero.map(t => t.duration)).toEqual(['0 分钟', '0 分钟', '0 分钟']);
+    const unionReports = await page.evaluate(() => {
+      const records = [getTodayStr(), getPastDateStr(1)].flatMap((date, day) =>
+        [['focus', 9, 10], ['focus', 9.5, 11], ['rest', 10, 12], ['other', 11, 12]].map(([activityType, start, end], index) => {
+          const midnight = new Date(date + 'T00:00:00').getTime();
+          return { id: day * 10 + index + 1, date, name: `重叠记录${index}`, activityType,
+            affectsFocus: activityType === 'focus', totalMs: (end - start) * 3600000,
+            sessions: [{ start: midnight + start * 3600000, end: midnight + end * 3600000 }] };
+        }));
+      saveTimerRecords(records);
+      return [collectDailyReportData(), collectEveningReportData()];
+    });
+    for (const [index, prefix] of ['yday', 'today'].entries()) {
+      expect(unionReports[index][prefix + 'TimerStr']).toBe('3 小时 0 分钟');
+      expect(unionReports[index][prefix + 'TimerTypeTotals'].map(t => t.totalMs)).toEqual([7200000, 7200000, 3600000]);
+    }
+    await expect(list.locator('.timer-history-date-total')).toHaveText('共 3:00:00');
+    await page.locator('#todayTimerTypeFilter').selectOption('focus');
+    await expect(list.locator('.timer-history-date-total')).toHaveText('共 2:00:00');
   } finally {
     if (app) await app.close();
     await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

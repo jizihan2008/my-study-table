@@ -7,6 +7,7 @@
     study_notes_v2: '笔记',
     study_links_v3: '链接',
     study_calendar_events: '日历事件',
+    study_timer_activity_types: '计时类型',
     study_habits_v2: '习惯',
     study_books_v1: '教材',
     study_todos_archive: '待办归档',
