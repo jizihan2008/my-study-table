@@ -12,8 +12,12 @@ test('today manual record shares timer form and updates records and reports', as
     app = await electron.launch({ args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'],
       env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
     const page = await app.firstWindow();
-    await page.waitForFunction(() => typeof renderTodayTimerRecords === 'function' && document.readyState !== 'loading');
-    await page.evaluate(() => { saveTimerRecords([]); switchTab('today'); });
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
+    await page.evaluate(() => {
+      saveTimerRecords([]);
+      todos = [{ id: 91001, text: '补记关联待办', parentId: null, done: false }];
+      switchTab('today');
+    });
     const button = page.locator('#todayTimerManual');
     const form = page.locator('#todayTimerManualForm');
     await button.click();
@@ -21,6 +25,25 @@ test('today manual record shares timer form and updates records and reports', as
     await expect(page.locator('#section-today')).toHaveClass(/active/);
     await expect(page.locator('#manualRecName')).toHaveCount(1);
     await page.locator('#manualRecName').fill('手动补记测试');
+    const picker = page.locator('#timerPickerOverlay');
+    for (const width of [1280, 1024, 390]) {
+      await page.setViewportSize({ width, height: 844 });
+      await form.getByRole('button', { name: '选择待办', exact: false }).click();
+      await expect(picker).toBeVisible();
+      await page.locator('#timerPickerSearch').fill('补记关联');
+      await page.evaluate(() => renderTimer());
+      await expect(picker).toBeVisible();
+      await expect(page.locator('#timerPickerSearch')).toHaveValue('补记关联');
+      expect(await picker.evaluate(el => el.parentElement === document.body)).toBe(true);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.locator('#timerPickerSearch').press('Escape');
+      await expect(picker).toBeHidden();
+    }
+    await form.getByRole('button', { name: '选择待办', exact: false }).click();
+    await picker.locator('.todo-picker-item').filter({ hasText: '补记关联待办' }).last().click();
+    await expect(picker).toBeHidden();
+    await expect(page.locator('#manualRecTodo')).toHaveValue('91001');
+    await expect(page.locator('#manualRecName')).toHaveValue('手动补记测试');
     const today = await page.evaluate(() => getTodayStr());
     const rows = form.locator('.timer-manual-session-row');
     await rows.first().locator('.manual-rec-session-date').fill(today);
@@ -53,7 +76,7 @@ test('today manual record shares timer form and updates records and reports', as
     await expect(page.locator('#todayTimerRecords')).toContainText('手动补记测试');
     const saved = await page.evaluate(() => ({ records: loadTimerRecords(), report: collectEveningReportData() }));
     expect(saved.records).toHaveLength(1);
-    expect(saved.records[0]).toMatchObject({ manual: true, name: '手动补记测试', activityType: 'rest', affectsFocus: false, totalMs: 2400000 });
+    expect(saved.records[0]).toMatchObject({ manual: true, name: '手动补记测试', todoId: 91001, activityType: 'rest', affectsFocus: false, totalMs: 2400000 });
     expect(saved.records[0].sessions).toHaveLength(2);
     expect(saved.report.todayTimerTypeTotals.find(item => item.activityType === 'rest').totalMs).toBe(2400000);
     // Cancel must discard the draft without adding a second record.
@@ -68,6 +91,10 @@ test('today manual record shares timer form and updates records and reports', as
     await page.locator('#section-timer .timer-btn-manual').click();
     await expect(page.locator('#manualRecName')).toHaveCount(1);
     await expect(form.locator('.timer-manual-form')).toHaveCount(0);
+    await page.locator('#section-timer').getByRole('button', { name: '选择待办', exact: false }).click();
+    await expect(picker).toBeVisible();
+    await picker.locator('.todo-picker-item').filter({ hasText: '补记关联待办' }).last().click();
+    await expect(page.locator('#manualRecTodo')).toHaveValue('91001');
     await page.locator('#section-timer .timer-btn-manual').click();
     await page.evaluate(() => switchTab('today'));
     await button.click();

@@ -12,7 +12,7 @@ test('rest and other records persist, can be edited, and do not advance focus st
     app = await electron.launch({ args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'],
       env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
     const page = await app.firstWindow();
-    await page.waitForFunction(() => typeof setTimerActivityType === 'function' && document.readyState !== 'loading');
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
     await page.evaluate(() => {
       saveTimerRecords([]);
       switchTab('timer');
@@ -24,7 +24,7 @@ test('rest and other records persist, can be edited, and do not advance focus st
     // 快进时段以验证保存，无需实际等一分钟。
     await page.evaluate(() => { timerSessionStart -= 60000; saveTimerState(); });
     await page.reload();
-    await page.waitForFunction(() => typeof setTimerActivityType === 'function');
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
     await page.evaluate(() => switchTab('timer'));
     await expect(page.locator('#tfTitle')).toHaveText('休息计时');
     expect(await page.evaluate(() => timerRunning)).toBe(true);
@@ -86,7 +86,7 @@ test('rest and other records persist, can be edited, and do not advance focus st
 
     await page.getByRole('combobox', { name: '时段类型', exact: true }).selectOption('other');
     await page.reload();
-    await page.waitForFunction(() => typeof timerActivityType !== 'undefined');
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
     await page.evaluate(() => switchTab('timer'));
     await expect(page.getByRole('combobox', { name: '时段类型', exact: true })).toHaveValue('other');
     expect(await page.evaluate(() => loadTimerRecords().find(r => r.name === '午休').activityType)).toBe('rest');

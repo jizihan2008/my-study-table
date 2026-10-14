@@ -12,7 +12,7 @@ test('custom types cover timer, manual records, calendar auto recording, reports
     app = await electron.launch({ args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'],
       env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
     const page = await app.firstWindow();
-    await page.waitForFunction(() => typeof openTimerTypeManager === 'function' && document.readyState !== 'loading');
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
     await page.evaluate(() => { saveTimerRecords([]); saveCalendarEvents([]); switchTab('timer'); });
     await page.locator('#timerContainer').getByRole('button', { name: '管理类型', exact: true }).click();
     await page.locator('#newTimerTypeName').fill('阅读 <学习>');
@@ -33,7 +33,7 @@ test('custom types cover timer, manual records, calendar auto recording, reports
     expect(await page.locator('#tfTitle').locator('*').count()).toBe(0);
     await page.evaluate(() => { timerSessionStart -= 60000; saveTimerState(); });
     await page.reload();
-    await page.waitForFunction(() => typeof setTimerActivityType === 'function');
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
     await page.evaluate(() => switchTab('timer'));
     await expect(page.locator('#timerActivityType')).toHaveValue(reading.id);
     await page.locator('#timerContainer .timer-btn-stop').click();
@@ -103,7 +103,7 @@ test('custom types cover timer, manual records, calendar auto recording, reports
     await expect(page.locator('#todayTimerTypeFilter')).toHaveValue(commute.id);
     await expect(page.locator('#todayTimerRecords')).toContainText('出行');
     await page.reload();
-    await page.waitForFunction(() => typeof loadTimerActivityTypes === 'function');
+    await page.locator('#todayTimerManual').waitFor({ state: 'visible' });
     expect(await page.evaluate(id => loadTimerActivityTypes().find(t => t.id === id).label, commute.id)).toBe('出行');
     await page.evaluate(() => { switchTab('timer'); renderTimer(); });
     expect(await page.locator(`#timerActivityType option[value="${commute.id}"]`).count()).toBe(0);

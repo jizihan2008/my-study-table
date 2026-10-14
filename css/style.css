@@ -5325,6 +5325,7 @@ body.ai-message-immersive-open { overflow: hidden; }
   background: var(--card);
   border-radius: 14px;
   width: 400px;
+  max-width: calc(100vw - 24px);
   max-height: 60vh;
   display: flex;
   flex-direction: column;

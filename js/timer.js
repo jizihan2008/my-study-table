@@ -379,7 +379,6 @@ let timerManualFormSource = 'timer';
 let timerEditingRecordId = null; // null = add mode, id = edit mode
 let manualRecSelectedTodoId = null; // selected todo for the manual record form
 let manualRecSelectedTaskId = null;
-let timerPickerOpen = false; // 待办选择遮罩是否打开（心跳重绘后需恢复）
 
 // ═══════════ Render ═══════════
 function getTimerTask(taskId) {
@@ -517,26 +516,7 @@ function renderTimer() {
     <div class="timer-history" id="timerHistory">
       ${renderTimerHistory(records)}
     </div>
-    <div class="timer-picker-overlay" id="timerPickerOverlay" style="display:none;" onclick="closeTimerTodoPicker(event)">
-      <div class="timer-picker" onclick="event.stopPropagation()">
-        <div class="timer-picker-header">
-          <span>选择要关联的待办</span>
-          <button class="timer-picker-close" onclick="closeTimerTodoPicker()">✕</button>
-        </div>
-        <input type="text" class="timer-picker-search" id="timerPickerSearch" placeholder="搜索待办..." oninput="renderTimerPickerList()">
-        <div class="todo-picker-list" id="timerPickerList"></div>
-      </div>
-    </div>
   `;
-
-  // 心跳每 500ms 重绘一次容器：若选择遮罩正打开则恢复显示并重建列表，否则跳过（避免重复渲染开销）
-  const pickerOverlay = document.getElementById('timerPickerOverlay');
-  if (timerPickerOpen && pickerOverlay) {
-    pickerOverlay.style.display = '';
-    const header = pickerOverlay.querySelector('.timer-picker-header span');
-    if (header) header.textContent = timerPickerMode === 'goal' ? '选择要关联的长期目标' : (timerPickerMode === 'task' ? '选择要关联的任务线任务' : '选择要关联的待办');
-    renderTimerPickerList();
-  }
 
   // Refresh Lucide icons for newly rendered buttons
   if (typeof lucide !== 'undefined') lucide.createIcons();
@@ -914,8 +894,9 @@ function unlinkTimerTask() {
 }
 
 function openTimerGoalPicker() {
+  ensureTimerPickerOverlay();
+  timerPickerTarget = 'timer';
   timerPickerMode = 'goal';
-  timerPickerOpen = true;
   const overlay = document.getElementById('timerPickerOverlay');
   const header = overlay?.querySelector('.timer-picker-header span');
   if (header) header.textContent = '选择要关联的长期目标';
@@ -940,9 +921,9 @@ function pickTimerGoal(id) {
 }
 
 function openTimerTaskPicker(target = 'timer') {
+  ensureTimerPickerOverlay();
   timerPickerTarget = target;
   timerPickerMode = 'task';
-  timerPickerOpen = true;
   const overlay = document.getElementById('timerPickerOverlay');
   const header = overlay?.querySelector('.timer-picker-header span');
   if (header) header.textContent = '选择要关联的任务线任务';
@@ -978,7 +959,30 @@ function pickTimerTask(id) {
 // ═══════════ Todo picker (tree view) ═══════════
 let timerPickerExpandedIds = new Set();
 
+// 共用弹窗挂在 body 下，避免被非当前页面隐藏，也避免计时器重绘清空搜索。
+function ensureTimerPickerOverlay() {
+  let overlay = document.getElementById('timerPickerOverlay');
+  if (overlay) return overlay;
+  overlay = document.createElement('div');
+  overlay.id = 'timerPickerOverlay';
+  overlay.className = 'timer-picker-overlay';
+  overlay.style.display = 'none';
+  overlay.innerHTML = `<div class="timer-picker" role="dialog" aria-modal="true" aria-labelledby="timerPickerTitle">
+    <div class="timer-picker-header"><span id="timerPickerTitle">选择要关联的待办</span>
+      <button type="button" class="timer-picker-close" onclick="closeTimerTodoPicker()" aria-label="关闭关联选择">✕</button></div>
+    <input type="text" class="timer-picker-search" id="timerPickerSearch" placeholder="搜索待办..." aria-label="搜索关联项" oninput="renderTimerPickerList()">
+    <div class="todo-picker-list" id="timerPickerList"></div>
+  </div>`;
+  overlay.addEventListener('click', closeTimerTodoPicker);
+  overlay.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); closeTimerTodoPicker(); }
+  });
+  document.body.appendChild(overlay);
+  return overlay;
+}
+
 function openTimerTodoPicker(target = 'timer') {
+  ensureTimerPickerOverlay();
   timerPickerTarget = target;
   timerPickerMode = 'todo';
   const overlay = document.getElementById('timerPickerOverlay');
@@ -993,8 +997,8 @@ function openTimerTodoPicker(target = 'timer') {
 
 function closeTimerTodoPicker(e) {
   if (e && e.target !== document.getElementById('timerPickerOverlay')) return;
-  timerPickerOpen = false;
-  document.getElementById('timerPickerOverlay').style.display = 'none';
+  const overlay = document.getElementById('timerPickerOverlay');
+  if (overlay) overlay.style.display = 'none';
   timerPickerExpandedIds = new Set();
 }
 

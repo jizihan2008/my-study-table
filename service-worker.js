@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v225';
+const VERSION = 'mst-v226';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -15,7 +15,7 @@ const PRECACHE_URLS = [
   './index.html',
   './reset-site-data.html',
   './manifest.webmanifest?v=20260926-icon-v3',
-  './css/style.css?v=20261012-visual-fold-r1',
+  './css/style.css?v=20261014-shared-picker-r1',
   './js/trash.js?v=20261010-r1',
   './css/workspace.css?v=20261013-today-manual-r1',
   './css/appearance.css?v=20260929-r2',
@@ -64,7 +64,7 @@ const PRECACHE_URLS = [
   './js/prompts.js?v=20261013-timer-union-r1',
   './js/env.js?v=20260911-r2',
   './js/core.js?v=20261014-idb-r1',
-  './js/timer.js?v=20261013-time-order-r1',
+  './js/timer.js?v=20261014-shared-picker-r1',
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
