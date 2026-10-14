@@ -85,6 +85,15 @@
     { id: 'translation', label: '翻译与生词本', keys: ['study_translation_history_v1', 'study_translation_cet4_progress_v1', 'study_translation_cet6_progress_v1'] }
   ];
 
+  const settingsSync = global.SettingsSync;
+  if (settingsSync) {
+    SYNC_KEYS.push(...settingsSync.keys);
+    SYNC_MODULES.push({ id: 'settings', label: '设置（不含密钥与设备设置）', keys: settingsSync.keys.slice() });
+  }
+  function _decodeSyncValue(key, raw) {
+    return settingsSync && settingsSync.isKey(key) ? settingsSync.decode(key, raw) : (raw === null ? null : JSON.parse(raw));
+  }
+
   function getModules() { return SYNC_MODULES.map(item => ({ ...item, keys: item.keys.slice() })); }
   function _manualScope(options) {
     const id = options && options.moduleId || 'all';
@@ -149,7 +158,9 @@
     'study_todo_completed_log': '待办完成日志'
   };
 
-  const SYNC_VER = '20260924-r28';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  if (settingsSync) Object.assign(SYNC_LABELS, settingsSync.labels);
+
+  const SYNC_VER = '20261014-settings-r1';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const EVENT_LOG_KEY = 'study_sync_event_log_v1';
   const EVENT_LOG_LIMIT = 300;
@@ -250,7 +261,7 @@
     const trimmed = raw.trim();
     if (trimmed === '') return true;
     try {
-      const v = JSON.parse(trimmed);
+      const v = _decodeSyncValue(key, raw);
       // AI 长期记忆特殊判定：只看核心数据字段是否为空，忽略 lastDailyIntegration/dailySummaryDate 等元数据标记，
       // 否则一个「空记忆壳」（含日期标记但无实际内容）会被误判为非空而阻挡云端真实记忆拉取。
       if (key === 'study_ai_memory' && v && typeof v === 'object') {
@@ -387,7 +398,7 @@
     }
     let payload = null;
     try {
-      payload = value ? JSON.parse(value) : null;
+      payload = _decodeSyncValue(key, value);
     } catch (e) {
       return { ok: false, reason: 'invalid-local-json' };
     }
@@ -461,7 +472,7 @@
           continue;
         }
         try {
-          rows.push({ user_id: session.user.id, key, value: raw ? JSON.parse(raw) : null });
+          rows.push({ user_id: session.user.id, key, value: _decodeSyncValue(key, raw) });
           snapshots.set(key, raw);
         } catch (e) { results[key] = { ok: false, reason: 'invalid-local-json' }; }
       }
@@ -512,7 +523,7 @@
   async function _storeFailedUpload(key, reason) {
     let payload = null;
     const raw = localStorage.getItem(key);
-    try { payload = raw ? JSON.parse(raw) : null; } catch (e) {}
+    try { payload = _decodeSyncValue(key, raw); } catch (e) {}
     _markLocalDirty(key);
     dirtyKeys.add(key);
     await _outboxPut(key, payload, new Date().toISOString());
@@ -696,7 +707,7 @@
     if (!row || !Object.prototype.hasOwnProperty.call(row, 'value')) return false;
     try {
       const raw = localStorage.getItem(key);
-      return policy.sameContent(raw === null ? null : JSON.parse(raw), row.value);
+      return policy.sameContent(_decodeSyncValue(key, raw), row.value);
     } catch (_) { return false; }
   }
 
@@ -726,7 +737,8 @@
     }
     remoteApplyDepth++;
     try {
-      const saved = typeof saveDataDurable === 'function' ? await saveDataDurable(key, value) : saveData(key, value);
+      const saved = settingsSync && settingsSync.isKey(key) ? await settingsSync.apply(key, value)
+        : typeof saveDataDurable === 'function' ? await saveDataDurable(key, value) : saveData(key, value);
       if (!saved) throw new Error('保存远端记录到本地失败：' + (saveData.lastError || '未知存储错误'));
     } catch (error) {
       if (localStorage.getItem(key) !== previousRaw) {
@@ -847,7 +859,7 @@
         .eq('user_id', session.user.id).eq('key', key).maybeSingle();
       if (error) throw new Error(error.message || '读取云端内容失败');
       const raw = localStorage.getItem(key);
-      return { ok: true, local: raw === null ? null : JSON.parse(raw), remote: data && data.value,
+      return { ok: true, local: _decodeSyncValue(key, raw), remote: data && data.value,
         localMissing: raw === null, remoteMissing: !data, remoteTimestamp: data && data.updated_at };
     } catch (e) { return { ok: false, reason: String(e && e.message || e) }; }
   }
@@ -1345,6 +1357,7 @@
   // 需重新加载并重渲染，否则用户看到的是旧数据（即使 localStorage 已更新）。
   // 此处用 try/catch 逐个调用，避免单个模块异常影响整体刷新。
   function _refreshUI() {
+    try { if (typeof global.refreshSyncedSettings === 'function') global.refreshSyncedSettings(); } catch (_) {}
     // ── 正在编辑的笔记保护：刷新会重渲染 DOM 并用 localStorage 覆盖内存，
     //    若用户正在编辑笔记标题/正文，先保存草稿；刷新后仅恢复原本真正聚焦的编辑区。──
     let editSnap = null;
@@ -1630,6 +1643,7 @@
   }
 
   function init() {
+    if (settingsSync) settingsSync.initialize();
     const cfg = getConfig();
     enabled = !!cfg.enabled;
     autoSync = !!cfg.autoSync;

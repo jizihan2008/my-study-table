@@ -123,7 +123,7 @@ function saveMaxFocusSetting() {
   if (isNaN(val) || val < 2) val = 2;
   if (val > 5) val = 5;
   input.value = val;
-  localStorage.setItem('study_max_focus_count', val);
+  setSyncedSetting('study_max_focus_count', val);
   renderFocusList();
 }
 
@@ -136,7 +136,7 @@ async function editMaxFocusCount() {
   let value = parseInt(raw, 10);
   if (isNaN(value)) value = current;
   value = Math.max(2, Math.min(5, value));
-  localStorage.setItem('study_max_focus_count', String(value));
+  setSyncedSetting('study_max_focus_count', String(value));
   const settingsInput = document.getElementById('settingsMaxFocusCount');
   if (settingsInput) settingsInput.value = value;
   renderFocusList();

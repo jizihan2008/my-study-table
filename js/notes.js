@@ -1181,34 +1181,72 @@ function contextNewNote(){
 // ═══════════ 笔记选区 → AI 解释（右键新开对话标签页）═══════════
 // 在笔记预览/编辑区选中一段文字后右键，弹出「AI 解释」菜单；
 // 点击后切换到 AI 页、新建一个对话标签页并把选中文字作为提问发送。
-// 提问会附带：笔记标题、笔记 id、选中内容的上下文片段（前后各若干字符）。
+// 提问会附带：笔记标题、笔记 id、选中内容的上下文片段和 Markdown 原文 UTF-16 offset。
 // 在预览 DOM 中把选区映射到纯文本区间（按 DOM 文本节点顺序拼接全文）
-function getNotePreviewSelRange() {
-  const pv = document.getElementById('notesPreview');
-  if (!pv) return null;
+function getNotePreviewSelRange(pv = document.getElementById('notesPreview')) {
   const sel = window.getSelection();
-  if (!sel || sel.rangeCount === 0) return null;
-  const nodes = [];
-  const walker = document.createTreeWalker(pv, NodeFilter.SHOW_TEXT);
-  let total = 0;
+  if (!pv || !sel || !sel.rangeCount || sel.isCollapsed) return null;
+  const range = sel.getRangeAt(0);
+  if (!pv.contains(range.startContainer) || !pv.contains(range.endContainer)) return null;
+  const before = range.cloneRange();
+  before.selectNodeContents(pv);
+  before.setEnd(range.startContainer, range.startOffset);
+  const start = before.toString().length;
+  return { start, end: start + range.toString().length, fullText: pv.textContent, range };
+}
+// Map rendered text nodes in document order, scoped to Markdown source lines
+// where available. Never label a rendered-text index as a source offset.
+function getNoteSelectionSourceRange(container, selection, source) {
+  const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+  const positions = [];
+  let cursor = 0, rendered = 0, uncertain = false;
+  const skippedMath = new WeakSet();
+  const lines = [0];
+  for (let i = 0; i < source.length; i++) if (source[i] === '\n') lines.push(i + 1);
   while (walker.nextNode()) {
-    const n = walker.currentNode;
-    nodes.push({ node: n, start: total, len: n.textContent.length });
-    total += n.textContent.length;
-  }
-  if (nodes.length === 0) return null;
-  const locate = (node, offset) => {
-    if (!node) return 0;
-    if (node.nodeType === Node.TEXT_NODE) {
-      for (const it of nodes) if (it.node === node) return it.start + Math.min(offset, it.len);
-      return 0;
+    const node = walker.currentNode;
+    const text = node.textContent;
+    const start = rendered;
+    rendered += text.length;
+    if (!text.replace(/\u200b/g, '').trim() || node.parentElement.closest('.footnotes')) continue;
+    const math = node.parentElement.closest('.katex');
+    if (math) {
+      if (!skippedMath.has(math)) {
+        skippedMath.add(math);
+        const latex = math.dataset.latex || math.querySelector('annotation[encoding="application/x-tex"]')?.textContent;
+        const display = !!math.closest('.katex-display, .markdown-math-display');
+        const delimiters = display ? ['$$', '$$'] : ['$', '$'];
+        const opening = source.indexOf(delimiters[0], cursor);
+        const closing = opening < 0 ? -1 : source.indexOf(delimiters[1], opening + delimiters[0].length);
+        if (latex && closing >= 0 && source.slice(opening + delimiters[0].length, closing).trim() === latex.trim()) {
+          cursor = closing + delimiters[1].length;
+        } else uncertain = true;
+      }
+      continue;
     }
-    for (const it of nodes) if (it.node.parentNode === node) return it.start + Math.min(offset, it.len);
-    return 0;
-  };
-  const a = locate(sel.anchorNode, sel.anchorOffset);
-  const b = locate(sel.focusNode, sel.focusOffset);
-  return { start: Math.min(a, b), end: Math.max(a, b), fullText: nodes.map(n => n.textContent).join('') };
+    const mapped = container.id.includes('Preview') ? node.parentElement.closest('[data-source-line]') : null;
+    const lower = mapped ? (lines[Number(mapped.dataset.sourceLine)] ?? cursor) : cursor;
+    const upper = mapped ? (lines[Number(mapped.dataset.sourceEnd)] ?? source.length) : source.length;
+    const found = source.indexOf(text, Math.max(cursor, lower));
+    if (found < 0 || found + text.length > upper) { uncertain = true; continue; }
+    // A fresh mapped block can recover after an unsupported prior block.
+    if (mapped && lower > cursor) uncertain = false;
+    if (uncertain) continue;
+    positions.push({ start, end: rendered, sourceStart: found });
+    cursor = found + text.length;
+    const link = node.parentElement.closest('a');
+    if (link && node === link.lastChild && source.slice(cursor, cursor + 2) === '](') {
+      const target = '](' + (link.getAttribute('href') || '') + ')';
+      if (source.startsWith(target, cursor)) cursor += target.length;
+      else uncertain = true;
+    }
+  }
+  const first = positions.find(p => p.start <= selection.start && p.end > selection.start);
+  const last = positions.find(p => p.start < selection.end && p.end >= selection.end);
+  if (!first || !last) return null;
+  const start = first.sourceStart + selection.start - first.start;
+  const end = last.sourceStart + selection.end - last.start;
+  return end > start ? { start, end } : null;
 }
 // 提取选中内容在完整文本中的上下文（前后各 N 字符，边缘加省略号）
 function buildNoteCtx(fullText, selStart, selEnd, N) {
@@ -1221,50 +1259,40 @@ function buildNoteCtx(fullText, selStart, selEnd, N) {
   };
 }
 function bindNoteSelectionAiMenu() {
-  const pv = document.getElementById('notesPreview');
-  if (pv) {
-    pv.addEventListener('contextmenu', function (e) {
-      closeNoteAnnFloat();   // 防止残留的批注浮层遮挡右键目标
-      const r = getNotePreviewSelRange();
-      const sel = window.getSelection();
-      // 兜底：TreeWalker 定位失败时直接用选区文本
-      const fallbackText = sel && !sel.isCollapsed ? sel.toString().trim() : '';
-      const rawSel = r ? r.fullText.substring(r.start, r.end) : '';
-      const text = rawSel.trim() || fallbackText;
-      if (!text) return;   // 无选中文字 → 走浏览器默认行为
-      e.preventDefault();
-      let selStart = -1, selEnd = -1, fullText = '';
-      if (r) {
-        selStart = r.start + (rawSel.length - rawSel.trimStart().length);
-        selEnd = r.start + rawSel.trimEnd().length;
-        fullText = r.fullText;
-      }
-      // 批注锚点基于源文本（textarea.value）。预览渲染文本 ≠ 源文本（markdown 语法被渲染），
-      // 用「内容匹配」反查源文本位置；找不到则禁用添加批注（AI 解释仍可用）。
-      let srcStart = -1, srcEnd = -1;
-      const note = getActiveNote();
-      if (note) {
-        const S = note.content || '';
-        const found = S.indexOf(text);
-        if (found >= 0) { srcStart = found; srcEnd = found + text.length; }
-      }
-      showNoteAiExplainMenu(e.clientX, e.clientY, text, buildNoteCtx(fullText, selStart, selEnd), srcStart, srcEnd);
-    });
-  }
-  const ta = document.getElementById('notesTextarea');
-  if (ta) {
-    ta.addEventListener('contextmenu', function (e) {
-      closeNoteAnnFloat();
-      const rawSel = ta.value.substring(ta.selectionStart, ta.selectionEnd);
-      if (!rawSel.trim()) return;
-      e.preventDefault();
-      const selStart = ta.selectionStart + (rawSel.length - rawSel.trimStart().length);
-      const selEnd = ta.selectionStart + rawSel.trimEnd().length;
-      showNoteAiExplainMenu(e.clientX, e.clientY, rawSel.trim(), buildNoteCtx(ta.value, selStart, selEnd), selStart, selEnd);
-    });
-  }
+  // Delegate so the immersive/split editors work even when mounted later.
+  document.addEventListener('contextmenu', function (e) {
+    const container = e.target.closest?.('#notesPreview, #notesRichEditor, #notesTextarea, #notesSplitPreview, #notesSplitRichEditor');
+    if (!container) return;
+    closeNoteAnnFloat();
+    const secondary = container.id.startsWith('notesSplit');
+    const note = secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote();
+    if (!note) return;
+    let text, ctx, offsets;
+    if (container.tagName === 'TEXTAREA') {
+      const raw = container.value.slice(container.selectionStart, container.selectionEnd);
+      text = raw.trim();
+      if (!text) return;
+      offsets = { start: container.selectionStart + raw.length - raw.trimStart().length,
+        end: container.selectionStart + raw.trimEnd().length };
+      ctx = buildNoteCtx(container.value, offsets.start, offsets.end);
+    } else {
+      const selected = getNotePreviewSelRange(container);
+      if (!selected) return;
+      const raw = selected.fullText.slice(selected.start, selected.end);
+      text = raw.trim();
+      if (!text) return;
+      selected.start += raw.length - raw.trimStart().length;
+      selected.end -= raw.length - raw.trimEnd().length;
+      offsets = getNoteSelectionSourceRange(container, selected, note.content || '');
+      ctx = buildNoteCtx(selected.fullText, selected.start, selected.end);
+    }
+    e.preventDefault();
+    showNoteAiExplainMenu(e.clientX, e.clientY, text, ctx, offsets?.start, offsets?.end, note, secondary);
+    // Own note selections before the global English translation capture handler.
+    e.stopImmediatePropagation();
+  }, true);
 }
-function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd) {
+function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActiveNote(), secondary = false) {
   let menu = document.getElementById('noteAiExplainMenu');
   if (!menu) {
     menu = document.createElement('div');
@@ -1281,12 +1309,14 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd) {
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   menu.dataset.text = text;
+  menu.dataset.noteId = note?.id ?? '';
+  menu.dataset.noteTitle = note?.title || '未命名笔记';
   menu.dataset.ctx = ctx ? JSON.stringify(ctx) : '';
   menu.dataset.srcStart = (srcStart === undefined || srcStart === null) ? -1 : srcStart;
   menu.dataset.srcEnd = (srcEnd === undefined || srcEnd === null) ? -1 : srcEnd;
-  // 无法定位源文本位置时（预览中内容跨 markdown 语法导致 indexOf 失败）隐藏批注项
+  // 无法定位原文或来自分屏副笔记时，不使用主笔记的批注入口。
   const addAnnItem = menu.querySelector('#noteAiExplainAddAnn');
-  if (addAnnItem) addAnnItem.style.display = (menu.dataset.srcStart >= 0) ? '' : 'none';
+  if (addAnnItem) addAnnItem.style.display = (!secondary && Number(menu.dataset.srcStart) >= 0) ? '' : 'none';
   menu.style.display = 'block';
 }
 // 从右键菜单「添加批注」：打开批注输入模态
@@ -1307,14 +1337,19 @@ function aiExplainSelection() {
   const menu = document.getElementById('noteAiExplainMenu');
   const text = menu ? (menu.dataset.text || '') : '';
   let ctx = null;
-  try { ctx = menu.dataset.ctx ? JSON.parse(menu.dataset.ctx) : null; } catch (e) { ctx = null; }
+  try { ctx = menu?.dataset.ctx ? JSON.parse(menu.dataset.ctx) : null; } catch (e) { ctx = null; }
   closeNoteAiExplainMenu();
   if (!text) return;
-  // 附带笔记标题 + id（getActiveNote 取当前打开/选中的笔记）
-  const note = getActiveNote();
-  const title = note ? (note.title || '未命名笔记') : '';
-  const nid = note ? note.id : '';
-  let prompt = '请解释下面这段内容，它出自笔记「' + title + '」（笔记ID：' + nid + '）。\n\n';
+  // Use the captured source note; switching panes must not change its identity.
+  const title = menu.dataset.noteTitle;
+  const nid = menu.dataset.noteId;
+  const start = Number(menu.dataset.srcStart), end = Number(menu.dataset.srcEnd);
+  let prompt = '请解释下面这段内容，它出自笔记「' + title + '」（笔记ID：' + nid + '）。\n';
+  if (start >= 0 && end > start) {
+    prompt += '选区原文 offset=' + start + '，endOffset=' + end + '（UTF-16，范围 [' + start + ', ' + end + ')，基于笔记 Markdown 正文）。\n\n';
+  } else {
+    prompt += '选区无法可靠映射到 Markdown 原文，offset 未确定；请根据以下选中文字和上下文定位。\n\n';
+  }
   if (ctx && (ctx.prefix || ctx.suffix)) {
     prompt += '以下是选中内容及其上下文片段（⟪⟫ 内为需要解释的选中内容）：\n';
     prompt += ctx.prefix + '⟪⟫' + text + '⟪⟫' + ctx.suffix;

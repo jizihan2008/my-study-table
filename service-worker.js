@@ -6,16 +6,17 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v226';
+const VERSION = 'mst-v230';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
 const PRECACHE_URLS = [
   './',
   './index.html',
+  './js/settings-sync.js?v=20261014-r1',
   './reset-site-data.html',
   './manifest.webmanifest?v=20260926-icon-v3',
-  './css/style.css?v=20261014-shared-picker-r1',
+  './css/style.css?v=20261014-settings-groups-r1',
   './js/trash.js?v=20261010-r1',
   './css/workspace.css?v=20261013-today-manual-r1',
   './css/appearance.css?v=20260929-r2',
@@ -23,7 +24,7 @@ const PRECACHE_URLS = [
   './js/liquid-glass.js?v=20260929-r1',
   './js/appearance.js?v=20260929-r1',
   './js/timer-types.js?v=20261013-custom-types-r1',
-  './js/today.js?v=20261013-custom-types-r1',
+  './js/today.js?v=20261014-settings-r1',
   './js/todo-queue.js?v=20261013-check-r1',
   './lib/lucide/lucide.min.js',
   './lib/katex/katex.min.css',
@@ -41,10 +42,10 @@ const PRECACHE_URLS = [
   './js/note-rich-editor.js?v=20261013-r1',
   './js/ai-tree.js?v=20261012-visual-fold-r1',
   './js/ai-conv.js?v=20261012-protocol-r2',
-  './js/ai-attach.js?v=20261013-text-history-r1',
+  './js/ai-attach.js?v=20261014-settings-r1',
   './js/ai-render.js?v=20261012-visual-fold-r1',
   './js/ai-tools.js?v=20261014-idb-r1',
-  './js/notes.js?v=20261014-idb-r1',
+  './js/notes.js?v=20261014-selection-r1',
   './js/utils.js?v=20261014-idb-r1',
   './js/file-library.js?v=20260923-r1',
   './js/stats.js?v=20261012-focus',
@@ -68,13 +69,13 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20261014-idb-r1',
+  './js/settings.js?v=20261014-sync-retry-r1',
   './js/site-data-reset.js?v=20261010-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20261008-r1',
   './js/sync-diff.js?v=20261008-r1',
   './js/sync-collections.js?v=20261014-idb-r1',
-  './js/sync.js?v=20261014-idb-r1',
+  './js/sync.js?v=20261014-settings-r1',
   './js/sync-logs.js?v=20261014-idb-r1',
   './js/ai-utils.js?v=20261012-protocol-r2-timer',
   './js/bg-media-idb.js?v=20260906-r2',

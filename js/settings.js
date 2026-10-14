@@ -186,7 +186,7 @@ function renderHelpModal() {
               <li><b>🗺️ 任务线</b>：GTNH 式任务书系统——主线（人生阶段，顺序推进）+ 素质线（并行成长）双轴章节；任务带前置依赖解锁、完成条件（绑定待办/笔记/计时）、三段式描述；奖励=经验等级 + 徽章收藏 + 自定义奖励池</li>
               <li><b>🤖 AI 学习助手</b>：多对话标签页、多模型支持、深度思考、工具调用、多候选回复、网络搜索、图片/文档附件、多 AI 协作、长期记忆、定时自动化</li>
               <li><b>⏰ 自动化任务</b>：可创建定时任务，到达指定时间后自动触发 AI 执行</li>
-              <li><b>⚙️ 设置面板</b>：AI 设置、记忆管理、笔记设置、自动化管理、数据备份、调试</li>
+              <li><b>⚙️ 设置面板</b>：外观与桌宠、学习与复习、AI 与工具、AI 记忆、提醒与自动化、账号与同步、数据与备份、应用与诊断</li>
               <li><b>📰 更新日志</b>：版本更新记录</li>
             </ol>
             <p style="margin:6px 0 0 0;font-size:11px;color:var(--text-secondary);">💡 每次对话开始时，AI 会获得实时的上下文数据（待办概览、今日聚焦、打卡状态、笔记/链接数量、自动化任务列表、长期记忆等）。</p>
@@ -372,15 +372,25 @@ function loadApiKeys() {
   if (typeof SecretVault !== 'undefined') return SecretVault.getJson('study_api_keys', []);
   try { return JSON.parse(localStorage.getItem('study_api_keys')) || []; } catch { return []; }
 }
-function saveApiKeys(keys) {
+function saveApiKeys(keys, options = {}) {
+  function saved(result) {
+    if (result && result.ok && options.sync !== false && window.SettingsSync) {
+      try { window.SettingsSync.publishApiKeys(keys); }
+      catch (error) {
+        console.warn('[API Key] 配置已保存在本机，同步登记失败');
+        if (typeof showMiniToast === 'function') showMiniToast('API Key 已在本机保存，但配置同步登记失败，请重试保存。', 'error');
+      }
+    }
+    return result;
+  }
   if (typeof SecretVault !== 'undefined') {
-    const pending = SecretVault.setJson('study_api_keys', keys);
+    const pending = SecretVault.setJson('study_api_keys', keys).then(saved);
     // Existing synchronous callers still get an observed rejection; the form awaits it.
     pending.catch(() => console.warn('[API Key] 凭据保存失败'));
     return pending;
   }
   localStorage.setItem('study_api_keys', JSON.stringify(keys));
-  return Promise.resolve({ ok: true });
+  return Promise.resolve(saved({ ok: true }));
 }
 function getActiveApiKeyId() {
   return localStorage.getItem('study_active_api_key_id') || '';
@@ -391,7 +401,7 @@ function getActiveReportKeyId() {
 }
 
 function setActiveReportKeyId(id) {
-  localStorage.setItem('study_dayreport_key_id', id);
+  setSyncedSetting('study_dayreport_key_id', id);
 }
 
 // Migrate legacy API key to multi-key system (one-time)
@@ -415,7 +425,7 @@ function setActiveReportKeyId(id) {
     createdAt: new Date().toISOString()
   };
   saveApiKeys([newKey]);
-  localStorage.setItem('study_active_api_key_id', newKey.id);
+  setSyncedSetting('study_active_api_key_id', newKey.id);
   // Clean up legacy keys
   ['study_ai_api_key', 'study_ai_model', 'study_ai_temperature',
    'study_ai_deep_think', 'study_ai_provider', 'study_ai_base_url'].forEach(k => {
@@ -510,17 +520,43 @@ function buildDeepThinkParams(apiCfg) {
   return {};
 }
 
-let _settingsTab = 'api';
+let _settingsTab = 'appearance';
+
+function resolveSettingsTab(tab) {
+  return ({ supabase: 'sync', friends: 'sync', store: 'sync', reminder: 'automation' })[tab] || tab;
+}
+
+function handleSettingsTabKeydown(event) {
+  const tabs = Array.from(document.querySelectorAll('#settingsModal [role="tab"]'));
+  const index = tabs.indexOf(event.currentTarget);
+  let next;
+  if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+  else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+  else if (event.key === 'Home') next = 0;
+  else if (event.key === 'End') next = tabs.length - 1;
+  else return;
+  event.preventDefault();
+  tabs[next].click();
+  tabs[next].focus();
+}
 
 function switchSettingsTab(tab) {
-  _settingsTab = tab;
-  if (tab === 'data' && typeof refreshStorageUsage === 'function') refreshStorageUsage();
-  document.querySelectorAll('.settings-tab').forEach(t => t.classList.remove('active'));
-  document.querySelectorAll('.settings-tab-panel').forEach(p => p.classList.remove('active'));
+  tab = resolveSettingsTab(tab);
   const tabEl = document.getElementById('settingsTab' + tab.charAt(0).toUpperCase() + tab.slice(1));
   const panelEl = document.getElementById('settingsPanel' + tab.charAt(0).toUpperCase() + tab.slice(1));
   if (!tabEl || !panelEl) return;
+  _settingsTab = tab;
+  if (tab === 'data' && typeof refreshStorageUsage === 'function') refreshStorageUsage();
+  document.querySelectorAll('#settingsModal .settings-tab').forEach(t => {
+    t.classList.remove('active');
+    t.setAttribute('aria-selected', 'false');
+    t.tabIndex = -1;
+  });
+  document.querySelectorAll('#settingsModal .settings-tab-panel').forEach(p => p.classList.remove('active'));
   tabEl.classList.add('active');
+  tabEl.setAttribute('aria-selected', 'true');
+  tabEl.tabIndex = 0;
+  tabEl.scrollIntoView({ block: 'nearest', inline: 'nearest' });
   panelEl.classList.add('active');
   // Clear status messages
   const statusEl = document.getElementById('settingsStatus');
@@ -540,7 +576,7 @@ function switchSettingsTab(tab) {
     renderImageUploadSetting();
   }
   // Load Supabase connection settings
-  if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
+  if (tab === 'sync' && typeof loadSupabaseSettings === 'function') {
     loadSupabaseSettings();
   }
   // Render sync panel（含日志类数据云存储区块，js/sync-logs.js，与同步共用同一 tab）
@@ -579,6 +615,7 @@ async function renderSyncPanel() {
     const errorTxt = st.lastError ? '，最近错误：' + st.lastError : '';
     statusEl.textContent = '同步状态：' + (st.enabled ? '已开启 · ' + loggedTxt + pendingTxt + conflictTxt + autoTxt + errorTxt : '已关闭');
     statusEl.className = st.lastError ? 'settings-status error' : 'settings-status';
+    _updateSyncRetry(st.lastError || '');
     if (statusEl.dataset.conflictError) {
       statusEl.textContent += '。' + statusEl.dataset.conflictError;
       statusEl.className = 'settings-status error';
@@ -769,6 +806,7 @@ const _syncConflictResolvingCategories = new Set();
 
 function _syncConflictCategory(item) {
   const sourceKey = item.collection || item.key || 'other';
+  if (window.SettingsSync && window.SettingsSync.isKey(sourceKey)) return { id: 'settings', label: '设置' };
   const known = SYNC_CONFLICT_CATEGORIES[sourceKey];
   if (known) return known;
   return { id: sourceKey, label: item.collection ? String(item.collection) : (item.label || item.key || '其他数据') };
@@ -958,16 +996,35 @@ function toggleSyncAutoEnabled() {
   renderSyncPanel();
 }
 
-async function syncManualSync() {
+let _syncActionBusy = false;
+let _syncRetrySelection = null;
+
+function _updateSyncRetry(error, selection) {
+  const button = document.getElementById('syncRetryButton');
+  if (!button || _syncActionBusy) return;
+  button.hidden = !error;
+  button.disabled = false;
+  button.textContent = '立即重试';
+  _syncRetrySelection = error ? (selection || _syncRetrySelection || _selectedSyncModule()) : null;
+}
+
+async function syncRetryNow() {
+  if (_syncActionBusy) return;
+  await syncManualSync(_syncRetrySelection || _selectedSyncModule());
+}
+
+async function syncManualSync(selection = _selectedSyncModule()) {
+  if (_syncActionBusy) return;
   const stEl = document.getElementById('syncStatus');
   if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
-  const selection = _selectedSyncModule();
   _setSyncActionBusy(true);
   let message = '';
+  let failure = '';
   if (stEl) { stEl.textContent = '正在同步' + selection.label + '…'; stEl.className = 'settings-status'; }
   _showSyncProgress('同步', 0);   // 立即显示进度条（防抖闪烁）
   try {
     const res = await window.Sync.manualSync({ moduleId: selection.id });
+    failure = (res && res.lastError) || '';
     if (stEl) {
       const err = (res && res.lastError) || '';
       message = err
@@ -975,33 +1032,44 @@ async function syncManualSync() {
         : (res && res.pendingConflictCount > 0 ? selection.label + '同步完成，仍有冲突需要处理。' : selection.label + '同步完成。');
     }
   } catch (e) {
-    message = selection.label + '同步出错：' + (e && e.message || e);
+    failure = String(e && e.message || e);
+    message = selection.label + '同步出错：' + failure;
   } finally {
     _hideSyncProgress();
-    _setSyncActionBusy(false);
-    await renderSyncPanel();
-    if (stEl) stEl.textContent = message;
+    try { await renderSyncPanel(); }
+    finally {
+      _setSyncActionBusy(false);
+      if (stEl) { stEl.textContent = message; stEl.className = failure ? 'settings-status error' : 'settings-status'; }
+      _updateSyncRetry(failure, selection);
+    }
   }
 }
 
 async function syncUploadAll() {
+  if (_syncActionBusy) return;
   const stEl = document.getElementById('syncStatus');
   if (typeof window.Sync === 'undefined') { if (stEl) stEl.textContent = '同步模块未加载'; return; }
   const selection = _selectedSyncModule();
   _setSyncActionBusy(true);
   let message = '';
+  let failure = '';
   if (stEl) { stEl.textContent = '正在上传' + selection.label + '的全部本地数据…'; stEl.className = 'settings-status'; }
   _showSyncProgress('上传', 0);
   try {
     const res = await window.Sync.uploadAll({ moduleId: selection.id });
+    failure = (res && res.lastError) || '';
     message = res && res.lastError ? selection.label + '上传未完成：' + res.lastError : selection.label + '上传完成。';
   } catch (e) {
-    message = selection.label + '上传出错：' + (e && e.message || e);
+    failure = String(e && e.message || e);
+    message = selection.label + '上传出错：' + failure;
   } finally {
     _hideSyncProgress();
-    _setSyncActionBusy(false);
-    await renderSyncPanel();
-    if (stEl) stEl.textContent = message;
+    try { await renderSyncPanel(); }
+    finally {
+      _setSyncActionBusy(false);
+      if (stEl) { stEl.textContent = message; stEl.className = failure ? 'settings-status error' : 'settings-status'; }
+      _updateSyncRetry(failure, selection);
+    }
   }
 }
 
@@ -1011,10 +1079,13 @@ function _selectedSyncModule() {
 }
 
 function _setSyncActionBusy(busy) {
-  for (const id of ['syncModuleSelect', 'syncManualButton', 'syncUploadButton']) {
+  _syncActionBusy = busy;
+  for (const id of ['syncModuleSelect', 'syncManualButton', 'syncUploadButton', 'syncRetryButton']) {
     const element = document.getElementById(id);
     if (element) element.disabled = busy;
   }
+  const retry = document.getElementById('syncRetryButton');
+  if (retry) retry.textContent = busy ? '重试中…' : '立即重试';
 }
 
 function _showSyncProgress(phase, pct) {
@@ -1491,7 +1562,7 @@ function openSettingsModal() {
   if (maxBackupInput) maxBackupInput.value = maxBackupFiles;
   document.getElementById('settingsStatus').className = 'settings-status';
   document.getElementById('settingsStatus').textContent = '';
-  switchSettingsTab('api');
+  switchSettingsTab('appearance');
   renderApiKeyList(); // Refresh multi-key list
   populateSummaryAiKeySelect();
   populateAutoTitleAiKeySelect();
@@ -1532,7 +1603,45 @@ function saveLibraryPdfSizeSetting() {
     && Number.isSafeInteger(value * 1024 * 1024);
   input.setCustomValidity(valid ? '' : '请输入非负整数，0 表示不限文件大小');
   if (!valid) { input.reportValidity(); return; }
-  localStorage.setItem('study_ai_library_pdf_max_mib', String(value));
+  setSyncedSetting('study_ai_library_pdf_max_mib', String(value));
+}
+
+// Apply synced preferences without reopening the dialog or overwriting an in-progress form.
+function refreshSyncedSettings() {
+  if (typeof invalidateStatusOptionsCache === 'function') invalidateStatusOptionsCache();
+  if (typeof refreshKeyBar === 'function') refreshKeyBar();
+  if (typeof updateAiFileInput === 'function') updateAiFileInput();
+  if (typeof updateAiImageUploadBtn === 'function') updateAiImageUploadBtn();
+  if (!settingsModalOpen) return;
+  const active = document.activeElement;
+  if (active && active.closest('#settingsModal .modal-body') && active.matches('input, textarea, select')) {
+    active.addEventListener('blur', refreshSyncedSettings, { once: true });
+    return;
+  }
+  renderApiKeyList();
+  populateSummaryAiKeySelect();
+  populateAutoTitleAiKeySelect();
+  loadDayReportSettings();
+  loadMorningReportSettings();
+  loadEveningReportSettings();
+  loadReviewSettings();
+  loadReminderSettings();
+  loadBooksKbSettings();
+  if (_settingsTab === 'notes') loadTodoStatusesToSettings();
+  if (_settingsTab === 'memory' && typeof renderMemoryPanel === 'function') renderMemoryPanel();
+  const fields = {
+    settingsMaxFocusCount: ['study_max_focus_count', '3'],
+    settingsLibraryPdfMaxMiB: ['study_ai_library_pdf_max_mib', '0'],
+    settingsWebSearchEngine: ['study_web_search_engine', 'duckduckgo']
+  };
+  for (const [id, [key, fallback]] of Object.entries(fields)) {
+    const el = document.getElementById(id);
+    if (el) el.value = localStorage.getItem(key) ?? fallback;
+  }
+  document.getElementById('settingsAutoTitle').checked = isAutoTitleEnabled();
+  document.getElementById('settingsAutoSummary').checked = localStorage.getItem('study_auto_summary') !== 'false';
+  updateWebSearchKeyFieldVisibility();
+  if (typeof renderImageUploadSetting === 'function') renderImageUploadSetting();
 }
 
 function closeSettingsModal(e) {
@@ -1788,7 +1897,7 @@ function loadIdleExemptRanges() {
   } catch (e) { return []; }
 }
 function saveIdleExemptRanges(ranges) {
-  localStorage.setItem('study_reminder_idle_exempt_ranges', JSON.stringify(ranges));
+  setSyncedSetting('study_reminder_idle_exempt_ranges', JSON.stringify(ranges));
 }
 function renderIdleExemptRanges() {
   const container = document.getElementById('idleExemptList');
@@ -1907,20 +2016,20 @@ function saveReminderSettings() {
   const ckTime = document.getElementById('reminderCheckinTime');
   const focusMin = document.getElementById('reminderFocusAfterMin');
   const idleMin = document.getElementById('reminderIdleAfterMin');
-  if (ckTime) localStorage.setItem('study_reminder_checkin_time', ckTime.value);
-  if (focusMin) localStorage.setItem('study_reminder_focus_after_min', focusMin.value);
-  if (idleMin) localStorage.setItem('study_reminder_idle_after_min', idleMin.value);
+  if (ckTime) setSyncedSetting('study_reminder_checkin_time', ckTime.value);
+  if (focusMin) setSyncedSetting('study_reminder_focus_after_min', focusMin.value);
+  if (idleMin) setSyncedSetting('study_reminder_idle_after_min', idleMin.value);
 
   const exemptCb = document.getElementById('reminderIdleExemptEnabled');
-  if (exemptCb) localStorage.setItem('study_reminder_idle_exempt_enabled', String(exemptCb.checked));
+  if (exemptCb) setSyncedSetting('study_reminder_idle_exempt_enabled', String(exemptCb.checked));
 
   const maxCountEl = document.getElementById('reminderIdleMaxCount');
   const unlimitedCb = document.getElementById('reminderIdleUnlimited');
   if (maxCountEl) {
     if (unlimitedCb) maxCountEl.disabled = unlimitedCb.checked;
-    localStorage.setItem('study_reminder_idle_max_count', maxCountEl.value);
+    setSyncedSetting('study_reminder_idle_max_count', maxCountEl.value);
   }
-  if (unlimitedCb) localStorage.setItem('study_reminder_idle_unlimited', String(unlimitedCb.checked));
+  if (unlimitedCb) setSyncedSetting('study_reminder_idle_unlimited', String(unlimitedCb.checked));
 
   // Sync body visibility
   if (document.getElementById('reminderCheckinBody')) {
@@ -1960,7 +2069,7 @@ function populateSummaryAiKeySelect() {
 function saveSummaryAiKeySetting() {
   const select = document.getElementById('settingsSummaryAiKey');
   if (!select) return;
-  localStorage.setItem('study_summary_ai_key_id', select.value);
+  setSyncedSetting('study_summary_ai_key_id', select.value);
   if (typeof checkAndUpdateSummary === 'function') checkAndUpdateSummary();
 }
 
@@ -1983,8 +2092,8 @@ function populateAutoTitleAiKeySelect() {
 function saveAutoTitleSetting() {
   const enabled = document.getElementById('settingsAutoTitle')?.checked;
   const keyId = document.getElementById('settingsAutoTitleAiKey')?.value;
-  if (enabled !== undefined) localStorage.setItem('study_auto_title_enabled', enabled);
-  if (keyId !== undefined) localStorage.setItem('study_auto_title_ai_key_id', keyId);
+  if (enabled !== undefined) setSyncedSetting('study_auto_title_enabled', enabled);
+  if (keyId !== undefined) setSyncedSetting('study_auto_title_ai_key_id', keyId);
 }
 
 function isAutoTitleEnabled() {
@@ -2001,7 +2110,7 @@ function getAutoTitleAiKey() {
 // Save notes settings (auto-saved via onchange)
 function saveNotesSettings() {
   const autoCb = document.getElementById('settingsAutoSummary');
-  if (autoCb) localStorage.setItem('study_auto_summary', autoCb.checked);
+  if (autoCb) setSyncedSetting('study_auto_summary', autoCb.checked);
   if (autoCb?.checked && typeof checkAndUpdateSummary === 'function') checkAndUpdateSummary();
 }
 
@@ -2023,11 +2132,11 @@ function loadReviewSettings() {
 function saveReviewSettings() {
   const modeSelect = document.getElementById('settingsReviewMode');
   const mode = modeSelect ? modeSelect.value : 'standard';
-  localStorage.setItem('study_review_mode', mode);
+  setSyncedSetting('study_review_mode', mode);
   if (mode === 'custom') {
     const customInput = document.getElementById('settingsReviewCustomIntervals');
     const val = customInput ? customInput.value.trim() : '';
-    localStorage.setItem('study_review_custom_intervals', val);
+    setSyncedSetting('study_review_custom_intervals', val);
   }
   updateReviewPreview();
 }
@@ -2139,7 +2248,7 @@ function renderApiKeyList() {
     <div style="display:flex;align-items:center;padding:8px 10px;margin:4px 0;background:var(--todo-bg);border-radius:8px;font-size:12px;gap:8px;${isActive ? 'border:2px solid var(--primary);' : ''}">
       <div style="flex:1;min-width:0;">
         <div style="color:var(--text);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">🔑 ${escapeHtml(k.name)} ${isActive ? '<span style="color:var(--primary);font-size:10px;">(当前使用)</span>' : ''}</div>
-        <div style="color:var(--text-secondary);font-size:11px;">${escapeHtml(k.key.slice(0,12))}… | ${escapeHtml(modelName)} | ${k.baseUrl ? escapeHtml(k.baseUrl.replace(/\/+$/,'').replace(/https?:\/\//,'')) : 'openai'}</div>
+        <div style="color:var(--text-secondary);font-size:11px;">${k.key ? escapeHtml(k.key.slice(0,12)) + '…' : '需在此设备填写密钥'} | ${escapeHtml(modelName)} | ${k.baseUrl ? escapeHtml(k.baseUrl.replace(/\/+$/,'').replace(/https?:\/\//,'')) : 'openai'}</div>
       </div>
       <button onclick="duplicateApiKey('${k.id}')" style="background:var(--todo-hover);color:var(--text);border:none;border-radius:4px;padding:3px 6px;cursor:pointer;font-size:10px;" title="复制一份（克隆配置）">📋</button>
       <button onclick="setActiveApiKey('${k.id}')" style="background:${isActive ? 'var(--done)' : 'var(--border)'};color:${isActive ? '#fff' : 'var(--text)'};border:none;border-radius:4px;padding:3px 8px;cursor:pointer;font-size:10px;white-space:nowrap;" title="设为当前使用">${isActive ? '✅ 使用中' : '启用'}</button>
@@ -2215,7 +2324,7 @@ async function submitApiKeyForm() {
   const titleContextCount = parseInt(document.getElementById('apiKeyFormTitleContext').value) || 4;
 
   if (!name) { showSettingsStatus('请输入 Key 名称', true); return; }
-  if (!key) { showSettingsStatus('请输入 API Key', true); return; }
+  if (!key && !editId) { showSettingsStatus('请输入 API Key', true); return; }
 
   const keys = loadApiKeys();
 
@@ -2293,7 +2402,7 @@ function deleteApiKey(id) {
     keys.splice(idx, 1);
     saveApiKeys(keys);
     if (getActiveApiKeyId() === id) {
-      localStorage.setItem('study_active_api_key_id', keys.length > 0 ? keys[0].id : '');
+      setSyncedSetting('study_active_api_key_id', keys.length > 0 ? keys[0].id : '');
     }
     renderApiKeyList();
     showSettingsStatus('✅ 已删除 Key');
@@ -2346,7 +2455,7 @@ function buildKeyBarHTML(activeName) {
 
 // Switch active key and refresh the key bar
 function switchActiveKey(id) {
-  localStorage.setItem('study_active_api_key_id', id);
+  setSyncedSetting('study_active_api_key_id', id);
   refreshKeyBar();
   // Update file input accept based on the new model
   if (typeof updateAiFileInput === 'function') updateAiFileInput();
@@ -2933,7 +3042,7 @@ function onDebugToggle() {
 function saveWebSearchSettings() {
   const engine = document.getElementById('settingsWebSearchEngine').value;
   const key = document.getElementById('settingsWebSearchKey').value.trim();
-  localStorage.setItem('study_web_search_engine', engine);
+  setSyncedSetting('study_web_search_engine', engine);
   if (typeof SecretVault !== 'undefined') SecretVault.set('study_web_search_key', key).catch(console.warn);
   else localStorage.setItem('study_web_search_key', key);
 }
@@ -2957,7 +3066,7 @@ function saveBooksKbSettings() {
     if (!Number.isFinite(v)) v = 9000;
     v = Math.max(1000, Math.min(100000, v));
     el.value = v;
-    localStorage.setItem('study_books_kb_truncate', String(v));
+    setSyncedSetting('study_books_kb_truncate', String(v));
   }
   // 章节讲解上下文轮数（0~30）
   const rEl = document.getElementById('settingsBooksCtxRounds');
@@ -2966,7 +3075,7 @@ function saveBooksKbSettings() {
     if (!Number.isFinite(r)) r = 6;
     r = Math.max(0, Math.min(30, r));
     rEl.value = r;
-    localStorage.setItem('study_bk_explain_ctx_rounds', String(r));
+    setSyncedSetting('study_bk_explain_ctx_rounds', String(r));
   }
 }
 function loadBooksKbSettings() {
@@ -3210,7 +3319,7 @@ function statusDragEnd(e) {
 }
 
 function saveStatusOptions(options) {
-  localStorage.setItem('study_todo_statuses', JSON.stringify(options));
+  setSyncedSetting('study_todo_statuses', JSON.stringify(options));
   if (typeof invalidateStatusOptionsCache === 'function') invalidateStatusOptionsCache();
 }
 
@@ -3234,7 +3343,7 @@ function loadMorningReportSettings() {
 
 function saveMorningReportSettings() {
   const el = document.getElementById('morningReportEnabled');
-  localStorage.setItem('study_morning_cfg', JSON.stringify({
+  setSyncedSetting('study_morning_cfg', JSON.stringify({
     enabled: el ? el.checked : true
   }));
 }
@@ -3263,7 +3372,7 @@ const MIGRATION_KEYS = [
   // 打卡 / 今日 / 链接 / AI
   'study_checkin', 'study_today_focus', 'study_todo_queue', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
   'study_ai_usage_v1', 'study_ai_usage_v2',
-  // UI/状态/敏感（仅本地备份，不同步）
+  // UI/状态/凭据与 AI Key 选择（备份范围独立于云同步范围）
   'study_changelog', 'study_active_note', 'study_sidebar_open', 'study_theme', 'study_active_conv', 'study_today_review_layout',
   'study_api_keys', 'study_active_api_key_id', 'study_developer_mode', 'study_debug_mode',
   'study_automations'
@@ -4438,7 +4547,7 @@ function loadEveningReportCfg() {
 }
 
 function saveEveningReportCfg(cfg) {
-  localStorage.setItem('study_evening_report_cfg', JSON.stringify(cfg));
+  setSyncedSetting('study_evening_report_cfg', JSON.stringify(cfg));
 }
 
 function loadEveningReportLog() {
@@ -5319,7 +5428,7 @@ function showMemoryStatus(msg) {
 function saveMemoryDedupMode() {
   const sel = document.getElementById('memoryDedupMode');
   if (!sel) return;
-  localStorage.setItem('study_memory_dedup_mode', sel.value);
+  setSyncedSetting('study_memory_dedup_mode', sel.value);
   const label = sel.value === 'A' ? '完全AI（写入不做本地合并）' : sel.value === 'B' ? 'JS本地合并 + AI每日兜底' : '纯JS本地合并（无AI兜底）';
   showMemoryStatus(`✅ 去重方案已切换：${label}`);
 }
@@ -5331,7 +5440,7 @@ function saveMemoryDedupThreshold() {
   if (isNaN(v)) v = 30;
   v = Math.max(10, Math.min(50, v));
   input.value = v;
-  localStorage.setItem('study_memory_dedup_threshold', String(v));
+  setSyncedSetting('study_memory_dedup_threshold', String(v));
   showMemoryStatus(`✅ 每日 AI 兜底阈值已设为 ${v} 条`);
 }
 
@@ -5358,7 +5467,7 @@ openSettingsModal = function() {
     if (typeof renderMemoryPanel === 'function' && _settingsTab === 'memory') {
       renderMemoryPanel();
     }
-    if (_settingsTab === 'supabase' && typeof loadSupabaseSettings === 'function') {
+    if (_settingsTab === 'sync' && typeof loadSupabaseSettings === 'function') {
       loadSupabaseSettings();
     }
   }, 150);
@@ -5367,18 +5476,13 @@ openSettingsModal = function() {
 // Hook switchSettingsTab to render memory panel when switching to it
 const _origSwitchSettingsTab = switchSettingsTab;
 switchSettingsTab = function(tab) {
+  tab = resolveSettingsTab(tab);
   _origSwitchSettingsTab(tab);
   if (tab === 'memory' && typeof renderMemoryPanel === 'function') {
     renderMemoryPanel();
   }
-  if (tab === 'data' && typeof loadTodoStatusesToSettings === 'function') {
+  if (tab === 'notes' && typeof loadTodoStatusesToSettings === 'function') {
     loadTodoStatusesToSettings();
-  }
-  if (tab === 'api' && typeof renderCodebuddyCliConfig === 'function') {
-    renderCodebuddyCliConfig();
-  }
-  if (tab === 'supabase' && typeof loadSupabaseSettings === 'function') {
-    loadSupabaseSettings();
   }
 };
 

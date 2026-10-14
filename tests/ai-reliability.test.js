@@ -29,6 +29,8 @@ function harness() {
     setTimeout, clearTimeout
   };
   vm.createContext(ctx);
+  vm.runInContext(source('settings-sync'), ctx);
+  ctx.setSyncedSetting = ctx.window.setSyncedSetting;
   for (const file of ['ai-tree', 'ai-attach', 'skills', 'ai-tools', 'ai-api', 'ai-send', 'ai-render']) {
     // aiAttachments 在应用里由 js/settings.js 以 let 声明（全局词法绑定），测试里显式补上，
     // 否则对 ctx.aiAttachments 的赋值只会写到宿主对象上，源码里的 push/读改写都看不到

@@ -4115,10 +4115,14 @@ body.ai-message-immersive-open { overflow: hidden; }
   display: inline-flex; align-items: center; justify-content: center; gap: 6px;
 }
 .settings-tab:hover { color: var(--text); }
-/* 设置弹窗加宽，容纳更多 tab（AI 设置/记忆/数据/笔记/自动化/外观/提醒/更多设置） */
+/* 设置分类完整显示，避免常用入口藏在横向滚动区域。 */
 #settingsModal .modal { max-width: 720px; }
 #settingsModal .settings-tab { min-width: 60px; min-height: 38px; padding: 8px 10px; font-size: 12px; }
-#settingsModal .settings-tabs { scrollbar-width: none; -ms-overflow-style: none; }
+#settingsModal .settings-tabs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); overflow: visible; scrollbar-width: none; -ms-overflow-style: none; }
+#settingsModal .settings-tab:focus-visible { outline: 2px solid var(--primary); outline-offset: -3px; }
+@media (max-width: 480px) {
+  #settingsModal .settings-tabs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
 #settingsModal .settings-tabs::-webkit-scrollbar { display: none; }
 .settings-tab.active { color: var(--primary); border-bottom-color: var(--primary); }
 .settings-tab-panel { display: none; }

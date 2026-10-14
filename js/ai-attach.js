@@ -392,7 +392,7 @@ function getAiImageUploadMode() {
 
 function setAiImageUploadMode(mode) {
   const next = (mode === 'always' || mode === 'never') ? mode : 'auto';
-  try { localStorage.setItem(AI_IMAGE_UPLOAD_KEY, next); } catch (e) {}
+  try { setSyncedSetting(AI_IMAGE_UPLOAD_KEY, next); } catch (e) {}
   return next;
 }
 
