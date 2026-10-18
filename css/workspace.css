@@ -569,3 +569,37 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   .calendar-legend { gap: 8px 12px; font-size: 10px; }
   .timer-display { font-size: 62px; }
 }
+.note-table-toolbar {
+  box-sizing: border-box;
+  position: fixed;
+  z-index: 1200;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  width: max-content;
+  max-width: calc(100vw - 16px);
+  padding: 6px;
+  border: 1px solid var(--border, #d5dce6);
+  border-radius: 10px;
+  background: var(--card, #fff);
+  color: var(--text, #243044);
+  box-shadow: 0 4px 18px #0002;
+}
+.note-table-toolbar[hidden] { display: none; }
+.note-table-toolbar button {
+  min-height: 36px;
+  padding: 5px 8px;
+  border: 1px solid var(--border, #d5dce6);
+  border-radius: 6px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+.note-table-toolbar button:hover,
+.note-table-toolbar button:focus-visible {
+  background: var(--hover-bg, #eaf2ff);
+  outline: 2px solid var(--primary, #648ff0);
+  outline-offset: 1px;
+}

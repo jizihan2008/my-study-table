@@ -21,8 +21,8 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261014-settings-groups-r1">
-<link rel="stylesheet" href="css/workspace.css?v=20261013-today-manual-r1">
+<link rel="stylesheet" href="css/style.css?v=20261017-todo-status-r1">
+<link rel="stylesheet" href="css/workspace.css?v=20261017-table-actions-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -1176,6 +1176,7 @@
           <label><i data-lucide="search" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 网络搜索引擎</label>
           <select id="settingsWebSearchEngine" onchange="saveWebSearchSettings();updateWebSearchKeyFieldVisibility()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
             <option value="duckduckgo">DuckDuckGo（免费，无需 Key）</option>
+            <option value="deepseek">DeepSeek Search</option>
             <option value="brave">Brave Search</option>
             <option value="tavily">Tavily</option>
             <option value="exa">Exa</option>
@@ -1192,6 +1193,20 @@
             Exa: <code>https://api.exa.ai/search</code>（免费 1000 次/月）<br>
             SearchAPI: <code>https://www.searchapi.io/api/v1/search</code>（免费 100 次/月）
           </span>
+        </div>
+        <div class="settings-field">
+          <label for="settingsDeepSeekWebKey">DeepSeek 联网 API Key</label>
+          <input type="password" id="settingsDeepSeekWebKey" autocomplete="off" placeholder="DeepSeek Search / Fetch 共用，与聊天模型独立" onchange="saveWebSearchSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);box-sizing:border-box;">
+          <span class="hint">仅保存在本机，不参与设置云同步。用于 DeepSeek 搜索和网页读取；Search / Fetch 按成功请求计费。公开网页 URL 会发送给 DeepSeek。</span>
+        </div>
+        <div class="settings-field">
+          <label for="settingsWebReadMode">网页读取方式</label>
+          <select id="settingsWebReadMode" onchange="saveWebSearchSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
+            <option value="auto">自动（桌面优先本地，失败后尝试 DeepSeek；PWA 使用 DeepSeek）</option>
+            <option value="deepseek">DeepSeek 优先（失败后尝试桌面本地读取）</option>
+            <option value="local">仅桌面本地读取</option>
+          </select>
+          <span class="hint">网页读取不依赖搜索开关，需在对话接口组中开放「联网」。DeepSeek 搜索失败或无结果时尝试 DuckDuckGo；所有方式均失败时会说明原因。</span>
         </div>
                 <div class="settings-status" id="settingsStatus"></div>
 
@@ -1318,6 +1333,20 @@
         <span class="hint" style="display:block;margin-bottom:12px;">设置智能提醒，帮助你保持学习节奏。消息会通过系统通知发送，包含友善的鼓励话语。</span>
 
         <!-- 1. Check-in Reminder -->
+        <div class="reminder-card">
+          <div class="reminder-card-header">
+            <div class="reminder-card-left">
+              <label class="reminder-card-title" for="aiCrossDeviceNotify">其它设备的 AI 任务完成提醒</label>
+              <span class="reminder-card-desc">其它设备完成 AI 回复、自动化或日报后，在此设备弹出提示；点击系统通知打开对话。</span>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="aiCrossDeviceNotify" checked onchange="saveAiCrossDeviceNotificationSetting(this.checked)">
+              <span class="toggle-slider"></span>
+            </label>
+          </div>
+          <p class="hint">默认开启，仅控制此设备。各端需登录同一账号，并开启云同步、自动同步及 AI 对话自动同步。应用需保持运行；系统通知需授权，未授权时仍有应用内提示。离线恢复后补提醒最近 24 小时的完成结果。</p>
+        </div>
+
         <div class="reminder-card">
           <div class="reminder-card-header">
             <div class="reminder-card-left">
@@ -1789,15 +1818,15 @@
 <script src="lib/markdown/purify.min.js"></script>
 <script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/markdown.js?v=20261004-r3"></script>
-<script src="js/note-reading-renderer.js?v=20261004-r2"></script>
+<script src="js/markdown.js?v=20261017-table-multiline-r1"></script>
+<script src="js/note-reading-renderer.js?v=20261015-fold-toc-r1"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261013-r1"></script>
+<script src="js/note-rich-editor.js?v=20261017-table-actions-r1"></script>
 <script src="js/platform.js?v=20261014-idb-r1"></script>
-<script src="js/secrets.js?v=20261014-key-save-r1"></script>
+<script src="js/secrets.js?v=20261016-web-r1"></script>
 <script src="js/data-store.js?v=20261014-idb-r1"></script>
 <!-- app-loader hydrates IndexedDB before loading these modules in dependency order. -->
-<script type="application/x-study-script" data-app-src="js/settings-sync.js?v=20261014-r1"></script>
+<script type="application/x-study-script" data-app-src="js/settings-sync.js?v=20261016-web-r1"></script>
 <script type="application/x-study-script" data-app-src="js/diagnostics.js?v=20260825-r1"></script>
 <script type="application/x-study-script" data-app-src="js/env.js?v=20260911-r2"></script>
 <script type="application/x-study-script" data-app-src="js/theme-model.js?v=20260914-r5"></script>
@@ -1805,40 +1834,42 @@
 <script type="application/x-study-script" data-app-src="js/nav-shortcuts.js?v=20260920-r1"></script>
 <script type="application/x-study-script" data-app-src="js/core.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/trash.js?v=20261010-r1"></script>
-<script type="application/x-study-script" data-app-src="js/todos.js?v=20260922-r1"></script>
-<script type="application/x-study-script" data-app-src="js/notes.js?v=20261014-selection-r1"></script>
+<script type="application/x-study-script" data-app-src="js/todos.js?v=20261017-status-r1"></script>
+<script type="application/x-study-script" data-app-src="js/notes.js?v=20261015-fold-toc-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/file-library-order.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
 <script type="application/x-study-script" data-app-src="js/timer-types.js?v=20261013-custom-types-r1"></script>
-<script type="application/x-study-script" data-app-src="js/today.js?v=20261014-settings-r1"></script>
+<script type="application/x-study-script" data-app-src="js/today.js?v=20261017-todo-status-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261012-protocol-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261014-settings-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261012-visual-fold-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261014-idb-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-search.js"></script>
+<script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261015-ipad-paste-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261015-ipad-paste-r1"></script>
+<script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261016-web-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-client.js?v=20260914-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261014-idb-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261012-visual-fold-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261016-web-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
-<script type="application/x-study-script" data-app-src="js/prompts.js?v=20261013-timer-union-r1"></script>
+<script type="application/x-study-script" data-app-src="js/prompts.js?v=20261014-completed-review-r1"></script>
 <script type="application/x-study-script" data-app-src="js/music.js"></script>
-<script type="application/x-study-script" data-app-src="js/memory.js?v=20260914-r5"></script>
+<script type="application/x-study-script" data-app-src="js/memory.js?v=20261014-complete-summary-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bg-media-idb.js?v=20260906-r2"></script>
 <script type="application/x-study-script" data-app-src="js/appearance.js?v=20260929-r1"></script>
 <script type="application/x-study-script" data-app-src="js/backup-idb.js?v=20260812-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habit-status-text.js?v=20260920-r1"></script>
-<script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261013-check-r1"></script>
+<script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261017-todo-status-r1"></script>
 <script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261014-idb-r1"></script>
-<script type="application/x-study-script" data-app-src="js/settings.js?v=20261014-sync-retry-r1"></script>
+<script type="application/x-study-script" data-app-src="js/settings.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/utils.js?v=20261014-idb-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
-<script type="application/x-study-script" data-app-src="js/qq-chats.js?v=20260827-r2"></script>
-<script type="application/x-study-script" data-app-src="js/inbox.js?v=20260914-r2"></script>
+<script type="application/x-study-script" data-app-src="lib/qq-chat-media.js?v=20261017-images-r1"></script>
+<script type="application/x-study-script" data-app-src="js/qq-chats.js?v=20261017-images-r1"></script>
+<script type="application/x-study-script" data-app-src="js/inbox.js?v=20261017-inbox-images-r1"></script>
 <!-- 教材学习（pdf.js 为 ESM，用 module 加载并挂到 window） -->
 <script type="module">
   import * as pdfjsLib from './lib/pdfjs/pdf.min.mjs';
@@ -1882,7 +1913,7 @@
 <script type="application/x-study-script" data-app-src="js/sync-dom.js?v=20260930-r1"></script>
 <script type="application/x-study-script" data-app-src="js/sync.js?v=20261014-settings-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261014-idb-r1"></script>
+<script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261017-cloud-manage-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bootstrap.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/desktop-pet.js?v=20261005-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/cet/vocabulary.js?v=20261008-r1"></script>

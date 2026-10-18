@@ -1960,6 +1960,8 @@ function trackFirstCheckinToday() {
 
 // ── Settings load/save ──
 function loadReminderSettings() {
+  const crossDeviceCb = document.getElementById('aiCrossDeviceNotify');
+  if (crossDeviceCb) crossDeviceCb.checked = localStorage.getItem('study_ai_cross_device_notify') !== 'false';
   const ckEnabled = localStorage.getItem('study_reminder_checkin_enabled') === 'true';
   const focusEnabled = localStorage.getItem('study_reminder_focus_enabled') === 'true';
   const idleEnabled = localStorage.getItem('study_reminder_idle_enabled') === 'true';
@@ -2894,7 +2896,7 @@ async function executeAutomation(conv, auto) {
     console.log('[Auto API] model:', apiCfg.model, 'deepThink:', apiCfg.deepThink);
 
     // Use the shared tool call loop — tools execute invisibly, only final reply is shown
-    const { finalCleanText, finalReasoning } = await runToolCallLoop(
+    const { finalCleanText, finalReasoning, stopped, streamError, finishReason, incompleteReason } = await runToolCallLoop(
       apiCfg, conv,
       // Intermediate callback: refresh UI after each tool execution round
       () => {
@@ -2908,6 +2910,8 @@ async function executeAutomation(conv, auto) {
     const messageObj = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
     if (finalReasoning) messageObj.reasoning = finalReasoning;
     appendMessage(conv, messageObj);
+    if (!stopped && !streamError && !incompleteReason && finishReason !== 'length' && finishReason !== 'content_filter'
+        && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, finalCleanText, keyName);
 
     saveData('study_ai_convs', aiConvs);
 
@@ -2949,6 +2953,9 @@ if (shouldTimerRun()) {
 // Auto-generate conversation title using AI
 // Uses the latest N messages (configurable via apiCfg.titleContextCount)
 async function generateConvTitle(conv) {
+  // The report conversation has a stable name, including legacy records whose
+  // marker has not yet been restored by getDailyReportConv().
+  if (!conv || conv._dailyReport || conv.title === '📋 每日日报' || conv.title === '☀️ 晨间日报') return;
   // Check if auto-title is enabled
   if (!isAutoTitleEnabled()) {
     console.log('[TitleGen] Auto-title disabled, skipping');
@@ -3010,7 +3017,7 @@ async function generateConvTitle(conv) {
       });
       const title = (data.choices?.[0]?.message?.content || '').trim().replace(/["“”'']/g, '').slice(0, 20);
       console.log('[TitleGen] Got title:', title);
-      if (title && title.length >= 2) {
+      if (title && title.length >= 2 && !conv._dailyReport && conv.title !== '📋 每日日报' && conv.title !== '☀️ 晨间日报') {
         conv.title = title;
         conv.autoTitled = true;
         saveData('study_ai_convs', aiConvs);
@@ -3045,6 +3052,10 @@ function saveWebSearchSettings() {
   setSyncedSetting('study_web_search_engine', engine);
   if (typeof SecretVault !== 'undefined') SecretVault.set('study_web_search_key', key).catch(console.warn);
   else localStorage.setItem('study_web_search_key', key);
+  const deepseekKey = document.getElementById('settingsDeepSeekWebKey')?.value.trim() || '';
+  if (typeof SecretVault !== 'undefined') SecretVault.set('study_deepseek_web_key', deepseekKey).catch(console.warn);
+  else localStorage.setItem('study_deepseek_web_key', deepseekKey);
+  setSyncedSetting('study_web_read_mode', document.getElementById('settingsWebReadMode')?.value || 'auto');
 }
 function loadWebSearchSettings() {
   const engine = localStorage.getItem('study_web_search_engine') || 'duckduckgo';
@@ -3055,6 +3066,10 @@ function loadWebSearchSettings() {
   const keyEl = document.getElementById('settingsWebSearchKey');
   if (engineEl) engineEl.value = engine;
   if (keyEl) keyEl.value = key;
+  const deepseekEl = document.getElementById('settingsDeepSeekWebKey');
+  if (deepseekEl) deepseekEl.value = typeof SecretVault !== 'undefined' ? SecretVault.get('study_deepseek_web_key', '') : (localStorage.getItem('study_deepseek_web_key') || '');
+  const readModeEl = document.getElementById('settingsWebReadMode');
+  if (readModeEl) readModeEl.value = localStorage.getItem('study_web_read_mode') || 'auto';
   updateWebSearchKeyFieldVisibility();
 }
 
@@ -3350,7 +3365,7 @@ function saveMorningReportSettings() {
 function updateWebSearchKeyFieldVisibility() {
   const engine = document.getElementById('settingsWebSearchEngine').value;
   const field = document.getElementById('settingsWebSearchKeyField');
-  if (field) field.style.display = engine === 'duckduckgo' ? 'none' : '';
+  if (field) field.style.display = ['duckduckgo', 'deepseek'].includes(engine) ? 'none' : '';
 }
 
 // ── Data migration ──
@@ -3378,6 +3393,7 @@ const MIGRATION_KEYS = [
   'study_automations'
 ];
 const SENSITIVE_MIGRATION_KEYS = new Set([
+  'study_deepseek_web_key',
   'study_api_keys',
   'study_ai_api_key',
   'study_web_search_key',
@@ -4101,6 +4117,33 @@ function formatDailyReportTimerLabel(record) {
   return label;
 }
 
+// Count actual review completions by local calendar day, independently of
+// whether review reminders are currently enabled or the note is still due.
+function collectReportCompletedNoteReviews(dateStr) {
+  const completedNotes = [];
+  for (const note of notes) {
+    if (note.type !== 'note' || !Array.isArray(note._reviewHistory)) continue;
+    const completedAt = note._reviewHistory.filter(timestamp => {
+      if (typeof timestamp !== 'string' || !timestamp.trim()) return false;
+      const d = new Date(timestamp);
+      if (!Number.isFinite(d.getTime())) return false;
+      const localDate = d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+      return localDate === dateStr;
+    });
+    if (completedAt.length) completedNotes.push({
+      id: note.id, title: note.title || '未命名',
+      completionCount: completedAt.length, completedAt
+    });
+  }
+  return {
+    activityDate: dateStr,
+    completedNoteCount: completedNotes.length,
+    completionCount: completedNotes.reduce((sum, note) => sum + note.completionCount, 0),
+    completedNotes,
+    statisticsNote: '按本地日期统计现存笔记中保留的完成复习记录；同一笔记当天多次完成计为多次，笔记篇数按笔记去重。关闭或跳过复习提醒不影响已完成记录；已删除笔记或重置复习周期后清除的记录不在统计范围内。'
+  };
+}
+
 function collectDailyReportData() {
   const todayStr = getTodayStr();
   const yesterdayStr = getPastDateStr(1);
@@ -4238,6 +4281,7 @@ function collectDailyReportData() {
     totalTodos: todos.length,
     totalDone: todos.filter(t => t.done).length,
     taskline,
+    completedNoteReviews: collectReportCompletedNoteReviews(yesterdayStr),
     ydayCreatedNotes: ydayCreatedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     ydayEditedNotes: ydayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     ydayTimerStr: ydayTimerMs > 0 ? fmtTimer(ydayTimerMs) : '无',
@@ -4501,6 +4545,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     if (report) {
       appendMessage(conv, { role: 'user', content: '生成 ' + data.todayStr + ' 晨间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
       appendMessage(conv, { role: 'assistant', content: report, reasoning: reasoning || undefined, keyName: getActiveKeyDisplayName() });
+      if (finishReason !== 'length' && finishReason !== 'content_filter' && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, report, getActiveKeyDisplayName());
       // Keep only last 30 messages to avoid bloating
       trimConvMessages(conv, 30);
       saveData('study_ai_convs', aiConvs);
@@ -4719,6 +4764,7 @@ function collectEveningReportData() {
     tomorrowDueTodos: tomorrowDue.map(t => ({ text: t.text, id: t.id })),
     totalTodos,
     totalDone,
+    completedNoteReviews: collectReportCompletedNoteReviews(todayStr),
     todayCreatedNotes: todayCreatedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     todayEditedNotes: todayEditedNotes.map(n => ({ title: n.title || '未命名', id: n.id })),
     todayTimerStr: todayTimerMs > 0 ? fmtDuration(todayTimerMs) : '无',
@@ -4948,6 +4994,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     if (report) {
       appendMessage(conv, { role: 'user', content: '生成 ' + todayStr + ' 晚间日报' + (userInstruction ? '\n\n我的补充：' + userInstruction : '') });
       appendMessage(conv, { role: 'assistant', content: report, reasoning: reasoning || undefined, keyName: getActiveKeyDisplayName() });
+      if (finishReason !== 'length' && finishReason !== 'content_filter' && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, report, getActiveKeyDisplayName());
       trimConvMessages(conv, 30);
       saveData('study_ai_convs', aiConvs);
       // Send Windows notification (before render/mark to ensure delivery)

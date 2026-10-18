@@ -548,7 +548,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   }
 
   // AI Auto-title — regenerate after every exchange
-  const shouldAutoTitle = conv.messages.filter(isAiUserQuestion).length >= 1;
+  const shouldAutoTitle = !conv._dailyReport && conv.messages.filter(isAiUserQuestion).length >= 1;
 
   if (conv.title.startsWith('新对话 ') && conv.messages.filter(isAiUserQuestion).length === 1) {
     conv.title = text ? (text.length > 20 ? text.slice(0, 20) + '…' : text) : '附件对话';
@@ -604,6 +604,8 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
     const finalAssistantMsg = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
     if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
     appendMessage(conv, finalAssistantMsg);
+    if (!loopRes.stopped && !loopRes.streamError && !loopRes.incompleteReason && loopRes.finishReason !== 'length' && loopRes.finishReason !== 'content_filter'
+        && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, finalCleanText, keyName);
     safeSaveAiConvs();
     sendAiNotification(conv, finalCleanText, keyName);
 
@@ -767,6 +769,8 @@ async function regenerateFromUserNode(conv, userNodeId, config) {
     const finalAssistantMsg = { role: 'assistant', content: finalCleanText || '（未收到回复）', time: timeStr, keyName };
     if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
     appendMessage(conv, finalAssistantMsg);
+    if (!loopRes.stopped && !loopRes.streamError && !loopRes.incompleteReason && loopRes.finishReason !== 'length' && loopRes.finishReason !== 'content_filter'
+        && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, finalCleanText, keyName);
     safeSaveAiConvs();
     sendAiNotification(conv, finalCleanText, (apiCfg.name || apiCfg.model || 'AI'));
 

@@ -314,12 +314,17 @@ function renderAiChat(options) {
       <button class="ai-attach-btn" id="aiConversationFilesBtn" ${noKey ? 'disabled' : ''} onclick="openAiConversationFiles()" title="从本对话已发送的文件中再次插入" aria-label="本对话文件">
         <i data-lucide="files" class="lucide-icon" style="width:18px;height:18px;"></i>
       </button>
-      <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="document.getElementById('aiFileInput').click()" title="上传附件（也可拖拽文件到对话区，或 Ctrl+V 粘贴）">
+      <button class="ai-attach-btn" id="aiAttachBtn" ${noKey ? 'disabled' : ''} onclick="openAiAttachmentMenu()" title="添加附件" aria-label="添加附件" aria-haspopup="dialog">
         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
       </button>
       <button class="ai-chat-send-btn" id="aiSendBtn" ${noKey ? 'disabled' : ''} onclick="handleAiSendOrStop()" title="发送">
         <svg id="aiSendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
       </button>
+    </div>
+    <div id="aiPasteTextHint" class="ai-paste-text-hint" hidden role="status">
+      <span>刚粘贴的文字可作为附件</span>
+      <button type="button" onclick="convertAiPastedText()">转为 TXT</button>
+      <button type="button" onclick="clearAiPasteTextHint()" aria-label="关闭粘贴提示">✕</button>
     </div>
   `;
   layout.dataset.aiConvId = String(conv.id);

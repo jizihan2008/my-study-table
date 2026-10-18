@@ -151,7 +151,7 @@ function pageSnapshot(data, options, snapshotId) {
   }
   return { ok: true, title: data.title, finalUrl: data.finalUrl, text, snapshotId,
     offset: options.offset, totalChars, nextOffset, truncated: nextOffset !== null,
-    sourceTruncated: !!data.sourceTruncated, warnings: data.warnings || [],
+    sourceTruncated: !!data.sourceTruncated, warnings: data.warnings || [], fetchedAt: data.fetchedAt,
     headings: options.offset === 0 ? data.headings : [], links: options.offset === 0 ? data.links : [], matches };
 }
 

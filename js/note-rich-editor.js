@@ -13,6 +13,10 @@
   let footnoteDefinitions = '';
   let mathPointerStart = null;
   let closeMathEditor = null;
+  let pendingFoldTitle = null;
+  let composingFoldTitle = null;
+  let tableToolbar = null;
+  let activeTableCell = null;
 
   const blockTags = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'PRE', 'BLOCKQUOTE', 'TABLE', 'HR', 'DETAILS']);
 
@@ -114,7 +118,10 @@
   }
 
   function setMarkdown(markdown, noteId) {
+    hideTableToolbar();
     closeMathEditor?.(false);
+    pendingFoldTitle = null;
+    composingFoldTitle = null;
     if (!host) init();
     if (!host) return;
     syncing = true;
@@ -215,11 +222,33 @@
       .join('\n');
   }
 
+  function serializeTableCell(cell) {
+    // Enter produces BRs or P/DIV wrappers depending on the browser. Keep
+    // their visual line boundaries inside one Markdown table row.
+    const cellContent = container => {
+      const nodes = Array.from(container.childNodes);
+      if (nodes.length === 1 && nodes[0].nodeName === 'BR') return '';
+      let value = '', previousBlock = false, hasContent = false;
+      nodes.forEach(node => {
+        const isBlock = node.nodeType === Node.ELEMENT_NODE && /^(P|DIV)$/.test(node.tagName);
+        if (node.nodeType === Node.TEXT_NODE && /^[\t\r\n ]+$/.test(node.textContent)
+          && /[\r\n]/.test(node.textContent)) return;
+        if (hasContent && (isBlock || previousBlock)) value += '\n';
+        value += isBlock ? cellContent(node) : inline(node);
+        previousBlock = isBlock;
+        hasContent = true;
+      });
+      return value;
+    };
+    return cellContent(cell).replace(/^[\t ]+|[\t ]+$/g, '')
+      .replace(/\|/g, '\\|').replace(/\n/g, '<br>');
+  }
+
   function serializeTable(table) {
     const rows = Array.from(table.querySelectorAll('tr')).map(row =>
       Array.from(row.children)
         .filter(cell => cell.tagName === 'TH' || cell.tagName === 'TD')
-        .map(cell => Array.from(cell.childNodes).map(inline).join('').trim().replace(/\|/g, '\\|'))
+        .map(serializeTableCell)
     ).filter(row => row.length);
     if (!rows.length) return '';
     const width = Math.max(...rows.map(row => row.length));
@@ -261,9 +290,19 @@
     if (tag === 'details') {
       const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
       const body = Array.from(node.children).find(child => child.classList.contains('note-fold-body'));
-      const title = summary
+      let title = summary
         ? Array.from(summary.childNodes).map(inline).join('').trim()
-        : '折叠内容';
+        : '';
+      // Last-resort preservation for an already damaged WebKit editing DOM.
+      // A generated Details label is not a real title; retain the orphan text.
+      if (!title && body && node.classList.contains('note-fold')) {
+        const orphanTitle = [];
+        for (const child of node.childNodes) {
+          if (child === body) break;
+          if (child !== summary) orphanTitle.push(child);
+        }
+        title = orphanTitle.map(inline).join('').trim();
+      }
       const bodyNodes = body ? Array.from(body.childNodes) : Array.from(node.childNodes).filter(child => child !== summary);
       const bodyMarkdown = serializeBlocks(bodyNodes).trim();
       // An empty body is real document content (including in history), not a
@@ -663,6 +702,136 @@
     });
   }
 
+  function hideTableToolbar() {
+    activeTableCell = null;
+    if (tableToolbar) tableToolbar.hidden = true;
+  }
+
+  function updateTableToolbar() {
+    const selection = window.getSelection();
+    const anchor = selection?.anchorNode;
+    const element = anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement;
+    const cell = element?.closest('th, td');
+    if (cell && host.contains(cell) && cell.contains(selection.focusNode)) activeTableCell = cell;
+    else if (!tableToolbar?.contains(document.activeElement)) return hideTableToolbar();
+    if (!activeTableCell || !host.contains(activeTableCell) || !host.getClientRects().length) return hideTableToolbar();
+    const rect = activeTableCell.getBoundingClientRect();
+    const bounds = host.getBoundingClientRect();
+    if (rect.bottom < Math.max(0, bounds.top) || rect.top > Math.min(innerHeight, bounds.bottom)) return hideTableToolbar();
+    tableToolbar.hidden = false;
+    const width = tableToolbar.offsetWidth;
+    const height = tableToolbar.offsetHeight;
+    tableToolbar.style.left = Math.max(8, Math.min(rect.left, innerWidth - width - 8)) + 'px';
+    tableToolbar.style.top = Math.max(8, Math.min(rect.top - height - 8 >= Math.max(8, bounds.top)
+      ? rect.top - height - 8 : rect.bottom + 8, innerHeight - height - 8)) + 'px';
+  }
+
+  function editTable(action) {
+    const cell = activeTableCell;
+    const table = cell?.closest('table');
+    if (!table || !host.contains(table)) return hideTableToolbar();
+    const row = cell.parentElement;
+    const rows = Array.from(table.rows);
+    const rowIndex = rows.indexOf(row);
+    const column = cell.cellIndex;
+    let target = cell;
+    if ((action === 'delete-row' && rows.length === 1)
+      || (action === 'delete-column' && row.cells.length === 1)) {
+      target = document.createElement('p');
+      target.appendChild(document.createElement('br'));
+      table.replaceWith(target);
+    } else {
+      if (action === 'row-before' || action === 'row-after') {
+        const inserted = document.createElement('tr');
+        Array.from(row.cells).forEach(source => {
+          const blank = document.createElement('td');
+          blank.style.cssText = source.style.cssText;
+          blank.appendChild(document.createElement('br'));
+          inserted.appendChild(blank);
+        });
+        row[action === 'row-before' ? 'before' : 'after'](inserted);
+        target = inserted.cells[column];
+      } else if (action === 'column-before' || action === 'column-after') {
+        rows.forEach(existing => {
+          const source = existing.cells[column];
+          const blank = document.createElement(source.tagName.toLowerCase());
+          blank.style.cssText = source.style.cssText;
+          blank.appendChild(document.createElement('br'));
+          source[action === 'column-before' ? 'before' : 'after'](blank);
+          if (existing === row) target = blank;
+        });
+      } else if (action === 'delete-row') {
+        target = (rows[rowIndex + 1] || rows[rowIndex - 1]).cells[column];
+        row.remove();
+      } else if (action === 'delete-column') {
+        target = row.cells[column + 1] || row.cells[column - 1];
+        rows.forEach(existing => existing.cells[column]?.remove());
+      } else return;
+      // Markdown tables always have one header row. Rebuild the sections so
+      // inserting before, or deleting, the header survives a render round trip.
+      const remaining = Array.from(table.rows);
+      const head = document.createElement('thead');
+      const body = document.createElement('tbody');
+      remaining.forEach((existing, index) => {
+        Array.from(existing.cells).forEach(old => {
+          const tag = index === 0 ? 'th' : 'td';
+          if (old.tagName.toLowerCase() === tag) return;
+          const replacement = document.createElement(tag);
+          replacement.style.cssText = old.style.cssText;
+          while (old.firstChild) replacement.appendChild(old.firstChild);
+          old.replaceWith(replacement);
+          if (target === old) target = replacement;
+        });
+        (index === 0 ? head : body).appendChild(existing);
+      });
+      table.replaceChildren(head, body);
+    }
+    host.focus({ preventScroll: true });
+    const range = document.createRange();
+    range.selectNodeContents(target);
+    range.collapse(true);
+    restoreRange(range);
+    notifyChange({ historyBoundary: true });
+    updateTableToolbar();
+  }
+
+  function initTableToolbar() {
+    tableToolbar = document.createElement('div');
+    tableToolbar.className = 'note-table-toolbar';
+    tableToolbar.hidden = true;
+    tableToolbar.setAttribute('role', 'group');
+    tableToolbar.setAttribute('aria-label', '表格行列操作');
+    tableToolbar.dataset.editor = host.id;
+    const actions = { 'row-before': '上方插入行', 'row-after': '下方插入行',
+      'column-before': '左侧插入列', 'column-after': '右侧插入列',
+      'delete-row': '删除行', 'delete-column': '删除列' };
+    Object.entries(actions).forEach(([action, label]) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.textContent = label;
+      button.dataset.tableAction = action;
+      button.addEventListener('pointerdown', event => event.preventDefault());
+      button.addEventListener('click', () => editTable(action));
+      tableToolbar.appendChild(button);
+    });
+    tableToolbar.addEventListener('keydown', event => {
+      if (event.key !== 'Escape') return;
+      host.focus({ preventScroll: true });
+      hideTableToolbar();
+      event.preventDefault();
+    });
+    document.body.appendChild(tableToolbar);
+    document.addEventListener('selectionchange', updateTableToolbar);
+    document.addEventListener('pointerdown', event => {
+      if (!host.contains(event.target) && !tableToolbar.contains(event.target)) hideTableToolbar();
+    });
+    document.addEventListener('focusin', event => {
+      if (!host.contains(event.target) && !tableToolbar.contains(event.target)) hideTableToolbar();
+    });
+    document.addEventListener('scroll', updateTableToolbar, true);
+    window.addEventListener('resize', updateTableToolbar);
+  }
+
   function foldTitleRange() {
     const selection = window.getSelection();
     if (!selection?.rangeCount) return null;
@@ -671,6 +840,92 @@
     const summary = element.closest('summary');
     return summary && host.contains(summary) && summary.parentElement.matches('details.note-fold')
       && summary.contains(range.endContainer) ? range : null;
+  }
+
+  function captureFoldTitle() {
+    const range = foldTitleRange();
+    if (!range) return null;
+    const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+    const summary = element.closest('summary');
+    return { summary, fold: summary.parentElement };
+  }
+
+  function hasTitleContent(fragment) {
+    return !!fragment.textContent.replace(/\u200b/g, '') || !!fragment.querySelector?.('img, .katex, math');
+  }
+
+  function keepEmptyFoldTitle(summary) {
+    if (hasTitleContent(summary)) return;
+    // A real caret node prevents WebKit from removing an empty <summary> and
+    // falling back to its generated "Details" label. It is never serialized.
+    summary.replaceChildren(document.createTextNode('\u200b'));
+    const range = document.createRange();
+    range.selectNodeContents(summary);
+    range.collapse(false);
+    restoreRange(range);
+  }
+
+  function protectFoldTitleDeletion(event) {
+    if (!event.inputType.startsWith('delete') || !event.cancelable || event.isComposing) return false;
+    const range = foldTitleRange();
+    if (!range) return false;
+    const { summary } = captureFoldTitle();
+    let deletion = range;
+    const target = event.getTargetRanges?.()[0];
+    if (target && summary.contains(target.startContainer) && summary.contains(target.endContainer)) {
+      deletion = document.createRange();
+      deletion.setStart(target.startContainer, target.startOffset);
+      deletion.setEnd(target.endContainer, target.endOffset);
+    }
+    const before = document.createRange(), after = document.createRange();
+    before.selectNodeContents(summary); before.setEnd(deletion.startContainer, deletion.startOffset);
+    after.selectNodeContents(summary); after.setStart(deletion.endContainer, deletion.endOffset);
+    let empty = !hasTitleContent(before.cloneContents()) && !hasTitleContent(after.cloneContents());
+    if (deletion.collapsed) {
+      const backward = /Backward$/.test(event.inputType), forward = /Forward$/.test(event.inputType);
+      const prefix = before.cloneContents(), suffix = after.cloneContents();
+      // Block boundary merges as well as deletion of the final grapheme when
+      // iPad does not supply a target range (including hardware keyboards).
+      if ((backward && !hasTitleContent(prefix)) || (forward && !hasTitleContent(suffix))) {
+        event.preventDefault(); return true;
+      }
+      const remaining = backward ? prefix : suffix;
+      const opposite = backward ? suffix : prefix;
+      const text = remaining.textContent.replace(/\u200b/g, '');
+      const graphemes = typeof Intl.Segmenter === 'function'
+        ? [...new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(text)].length : Array.from(text).length;
+      empty = (backward || forward) && !hasTitleContent(opposite) && graphemes === 1
+        && !remaining.querySelector('img, .katex, math');
+      if (empty) deletion.selectNodeContents(summary);
+    }
+    if (!empty) return false;
+    event.preventDefault();
+    deletion.deleteContents();
+    keepEmptyFoldTitle(summary);
+    notifyChange();
+    return true;
+  }
+
+  function repairFoldTitle(context, composing = false) {
+    if (!context || !host.contains(context.fold)) return;
+    const { summary, fold } = context;
+    if (summary.parentElement !== fold) {
+      // Undo may already have restored a new, valid title node.
+      if (Array.from(fold.children).some(child => child.tagName === 'SUMMARY')) return;
+      // Recover characters WebKit may have moved between the lost title and
+      // the body. Move the nodes rather than copying them, preserving IME text.
+      summary.replaceChildren();
+      const body = Array.from(fold.children).find(child => child.classList.contains('note-fold-body'));
+      if (body) {
+        for (const node of Array.from(fold.childNodes)) {
+          if (node === body) break;
+          summary.appendChild(node);
+        }
+      }
+      fold.prepend(summary);
+      const range = document.createRange(); range.selectNodeContents(summary); range.collapse(false); restoreRange(range);
+    }
+    if (!composing) keepEmptyFoldTitle(summary);
   }
 
   function insertTitleContent(range, fragment) {
@@ -1057,7 +1312,19 @@
     host = document.getElementById(options.hostId || 'notesRichEditor');
     if (!host || host.dataset.ready === 'true') return;
     host.dataset.ready = 'true';
-    host.addEventListener('input', notifyChange);
+    initTableToolbar();
+    host.addEventListener('input', event => {
+      repairFoldTitle(pendingFoldTitle || composingFoldTitle || captureFoldTitle(), event.isComposing);
+      pendingFoldTitle = null;
+      notifyChange(event);
+    });
+    host.addEventListener('compositionstart', () => { composingFoldTitle = captureFoldTitle(); });
+    host.addEventListener('compositionend', () => {
+      if (!composingFoldTitle) return;
+      repairFoldTitle(composingFoldTitle);
+      composingFoldTitle = null;
+      notifyChange();
+    });
     host.addEventListener('change', event => {
       if (event.target.matches('input[type="checkbox"]')) notifyChange();
     });
@@ -1072,6 +1339,8 @@
     const heading = caretElement()?.closest('h1,h2,h3,h4,h5,h6');
     root.updateNotesHeadingState?.(heading ? Number(heading.tagName.slice(1)) : 0);
     host.addEventListener('beforeinput', event => {
+      pendingFoldTitle = captureFoldTitle();
+      if (protectFoldTitleDeletion(event)) { pendingFoldTitle = null; return; }
       if (!event.isComposing && event.inputType === 'insertParagraph' && enterFoldBodyFromTitle()) {
         event.preventDefault();
         return;

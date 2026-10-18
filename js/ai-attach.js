@@ -14,6 +14,7 @@ let aiContextInserts = []; // [{ type: 'note'|'todo'|'skill', id } | { type: 'qu
 let aiContextPickerType = null;
 let aiContextPickerQuery = '';
 let aiContextPickerExpandedIds = new Set();
+let aiPastedTextRange = null;
 
 function getAiContextTodoPath(todo) {
   if (!todo) return '';
@@ -1686,10 +1687,110 @@ const PASTE_FILE_MIME_EXT = {
   'text/plain': '.txt', 'text/markdown': '.md', 'application/json': '.json'
 };
 
-// 纯文本达到该长度时，先询问是否转成 .txt 附件，避免超长正文挤满输入框。
-const LARGE_PASTE_TEXT_THRESHOLD = 2000;
+// 普通粘贴保留原生行为，并提供转换提示；键盘快捷键可直接打开附件确认。
 let largePasteDialogResolver = null;
+let largePasteReturnFocus = null;
 let aiPasteAsTextFile = false;
+
+function clearAiPasteTextHint() {
+  aiPastedTextRange = null;
+  const hint = document.getElementById('aiPasteTextHint');
+  if (hint) hint.hidden = true;
+}
+
+function rememberAiPastedText(input, text, start) {
+  aiPastedTextRange = { input, text, start, value: input.value };
+  const hint = document.getElementById('aiPasteTextHint');
+  if (hint) hint.hidden = false;
+}
+
+// 原生粘贴完成后记录范围；后续编辑只要碰到这段文字，就撤掉转换入口。
+function trackAiPasteTextEdit(event) {
+  const range = aiPastedTextRange;
+  if (!range || event.target !== range.input) return;
+  const before = range.value, after = range.input.value;
+  if (before === after) return;
+  let start = 0, oldEnd = before.length, newEnd = after.length;
+  while (start < oldEnd && start < newEnd && before[start] === after[start]) start++;
+  while (oldEnd > start && newEnd > start && before[oldEnd - 1] === after[newEnd - 1]) { oldEnd--; newEnd--; }
+  if (oldEnd <= range.start) range.start += newEnd - oldEnd;
+  else if (start < range.start + range.text.length) { clearAiPasteTextHint(); return; }
+  range.value = after;
+}
+
+function isAiPasteInputCurrent(input) {
+  return input && input.isConnected && input === document.getElementById('aiInput') && !input.disabled;
+}
+
+async function convertAiPastedText() {
+  const range = aiPastedTextRange;
+  if (!range || !isAiPasteInputCurrent(range.input)) { clearAiPasteTextHint(); return; }
+  const name = await askLargePasteAsFile(range.text, { converting: true });
+  if (!name || aiPastedTextRange !== range || !isAiPasteInputCurrent(range.input)) return;
+  if (range.input.value !== range.value || range.input.value.slice(range.start, range.start + range.text.length) !== range.text) {
+    clearAiPasteTextHint(); return;
+  }
+  const added = addAiAttachmentFiles([new File([range.text], name, { type: 'text/plain;charset=utf-8' })]);
+  if (!added.length) return;
+  clearAiPasteTextHint();
+  range.input.setRangeText('', range.start, range.start + range.text.length, 'start');
+  range.input.dispatchEvent(new Event('input', { bubbles: true }));
+  autoResizeAiInput();
+  range.input.focus();
+}
+
+function openAiAttachmentMenu() {
+  const input = document.getElementById('aiInput');
+  if (!isAiPasteInputCurrent(input)) return;
+  const existing = document.getElementById('aiTextAttachmentOverlay');
+  if (existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'aiTextAttachmentOverlay';
+  overlay.className = 'modal-overlay open';
+  overlay.innerHTML = `<div class="modal ai-text-attachment-dialog" role="dialog" aria-modal="true" aria-labelledby="aiTextAttachmentTitle">
+    <div class="modal-header"><div class="modal-title" id="aiTextAttachmentTitle">添加附件</div><button type="button" class="modal-close" aria-label="关闭">✕</button></div>
+    <div class="modal-body">
+      <div class="ai-text-attachment-choices"><button type="button" data-action="upload" class="btn-secondary">上传文件</button><button type="button" data-action="text" class="btn-secondary">粘贴文字为 TXT</button></div>
+      <div data-text-form hidden>
+        <label class="modal-field"><span>文字内容</span><textarea id="aiTextAttachmentContent" placeholder="在这里长按粘贴，也可以编辑文字" rows="7"></textarea></label>
+        <label class="modal-field"><span>文件名</span><input id="aiTextAttachmentName" type="text" autocomplete="off" spellcheck="false"></label>
+        <p data-error role="alert"></p>
+        <div class="ai-large-paste-actions"><button type="button" class="btn-save-modal" data-action="add">添加 TXT 附件</button></div>
+      </div>
+    </div></div>`;
+  const close = () => { overlay.remove(); if (isAiPasteInputCurrent(input)) document.getElementById('aiAttachBtn').focus(); };
+  overlay.querySelector('.modal-close').onclick = close;
+  overlay.onclick = event => { if (event.target === overlay) close(); };
+  overlay.addEventListener('keydown', event => {
+    if (event.key === 'Escape') { event.preventDefault(); close(); }
+    if (event.key === 'Tab') {
+      const items = [...overlay.querySelectorAll('button, input, textarea')].filter(el => el.getClientRects().length && !el.disabled);
+      const first = items[0], last = items[items.length - 1];
+      if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+      else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+    }
+  });
+  overlay.querySelector('[data-action="upload"]').onclick = () => { close(); if (isAiPasteInputCurrent(input)) document.getElementById('aiFileInput').click(); };
+  overlay.querySelector('[data-action="text"]').onclick = () => {
+    overlay.querySelector('.ai-text-attachment-choices').hidden = true;
+    overlay.querySelector('[data-text-form]').hidden = false;
+    overlay.querySelector('#aiTextAttachmentTitle').textContent = '粘贴文字为 TXT';
+    overlay.querySelector('#aiTextAttachmentName').value = `粘贴文本-${new Date().toISOString().slice(0, 10)}.txt`;
+    overlay.querySelector('textarea').focus();
+  };
+  overlay.querySelector('textarea').addEventListener('input', () => { overlay.querySelector('[data-error]').textContent = ''; });
+  overlay.querySelector('[data-action="add"]').onclick = () => {
+    const text = overlay.querySelector('textarea').value;
+    const error = overlay.querySelector('[data-error]');
+    if (!text.trim()) { error.textContent = '请先粘贴或输入文字。'; return; }
+    if (!isAiPasteInputCurrent(input)) { error.textContent = '对话已切换，请关闭后在当前对话重新添加。'; return; }
+    const name = normalizePastedTextFileName(overlay.querySelector('input').value);
+    const added = addAiAttachmentFiles([new File([text], name, { type: 'text/plain;charset=utf-8' })]);
+    if (added.length) close();
+  };
+  document.body.appendChild(overlay);
+  overlay.querySelector('[data-action="upload"]').focus();
+}
 
 function normalizePastedTextFileName(value) {
   let name = String(value || '').trim().replace(/[\\/:*?"<>|]/g, '-');
@@ -1706,10 +1807,12 @@ function closeLargePasteDialog(asFile) {
   largePasteDialogResolver = null;
   overlay.classList.remove('open');
   overlay.setAttribute('aria-hidden', 'true');
+  if (largePasteReturnFocus && largePasteReturnFocus.isConnected) largePasteReturnFocus.focus();
+  largePasteReturnFocus = null;
   resolve(asFile ? normalizePastedTextFileName(input && input.value) : null);
 }
 
-function askLargePasteAsFile(text) {
+function askLargePasteAsFile(text, options = {}) {
   let overlay = document.getElementById('aiLargePasteOverlay');
   if (!overlay) {
     overlay = document.createElement('div');
@@ -1733,12 +1836,21 @@ function askLargePasteAsFile(text) {
     overlay.addEventListener('click', event => { if (event.target === overlay) closeLargePasteDialog(false); });
     overlay.addEventListener('keydown', event => {
       if (event.key === 'Escape') closeLargePasteDialog(false);
-      if (event.key === 'Enter') { event.preventDefault(); closeLargePasteDialog(true); }
+      if (event.key === 'Enter' && event.target.tagName === 'INPUT') { event.preventDefault(); closeLargePasteDialog(true); }
+      if (event.key === 'Tab') {
+        const items = [...overlay.querySelectorAll('button, input')];
+        const first = items[0], last = items[items.length - 1];
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
+      }
     });
     document.body.appendChild(overlay);
   }
   // 若极短时间内重复触发粘贴，上一段按直接粘贴处理，不让 Promise 永久悬空。
   if (largePasteDialogResolver) closeLargePasteDialog(false);
+  largePasteReturnFocus = document.activeElement;
+  overlay.querySelector('#aiLargePasteTitle').textContent = options.converting ? '转为文本文件？' : '粘贴为文本文件？';
+  overlay.querySelector('.btn-secondary').textContent = options.converting ? '保留在输入框' : '直接粘贴';
   overlay.querySelector('.ai-large-paste-summary').textContent = `检测到 ${text.length.toLocaleString()} 个字符。转为附件可以保持输入框简洁。`;
   const nameInput = overlay.querySelector('#aiLargePasteFileName');
   nameInput.value = `粘贴文本-${new Date().toISOString().slice(0, 10)}.txt`;
@@ -1820,7 +1932,7 @@ function isAiPasteZone(event) {
   return !!(section && section.classList.contains('active'));
 }
 
-// 粘贴文件 → 加入附件；短纯文本仍走浏览器原生行为，长纯文本可转成可命名的 .txt 附件。
+// 粘贴文件 → 加入附件；纯文本走原生粘贴并提供可命名的 TXT 转换入口。
 async function handleAiPaste(event) {
   const dt = event.clipboardData;
   if (!dt) return;
@@ -1835,16 +1947,29 @@ async function handleAiPaste(event) {
     ? dt.getData('text/plain') : getClipboardPlainText(dt);
   if (files.length === 0) {
     if (!input || !plainText) return;
-    if (!asTextFile && (event.target !== input || plainText.length < LARGE_PASTE_TEXT_THRESHOLD)) return;
+    if (!asTextFile && event.target !== input) return;
+    clearAiPasteTextHint();
+    if (!asTextFile) {
+      const text = plainText.replace(/\r\n?/g, '\n');
+      const start = input.selectionStart;
+      const expected = input.value.slice(0, start) + text + input.value.slice(input.selectionEnd);
+      input.addEventListener('input', () => {
+        if (isAiPasteInputCurrent(input) && input.value === expected) rememberAiPastedText(input, text, start);
+      }, { once: true });
+      return;
+    }
     const selection = { start: input.selectionStart, end: input.selectionEnd };
     event.preventDefault();
     const fileName = await askLargePasteAsFile(plainText);
+    if (!isAiPasteInputCurrent(input)) return;
     if (fileName) {
       const file = new File([plainText], fileName, { type: 'text/plain;charset=utf-8' });
       const added = addAiAttachmentFiles([file]);
       if (added.length && typeof showAiToast === 'function') showAiToast(`📎 已添加文本附件：${added[0]}`);
     } else {
       insertPastedInputText(plainText, selection);
+      const text = plainText.replace(/\r\n?/g, '\n');
+      if (input.value.slice(selection.start, selection.start + text.length) === text) rememberAiPastedText(input, text, selection.start);
     }
     return;
   }
@@ -1860,6 +1985,7 @@ async function handleAiPaste(event) {
 // 绑定剪贴板粘贴。事件挂在 document 上——输入框会被 renderAiChat 重建，挂在输入框上每次重建都要重绑；
 // 是否接管由 isAiPasteZone() 判定。保留为可重复调用的形式，兼容既有调用点。
 function initAiPasteZone() {
+  if (aiPastedTextRange && !isAiPasteInputCurrent(aiPastedTextRange.input)) clearAiPasteTextHint();
   if (document._aiPasteAttached) return;
   document._aiPasteAttached = true;
   document.addEventListener('keydown', event => {
@@ -1869,6 +1995,7 @@ function initAiPasteZone() {
   document.addEventListener('keyup', () => { aiPasteAsTextFile = false; }, true);
   window.addEventListener('blur', () => { aiPasteAsTextFile = false; });
   document.addEventListener('paste', handleAiPaste);
+  document.addEventListener('input', trackAiPasteTextEdit);
 }
 
 // Check if a file is an image (for Kimi vision inline base64 analysis)

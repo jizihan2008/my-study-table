@@ -136,6 +136,9 @@ window.QQChats = (function () {
         msgKey: '', chatId, order: state.nextOrder++, id: String(message.id || ''), timestamp, time,
         senderName: String(sender.name || sender.nickname || '未知'), senderUin: String(sender.uin || sender.uid || ''),
         text: String(content.text !== undefined ? content.text : (typeof content === 'string' ? content : '')),
+        images: window.QQChatMedia.extractImages(message),
+        resources: Array.isArray(content.resources) ? content.resources : (Array.isArray(message.resources) ? message.resources : []),
+        elements: Array.isArray(content.elements) ? content.elements : (Array.isArray(message.elements) ? message.elements : []),
         type: String(message.type || message.messageType || ''), recalled: !!message.recalled, system: !!message.system
       };
       const base = _fingerprintBase(normalized);
@@ -177,6 +180,7 @@ window.QQChats = (function () {
     return new Promise(function (resolve) {
       const index = db.transaction(MSG_STORE, 'readonly').objectStore(MSG_STORE).index('byChat');
       const req = index.openCursor(IDBKeyRange.bound([chatId, 0], [chatId, Number.MAX_SAFE_INTEGER]));
+      const records = new Map();
       const ids = new Set();
       const fingerprints = new Set();
       const occurrences = new Map();
@@ -184,7 +188,7 @@ window.QQChats = (function () {
       let count = 0;
       req.onsuccess = function () {
         const cursor = req.result;
-        if (!cursor) { resolve({ ids, fingerprints, maxOrder, count }); return; }
+        if (!cursor) { resolve({ ids, fingerprints, records, maxOrder, count }); return; }
         const value = cursor.value;
         if (value.id) ids.add(String(value.id));
         const base = _fingerprintBase(value);
@@ -192,26 +196,44 @@ window.QQChats = (function () {
         occurrences.set(base, occurrence);
         fingerprints.add(base + '#' + occurrence);
         if (value.fingerprint) fingerprints.add(value.fingerprint);
+        if (value.id) records.set('id:' + value.id, value);
+        records.set('fp:' + base + '#' + occurrence, value);
+        if (value.fingerprint) records.set('fp:' + value.fingerprint, value);
         maxOrder = Math.max(maxOrder, Number(value.order) || 0);
         count++;
         cursor.continue();
       };
-      req.onerror = function () { resolve({ ids, fingerprints, maxOrder: -1, count: 0 }); };
+      req.onerror = function () { resolve({ ids, fingerprints, records, maxOrder: -1, count: 0 }); };
     });
   }
 
   function _dedupeMerge(existingInfo, messages) {
     const toAdd = [];
+    const toUpdate = [];
     let skipped = 0;
     for (const message of messages) {
       const duplicate = message.id ? existingInfo.ids.has(message.id) : existingInfo.fingerprints.has(message.fingerprint);
-      if (duplicate) { skipped++; continue; }
+      if (duplicate) {
+        skipped++;
+        const old = existingInfo.records && existingInfo.records.get(message.id ? 'id:' + message.id : 'fp:' + message.fingerprint);
+        if (old && message.images.length) {
+          const images = window.QQChatMedia.mergeImages(old.images || [], message.images);
+          if (JSON.stringify(images) !== JSON.stringify(old.images || [])) {
+            const updated = Object.assign({}, old, { images, resources: message.resources, elements: message.elements });
+            toUpdate.push(updated);
+            existingInfo.records.set(message.id ? 'id:' + message.id : 'fp:' + message.fingerprint, updated);
+          }
+        }
+        continue;
+      }
       message.order = ++existingInfo.maxOrder;
       message.msgKey = message.chatId + '::' + message.order;
       if (message.id) existingInfo.ids.add(message.id); else existingInfo.fingerprints.add(message.fingerprint);
+      if (!existingInfo.records) existingInfo.records = new Map();
+      existingInfo.records.set(message.id ? 'id:' + message.id : 'fp:' + message.fingerprint, message);
       toAdd.push(message);
     }
-    return { toAdd, existingCount: skipped };
+    return { toAdd, toUpdate, existingCount: skipped };
   }
 
   function _messageStats(messages, seed) {
@@ -344,12 +366,16 @@ window.QQChats = (function () {
       if (existing && !opts.force && !opts.merge) return { chatId, exists: true, chat: existing, added: 0 };
       let messages = _normalizeMessages(chatId, json.messages, { nextOrder: 0, occurrences: new Map() });
       let skipped = 0;
+      let updated = [];
       let meta;
       if (existing && opts.merge) {
         const dedupe = _dedupeMerge(await _getExistingMsgInfo(chatId), messages);
         messages = dedupe.toAdd;
+        updated = dedupe.toUpdate;
         skipped = dedupe.existingCount;
-        meta = _mergedChatMeta(existing, info, _messageStats(messages));
+        const stats = _messageStats(messages);
+        for (const item of updated) stats.affectedDates.add(_messageDateKey(item));
+        meta = _mergedChatMeta(existing, info, stats);
       } else {
         if (existing) await _deleteChatRecords(chatId, true);
         meta = _newChatMeta(chatId, info, _messageStats(messages));
@@ -359,9 +385,15 @@ window.QQChats = (function () {
         await _putMessages(messages.slice(offset, offset + BATCH_SIZE));
         if (onProgress) onProgress(Math.min(offset + BATCH_SIZE, messages.length), messages.length);
       }
-      await _putChat(meta);
+      if (updated.length) {
+        const db = await _open();
+        const tx = db.transaction([MSG_STORE, CHAT_STORE], 'readwrite');
+        for (const message of updated) tx.objectStore(MSG_STORE).put(message);
+        tx.objectStore(CHAT_STORE).put(meta);
+        await _txDone(tx, '保存图片信息与日报更新状态失败');
+      } else await _putChat(meta);
       await api.loadMetaCache();
-      return { chatId, added: messages.length, exists: !!existing, merged: !!(existing && opts.merge), existingCount: skipped, chat: meta };
+      return { chatId, updatedImages: updated.length, added: messages.length, exists: !!existing, merged: !!(existing && opts.merge), existingCount: skipped, chat: meta };
     },
 
     async beginChunkedImport(manifest, opts) {
@@ -376,7 +408,7 @@ window.QQChats = (function () {
       const session = {
         id: _newSessionId(), chatId, info, existing, existingInfo, mode,
         normalizeState: { nextOrder: mode === 'merge' ? existingInfo.maxOrder + 1 : 0, occurrences: new Map() },
-        stats: _messageStats([]), stagedCount: 0, rawCount: 0, skipped: 0
+        stats: _messageStats([]), stagedCount: 0, rawCount: 0, skipped: 0, updatedImages: 0
       };
       _importSessions.set(session.id, session);
       return { sessionId: session.id, chatId, exists: !!existing, chat: existing, mode };
@@ -392,6 +424,9 @@ window.QQChats = (function () {
         const dedupe = _dedupeMerge(session.existingInfo, messages);
         messages = dedupe.toAdd;
         session.skipped += dedupe.existingCount;
+        session.updatedImages += dedupe.toUpdate.length;
+        for (const item of dedupe.toUpdate) session.stats.affectedDates.add(_messageDateKey(item));
+        await _stageMessages(session, dedupe.toUpdate);
       }
       _messageStats(messages, session.stats);
       await _stageMessages(session, messages);
@@ -405,7 +440,7 @@ window.QQChats = (function () {
       await _commitStage(session, meta);
       _importSessions.delete(sessionId);
       await api.loadMetaCache();
-      return { chatId: session.chatId, added: session.stagedCount, exists: !!session.existing, merged: session.mode === 'merge', existingCount: session.skipped, chat: meta };
+      return { chatId: session.chatId, added: session.stats.count, updatedImages: session.updatedImages, exists: !!session.existing, merged: session.mode === 'merge', existingCount: session.skipped, chat: meta };
     },
 
     async abortChunkedImport(sessionId) {
@@ -424,6 +459,11 @@ window.QQChats = (function () {
         await api.abortChunkedImport(begin.sessionId);
         throw error;
       }
+    },
+
+    async getMessage(chatId, order) {
+      const db = await _open();
+      return _request(db.transaction(MSG_STORE, 'readonly').objectStore(MSG_STORE).get(chatId + '::' + Number(order)), null);
     },
 
     async getAllMessages(chatId) {
@@ -532,7 +572,7 @@ window.QQChats = (function () {
         const items = payload && Array.isArray(payload.items) ? payload.items : [];
         if (!Array.isArray(chat.dailyReports)) chat.dailyReports = [];
         const index = chat.dailyReports.findIndex(function (item) { return item.date === date; });
-        const next = { date, report, items, stale: false, updatedAt: new Date().toISOString() };
+        const next = { date, report, items, imageAnalysis: payload && payload.imageAnalysis || null, stale: false, updatedAt: new Date().toISOString() };
         if (index >= 0) chat.dailyReports[index] = next; else chat.dailyReports.push(next);
         chat.dailyReports.sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
         await _putChat(chat);

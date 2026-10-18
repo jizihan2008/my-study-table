@@ -777,7 +777,7 @@ function buildApiMessages(conv, extraSystemMsgs, apiCfg = getEffectiveApiConfig(
   for (let mi = 0; mi < recentMsgs.length; mi++) {
     const m = recentMsgs[mi];
     if (m.role === 'system') {
-      const externalWebData = String(m._toolInfo?.toolNames || '').split('、').some(name => ['read_webpage','read_conversation_file'].includes(name));
+      const externalWebData = String(m._toolInfo?.toolNames || '').split('、').some(name => ['web_search','read_webpage','read_conversation_file'].includes(name));
       // Persisted tag-based calls have no native tool_call_id. Keep web data
       // out of the privileged system role without breaking their API protocol.
       msgs.push({ role: externalWebData ? 'user' : 'system', content: externalWebData

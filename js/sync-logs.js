@@ -152,6 +152,93 @@
   }
 
   function _baseKey(kind, itemId) { return kind + '/' + String(itemId); }
+
+  let cloudConversations = { owner: null, items: [], loaded: false, error: '' };
+
+  async function listCloudConversations() {
+    const session = await _session();
+    const c = _client();
+    if (!session || !c) throw new Error('请先登录云同步账号');
+    const inventory = await _fetchRemoteInventory(session, c);
+    const groups = Object.values(inventory.groups).filter(rows => rows[0].kind === 'ai_conv' && rows.some(row => row.bytes !== 0));
+    // Every shard contains metadata. Prefer the last shard, which usually omits
+    // the large conversation tree, instead of downloading every conversation.
+    const representatives = groups.map(rows => _selectCurrentRows(rows.filter(row => row.bytes !== 0))
+      .sort((a, b) => a.item_id.localeCompare(b.item_id)).at(-1));
+    const payloads = representatives.length ? await _queryAll(() => c.from('user_sync_items')
+      .select('item_id,data').eq('user_id', session.user.id).eq('kind', 'ai_conv')
+      .in('item_id', representatives.map(row => row.item_id))) : [];
+    const items = [];
+    for (let i = 0; i < groups.length; i++) {
+      const rows = groups[i];
+      const itemId = _baseIdFromRemoteId(rows[0].item_id);
+      let title = '对话 ' + itemId;
+      try {
+        const payload = payloads.find(row => row.item_id === representatives[i].item_id);
+        const decoded = payload && await _decodePayload(payload.data);
+        if (decoded && decoded.meta && decoded.meta.title) title = String(decoded.meta.title);
+      } catch (_) { /* A damaged conversation must still be removable. */ }
+      items.push({ itemId, title, updatedAt: _latestTimestamp(rows),
+        bytes: rows.reduce((sum, row) => sum + (Number(row.bytes) || 0), 0) });
+    }
+    items.sort((a, b) => policy.compareTimestamps(b.updatedAt, a.updatedAt));
+    cloudConversations = { owner: session.user.id, items, loaded: true, error: '' };
+    return items;
+  }
+
+  async function loadCloudConversations(button) {
+    if (button) { button.disabled = true; button.textContent = '正在读取云端…'; }
+    const result = await _enqueue(async () => {
+      try { return await listCloudConversations(); }
+      catch (e) { cloudConversations.error = String(e.message || e); throw e; }
+    });
+    await renderPanelSafe();
+    return result;
+  }
+
+  async function _acceptCloudOnlyDeletion(itemId, updatedAt) {
+    const key = _baseKey('ai_conv', itemId);
+    _setItemEnabled('ai_conv', itemId, false);
+    await _removeOutboxForBase('ai_conv', itemId);
+    _clearItemDirty('ai_conv', itemId);
+    _clearConflict('ai_conv', itemId);
+    const hashes = _getLocal(HASH_KEY, {});
+    for (const hashKey of Object.keys(hashes)) {
+      if (hashKey === key || hashKey.startsWith(key + '_p')) delete hashes[hashKey];
+    }
+    _setLocal(HASH_KEY, hashes);
+    if (updatedAt) _setTs(key, updatedAt);
+  }
+
+  async function deleteCloudConversation(itemId, button) {
+    itemId = String(itemId);
+    const entry = cloudConversations.items.find(item => item.itemId === itemId);
+    if (!confirm('从云端删除「' + (entry ? entry.title : itemId) + '」？各设备的本地记录会保留，收到删除标记后暂停此对话上传。需要时可重新开启上传。')) return { cancelled: true };
+    if (button) { button.disabled = true; button.textContent = '删除中…'; }
+    const result = await _enqueue(async () => {
+      const session = await _session();
+      const c = _client();
+      if (!session || !c) throw new Error('请先登录云同步账号');
+      const inventory = await _fetchRemoteInventory(session, c, [{ kind: 'ai_conv', itemId }]);
+      const rows = inventory.groups[_baseKey('ai_conv', itemId)] || [];
+      const { data, error } = await c.from('user_sync_items').upsert({
+        user_id: session.user.id, kind: 'ai_conv', item_id: itemId,
+        data: { v: 2, cloudOnlyDeleted: true }, bytes: 0
+      }, { onConflict: 'user_id,kind,item_id' }).select('updated_at').single();
+      if (error || !data || !data.updated_at) throw new Error((error && error.message) || '保存云端删除标记失败');
+      await _acceptCloudOnlyDeletion(itemId, data.updated_at);
+      // Keep the tiny marker so other devices preserve their local copy and do
+      // not automatically upload it again. Delete all content-bearing shards.
+      await _deleteRowsById(c, rows.filter(row => row.item_id !== itemId));
+      localStorage.removeItem(USAGE_CACHE_KEY);
+      await listCloudConversations();
+      return { ok: true };
+    });
+    await renderPanelSafe();
+    const status = document.getElementById('storageStatus');
+    if (status) status.textContent = result.ok ? '已删除此云端对话，本地记录保留。' : '删除未完成：' + (result.error || '请重试');
+    return result;
+  }
   function _getDirtyMap() { return _getLocal(DIRTY_KEY, {}); }
   function _setDirtyMap(map) { _setLocal(DIRTY_KEY, map); }
   function _markKindDirty(kind) {
@@ -410,6 +497,7 @@
           systemPrompt: conv.systemPrompt || '',
           createdAt: conv.createdAt || 0,
           autoTitled: !!conv.autoTitled,
+          ...(Array.isArray(conv.aiCompletions) && conv.aiCompletions.length ? { aiCompletions: conv.aiCompletions.slice(-20) } : {}),
           daily: !!conv._dailyReport   // 日报会话标记：拉取侧据此合并而非新建
         },
         tree: conv.tree || null,
@@ -1114,6 +1202,14 @@
         const [kind, baseId] = key.split('/');
         const g = grouped[key];
         if (_getTombstones()[key]) continue;
+        const currentRows = _selectCurrentRows(g.rows);
+        const cloudOnlyMarker = kind === 'ai_conv' && currentRows.find(row => row.data && row.data.cloudOnlyDeleted === true);
+        if (cloudOnlyMarker) {
+          const localTimestamp = _getTs(key);
+          if (localTimestamp && policy.compareTimestamps(localTimestamp, cloudOnlyMarker.updated_at) >= 0) continue;
+          await _acceptCloudOnlyDeletion(baseId, cloudOnlyMarker.updated_at);
+          continue;
+        }
         if (_isItemDirty(kind, baseId) || _isConflicted(kind, baseId)) {
           await _acceptSameLogContent(kind, baseId, g.rows);
           continue;
@@ -1295,7 +1391,17 @@
         if (appliedConv && built.tree && built.activePath && typeof ensureTree === 'function') {
           ensureTree(appliedConv);
         }
+        if (appliedConv && built.meta && Array.isArray(built.meta.aiCompletions)) {
+          appliedConv.aiCompletions = built.meta.aiCompletions.slice(-20);
+        }
         if (!safeSaveAiConvs()) throw new Error('保存云端对话失败');
+        if (appliedConv && built.meta && Array.isArray(built.meta.aiCompletions)) {
+          if (typeof global.receiveAiTaskCompletions === 'function') {
+            // Notifications are best effort and must never make a successful pull fail.
+            try { global.receiveAiTaskCompletions(appliedConv, built.meta.aiCompletions); }
+            catch (e) { console.warn('[SyncLogs] AI completion notification failed:', e); }
+          }
+        }
       }
     } catch (e) { throw e; }
   }
@@ -1643,6 +1749,27 @@
         <span class="storage-status" id="storageStatus"></span>
       </div>`;
 
+    html += `<div class="storage-group" data-cloud-conversations>
+      <div class="storage-group-title">云端 AI 对话记录</div>
+      <p class="storage-quota-hint">查看云端实际保存的对话。逐条删除会保留各端本地记录，并暂停该对话上传。</p>
+      <button class="storage-btn" onclick="SyncLogs.loadCloudConversations(this)">查看 / 刷新云端对话</button>`;
+    if (cloudConversations.error) html += `<p class="storage-quota-hint" role="alert">加载失败：${escapeHtml(cloudConversations.error)}，请重试。</p>`;
+    if (session && cloudConversations.owner === session.user.id && cloudConversations.loaded) {
+      html += `<div style="margin-top:10px;">`;
+      if (!cloudConversations.items.length) html += '<div class="storage-empty">云端暂无 AI 对话记录</div>';
+      for (const item of cloudConversations.items) {
+        html += `<div class="storage-item">
+          <div class="storage-item-info" style="flex:1;">
+            <div class="storage-item-name" title="${escapeHtml(item.title)}">${escapeHtml(item.title)}</div>
+            <div class="storage-item-meta">${(item.bytes / 1024).toFixed(1)} KB ｜ ${escapeHtml(_formatTime(item.updatedAt))}</div>
+          </div>
+          <button class="storage-btn storage-btn-danger" style="flex-shrink:0;" data-id="${escapeHtml(item.itemId)}" onclick="SyncLogs.deleteCloudConversation(this.dataset.id,this)">从云端删除</button>
+        </div>`;
+      }
+      html += '</div>';
+    }
+    html += '</div>';
+
     const conflicts = getPendingConflicts();
     if (conflicts.length) {
       html += `<section class="sync-conflict-panel" style="display:block;margin-bottom:12px;">
@@ -1780,6 +1907,7 @@
 
   function setItemEnabled(kind, itemId, on) {
     _setItemEnabled(kind, itemId, on);
+    if (on) _markItemDirty(kind, itemId);
     if (on && _enabled() && loggedIn && client) scheduleUpload();
     renderPanel();
   }
@@ -2208,6 +2336,8 @@
     registerNewItem,
     setKindAutoSync,
     deleteAllRemote,
+    loadCloudConversations,
+    deleteCloudConversation,
     pruneRemote,
     migrateLegacy,
     retryPending,
@@ -2232,7 +2362,8 @@
       processTombstone: _processTombstone,
       deleteRowsById: _deleteRowsById,
       queryAll: _queryAll,
-      normalizeTargets: _normalizeTargets
+      normalizeTargets: _normalizeTargets,
+      listCloudConversations
     };
   }
 

@@ -567,7 +567,7 @@ test('pasting files into the chat area attaches them, while plain text paste sta
   expect(output.bodyAdded).toBe(1);
 });
 
-test('large plain-text paste can become a named txt attachment or stay in the input', async () => {
+test('plain-text paste offers conversion and the keyboard shortcut can create a named txt attachment', async () => {
   const previousKeys = await page.evaluate(() => {
     const keys = window.loadApiKeys();
     window.saveApiKeys([{ id: 'e2e-large-paste', name: '长文本粘贴测试', apiKey: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }]);
@@ -639,9 +639,15 @@ test('large plain-text paste can become a named txt attachment or stay in the in
       dt.setData('text/plain', text);
       const event = new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true });
       input.dispatchEvent(event);
+      if (!event.defaultPrevented) {
+        input.setRangeText(text, input.selectionStart, input.selectionEnd, 'end');
+        input.dispatchEvent(new Event('input', { bubbles: true }));
+      }
       return event.defaultPrevented;
     }, longText);
-    expect(prevented).toBe(true);
+    expect(prevented).toBe(false);
+    await expect(page.locator('#aiPasteTextHint')).toBeVisible();
+    await page.getByRole('button', { name: '转为 TXT', exact: true }).click();
     await expect(page.locator('#aiLargePasteOverlay')).toHaveClass(/open/);
     await expect(page.locator('.ai-large-paste-summary')).toContainText(longText.length.toLocaleString());
     await page.locator('#aiLargePasteFileName').fill('课程笔记');
@@ -662,9 +668,11 @@ test('large plain-text paste can become a named txt attachment or stay in the in
       const input = document.getElementById('aiInput');
       input.value = '开头结尾';
       input.setSelectionRange(2, 2);
+      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', ctrlKey: true, shiftKey: true, bubbles: true }));
       const dt = new DataTransfer();
       dt.setData('text/plain', '甲'.repeat(2000));
       input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
+      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'V', bubbles: true }));
     });
     await page.getByRole('button', { name: '直接粘贴' }).click();
     await expect.poll(() => page.locator('#aiInput').inputValue()).toBe('开头' + '甲'.repeat(2000) + '结尾');
@@ -675,6 +683,83 @@ test('large plain-text paste can become a named txt attachment or stay in the in
       window.renderAiChat();
       while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
     }, previousKeys);
+  }
+});
+
+test('touch text attachments preserve questions and track only the latest unedited paste', async () => {
+  const keys = await page.evaluate(() => {
+    const keys = loadApiKeys();
+    saveApiKeys([{ id: 'touch-paste', apiKey: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }]);
+    switchTab('ai'); createNewConv(); renderAiChat();
+    return keys;
+  });
+  await page.setViewportSize({ width: 768, height: 1024 });
+  try {
+    await page.locator('#aiInput').fill('请总结这些资料');
+    await page.getByRole('button', { name: '添加附件', exact: true }).click();
+    await page.getByRole('button', { name: '粘贴文字为 TXT', exact: true }).click();
+    await page.getByRole('button', { name: '添加 TXT 附件' }).click();
+    await expect(page.locator('[data-error]')).toContainText('请先粘贴');
+    await page.locator('#aiTextAttachmentContent').fill('资料原文\n第二行 😀');
+    await page.locator('#aiTextAttachmentName').fill('课程资料');
+    await page.screenshot({ path: test.info().outputPath('text-attachment-ipad.png') });
+    await page.getByRole('button', { name: '添加 TXT 附件' }).click();
+    expect(await page.evaluate(() => aiAttachments[0].file.text())).toBe('资料原文\n第二行 😀');
+    expect(await page.evaluate(() => aiAttachments[0].name)).toBe('课程资料.txt');
+    await expect(page.locator('#aiInput')).toHaveValue('请总结这些资料');
+    await page.evaluate(() => removeAttachment(0));
+
+    // Synthetic paste events have no browser default insertion; emulate that native step.
+    const paste = text => page.evaluate(text => {
+      const input = document.getElementById('aiInput');
+      input.setSelectionRange(input.value.length, input.value.length);
+      const data = new DataTransfer(); data.setData('text/plain', text);
+      const event = new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true });
+      input.dispatchEvent(event);
+      if (!event.defaultPrevented) {
+        input.setRangeText(text, input.selectionStart, input.selectionEnd, 'end');
+        input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }));
+      }
+    }, text);
+    await paste('第一段');
+    await page.getByRole('button', { name: '转为 TXT', exact: true }).click();
+    await page.getByRole('button', { name: '保留在输入框', exact: true }).click();
+    await expect(page.locator('#aiInput')).toHaveValue('请总结这些资料第一段');
+    expect(await page.evaluate(() => getAiAttachmentsSnapshot().length)).toBe(0);
+    await paste('第二段\n😀');
+    await expect(page.locator('#aiPasteTextHint')).toBeVisible();
+    // An edit before the pasted span moves its range without changing its contents.
+    await page.evaluate(() => {
+      const input = document.getElementById('aiInput'); input.setRangeText('帮我：', 0, 0, 'end');
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    await page.getByRole('button', { name: '转为 TXT', exact: true }).click();
+    await page.locator('#aiLargePasteFileName').fill('刚粘贴');
+    await page.getByRole('button', { name: '作为 .txt 附件' }).click();
+    await expect(page.locator('#aiInput')).toHaveValue('帮我：请总结这些资料第一段');
+    expect(await page.evaluate(() => aiAttachments[0].file.text())).toBe('第二段\n😀');
+    await expect(page.locator('#aiPasteTextHint')).toBeHidden();
+    await page.evaluate(() => removeAttachment(0));
+    await paste('不可误删的资料');
+    await page.setViewportSize({ width: 600, height: 900 });
+    await page.screenshot({ path: test.info().outputPath('paste-hint-narrow.png') });
+    await page.locator('#aiInput').fill('已经重新编辑');
+    await expect(page.locator('#aiPasteTextHint')).toBeHidden();
+    await paste('切换前资料');
+    await page.getByRole('button', { name: '转为 TXT', exact: true }).click();
+    await page.evaluate(() => { createNewConv(); renderAiChat(); });
+    await page.getByRole('button', { name: '作为 .txt 附件' }).click();
+    expect(await page.evaluate(() => getAiAttachmentsSnapshot().length)).toBe(0);
+    await page.getByRole('button', { name: '添加附件', exact: true }).click();
+    const chooserPromise = page.waitForEvent('filechooser');
+    await page.getByRole('button', { name: '上传文件', exact: true }).click();
+    const chooser = await chooserPromise;
+    await chooser.setFiles({ name: '上传验证.txt', mimeType: 'text/plain', buffer: Buffer.from('上传原文') });
+    expect(await page.evaluate(() => aiAttachments[0].file.text())).toBe('上传原文');
+    await page.evaluate(() => removeAttachment(0));
+  } finally {
+    await page.evaluate(keys => { saveApiKeys(keys); renderAiChat(); }, keys);
+    await page.setViewportSize({ width: 1280, height: 720 });
   }
 });
 

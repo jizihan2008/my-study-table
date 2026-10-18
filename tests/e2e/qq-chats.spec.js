@@ -18,6 +18,7 @@ test.beforeAll(async () => {
   });
   page = await electronApp.firstWindow();
   await page.waitForFunction(() => document.readyState !== 'loading' && !!window.QQChats);
+  await expect(page.locator('#section-today')).toBeVisible();
 });
 
 test.afterAll(async () => {
@@ -115,4 +116,61 @@ test('QQ search UI uses delegated events and opens the matching message', async 
   await page.click('.chat-search-result');
   await expect(page.locator('.chat-view')).toBeVisible();
   await expect(page.locator('.chat-text', { hasText: 'topic 补导历史' })).toBeVisible();
+});
+
+test('conversation splits messages and reports and sidebar toggles without losing the conversation', async () => {
+  await page.setViewportSize({ width: 1440, height: 1000 });
+  await page.evaluate(async () => {
+    const chats = await window.QQChats.listChats();
+    await window.QQChats.setDailyReport(chats[0].chatId, '2026-08-27', { report: '- 第二天消息 (m3)', items: [{ text: '第二天消息', order: 3 }] });
+    window.Inbox.render();
+  });
+  await expect(page.locator('.chat-message-pane')).toBeVisible();
+  await expect(page.locator('.chat-report-pane')).toBeVisible();
+  await expect(page.locator('#inboxViewTitle, #inboxViewMeta, .inbox-page-header')).toHaveCount(0);
+  const messages = await page.locator('.chat-message-pane').boundingBox();
+  const reports = await page.locator('.chat-report-pane').boundingBox();
+  expect(reports.x).toBeGreaterThan(messages.x + messages.width);
+  expect(Math.abs(messages.y - reports.y)).toBeLessThan(2);
+  await page.getByRole('button', { name: '收起侧栏', exact: true }).click();
+  await expect(page.locator('#inboxSidebar')).toBeHidden();
+  await expect(page.getByRole('button', { name: '展开侧栏', exact: true })).toHaveAttribute('aria-expanded', 'false');
+  await expect(page.locator('.chat-text', { hasText: 'topic 补导历史' })).toBeVisible();
+  await page.getByTitle('后一天日报', { exact: true }).click();
+  await expect(page.locator('.chat-daily-pager-info')).toContainText('2 / 2');
+  await page.getByTitle('前一天日报', { exact: true }).click();
+  await expect(page.locator('.chat-daily-pager-info')).toContainText('1 / 2');
+  await page.locator('.chat-daily-item').first().click();
+  await expect(page.locator('.chat-msg-flash')).toBeVisible();
+  await expect(page.locator('#inboxSidebar')).toBeHidden();
+  await page.evaluate(() => window.Inbox.render());
+  await expect(page.locator('#inboxSidebar')).toBeHidden();
+  await expect(page.locator('.chat-report-pane')).toBeVisible();
+  for (const height of [780, 1200, 1000]) {
+    await page.setViewportSize({ width: 1440, height });
+    for (const collapsed of [false, true]) {
+      await page.evaluate(value => {
+        const button = document.getElementById('inboxSidebarToggle');
+        if ((button.getAttribute('aria-expanded') === 'false') !== value) window.Inbox.toggleSidebar();
+      }, collapsed);
+      const gap = await page.locator('.chat-reading-layout').evaluate(el => {
+        const root = document.getElementById('inboxApp');
+        const workspace = document.querySelector('.inbox-workspace');
+        const bottom = el.getBoundingClientRect().bottom;
+        return root.getBoundingClientRect().bottom - bottom - parseFloat(getComputedStyle(workspace).paddingBottom);
+      });
+      expect(Math.abs(gap)).toBeLessThanOrEqual(2);
+    }
+  }
+  await fs.mkdir('test-results/inbox-split', { recursive: true });
+  await page.locator('#inboxApp').screenshot({ path: 'test-results/inbox-split/desktop.png' });
+  await page.getByRole('button', { name: '展开侧栏', exact: true }).click();
+  await expect(page.locator('#inboxSidebar')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.getByRole('button', { name: '收起侧栏', exact: true }).click();
+  await page.locator('.chat-report-pane').scrollIntoViewIfNeeded();
+  const overflow = await page.locator('#inboxApp').evaluate(el => el.scrollWidth > el.clientWidth + 2);
+  expect(overflow).toBe(false);
+  await expect(page.locator('.chat-report-pane')).toBeVisible();
+  await page.locator('#inboxApp').screenshot({ path: 'test-results/inbox-split/mobile.png' });
 });

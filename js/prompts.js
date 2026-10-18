@@ -19,8 +19,8 @@ const PROMPT_INSERTIONS = [
   { token: '我的补充', hint: '生成日报前输入的补充要求' }
 ];
 const REPORT_DEFAULTS = {
-  morning: '你是用户的学习伙伴。请生成一份晨间日报，帮助用户回顾昨天、安排今天。语气清醒、温暖、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、逾期事项、今日聚焦、复习与习惯，并给出明确的今日方向。结合生词本与闪卡数据回顾昨日新增生词和最近复习结果，依据当前待复习、逾期和未复习数量建议今日复习重点；遵守统计口径，不把词数当作复习次数。结合昨天所有 AI 对话的摘要与摘录，回顾讨论主题、结论、收获和待解决问题。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}',
-  evening: '你是用户的学习伙伴。请生成一份晚间日报，帮助用户总结今天、沉淀收获，并为明天指出方向。语气温暖、具体、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、专注时间、笔记、复习、习惯和遗留事项。结合生词本与闪卡数据总结今日新增生词和最近复习结果，关注忘记或模糊的词及当前待复习状态，为后续巩固给出建议；遵守统计口径，不把词数当作复习次数。结合今天所有 AI 对话的摘要与摘录，总结讨论主题、结论、收获和待解决问题。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}'
+  morning: '你是用户的学习伙伴。请生成一份晨间日报，帮助用户回顾昨天、安排今天。语气清醒、温暖、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、逾期事项、今日聚焦、复习与习惯，并给出明确的今日方向。依据昨日完成笔记复习的记录回顾复习成果，区分笔记篇数和完成次数，不以当前待复习列表推断昨日是否复习。结合生词本与闪卡数据回顾昨日新增生词和最近复习结果，依据当前待复习、逾期和未复习数量建议今日复习重点；遵守统计口径，不把词数当作复习次数。结合昨天所有 AI 对话的摘要与摘录，回顾讨论主题、结论、收获和待解决问题。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}',
+  evening: '你是用户的学习伙伴。请生成一份晚间日报，帮助用户总结今天、沉淀收获，并为明天指出方向。语气温暖、具体、有洞察力；用 Markdown 自然表达，选择最有意义的信息，不必逐项罗列。关注完成的待办、专注时间、笔记、复习、习惯和遗留事项。依据今日完成笔记复习的记录总结复习成果，区分笔记篇数和完成次数，不以当前待复习列表推断今日是否复习。结合生词本与闪卡数据总结今日新增生词和最近复习结果，关注忘记或模糊的词及当前待复习状态，为后续巩固给出建议；遵守统计口径，不把词数当作复习次数。结合今天所有 AI 对话的摘要与摘录，总结讨论主题、结论、收获和待解决问题。\n\n当前时间：{{当前时间}}\n\n{{日报数据}}\n\n{{我的补充}}'
 };
 let selectedPromptTemplate = 'chat';
 let selectedPromptView = 'source';
@@ -178,7 +178,10 @@ function reportPromptData(templateId, data, legacyPrompt) {
     const vocabulary = data.vocabularyFlashcards
       ? `\n\n【生词本与闪卡】\n\`\`\`json\n${JSON.stringify(data.vocabularyFlashcards, null, 2)}\n\`\`\``
       : (Object.prototype.hasOwnProperty.call(data, 'vocabularyFlashcards') ? '\n\n【生词本与闪卡】数据暂不可用' : '');
-    return reportDataFromLegacyPrompt(legacyPrompt) + vocabulary;
+    const completedReviews = data.completedNoteReviews
+      ? `\n\n【${templateId === 'morning' ? '昨日' : '今日'}完成笔记复习】\n\`\`\`json\n${JSON.stringify(data.completedNoteReviews, null, 2)}\n\`\`\``
+      : '';
+    return reportDataFromLegacyPrompt(legacyPrompt) + vocabulary + completedReviews;
   }
   return `📊 **当前日报数据**\n\n\`\`\`json\n${JSON.stringify(data, null, 2)}\n\`\`\``;
 }
@@ -203,6 +206,8 @@ function promptPreviewContext(templateId) {
 }
 
 const PROMPT_DATA_LABELS = {
+  completedNoteReviews: '当日完成笔记复习', completedNoteCount: '完成复习笔记篇数',
+  completionCount: '完成复习次数', completedNotes: '已完成复习笔记', completedAt: '完成复习时间',
   vocabularyFlashcards: '生词本与闪卡', activityDate: '学习活动日期', snapshotAt: '状态快照时间', vocabularyCount: '生词总数',
   addedCount: '当日新增生词数', addedWords: '当日新增生词', reviewedWordCount: '最近复习发生在当日的词数',
   reviewRatings: '最近一次复习结果', again: '忘记', hard: '模糊', good: '记得', reviewedWords: '当日最近复习的词',

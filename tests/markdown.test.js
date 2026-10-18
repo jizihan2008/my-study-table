@@ -12,6 +12,28 @@ function createRenderer() {
   return StudyMarkdown.createRenderer({ markdownit, footnote, hljs, katex });
 }
 
+test('table line breaks render safely without enabling arbitrary HTML', () => {
+  const renderer = createRenderer();
+  const source = '| 标题 |\n| --- |\n| 第一行<br>第二行<BR/><br />第三行 |';
+  const html = renderer.render(source);
+  assert.match(html, /<td>第一行<br>第二行<BR\/><br \/>第三行<\/td>/);
+  assert.equal((html.match(/<tr>/g) || []).length, 2);
+  assert.match(renderer.createReadingPlan(source).renderBlock(0), /第一行<br>第二行/);
+  assert.match(renderer.render('`<br>`'), /<code>&lt;br&gt;<\/code>/);
+  const unsafe = renderer.render('<br onmouseover="alert(1)"><img src=x onerror="alert(1)">');
+  assert.doesNotMatch(unsafe, /<br\s+onmouseover|<img\s+src/);
+});
+
+test('reading TOC indexes nested fold titles without rendering their bodies or colliding with headings', () => {
+  const plan = createRenderer().createReadingPlan('# note-fold-title-0\n\n:::fold **外层**\n:::fold 内层\n###### 正文标题\n:::\n:::');
+  assert.deepEqual(plan.tocEntries.map(item => item.textContent), ['note-fold-title-0', '外层', '内层', '正文标题']);
+  assert.equal(new Set(plan.tocEntries.map(item => item.id)).size, 4);
+  assert.deepEqual(plan.tocEntries[2].ancestors, [0, 1]);
+  assert.equal(plan.headings.length, 2);
+  assert.match(plan.renderBlock(1), /<summary data-source-line="2" data-source-end="3" id="note-fold-title-0-1">/);
+  assert.match(plan.renderBlock(1), /data-lazy-fold="0"/);
+});
+
 test('source maps are opt-in and retain absolute lines inside nested folds', () => {
   const renderer = createRenderer();
   const source = '# 顶部\n\n:::fold 外层\n前文\n\n:::fold 内层\n## 内部标题\n\n> 引用内容\n:::\n:::';

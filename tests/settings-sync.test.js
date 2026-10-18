@@ -36,7 +36,7 @@ async function device(db, initial = {}, keys = []) {
 
 test('approved preferences synchronize with exact local encodings; device settings and secrets stay local', async () => {
   const db = cloud(), a = await device(db), b = await device(db, {
-    study_theme: 'dark', study_reminder_checkin_enabled: 'false', study_web_search_key: 'local-search-secret',
+    study_theme: 'dark', study_reminder_checkin_enabled: 'false', study_web_search_key: 'local-search-secret', study_deepseek_web_key: 'local-deepseek-secret',
     study_backup_interval: '120', study_codex_cli_path: 'local-cli', study_automations: '[{"id":1}]'
   });
   const prefs = {
@@ -48,13 +48,13 @@ test('approved preferences synchronize with exact local encodings; device settin
     study_reminder_checkin_time: '08:45', study_reminder_focus_after_min: '45', study_reminder_idle_after_min: '90',
     study_reminder_idle_exempt_ranges: '[{"start":"12:00","end":"14:00"}]',
     study_reminder_idle_exempt_enabled: 'true', study_reminder_idle_max_count: '5', study_reminder_idle_unlimited: 'false',
-    study_web_search_engine: 'brave', study_ai_library_pdf_max_mib: '0', study_ai_image_upload: 'never',
+    study_web_search_engine: 'deepseek', study_web_read_mode: 'deepseek', study_ai_library_pdf_max_mib: '0', study_ai_image_upload: 'never',
     study_active_api_key_id: 'key_shared', study_dayreport_key_id: 'key_shared',
     study_summary_ai_key_id: 'key_shared', study_auto_title_ai_key_id: 'key_shared'
   };
   for (const [key, value] of Object.entries(prefs)) a.prefs.setItem(key, value);
   for (const key of ['study_theme', 'study_ui_zoom', 'study_reminder_checkin_enabled', 'study_reminder_focus_enabled',
-    'study_reminder_idle_enabled', 'study_api_keys', 'study_web_search_key', 'study_backup_interval',
+    'study_reminder_idle_enabled', 'study_api_keys', 'study_web_search_key', 'study_deepseek_web_key', 'study_backup_interval',
     'study_codex_cli_path', 'study_debug_mode', 'study_developer_mode', 'study_automations', 'study_sync_config']) {
     assert.equal(a.sync.isSyncKey(key), false, key);
     if (key !== 'study_sync_config') a.disk.setItem(key, 'device-specific');
@@ -65,6 +65,7 @@ test('approved preferences synchronize with exact local encodings; device settin
   assert.equal(b.disk.getItem('study_auto_title_enabled'), 'false');
   assert.equal(b.disk.getItem('study_theme'), 'dark');
   assert.equal(b.disk.getItem('study_web_search_key'), 'local-search-secret');
+  assert.equal(b.disk.getItem('study_deepseek_web_key'), 'local-deepseek-secret');
   assert.equal(b.disk.getItem('study_automations'), '[{"id":1}]');
   assert.equal(b.disk.getItem('study_reminder_checkin_enabled'), 'false');
   assert.equal((await b.sync.getStatus()).pendingCount, 0, 'remote writes must not echo as local edits');

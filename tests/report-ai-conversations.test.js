@@ -66,14 +66,16 @@ test('morning and evening collectors pass yesterday and today into report prompt
   vm.runInContext(fs.readFileSync('js/timer-types.js', 'utf8'), context);
   Object.assign(context, {
     GlobalTranslation: { getReportData: date => ({ activityDate: date, vocabularyCount: 2 }) },
-    todos: [], notes: [], getTodayStr: () => '2026-10-08', getPastDateStr: () => '2026-10-07',
+    todos: [], notes: [{ id: 1, type: 'note', title: '积分笔记', _reviewHistory: [
+      new Date(2026, 9, 7, 23, 59).toISOString(), new Date(2026, 9, 8, 0, 1).toISOString()
+    ] }], getTodayStr: () => '2026-10-08', getPastDateStr: () => '2026-10-07',
     loadCheckinData: () => ({ dates: [] }), getFocusItemsForDate: () => ({ items: [] }),
     getTodayFocusItems: () => ({ items: [] }), collectReportLongTermGoals: () => [],
     getDailyReportConv: () => null, buildAiCalendarSnapshot: () => '',
     buildAiTodoTreeSnapshot: () => '', buildAiNoteTreeSnapshot: () => ''
   });
   const settings = fs.readFileSync('js/settings.js', 'utf8');
-  for (const name of ['collectDailyReportData', 'collectEveningReportData']) {
+  for (const name of ['collectReportCompletedNoteReviews', 'collectDailyReportData', 'collectEveningReportData']) {
     const start = settings.indexOf('function ' + name + '(');
     const end = settings.indexOf('\n}', start);
     vm.runInContext(settings.slice(start, end + 2), context);
@@ -88,6 +90,14 @@ test('morning and evening collectors pass yesterday and today into report prompt
   assert.doesNotMatch(evening[0].excerpts, /昨日讨论/);
   assert.equal(context.collectDailyReportData().vocabularyFlashcards.activityDate, '2026-10-07');
   assert.equal(context.collectEveningReportData().vocabularyFlashcards.activityDate, '2026-10-08');
+  const morningReviews = context.collectDailyReportData().completedNoteReviews;
+  const eveningReviews = context.collectEveningReportData().completedNoteReviews;
+  assert.equal(morningReviews.activityDate, '2026-10-07');
+  assert.equal(eveningReviews.activityDate, '2026-10-08');
+  assert.equal(morningReviews.completionCount, 1);
+  assert.equal(eveningReviews.completionCount, 1);
+  assert.equal(morningReviews.completedNotes[0].completedAt[0], context.notes[0]._reviewHistory[0]);
+  assert.equal(eveningReviews.completedNotes[0].completedAt[0], context.notes[0]._reviewHistory[1]);
 });
 
 test('vocabulary data reaches both prompt preview and actual report input', () => {

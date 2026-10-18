@@ -1504,7 +1504,7 @@ test('closed fold bodies defer formula rendering and reuse the expanded body', a
   });
   expect(initial.lazy).toBe(true);
   expect(initial.formulas).toBe(0);
-  expect(initial.headings).toEqual(['fold-heading']);
+  expect(initial.headings).toEqual(['note-fold-title-0', 'fold-heading']);
   await expect(page.locator('#notesPreview')).toBeVisible();
   await page.locator('#notesPreview summary').click();
   await expect(page.locator('#notesPreview .katex')).toHaveCount(45);

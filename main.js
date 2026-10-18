@@ -31,6 +31,7 @@ const { registerUpdaterIpc } = require('./electron/register-updater-ipc');
 const { resolveQQChatChunks } = require('./electron/qq-chat-policy');
 const { createQQChatAutoSyncService } = require('./electron/qq-chat-auto-sync');
 const { createQQChatExporterIntegration } = require('./electron/qq-chat-exporter-integration');
+const { createQQChatMedia } = require('./electron/qq-chat-media');
 
 // 屏蔽 Qt/log4cplus 等系统级无关警告
 process.env.QT_LOGGING_RULES = '*.debug=false;*.warning=false';
@@ -1976,7 +1977,7 @@ ipcMain.handle('web:read', async (event, payload = {}) => {
       if (data.hasFrames) warnings.push('页面包含 iframe，未提取其中的内容');
       if (blockedResources) warnings.push('部分非公网或不支持的资源请求已被拦截，内容可能不完整');
       const snapshot = { title: data.title, text: data.text, headings: data.headings, links: data.links,
-        sourceTruncated: data.sourceTruncated, warnings, finalUrl: parsePublicWebUrl(wc.getURL()).href };
+        sourceTruncated: data.sourceTruncated, warnings, fetchedAt: new Date().toISOString(), finalUrl: parsePublicWebUrl(wc.getURL()).href };
       const snapshotId = webReaderSnapshots.put(owner, options.url, snapshot);
       return pageSnapshot(snapshot, options, snapshotId);
     };
@@ -2196,6 +2197,7 @@ const QQCHAT_MAX_TOTAL_BYTES = 512 * 1024 * 1024;
 const QQCHAT_MAX_LINES_PER_CHUNK = 250000;
 const QQCHAT_MAX_TOTAL_MESSAGES = 500000;
 const allowedQQChatChunkFiles = new Set();
+const allowedQQChatMediaRoots = new Set();
 let qqChatMessagesRead = 0;
 const qqChatMetaBackupDir = path.join(userDataPath, 'qq-chat-backups');
 const qqChatAutoConfigPath = path.join(userDataPath, 'qq-chat-auto-sync.json');
@@ -2226,6 +2228,7 @@ async function readValidatedQQChatManifest(dir, authorize) {
     maxChunkBytes: QQCHAT_MAX_CHUNK_BYTES,
     maxTotalBytes: QQCHAT_MAX_TOTAL_BYTES
   });
+  allowedQQChatMediaRoots.add(await fs.promises.realpath(exportRoot));
   allowedQQChatChunkFiles.clear();
   for (const filePath of resolved.chunkFiles) allowedQQChatChunkFiles.add(filePath);
   qqChatMessagesRead = 0;
@@ -2262,6 +2265,26 @@ const qqChatExporterIntegration = createQQChatExporterIntegration({
   onExports: function (files) {
     if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send('qqchat:qce-exports', { files });
   }
+});
+
+const qqChatMedia = createQQChatMedia({
+  cacheDir: path.join(userDataPath, 'qq-chat-media'),
+  nativeImage,
+  getRoots: async function () {
+    const root = qqChatExporterIntegration.publicStatus().outputRoot;
+    const qceHome = path.join(app.getPath('home'), '.qq-chat-exporter');
+    return [qceHome, path.join(qceHome, 'resources'), path.join(qceHome, 'resources', 'images'),
+      root, root && path.join(root, 'resources'), root && path.join(root, 'images'),
+      ...Array.from(allowedQQChatMediaRoots).flatMap(dir => [dir, path.join(dir, 'resources'), path.join(dir, 'images')])];
+  }
+});
+ipcMain.handle('qqchat:read-image', async (event, image, maxEdge) => {
+  try { return { ok: true, ...await qqChatMedia.read(image || {}, maxEdge) }; }
+  catch (error) { return { ok: false, reason: String(error.message || error) }; }
+});
+ipcMain.handle('qqchat:qce-rescan-images', async () => {
+  try { return { ok: true, files: await qqChatExporterIntegration.scanExports(true) }; }
+  catch (error) { return { ok: false, reason: String(error.message || error) }; }
 });
 
 async function restoreQQChatExporterIntegration() {
@@ -2358,7 +2381,12 @@ ipcMain.handle('qqchat:qce-disable', async () => {
 });
 ipcMain.handle('qqchat:qce-run-now', async () => qqChatExporterIntegration.runNow(true));
 ipcMain.handle('qqchat:qce-read-export', async (event, filePath) => {
-  try { return { ok: true, result: await qqChatExporterIntegration.readExport(filePath) }; }
+  try {
+    const result = await qqChatExporterIntegration.readExport(filePath);
+    const directory = path.dirname(result.filePath);
+    result.media = await qqChatMedia.prepareExport(result.json, [directory, path.join(directory, 'resources'), path.join(directory, 'images')]);
+    return { ok: true, result };
+  }
   catch (e) { return { ok: false, reason: String((e && e.message) || e) }; }
 });
 ipcMain.handle('qqchat:qce-ack-export', async (event, payload) => {
@@ -2399,7 +2427,8 @@ ipcMain.handle('qqchat:read-chunk', async (event, filePath) => {
       return { ok: false, reason: '本次导入消息超过 50 万条，请拆分后导入' };
     }
     qqChatMessagesRead += items.length;
-    return { ok: true, items, invalidLines };
+    const media = await qqChatMedia.prepareExport({ messages: items });
+    return { ok: true, items, invalidLines, media };
   } catch (e) {
     return { ok: false, reason: String((e && e.message) || e) };
   }

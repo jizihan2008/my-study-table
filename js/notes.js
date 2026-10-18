@@ -2405,8 +2405,16 @@ function getNotePreviewHeadings(){
   const preview=document.getElementById(noteViewMode==='rich'?'notesRichEditor':'notesPreview');
   if(!preview)return[];
   const reading=noteViewMode==='preview'&&typeof NoteReadingRenderer!=='undefined'?NoteReadingRenderer.get(preview):null;
-  if(reading)return reading.getHeadings();
-  return Array.from(preview.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id]'));
+  if(reading)return reading.getTocEntries();
+  const entries=Array.from(preview.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id],details.note-fold > summary'));
+  entries.forEach((entry,index)=>{
+    if(entry.tagName!=='SUMMARY')return;
+    const base='note-fold-title-'+index;
+    let id=base, suffix=1;
+    while(entries.some(other=>other!==entry&&other.id===id))id=base+'-'+suffix++;
+    entry.id=id;
+  });
+  return entries;
 }
 
 function renderNoteToc(){
@@ -2427,15 +2435,17 @@ function renderNoteToc(){
 
   const headings=getNotePreviewHeadings();
   if(!headings.length){
-    list.innerHTML='<div class="notes-toc-empty">使用 <code># 标题</code> 后，目录会自动生成</div>';
+    list.innerHTML='<div class="notes-toc-empty">添加标题或折叠块后，目录会自动生成</div>';
     return;
   }
-  const minLevel=Math.min(...headings.map(heading=>Number(heading.tagName.slice(1))||1));
+  const levels=headings.filter(heading=>heading.tagName!=='SUMMARY').map(heading=>Number(heading.tagName.slice(1))||1);
+  const minLevel=levels.length?Math.min(...levels):1;
+  const foldLevel=levels.length?Math.max(...levels)+1:1;
   list.innerHTML=headings.map((heading,index)=>{
-    const level=Number(heading.tagName.slice(1))||1;
+    const level=heading.tagName==='SUMMARY'?foldLevel:Number(heading.tagName.slice(1))||1;
     const depth=Math.max(0,level-minLevel);
     const label=(heading.textContent||'').replace(/\s+/g,' ').trim()||('章节 '+(index+1));
-    return `<button type="button" class="notes-toc-item${index===0?' active':''}" data-target="${escapeHtml(heading.id)}" style="--toc-indent:${Math.min(depth,4)*12}px" onclick="jumpToNoteHeading(this.dataset.target)" title="${escapeHtml(label)}"${index===0?' aria-current="location"':''}>${escapeHtml(label)}</button>`;
+    return `<button type="button" class="notes-toc-item${index===0?' active':''}" data-target="${escapeHtml(heading.id)}" style="--toc-indent:${depth*12}px" onclick="jumpToNoteHeading(this.dataset.target)" title="${escapeHtml(label)}"${index===0?' aria-current="location"':''}>${escapeHtml(label)}</button>`;
   }).join('');
 }
 
@@ -2481,6 +2491,13 @@ function jumpToNoteHeading(targetId){
   const reading=noteViewMode==='preview'&&typeof NoteReadingRenderer!=='undefined'?NoteReadingRenderer.get(preview):null;
   const heading=reading?reading.ensureHeading(targetId):getNotePreviewHeadings().find(item=>item.id===targetId);
   if(!heading)return;
+  if(!reading){
+    let ancestor=heading.parentElement;
+    while(ancestor&&ancestor!==preview){
+      if(ancestor.matches('details.note-fold'))ancestor.open=true;
+      ancestor=ancestor.parentElement;
+    }
+  }
   const previewRect=preview.getBoundingClientRect();
   const headingRect=heading.getBoundingClientRect();
   const top=preview.scrollTop+headingRect.top-previewRect.top-12;
@@ -2505,7 +2522,7 @@ function onNotePreviewScroll(){
     updateNoteReadingProgress(preview);
     const tocVisible=notesIsMobile()?notesTocMobileOpen:notesTocVisible;
     if((noteViewMode!=='preview'&&noteViewMode!=='rich')||!tocVisible)return;
-    const headings=getNotePreviewHeadings();
+    const headings=getNotePreviewHeadings().filter(heading=>heading.tocVisible!==false&&(!heading.getClientRects||heading.getClientRects().length));
     if(!preview||!headings.length)return;
     // Smooth scrolling over a long document can take over a second. Keep the
     // clicked destination highlighted instead of flashing through prior headings.

@@ -39,6 +39,110 @@ async function choose(level) {
   await expect(page.locator('#notesHeadingMenu')).not.toBeVisible();
 }
 
+test('table row and column edits support undo, view switches and durable reload', async () => {
+  const initial = '| 标题 | 相邻列 |\n| --- | --- |\n| 第一行 | 保留 |';
+  await setup('rich', initial);
+  await page.locator('#notesRichEditor td').first().click();
+  const toolbar = page.locator('.note-table-toolbar[data-editor="notesRichEditor"]');
+  await toolbar.getByRole('button', { name: '下方插入行' }).click();
+  await page.keyboard.insertText('新增行');
+  await toolbar.getByRole('button', { name: '右侧插入列' }).click();
+  const changed = await page.evaluate(() => getActiveNote().content);
+  expect(changed).toContain('新增行');
+  await page.evaluate(() => undoNote());
+  await expect(page.locator('#notesRichEditor th')).toHaveCount(2);
+  await page.evaluate(() => redoNote());
+  await expect(page.locator('#notesRichEditor th')).toHaveCount(3);
+  await page.evaluate(() => switchNoteView('edit'));
+  await expect(page.locator('#notesTextarea')).toHaveValue(changed);
+  await page.evaluate(() => switchNoteView('preview'));
+  await expect(page.locator('#notesPreview th')).toHaveCount(3);
+  await expect(page.locator('#notesPreview')).toContainText('新增行');
+  await expect(page.locator('#notesStatus')).toHaveText('已保存');
+  const noteId = await page.evaluate(async () => {
+    await StudyData.flush();
+    return getActiveNote().id;
+  });
+  await page.reload();
+  await page.waitForFunction(() => document.querySelector('#section-today.active') && typeof escapeHtml === 'function');
+  expect(await page.evaluate(id => notes.find(note => note.id === id)?.content, noteId)).toBe(changed);
+});
+
+test('multiline table survives actual source, reading and editor view switches', async () => {
+  await setup('rich', '| 标题 | 相邻列 |\n| --- | --- |\n| 第一行 | 保留 |');
+  await page.locator('#notesRichEditor td').first().click();
+  await page.keyboard.press('End');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText('第二行');
+  await page.keyboard.press('Enter');
+  await page.keyboard.press('Enter');
+  await page.keyboard.insertText('第三行');
+  for (let i = 0; i < 2; i++) {
+    await page.evaluate(() => switchNoteView('edit'));
+    await expect(page.locator('#notesTextarea')).toHaveValue('| 标题 | 相邻列 |\n| --- | --- |\n| 第一行<br>第二行<br><br>第三行 | 保留 |');
+    await page.evaluate(() => switchNoteView('preview'));
+    await expect(page.locator('#notesPreview td').first().locator('br')).toHaveCount(3);
+    await page.evaluate(() => switchNoteView('rich'));
+    await expect(page.locator('#notesRichEditor tbody tr')).toHaveCount(1);
+    await expect(page.locator('#notesRichEditor td').first().locator('br')).toHaveCount(3);
+    await expect(page.locator('#notesRichEditor td').nth(1)).toHaveText('保留');
+  }
+});
+
+test('retyping a cleared fold title survives source, reading and editor view switches', async () => {
+  await setup('rich', ':::fold 旧标题\n保留正文\n:::');
+  await page.evaluate(() => {
+    const summary = document.querySelector('#notesRichEditor summary');
+    summary.parentElement.open = true;
+    document.getElementById('notesRichEditor').focus();
+    const range = document.createRange(); range.selectNodeContents(summary);
+    getSelection().removeAllRanges(); getSelection().addRange(range);
+  });
+  await page.keyboard.press('Backspace');
+  await page.keyboard.insertText('分析');
+  await expect(page.locator('#notesRichEditor summary')).toHaveText('分析');
+  await page.evaluate(() => switchNoteView('edit'));
+  await expect(page.locator('#notesTextarea')).toHaveValue(':::fold 分析\n保留正文\n:::');
+  await page.evaluate(() => switchNoteView('preview'));
+  await expect(page.locator('#notesPreview summary')).toHaveText('分析');
+  await page.evaluate(() => switchNoteView('rich'));
+  await expect(page.locator('#notesRichEditor summary')).toHaveText('分析');
+  await expect(page.locator('#notesRichEditor .note-fold-body')).toHaveText('保留正文');
+});
+
+for (const mode of ['rich', 'preview']) {
+  test(`${mode} TOC lists fold titles at the final level and reveals nested targets`, async () => {
+    const content = ['# 章节', '', '###### 最深标题', '',
+      ...Array.from({ length: 70 }, (_, index) => '正文段落 ' + index + '\n'),
+      ':::fold **外层标题**', '外层正文', '', ':::fold 内层标题', '内部正文', ':::', ':::', '',
+      ':::fold 外层标题', '第二块正文', ':::'].join('\n');
+    await setup(mode, content);
+    await page.evaluate(() => toggleNoteToc(true));
+    const items = page.locator('#notesTocList .notes-toc-item');
+    await expect(items).toHaveText(['章节', '最深标题', '外层标题', '内层标题', '外层标题']);
+    const indents = await items.evaluateAll(items => items.map(item => item.style.getPropertyValue('--toc-indent')));
+    expect(indents).toEqual(['0px', '60px', '72px', '72px', '72px']);
+    const targets = await items.evaluateAll(items => items.map(item => item.dataset.target));
+    expect(new Set(targets).size).toBe(5);
+    if (mode === 'preview') {
+      expect(await page.locator('#notesPreview').getAttribute('data-reading-virtual')).toBe('true');
+      await expect(page.locator('#notesPreview summary').filter({ hasText: '内层标题' })).toHaveCount(0);
+    }
+    await items.nth(3).click();
+    const host = page.locator(mode === 'rich' ? '#notesRichEditor' : '#notesPreview');
+    await expect(host.locator('summary').filter({ hasText: '内层标题' })).toBeVisible();
+    expect(await host.locator('summary').filter({ hasText: '内层标题' }).evaluate(summary => {
+      return summary.parentElement.open && summary.parentElement.parentElement.closest('details').open;
+    })).toBe(true);
+    await expect(items.nth(3)).toHaveAttribute('aria-current', 'location');
+    expect(await page.evaluate(() => getActiveNote().content)).toBe(content);
+    if (mode === 'rich') expect(await page.evaluate(() => RichNoteEditor.getMarkdown())).toBe(content);
+    await setup(mode, ':::fold 独立折叠块\n正文\n:::');
+    await expect(items).toHaveText(['独立折叠块']);
+    expect(await items.first().evaluate(item => item.style.getPropertyValue('--toc-indent'))).toBe('0px');
+  });
+}
+
 async function selectRich(hostId = 'notesRichEditor') {
   await page.evaluate(hostId => {
     const host = document.getElementById(hostId);

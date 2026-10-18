@@ -750,6 +750,30 @@ function getTypeDescription(type) {
 
 // ═══════════ Memory Extraction from Conversation ═══════════
 
+// Give reasoning models room to finish; never persist a token-limited fragment.
+// Retry the original request so the result remains one coherent, concise summary.
+async function requestCompleteMemoryText(url, options, feature, input) {
+  const body = JSON.parse(options.body);
+  body.max_tokens = Math.max(2048, body.max_tokens || 0);
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const response = await fetch(url, { ...options, body: JSON.stringify(body) });
+    if (!response.ok) throw new Error(`记忆生成请求失败（HTTP ${response.status}）`);
+    const data = await response.json();
+    const choice = data.choices?.[0];
+    if (typeof AIClient !== 'undefined') AIClient.recordUsage(body.model, data.usage, {
+      feature, input, output: choice?.message
+    });
+    const text = (choice?.message?.content || '').trim();
+    if (choice?.finish_reason === 'length') {
+      body.max_tokens *= 2;
+      continue;
+    }
+    if (text && (!choice.finish_reason || choice.finish_reason === 'stop')) return text;
+    throw new Error('记忆生成未返回完整文本，保留原有内容');
+  }
+  throw new Error('记忆生成连续达到输出上限，保留原有内容');
+}
+
 // Extract summary and facts from a conversation (called when user leaves a conv)
 async function extractMemoryFromConv(conv) {
   if (!conv || !conv.messages || conv.messages.length < 3) return;
@@ -774,7 +798,7 @@ async function extractMemoryFromConv(conv) {
 
   try {
     // Request 1: Extract summary
-    const summaryResp = await fetch(baseUrl + '/chat/completions', {
+    const summaryText = await requestCompleteMemoryText(baseUrl + '/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -790,21 +814,10 @@ async function extractMemoryFromConv(conv) {
         max_tokens: 150,
         stream: false
       })
-    });
+    }, 'memory_conversation_summary', convContext);
 
     const memory = loadAiMemory();
-    let summaryText = '';
-
-    if (summaryResp.ok) {
-      const data = await summaryResp.json();
-      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
-        feature: 'memory_conversation_summary', input: convContext, output: data.choices?.[0]?.message
-      });
-      summaryText = (data.choices?.[0]?.message?.content || '').trim();
-      if (summaryText) {
-        addConvSummary(memory, conv.id, conv.title, summaryText, currentCount);
-      }
-    }
+    addConvSummary(memory, conv.id, conv.title, summaryText, currentCount);
 
     // Request 2: Extract key memory points (6 categories)
     // 防重引导：方案 A/B 注入已有记忆清单（含 ID），要求只提取增量信息
@@ -998,7 +1011,7 @@ async function runDailyMemoryIntegration() {
 
   try {
     // Task 1: Generate daily summary from recent conv summaries
-    const summaryResp = await fetch(baseUrl + '/chat/completions', {
+    const summary = await requestCompleteMemoryText(baseUrl + '/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1009,7 +1022,7 @@ async function runDailyMemoryIntegration() {
         messages: [
           {
             role: 'system',
-            content: `你是记忆整合AI。根据近期对话摘要，生成一段综合摘要（100-200字），概括用户近期的关注点、进展和重要话题。以"近期用户关注了..."开头。只输出摘要文本。`
+            content: `你是记忆整合AI。根据近期对话摘要，生成一段综合摘要（100-200字），概括用户近期的关注点、进展和重要话题。以"近期用户关注了..."开头。只输出摘要文本，使用完整句子并自然收尾。`
           },
           { role: 'user', content: context + '\n请生成近期对话总摘要。' }
         ],
@@ -1017,25 +1030,18 @@ async function runDailyMemoryIntegration() {
         max_tokens: 300,
         stream: false
       })
-    });
+    }, 'memory_daily_summary', context);
 
-    if (summaryResp.ok) {
-      const data = await summaryResp.json();
-      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
-        feature: 'memory_daily_summary', input: context, output: data.choices?.[0]?.message
-      });
-      const summary = (data.choices?.[0]?.message?.content || '').trim();
-      if (summary) {
-        memory.dailySummary = summary;
-        memory.dailySummaryDate = today;
-        // Clean old summaries (> 7 days) replaced by daily summary
-        const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
-        memory.convSummaries = memory.convSummaries.filter(s => s.extractedAt > cutoff);
-      }
+    if (summary) {
+      memory.dailySummary = summary;
+      memory.dailySummaryDate = today;
+      // Clean old summaries (> 7 days) replaced by daily summary
+      const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+      memory.convSummaries = memory.convSummaries.filter(s => s.extractedAt > cutoff);
     }
 
     // Task 2: Update user profile (generate holistic summary)
-    const profileResp = await fetch(baseUrl + '/chat/completions', {
+    const rawProfile = await requestCompleteMemoryText(baseUrl + '/chat/completions', {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -1062,20 +1068,12 @@ async function runDailyMemoryIntegration() {
         max_tokens: 400,
         stream: false
       })
-    });
+    }, 'memory_profile', context);
 
-    if (profileResp.ok) {
-      const data = await profileResp.json();
-      if (typeof AIClient !== 'undefined') AIClient.recordUsage(apiCfg.model, data.usage, {
-        feature: 'memory_profile', input: context, output: data.choices?.[0]?.message
-      });
-      const rawProfile = (data.choices?.[0]?.message?.content || '').trim();
-      if (rawProfile && rawProfile.length > 10) {
-        // Remove any leading/trailing quotes
-        memory.profileText = rawProfile.replace(/^["']|["']$/g, '').trim();
-      }
+    if (rawProfile && rawProfile.length > 10) {
+      // Remove any leading/trailing quotes
+      memory.profileText = rawProfile.replace(/^["']|["']$/g, '').trim();
     }
-
   } catch (err) {
     if (isDebugMode()) console.warn('[Memory] Daily integration error:', err.message);
   }

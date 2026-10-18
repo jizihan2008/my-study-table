@@ -131,7 +131,7 @@
     }
 
     function ensureHeading(id) {
-      const heading = plan.headings.find(item => item.id === id);
+      const heading = plan.tocEntries.find(item => item.id === id);
       if (!heading) return null;
       if (virtual) {
         // Resolve nearby heights before computing a jump destination; replacing
@@ -145,8 +145,12 @@
       return container.querySelector('#' + CSS.escape(id));
     }
 
-    function getHeadings() {
-      return plan.headings.map(heading => ({ ...heading,
+    function getHeadings(entries = plan.headings) {
+      return entries.map(heading => ({ ...heading,
+        get tocVisible() {
+          const ancestors = heading.tagName === 'SUMMARY' ? heading.ancestors.slice(0, -1) : heading.ancestors;
+          return ancestors.every(index => plan.foldStates[index]);
+        },
         get offsetTop() {
           const element = container.querySelector('#' + CSS.escape(heading.id));
           const rect = (element || slots[heading.blockIndex] || container).getBoundingClientRect();
@@ -230,7 +234,8 @@
     } else container.innerHTML = plan.blocks.map((_, index) => plan.renderBlock(index)).join('');
     hydrateOpenFolds(container);
     refresh();
-    const controller = { source, noteId: note.id, plan, refresh, ensureHeading, ensureSourceLine, getHeadings, materializeAll,
+    const controller = { source, noteId: note.id, plan, refresh, ensureHeading, ensureSourceLine, getHeadings,
+      getTocEntries: () => getHeadings(plan.tocEntries), materializeAll,
       dispose() {
         disposed = true;
         cancelAnimationFrame(frame);

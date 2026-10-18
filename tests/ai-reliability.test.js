@@ -51,10 +51,10 @@ function conversation(ctx) {
 }
 const result = (tools = [], text = 'final answer') => ({ toolCalls: tools, cleanText: text, rawReply: text, finishReason: 'stop' });
 
-test('webpage tool data is never promoted to a system API message', () => {
+for (const tool of ['read_webpage', 'web_search']) test(tool + ' data is never promoted to a system API message', () => {
   const ctx = harness();
   const conv = conversation(ctx);
-  ctx.appendMessage(conv, { role: 'system', content: 'UNTRUSTED_WEB_BODY', _toolInfo: { toolNames: 'read_webpage' } });
+  ctx.appendMessage(conv, { role: 'system', content: 'UNTRUSTED_WEB_BODY', _toolInfo: { toolNames: tool } });
   const messages = ctx.buildApiMessages(conv, [], ctx.getEffectiveApiConfig());
   const webpage = messages.find(m => String(m.content).includes('UNTRUSTED_WEB_BODY'));
   assert.equal(webpage.role, 'user');

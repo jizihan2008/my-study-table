@@ -8,6 +8,7 @@ test('backup policy excludes secrets by default', () => {
   const output = sanitizeBackupData({
     study_todos_v2: '[{"id":1}]',
     study_api_keys: '[{"key":"secret"}]',
+    study_deepseek_web_key: 'deepseek-secret',
     study_mail_accounts: '[{"pass":"secret"}]'
   });
   assert.deepEqual(output, { study_todos_v2: '[{"id":1}]' });

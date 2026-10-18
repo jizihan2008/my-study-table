@@ -166,7 +166,7 @@ function createQQChatExporterIntegration(options) {
     runTimer = setTimeout(function () { runNow(false).catch(function () {}); }, Math.min(2147483647, due - Date.now()));
   }
 
-  async function scanExports() {
+  async function scanExports(includeProcessed = false) {
     const root = config.outputRoot;
     if (!root) return [];
     const found = [];
@@ -185,13 +185,13 @@ function createQQChatExporterIntegration(options) {
         try { stat = await fs.promises.lstat(full); } catch { continue; }
         if (!stat.isFile() || stat.isSymbolicLink() || stat.size <= 0 || stat.size > MAX_JSON_BYTES || Date.now() - stat.mtimeMs < 5000) continue;
         const signature = stat.size + ':' + Math.floor(stat.mtimeMs);
-        if (config.processed[full] === signature || pending.get(full) === signature) continue;
+        if ((!includeProcessed && config.processed[full] === signature) || pending.get(full) === signature) continue;
         found.push({ path: full, name: entry.name, size: stat.size, mtime: stat.mtime.toISOString(), signature });
       }
     }
     await walk(root, 0);
     found.sort((a, b) => String(a.mtime).localeCompare(String(b.mtime)));
-    const selected = found.slice(0, 50);
+    const selected = includeProcessed ? found : found.slice(0, 50);
     for (const file of selected) pending.set(file.path, file.signature);
     if (selected.length) await Promise.resolve(onExports(selected.map(function (file) {
       return { path: file.path, name: file.name, size: file.size, mtime: file.mtime };

@@ -245,6 +245,9 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
     : null;
   const note = getTodoSharedNote(todoId);
   const isEditingNote = isDirectFocus && focusNoteEditingId === todoId;
+  const done = !!(focusItem || todo).done;
+  const completionDisabled = !isDirectFocus && selectedFocusDate !== getTodayStr();
+  const completionLabel = completionDisabled ? '子任务仅可在今天修改' : (done ? '取消完成' : '标记完成');
 
   const renderedChildren = children.map(c => renderFocusTodoNode(c.id, depth + 1, false)).join('');
 
@@ -253,10 +256,11 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
       <div class="today-focus-item${isDirectFocus ? '' : ' child'}" style="padding-left:${14 + indent}px;">
         <div class="today-focus-main">
         ${hasKids ? `<button class="focus-expand${isExpanded ? ' expanded' : ''}" onclick="toggleFocusExpand(${todoId}, event)" title="展开/折叠">▶</button>` : '<span class="focus-expand-spacer"></span>'}
-        <div class="focus-check${(focusItem || todo).done ? ' done' : ''}${!isDirectFocus && selectedFocusDate !== getTodayStr() ? ' disabled' : ''}" onclick="event.stopPropagation(); toggleTodayFocusById(${todoId})" title="${isDirectFocus || selectedFocusDate === getTodayStr() ? '标记完成' : '子任务仅可在今天修改'}"></div>
+        <button type="button" class="focus-check${done ? ' done' : ''}${completionDisabled ? ' disabled' : ''}" role="checkbox" aria-checked="${done}" aria-label="${completionLabel}" title="${completionLabel}" ${completionDisabled ? 'disabled' : ''} onclick="event.stopPropagation(); toggleTodayFocusById(${todoId})"></button>
         <span class="focus-text${(focusItem || todo).done ? ' completed' : ''}" title="${escapeAttr(displayPath.full)}">
           ${displayPath.parents.length ? `<span class="focus-parent-path">${displayPath.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>')}</span>` : ''}
           <span class="focus-title">${escapeHtml(todo.text)}</span>
+          ${buildTodoQuickStatusHTML(todo)}
         </span>
         <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录" aria-label="跳转到待办目录">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
@@ -1482,7 +1486,7 @@ function sendNotification(title, body, tag, target) {
     if (target) {
       n.onclick = function() {
         try {
-          if (typeof switchTab === 'function') switchTab(target.tab);
+          handleNotificationClick(target);
           window.focus();
         } catch (e) { console.warn('[Notify] click handler failed:', e); }
       };

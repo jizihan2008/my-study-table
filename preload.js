@@ -143,6 +143,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   qqchatQCEConfigure: (config) => ipcRenderer.invoke('qqchat:qce-configure', config),
   qqchatQCEDisable: () => ipcRenderer.invoke('qqchat:qce-disable'),
   qqchatQCERunNow: () => ipcRenderer.invoke('qqchat:qce-run-now'),
+  qqchatReadImage: (image, maxEdge) => ipcRenderer.invoke('qqchat:read-image', image, maxEdge),
+  qqchatQCERescanImages: () => ipcRenderer.invoke('qqchat:qce-rescan-images'),
   qqchatQCEReadExport: (filePath) => ipcRenderer.invoke('qqchat:qce-read-export', filePath),
   qqchatQCEAckExport: (payload) => ipcRenderer.invoke('qqchat:qce-ack-export', payload),
   onQQChatQCEExports: (callback) => {

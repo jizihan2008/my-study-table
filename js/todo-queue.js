@@ -285,10 +285,11 @@ function renderTodoQueue() {
       ondragstart="startTodoQueueDrag(event, ${id})" ondragend="endTodoQueueDrag()">
       <div class="today-focus-main">
       <span class="todo-queue-grip" title="拖拽排序 · 第 ${index + 1} 项">⠿</span>
-      <button type="button" class="focus-check${todo.done ? ' done' : ''}" style="padding:0" role="checkbox" aria-checked="${todo.done}" title="${todo.done ? '取消完成' : '标记完成'}" aria-label="${todo.done ? '取消完成' : '标记完成'}" onclick="event.stopPropagation(); toggleQueueTodo(${id})"></button>
+      <button type="button" class="focus-check${todo.done ? ' done' : ''}" role="checkbox" aria-checked="${todo.done}" title="${todo.done ? '取消完成' : '标记完成'}" aria-label="${todo.done ? '取消完成' : '标记完成'}" onclick="event.stopPropagation(); toggleQueueTodo(${id})"></button>
       <span class="focus-text${todo.done ? ' completed' : ''}" title="${escapeAttr(path.full)}">
         ${path.parents.length ? '<span class="focus-parent-path">' + path.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>') + '</span>' : ''}
         <span class="focus-title">${escapeHtml(todo.text)}</span>
+        ${buildTodoQuickStatusHTML(todo)}
       </span>
       <button class="focus-nav" onclick="goToTodoFromFocus(${id})" title="跳转到待办目录" aria-label="跳转到待办目录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></button>
       <button class="focus-note-edit" onclick="event.stopPropagation(); editQueueTodoNote(${id})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>

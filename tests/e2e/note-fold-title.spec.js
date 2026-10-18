@@ -20,6 +20,53 @@ async function setup(page, secondary = false) {
 }
 
 for (const secondary of [false, true]) {
+  test(`serialization retains an orphan title in the ${secondary ? 'secondary' : 'primary'} editor`, async ({ page }) => {
+    await setup(page, secondary);
+    await page.evaluate(() => document.querySelector('summary').replaceWith(document.createTextNode('分析')));
+    expect(await page.evaluate(() => editor.getMarkdown())).toBe(':::fold 分析\n原正文\n:::');
+  });
+  for (const method of ['selection', 'last-character', 'composition-recovery']) {
+    test(`${method} clearing and retyping preserves the ${secondary ? 'secondary' : 'primary'} fold title`, async ({ page }) => {
+      await setup(page, secondary);
+      await page.evaluate(method => {
+        const summary = document.querySelector('summary');
+        const range = document.createRange();
+        if (method === 'last-character') {
+          summary.textContent = '题'; range.selectNodeContents(summary); range.collapse(false);
+        } else range.selectNodeContents(summary);
+        getSelection().removeAllRanges(); getSelection().addRange(range);
+      }, method);
+      if (method === 'composition-recovery') {
+        // Model the WebKit mutation shown in the report: summary disappears and
+        // the first composing character becomes a sibling of the body.
+        await page.evaluate(() => {
+          const host = document.querySelector('[contenteditable]');
+          host.dispatchEvent(new CompositionEvent('compositionstart', { bubbles: true }));
+          host.dispatchEvent(new InputEvent('beforeinput', { inputType: 'insertCompositionText', isComposing: true, data: '分', bubbles: true, cancelable: false }));
+          const summary = document.querySelector('summary');
+          summary.replaceWith(document.createTextNode('分'));
+          host.dispatchEvent(new InputEvent('input', { inputType: 'insertCompositionText', isComposing: true, data: '分', bubbles: true }));
+          host.dispatchEvent(new CompositionEvent('compositionend', { data: '分', bubbles: true }));
+        });
+      } else {
+        await page.keyboard.press('Backspace');
+        await expect(page.locator('summary')).toHaveCount(1);
+        await page.keyboard.insertText('分');
+      }
+      await expect(page.locator('summary')).toHaveText('分');
+      await expect(page.locator('.note-fold-body')).toHaveText('原正文');
+      expect(await page.evaluate(() => editor.getMarkdown())).toBe(':::fold 分\n原正文\n:::');
+      await page.addScriptTag({ path: path.resolve('lib/markdown/markdown-it.min.js') });
+      await page.addScriptTag({ path: path.resolve('js/markdown.js') });
+      await page.evaluate(() => {
+        const renderer = StudyMarkdown.createRenderer({ markdownit: window.markdownit });
+        window.formatNoteContent = source => renderer.render(source);
+        editor.setMarkdown(editor.getMarkdown(), 'round-trip');
+      });
+      await expect(page.locator('summary')).toHaveText('分');
+      await expect(page.locator('.note-fold-body')).toHaveText('原正文');
+    });
+  }
   test(`paste stays inside ${secondary ? 'secondary' : 'primary'} fold title`, async ({ page }) => {
     await setup(page, secondary);
     await page.evaluate(() => {

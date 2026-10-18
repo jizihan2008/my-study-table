@@ -279,7 +279,7 @@
       const title = md.renderInline(meta.title || '折叠内容', env).trim();
       if (env.__readingPlan && meta.readingFoldId != null) {
         return '<details class="note-fold" data-fold-index="' + meta.readingFoldId + '" data-lazy-fold="' + meta.readingFoldId + '"' +
-          (env.__readingPlan.foldStates[meta.readingFoldId] ? ' open' : '') + '><summary>' + title + '</summary>' +
+          (env.__readingPlan.foldStates[meta.readingFoldId] ? ' open' : '') + '><summary id="' + md.utils.escapeHtml(meta.readingTitleId) + '">' + title + '</summary>' +
           '<div class="note-fold-body">' + md.utils.escapeHtml(meta.body || '') + '</div></details>\n';
       }
       const body = md.render(meta.body || '', { ...env, __sourceLineOffset: Number(tokens[idx].attrGet('data-source-line')) + 1 });
@@ -314,9 +314,10 @@
 
     // Rich editing needs a lossless fallback when CommonMark delimiters cannot
     // represent punctuation next to words. Accept only attribute-free format
-    // tags; arbitrary HTML remains disabled and output is still sanitized.
+    // tags and line breaks used by multiline table cells; arbitrary HTML
+    // remains disabled and output is still sanitized.
     md.inline.ruler.before('html_inline', 'rich_format_tag', (state, silent) => {
-      const match = state.src.slice(state.pos).match(/^<\/?(?:strong|em|del)>/);
+      const match = state.src.slice(state.pos).match(/^(?:<\/?(?:strong|em|del)>|<br\s*\/?>)/i);
       if (!match) return false;
       if (!silent) state.push('html_inline', '', 0).content = match[0];
       state.pos += match[0].length;
@@ -405,7 +406,7 @@
         const end = tokens[index].attrGet('data-source-end');
         if (start != null) {
           html = html.replace(/^<(\w+)/, '<$1 data-source-line="' + start + '" data-source-end="' + end + '"');
-          if (name === 'collapsible_block') html = html.replace('<summary>', '<summary data-source-line="' + start + '" data-source-end="' + (Number(start) + 1) + '">');
+          if (name === 'collapsible_block') html = html.replace(/<summary(?=[ >])/, '<summary data-source-line="' + start + '" data-source-end="' + (Number(start) + 1) + '"');
         }
         return html;
       };
@@ -432,7 +433,7 @@
         if (depth === 0) { blocks.push({ tokens: group }); group = []; }
       });
       if (group.length) blocks.push({ tokens: group });
-      const headings = [], folds = new Map(), counts = Object.create(null);
+      const headings = [], tocEntries = [], folds = new Map(), counts = Object.create(null);
       let foldIndex = 0;
       const visit = (items, blockIndex, ancestors = [], offset = 0) => {
         mapSourceLines(items, offset);
@@ -443,11 +444,20 @@
             counts[base] = count + 1;
             const id = count ? base + '-' + count : base;
             token.attrSet('id', id);
-            headings.push({ id, tagName: token.tag.toUpperCase(), textContent: title, blockIndex, ancestors });
+            const heading = { id, tagName: token.tag.toUpperCase(), textContent: title, blockIndex, ancestors };
+            headings.push(heading);
+            tocEntries.push(heading);
           }
           if (token.type === 'collapsible_block') {
             const id = foldIndex++;
             token.meta.readingFoldId = id;
+            const base = 'note-fold-title-' + id, count = counts[base] || 0;
+            counts[base] = count + 1;
+            token.meta.readingTitleId = count ? base + '-' + count : base;
+            const title = md.parseInline(token.meta.title || '折叠内容', env)[0];
+            tocEntries.push({ id: token.meta.readingTitleId, tagName: 'SUMMARY',
+              textContent: (title?.children || []).map(child => child.content || '').join(''),
+              blockIndex, ancestors: [...ancestors, id] });
             const bodyTokens = md.parse(token.meta.body || '', env);
             folds.set(id, bodyTokens);
             visit(bodyTokens, blockIndex, [...ancestors, id], Number(token.attrGet('data-source-line')) + 1);
@@ -459,7 +469,7 @@
         block.text = block.tokens.map(token => token.type === 'inline' || token.type === 'fence' || token.type === 'code_block'
           ? token.content : token.type === 'collapsible_block' ? token.meta.title + '\n' + token.meta.body : '').filter(Boolean).join('\n');
       });
-      const plan = { blocks, headings, foldStates: options.foldStates || {} };
+      const plan = { blocks, headings, tocEntries, foldStates: options.foldStates || {} };
       env.__readingPlan = plan;
       plan.renderBlock = index => sanitize(md.renderer.render(blocks[index].tokens, md.options, env));
       plan.renderFold = id => sanitize(md.renderer.render(folds.get(Number(id)) || [], md.options, env));

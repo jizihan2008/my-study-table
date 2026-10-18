@@ -21,6 +21,7 @@ function loadSyncLogs(seed = {}, options = {}) {
     Sync: { enabled: true, autoSync: false }
   };
   const state = { renders: 0, renderOptions: [] };
+  window.receiveAiTaskCompletions = options.receiveAiTaskCompletions;
   const context = {
     window,
     localStorage,
@@ -45,6 +46,7 @@ function loadSyncLogs(seed = {}, options = {}) {
     TextEncoder,
     TextDecoder,
     document: { getElementById() { return null; } },
+    confirm: options.confirm || (() => true),
     console: { log() {}, warn() {}, error() {} }
   };
   vm.runInNewContext(fs.readFileSync(path.join(__dirname, '..', 'js', 'ai-tree.js'), 'utf8'), context);
@@ -180,13 +182,15 @@ test('new conversations inherit the default sync switch without changing older p
 });
 
 test('AI cloud payload does not duplicate messages already stored in the tree', async () => {
-  const conv = { id: 7, title: 'tree', messages: [{ role: 'user', content: 'only once' }] };
+  const completions = [{ id: 'device:task', deviceId: 'device', at: Date.now(), preview: 'done' }];
+  const conv = { id: 7, title: 'tree', messages: [{ role: 'user', content: 'only once' }], aiCompletions: completions };
   const { SyncLogs, context, values } = loadSyncLogs({ study_ai_convs: [conv] }, { aiConvs: [conv] });
   context.ensureTree(conv);
   values.set('study_ai_convs', JSON.stringify([conv]));
   const state = await SyncLogs.__test.refreshLocalState(true);
   const item = state.items.find(candidate => candidate.kind === 'ai_conv');
   assert.ok(item.tree);
+  assert.deepEqual(JSON.parse(JSON.stringify(item.meta.aiCompletions)), completions);
   assert.deepEqual(Array.from(item.items), []);
   assert.equal(SyncLogs.__test.itemSizeText(item), '9 字');
 });
@@ -534,6 +538,28 @@ test('a failed local conversation save does not advance the cloud cursor', async
   assert.equal(JSON.parse(values.get('study_sync_logs_ts') || '{}')['ai_conv/77'], undefined);
 });
 
+test('cloud completion metadata is saved before delivery and is not delivered twice by repeated pulls', async () => {
+  const event = { id: 'remote:task1', deviceId: 'remote', at: Date.now(), preview: 'done' };
+  const row = { kind: 'ai_conv', item_id: '77', updated_at: '2026-10-17T08:02:00Z',
+    data: { meta: { id: 77, title: 'remote', aiCompletions: [event] }, items: [{ role: 'assistant', content: 'done' }] } };
+  const client = { from() { return {
+    select() { return this; }, eq() { return this; }, in() { return this; },
+    then(resolve, reject) { return Promise.resolve({ data: [row], error: null }).then(resolve, reject); }
+  }; } };
+  const deliveries = [];
+  const { SyncLogs, values } = loadSyncLogs({}, { client, aiConvs: [],
+    receiveAiTaskCompletions(conv, events) {
+      const saved = JSON.parse(values.get('study_ai_convs'))[0];
+      assert.deepEqual(saved.aiCompletions, [event]);
+      deliveries.push({ id: conv.id, events });
+    } });
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '77' }]);
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '77' }]);
+  assert.equal(deliveries.length, 1);
+  assert.equal(deliveries[0].id, 77);
+  assert.equal(deliveries[0].events[0].id, event.id);
+});
+
 test('cloud inventory pagination reads beyond the first server page', async () => {
   const { SyncLogs } = loadSyncLogs();
   const all = Array.from({ length: 1001 }, (_, id) => ({ id }));
@@ -583,4 +609,104 @@ test('a conversation write detects a cloud change between inventory and update',
     item, [piece], inventory, false);
   assert.equal(result.conflict, true);
   assert.equal(SyncLogs.getPendingConflicts().length, 1);
+});
+
+function cloudManagementClient(seed) {
+  let rows = JSON.parse(JSON.stringify(seed));
+  let failDelete = false;
+  let writes = 0;
+  const client = {
+    auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+    from() {
+      let filters = [], operation = 'select', payload;
+      const query = {
+        select() { return this; }, order() { return this; }, range() { return this; },
+        eq(key, value) { filters.push(row => row[key] === value); return this; },
+        in(key, values) { filters.push(row => values.includes(key === 'base_item_id' ? row.item_id.replace(/(_p\d+)+$/, '') : row[key])); return this; },
+        upsert(value) { operation = 'upsert'; payload = value; return this; },
+        delete() { operation = 'delete'; return this; },
+        single() { return this; },
+        then(resolve, reject) {
+          let result;
+          if (operation === 'upsert') {
+            writes++;
+            const index = rows.findIndex(row => row.user_id === payload.user_id && row.kind === payload.kind && row.item_id === payload.item_id);
+            const row = { ...payload, id: index < 0 ? 'marker-' + writes : rows[index].id, updated_at: '2026-10-17T09:00:00Z' };
+            if (index < 0) rows.push(row); else rows[index] = row;
+            result = { data: row, error: null };
+          } else if (operation === 'delete') {
+            if (failDelete) result = { error: { message: 'delete offline' } };
+            else { rows = rows.filter(row => !filters.every(filter => filter(row))); result = { error: null }; }
+          } else result = { data: rows.filter(row => filters.every(filter => filter(row))), error: null };
+          return Promise.resolve(result).then(resolve, reject);
+        }
+      };
+      return query;
+    }
+  };
+  return { client, rows: () => rows, writes: () => writes, failDeletion: value => { failDelete = value; } };
+}
+
+const remoteConversationRows = () => [
+  { id: 'a', user_id: 'u1', kind: 'ai_conv', item_id: '7_p0', bytes: 100, updated_at: '2026-10-17T08:00:00Z', data: { meta: { title: '云端独有对话' }, items: [{ role: 'user', content: 'secret' }] } },
+  { id: 'b', user_id: 'u1', kind: 'ai_conv', item_id: '7_p1', bytes: 200, updated_at: '2026-10-17T08:00:00Z', data: { meta: { title: '云端独有对话' }, items: [] } },
+  { id: 'keep', user_id: 'u1', kind: 'ai_conv', item_id: '8', bytes: 50, updated_at: '2026-10-17T07:00:00Z', data: { meta: { title: '保留的对话' }, items: [] } },
+  { id: 'other', user_id: 'other-user', kind: 'ai_conv', item_id: '7', bytes: 50, updated_at: '2026-10-17T07:00:00Z', data: { meta: { title: '别人的对话' }, items: [] } }
+];
+
+test('cloud manager lists real remote conversations and deletes only selected shards while retaining local history', async () => {
+  const cloud = cloudManagementClient(remoteConversationRows());
+  const local = { id: 7, title: '本地记录', messages: [{ role: 'user', content: 'keep local' }] };
+  const { SyncLogs, values, context } = loadSyncLogs({ study_ai_convs: [local] }, { client: cloud.client, aiConvs: [local] });
+  const list = await SyncLogs.__test.listCloudConversations();
+  assert.deepEqual(Array.from(list, row => row.title), ['云端独有对话', '保留的对话']);
+  assert.equal(list[0].bytes, 300);
+  assert.equal((await SyncLogs.deleteCloudConversation('7')).ok, true);
+  assert.equal(context.aiConvs[0].messages[0].content, 'keep local');
+  assert.equal(cloud.rows().some(row => row.item_id === '7_p0' || row.item_id === '7_p1'), false);
+  assert.equal(cloud.rows().find(row => row.item_id === '7' && row.user_id === 'u1').data.cloudOnlyDeleted, true);
+  assert.equal(cloud.rows().some(row => row.id === 'keep'), true);
+  assert.equal(cloud.rows().some(row => row.id === 'other'), true);
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/7'], false);
+  assert.deepEqual(Array.from(await SyncLogs.__test.listCloudConversations(), row => row.itemId), ['8']);
+});
+
+test('another device consumes cloud-only deletion even with local edits, retaining its history and pausing uploads', async () => {
+  const rows = [{ id: 'marker', user_id: 'u1', kind: 'ai_conv', item_id: '7', bytes: 0,
+    updated_at: '2026-10-17T09:00:00Z', data: { v: 2, cloudOnlyDeleted: true } }];
+  const cloud = cloudManagementClient(rows);
+  const local = { id: 7, title: 'edited locally', messages: [{ role: 'assistant', content: 'local edit' }] };
+  const { SyncLogs, values, context } = loadSyncLogs({
+    study_sync_logs_dirty_v2: { 'ai_conv/7': true },
+    study_sync_logs_hash: { 'ai_conv/7': 'old-hash', 'ai_conv/7_p0': 'old-shard', 'ai_conv/8': 'keep' }
+  }, { client: cloud.client, aiConvs: [local] });
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, cloud.client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.equal(context.aiConvs[0], local);
+  assert.equal(local.messages[0].content, 'local edit');
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/7'], false);
+  assert.equal(!!JSON.parse(values.get('study_sync_logs_dirty_v2'))['ai_conv/7'], false);
+  assert.deepEqual(JSON.parse(values.get('study_sync_logs_hash')), { 'ai_conv/8': 'keep' });
+  SyncLogs.setItemEnabled('ai_conv', '7', true);
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, cloud.client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/7'], true);
+  assert.equal(JSON.parse(values.get('study_sync_logs_dirty_v2'))['ai_conv/7'], true);
+});
+
+test('partial cloud deletion reports failure and can be retried without losing unrelated or local records', async () => {
+  const cloud = cloudManagementClient(remoteConversationRows());
+  const { SyncLogs } = loadSyncLogs({}, { client: cloud.client, aiConvs: [] });
+  cloud.failDeletion(true);
+  const failed = await SyncLogs.deleteCloudConversation('7');
+  assert.match(failed.error, /delete offline/);
+  assert.equal(cloud.rows().some(row => row.item_id === '7_p1'), true);
+  cloud.failDeletion(false);
+  assert.equal((await SyncLogs.deleteCloudConversation('7')).ok, true);
+  assert.equal(cloud.rows().some(row => row.item_id === '7_p1'), false);
+});
+
+test('cancelling a cloud deletion does not write to the cloud', async () => {
+  const cloud = cloudManagementClient(remoteConversationRows());
+  const { SyncLogs } = loadSyncLogs({}, { client: cloud.client, confirm: () => false });
+  assert.equal((await SyncLogs.deleteCloudConversation('7')).cancelled, true);
+  assert.equal(cloud.writes(), 0);
 });

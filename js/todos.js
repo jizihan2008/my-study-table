@@ -1176,6 +1176,33 @@ function buildStatusOptions(current) {
   return html;
 }
 
+// 今日聚焦和队列共用原待办的状态配置与数据，不修改完成勾选。
+function buildTodoQuickStatusHTML(todo) {
+  return `<select class="todo-quick-status" aria-label="待办状态" title="快捷修改待办状态" style="--pill-color:${statusBgColor(todo.status)}" onclick="event.stopPropagation()" onkeydown="event.stopPropagation()" ondragstart="event.stopPropagation(); event.preventDefault()" onchange="setTodoQuickStatus(this, ${todo.id})">
+    <option value=""${!todo.status ? ' selected' : ''}>无</option>
+    ${buildStatusOptions(todo.status)}
+  </select>`;
+}
+
+async function setTodoQuickStatus(select, id) {
+  const todo = findTodo(id);
+  if (!todo) return;
+  const previous = todo.status;
+  const status = select.value || null;
+  if ((previous || null) === status) return;
+  pushTodoUndo();
+  todo.status = status;
+  select.disabled = true;
+  const saved = await saveDataDurable('study_todos_v2', todos);
+  if (!saved) {
+    todo.status = previous;
+    showMiniToast('待办状态保存失败' + (saveData.lastError ? '：' + saveData.lastError : ''), 'error');
+  }
+  select.disabled = false;
+  renderTodos();
+  renderFocusList();
+}
+
 // Custom dropdown for status (theme-adaptive, works with glass/dark/light)
 let _statusDropdownOpen = null;
 function toggleStatusDropdown(selectEl) {
