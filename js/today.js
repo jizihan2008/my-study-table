@@ -1380,6 +1380,17 @@ function renderTodayTimerRecords(records) {
   if (!list || typeof loadTimerRecords !== 'function' || typeof renderTimerHistory !== 'function') return;
   const today = getTodayStr();
   const todayRecords = (records || loadTimerRecords()).filter(record => record.date === today);
+  // Union each group across all its types; summing per-type totals double-counts overlaps.
+  for (const [id, affectsFocus] of [['todayTimerFocusTotal', true], ['todayTimerOtherTotal', false]]) {
+    const total = document.getElementById(id);
+    if (!total) continue;
+    const group = todayRecords.filter(record => {
+      const included = typeof record.affectsFocus === 'boolean'
+        ? record.affectsFocus : getTimerActivityAffectsFocus(getTimerActivityType(record));
+      return included === affectsFocus;
+    });
+    total.textContent = formatTimerTime(getTimerRecordsDurationSummary(group, today).totalMs);
+  }
   list.classList.toggle('expanded', todayTimerRecordsExpanded);
   const filter = document.getElementById('todayTimerTypeFilter');
   if (filter) {

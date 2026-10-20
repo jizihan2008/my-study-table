@@ -208,3 +208,51 @@ test('nested folds and fenced delimiter text do not terminate the outer fold', (
   assert.match(plan.renderFold(0), /data-lazy-fold="1"/);
   assert.match(plan.renderFold(1), /Actual <strong>body<\/strong>/);
 });
+
+test('a preceding footnote never adds a footnote list to a fold title or body', () => {
+  const renderer = createRenderer();
+  const source = '行列式第一个[^1]精彩应用与可逆矩阵有关.\n\n[^1]: 并非历史事实.\n\n:::fold 定理 3.21\n\n方阵 $A$ 可逆当且仅当其行列式不为 0.\n\n:::';
+  const html = renderer.render(source);
+  assert.match(html, /<summary>定理 3.21<\/summary>/);
+  assert.equal((html.match(/class="footnotes"/g) || []).length, 1);
+  assert.match(html, /并非历史事实\./);
+  assert.ok(html.indexOf('class="footnotes"') > html.indexOf('</details>'));
+  const plan = renderer.createReadingPlan(source);
+  const reading = plan.blocks.map((_, index) => plan.renderBlock(index)).join('');
+  assert.match(reading, /<summary[^>]*>定理 3.21<\/summary>/);
+  assert.equal((reading.match(/class="footnotes"/g) || []).length, 1);
+  assert.match(reading, /并非历史事实\./);
+  assert.doesNotMatch(plan.renderFold(0), /footnotes|footnote-backref/);
+  assert.match(plan.renderFold(0), /class="katex"/);
+});
+
+test('titles and nested fold bodies share document footnotes and reference links', () => {
+  const renderer = createRenderer();
+  const source = [
+    '外部[^a]，也引用内部定义[^b]。', '',
+    ':::fold **标题**[^a]', '正文[^a]，https://example.com', '',
+    ':::fold 内层[^b]', '[链接][site]，内层引用[^a]。', '',
+    '[^b]: 内层脚注正文', ':::', ':::', '',
+    '[^a]: 外部脚注正文', '[site]: https://example.com/reference'
+  ].join('\n');
+  const verify = html => {
+    assert.equal((html.match(/class="footnotes"/g) || []).length, 1);
+    assert.equal((html.match(/class="footnote-ref"/g) || []).length, 6);
+    assert.equal((html.match(/class="footnote-backref"/g) || []).length, 6);
+    assert.match(html, /外部脚注正文/);
+    assert.match(html, /内层脚注正文/);
+    assert.match(html, /href="https:\/\/example.com\/reference"/);
+    assert.match(html, /href="https:\/\/example.com"/);
+    const ids = [...html.matchAll(/\bid="([^"]+)"/g)].map(match => match[1]);
+    assert.equal(new Set(ids).size, ids.length);
+    for (const match of html.matchAll(/href="#([^"]+)"/g)) assert.ok(ids.includes(match[1]), match[1]);
+  };
+  verify(renderer.render(source));
+  const plan = renderer.createReadingPlan(source);
+  const materialize = html => html.replace(
+    /(<details\b[^>]*data-lazy-fold="(\d+)"[^>]*>[\s\S]*?<div class="note-fold-body">)[\s\S]*?(<\/div><\/details>)/g,
+    (_, open, id, close) => open + materialize(plan.renderFold(id)) + close
+  );
+  verify(plan.blocks.map((_, index) => materialize(plan.renderBlock(index))).join(''));
+  assert.equal(plan.tocEntries[0].textContent, '标题');
+});

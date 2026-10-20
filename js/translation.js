@@ -869,6 +869,13 @@
     gradeCetReview: (level, entryId, rating, reviewedAt) => gradeReview(entryId, rating, reviewedAt, level),
     renderPage: renderTranslationPage,
     translate: getTranslation,
+    openTranslation(text, anchor = {}) {
+      const normalized = normalizeSelection(text);
+      if (!isEnglishSelection(normalized)) return;
+      selectedText = normalized;
+      anchorPoint = { x: Number(anchor.x) || 0, y: Number(anchor.y) || 0 };
+      return translateCurrentSelection();
+    },
     close: closePanel
   });
 

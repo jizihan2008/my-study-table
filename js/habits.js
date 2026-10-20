@@ -294,6 +294,8 @@ function openEditHabitModal(habitId) {
   _editHabitColor = habit.color;
   _editDailyTarget = habit.dailyTarget || 1;
   _editWeeklyTarget = habit.weeklyTarget || 7;
+  _editHabitDebugChanges = {};
+  _editHabitDebugDate = getTodayDateStr();
 
   editModalOpen = true;
   document.getElementById('editModalTitle').innerHTML = '<i data-lucide="target" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 编辑习惯';
@@ -332,7 +334,20 @@ function openEditHabitModal(habitId) {
       <label>备注</label>
       <textarea id="editHabitNotes" placeholder="可选，记录习惯的目标、心得等...">${escapeHtml(habit.notes || '')}</textarea>
     </div>
-    <button class="btn-save-modal" onclick="saveEditHabit(${habitId})">💾 保存</button>
+    ${isDebugMode() ? `
+    <div class="habit-debug-fields">
+      <div class="modal-field">
+        <label for="editHabitDebugDate">打卡日期（调试模式）</label>
+        <input type="date" id="editHabitDebugDate" value="${_editHabitDebugDate}" max="${getTodayDateStr()}" required onchange="changeHabitDebugDate(${habitId})">
+      </div>
+      <div class="modal-field">
+        <label for="editHabitDebugCount">当天打卡次数</label>
+        <input type="number" id="editHabitDebugCount" value="${getDayCount(habit, _editHabitDebugDate)}" min="0" max="9007199254740991" step="1" required>
+        <span class="hint">可修改今天及历史日期的次数，0 表示清除当天记录。点击保存后生效，连续天数和进度会重新计算。</span>
+      </div>
+    </div>` : ''}
+    <p id="editHabitSaveError" class="hint" role="alert"></p>
+    <button id="editHabitSave" class="btn-save-modal" onclick="saveEditHabit(${habitId})">💾 保存</button>
   `;
   document.getElementById('editModal').classList.add('open');
   setTimeout(() => document.getElementById('editHabitName').focus(), 300);
@@ -342,6 +357,30 @@ let _editHabitEmoji = '';
 let _editHabitColor = '';
 let _editDailyTarget = 1;
 let _editWeeklyTarget = 7;
+let _editHabitDebugChanges = {};
+let _editHabitDebugDate = '';
+
+function captureHabitDebugCount() {
+  const input = document.getElementById('editHabitDebugCount');
+  if (!isDebugMode() || !input) return true;
+  if (!input.reportValidity()) return false;
+  _editHabitDebugChanges[_editHabitDebugDate] = input.valueAsNumber;
+  return true;
+}
+
+function changeHabitDebugDate(habitId) {
+  if (!isDebugMode()) return;
+  const habit = habits.find(h => h.id === habitId);
+  const date = document.getElementById('editHabitDebugDate');
+  if (!habit || !date) return;
+  if (!date.reportValidity() || !captureHabitDebugCount()) {
+    date.value = _editHabitDebugDate;
+    return;
+  }
+  _editHabitDebugDate = date.value;
+  document.getElementById('editHabitDebugCount').value = Object.prototype.hasOwnProperty.call(_editHabitDebugChanges, date.value)
+    ? _editHabitDebugChanges[date.value] : getDayCount(habit, date.value);
+}
 
 function pickEditHabitEmoji(el, emoji) {
   _editHabitEmoji = emoji;
@@ -355,23 +394,42 @@ function pickEditHabitColor(el, color) {
   el.classList.add('selected');
 }
 
-function saveEditHabit(habitId) {
+async function saveEditHabit(habitId) {
   const habit = habits.find(h => h.id === habitId);
   if (!habit) return;
 
   const name = document.getElementById('editHabitName').value.trim();
   if (!name) return;
+  const button = document.getElementById('editHabitSave');
+  if (button.disabled) return;
+  if (!captureHabitDebugCount()) return;
 
-  habit.name = name;
-  if (_editHabitEmoji) habit.emoji = _editHabitEmoji;
-  if (_editHabitColor) habit.color = _editHabitColor;
-  habit.dailyTarget = parseInt(document.getElementById('editDailyTarget').value) || 1;
-  habit.weeklyTarget = parseInt(document.getElementById('editWeeklyTarget').value) || 7;
-  habit.notes = document.getElementById('editHabitNotes').value.trim();
+  const updated = { ...habit, name,
+    emoji: _editHabitEmoji || habit.emoji, color: _editHabitColor || habit.color,
+    dailyTarget: parseInt(document.getElementById('editDailyTarget').value) || 1,
+    weeklyTarget: parseInt(document.getElementById('editWeeklyTarget').value) || 7,
+    notes: document.getElementById('editHabitNotes').value.trim()
+  };
+  if (isDebugMode() && document.getElementById('editHabitDebugCount')) {
+    updated.checkins = { ...getCkMap(habit) };
+    for (const [date, count] of Object.entries(_editHabitDebugChanges)) {
+      if (count === 0) delete updated.checkins[date];
+      else updated.checkins[date] = count;
+    }
+  }
+  const next = habits.map(h => h.id === habitId ? updated : h);
+  button.disabled = true;
+  const saved = typeof saveDataDurable === 'function'
+    ? await saveDataDurable(HABITS_KEY, next) : saveData(HABITS_KEY, next);
+  button.disabled = false;
+  if (!saved) {
+    document.getElementById('editHabitSaveError').textContent = '保存失败，请重试。';
+    return;
+  }
+  habits = next;
 
   _editHabitEmoji = '';
   _editHabitColor = '';
-  saveHabits();
   closeEditModal();
   renderHabits();
 }

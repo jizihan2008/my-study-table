@@ -13,6 +13,7 @@ test('today timer expands and filters; both reports include types and totals', a
       env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
     const page = await app.firstWindow();
     await page.waitForFunction(() => typeof renderTodayTimerRecords === 'function' && document.readyState !== 'loading');
+    await page.waitForFunction(() => document.querySelector('#section-today.active'));
     const reports = await page.evaluate(() => {
       const today = getTodayStr(), yesterday = getPastDateStr(1);
       const records = [today, yesterday].flatMap((date, day) => Array.from({ length: 12 }, (_, i) => {
@@ -52,6 +53,10 @@ test('today timer expands and filters; both reports include types and totals', a
       for (const label of ['专注', '休息', '其它']) expect(text).toContain(`[${label}]`);
     }
     const list = page.locator('#todayTimerRecords');
+    const focusTotal = page.locator('#todayTimerFocusTotal');
+    const otherTotal = page.locator('#todayTimerOtherTotal');
+    await expect(focusTotal).toHaveText('40:00');
+    await expect(otherTotal).toHaveText('1:20:00');
     await expect(list.locator('.timer-history-item')).toHaveCount(12);
     expect(await list.evaluate(el => el.scrollHeight > el.clientHeight)).toBe(true);
     await page.locator('#todayTimerExpand').click();
@@ -64,6 +69,8 @@ test('today timer expands and filters; both reports include types and totals', a
       await page.evaluate(() => renderToday());
       await expect(page.locator('#todayTimerTypeFilter')).toHaveValue(type);
       await expect(page.locator('#todayTimerExpand')).toHaveAttribute('aria-expanded', 'true');
+      await expect(focusTotal).toHaveText('40:00');
+      await expect(otherTotal).toHaveText('1:20:00');
     }
     await page.locator('#todayTimerTypeFilter').selectOption('all');
     for (const theme of ['light', 'dark']) {
@@ -79,6 +86,8 @@ test('today timer expands and filters; both reports include types and totals', a
     await page.locator('#todayTimerExpand').click();
     expect(await list.evaluate(el => getComputedStyle(el).maxHeight)).toBe('320px');
     await page.evaluate(() => saveTimerRecords([]));
+    await expect(focusTotal).toHaveText('0:00');
+    await expect(otherTotal).toHaveText('0:00');
     await page.locator('#todayTimerTypeFilter').selectOption('rest');
     await expect(list).toContainText('今天还没有此类型的计时记录');
     await page.locator('#todayTimerTypeFilter').selectOption('all');
@@ -101,8 +110,41 @@ test('today timer expands and filters; both reports include types and totals', a
       expect(unionReports[index][prefix + 'TimerTypeTotals'].map(t => t.totalMs)).toEqual([7200000, 7200000, 3600000]);
     }
     await expect(list.locator('.timer-history-date-total')).toHaveText('共 3:00:00');
+    await expect(focusTotal).toHaveText('2:00:00');
+    await expect(otherTotal).toHaveText('2:00:00');
     await page.locator('#todayTimerTypeFilter').selectOption('focus');
     await expect(list.locator('.timer-history-date-total')).toHaveText('共 2:00:00');
+    // Union across different custom types in each group, with overlaps between groups too.
+    await page.evaluate(() => {
+      saveTimerActivityTypes([...loadTimerActivityTypes(),
+        { id: 'reading', label: '阅读', affectsFocus: true, disabled: true },
+        { id: 'travel', label: '通勤', affectsFocus: false }]);
+      const date = getTodayStr(), hour = 3600000;
+      const midnight = new Date(date + 'T00:00:00').getTime();
+      saveTimerRecords([
+        ['focus', true, 9, 11], ['reading', true, 10, 12],
+        ['rest', false, 10, 12], ['travel', false, 11, 13],
+        // Preserve a historical record's own flag even if its type now counts towards focus.
+        ['reading', false, 12, 13]
+      ].map(([activityType, affectsFocus, start, end], index) => ({
+        id: 100 + index, date, name: `分组重叠${index}`, activityType, affectsFocus,
+        totalMs: (end - start) * hour,
+        sessions: [{ start: midnight + start * hour, end: midnight + end * hour }]
+      })));
+    });
+    await expect(focusTotal).toHaveText('3:00:00');
+    await expect(otherTotal).toHaveText('3:00:00');
+    await page.locator('#todayTimerTypeFilter').selectOption('all');
+    await expect(list.locator('.timer-history-date-total')).toHaveText('共 4:00:00');
+    // Missing timestamps retain the application's legacy duration fallback; edits refresh totals.
+    await page.evaluate(() => {
+      const records = loadTimerRecords();
+      records.push({ id: 200, date: getTodayStr(), name: '旧记录', activityType: 'other', affectsFocus: false, totalMs: 60000, sessions: [] });
+      saveTimerRecords(records);
+    });
+    await expect(otherTotal).toHaveText('3:01:00');
+    await page.evaluate(() => saveTimerRecords(loadTimerRecords().filter(record => record.activityType !== 'reading')));
+    await expect(focusTotal).toHaveText('2:00:00');
   } finally {
     if (app) await app.close();
     await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

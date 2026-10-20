@@ -97,6 +97,44 @@ test('note explanation captures source offsets in reading, rich editing, source 
       return { text: menu.dataset.text, start: Number(menu.dataset.srcStart), end: Number(menu.dataset.srcEnd) };
     });
     expect(source).toEqual({ text: '选中文字', start: 6, end: 10 });
+    await expect(page.locator('#noteSelectionTranslate')).toBeHidden();
+    await page.evaluate(() => {
+      window.getEffectiveApiConfig = () => ({ apiKey: 'test-key', model: 'test-model' });
+      window.translationRequests = [];
+      window.callAiApi = async messages => {
+        translationRequests.push(messages.at(-1).content);
+        return { cleanText: JSON.stringify({ englishDefinition: 'mental effort', chineseMeaning: '认知负荷' }) };
+      };
+    });
+    for (const surface of ['notesPreview', 'notesRichEditor', 'notesTextarea', 'notesSplitPreview', 'notesSplitRichEditor']) {
+      await page.evaluate(surface => {
+        GlobalTranslation.close();
+        const host = document.getElementById(surface);
+        if (host.tagName === 'TEXTAREA') {
+          host.value = 'before cognitive load after';
+          host.focus(); host.setSelectionRange(7, 21);
+        } else {
+          host.innerHTML = '<p>cognitive load</p>';
+          const range = document.createRange(); range.selectNodeContents(host.querySelector('p'));
+          getSelection().removeAllRanges(); getSelection().addRange(range);
+        }
+        host.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+      }, surface);
+      await expect(page.locator('#noteSelectionTranslate')).toBeVisible();
+      await expect(page.locator('#noteAiExplainMenu')).toContainText('AI 解释选中文字');
+      // The menu must retain its selection even after the editor loses it.
+      await page.evaluate(() => {
+        getSelection().removeAllRanges();
+        document.getElementById('notesTextarea').setSelectionRange(0, 0);
+      });
+      await page.locator('#noteSelectionTranslate').click();
+      await expect(page.locator('#globalTranslateEnglish')).toContainText('mental effort');
+      await expect(page.locator('#noteAiExplainMenu')).toBeHidden();
+      await page.locator('#globalTranslateChineseTab').click();
+      await expect(page.locator('#globalTranslateChinese')).toContainText('认知负荷');
+    }
+    expect(await page.evaluate(() => translationRequests)).toEqual(['cognitive load']);
+    expect(await page.evaluate(() => GlobalTranslation.getHistory()[0].viewCount)).toBe(5);
     const outside = await page.evaluate(() => {
       closeNoteAiExplainMenu();
       const host = document.getElementById('notesRichEditor');

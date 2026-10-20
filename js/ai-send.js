@@ -70,7 +70,7 @@ function updateAiSendButton() {
     sendBtn.style.background = '';
     sendBtn.style.borderColor = '';
     sendIcon.innerHTML = '<path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/>';
-    sendBtn.disabled = false;
+    sendBtn.disabled = !String(getEffectiveApiConfig().apiKey || '').trim();
   }
 }
 
@@ -234,10 +234,13 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   // Allow empty text if there are attachments
   const hasAttach = fromQueue ? (externalAttachments && externalAttachments.length > 0) : aiAttachments.length > 0;
   if (!text && !hasAttach) return null;
-  // Clear draft for this conv before sending
-  if (!fromQueue) clearAiDraft();
   const apiCfg = { ...getEffectiveApiConfig() };
-  if (!apiCfg.apiKey) { openSettingsModal(); return null; }
+  if (!String(apiCfg.apiKey || '').trim()) {
+    if (typeof showAiToast === 'function') showAiToast('当前 Key 在本机没有密钥，请选择可用 Key，或在设置中补充密钥。草稿已保留。');
+    if (typeof renderAiChat === 'function') renderAiChat();
+    return null;
+  }
+  if (!fromQueue) clearAiDraft();
 
   const conv = getActiveConv();
   if (!conv) return null;
@@ -843,10 +846,12 @@ function initAiToolbar() {
   const keys = loadApiKeys();
   const activeId = getActiveApiKeyId();
   select.innerHTML = keys.map(k =>
-    `<option value="${k.id}" ${k.id === activeId ? 'selected' : ''}>${escapeHtml(k.name)}</option>`
+    `<option value="${k.id}" ${k.id === activeId ? 'selected' : ''}>${escapeHtml(k.name)}${String(k.key || '').trim() ? '' : '（本机未填密钥）'}</option>`
   ).join('');
   if (keys.length === 0) {
     select.innerHTML = '<option value="">未配置 Key</option>';
+  } else if (!keys.some(k => k.id === activeId)) {
+    select.insertAdjacentHTML('afterbegin', '<option value="" selected>请选择 Key</option>');
   }
 
   // 接口组胶囊：显示当前对话开放的组数（每个对话一份设置）

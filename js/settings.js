@@ -2445,6 +2445,7 @@ function buildKeyBarHTML(activeName) {
       onclick="switchActiveKey('${k.id}')"
       title="${escapeHtml(k.name)} · ${escapeHtml(k.model || 'gpt-3.5-turbo')}">
       ${escapeHtml(k.name)}
+      ${String(k.key || '').trim() ? '' : '<span class="ai-key-chip-model">本机未填密钥</span>'}
       <span class="ai-key-chip-model">${escapeHtml(modelShort)}</span>
     </button>`;
   }).join('');
@@ -2470,9 +2471,12 @@ function switchActiveKey(id) {
 // Refresh just the key bar without full re-render
 function refreshKeyBar() {
   const bar = document.getElementById('aiKeyBar');
-  if (!bar) return;
   const activeName = getActiveKeyDisplayName();
-  bar.innerHTML = buildKeyBarHTML(activeName);
+  if (bar) bar.innerHTML = buildKeyBarHTML(activeName);
+  const layout = document.getElementById('aiChatLayout');
+  const hasKey = String(getEffectiveApiConfig().apiKey || '').trim() ? '1' : '0';
+  if (layout && layout.dataset.aiConvId && layout.dataset.aiHasApiKey !== hasKey
+    && typeof renderAiChat === 'function') renderAiChat();
 }
 
 // Legacy: kept for backward compatibility, no longer used by new UI

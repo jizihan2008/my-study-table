@@ -94,7 +94,7 @@
       const display = math.closest('.markdown-math-display');
       const atomic = display || math.closest('.katex-display') || math;
       atomic.setAttribute('contenteditable', 'false');
-      if (display) {
+      if (display?.tagName === 'DIV') {
         for (const side of ['previousSibling', 'nextSibling']) {
           const sibling = display[side];
           if (sibling?.nodeType === Node.ELEMENT_NODE && blockTags.has(sibling.tagName)) continue;
@@ -179,6 +179,10 @@
     }
     if (tag === 'a') {
       const href = node.getAttribute('href') || '';
+      if (href.startsWith('#note=')) {
+        const label = (node.textContent || '').replace(/[&\\[\]<>*`_]/g, char => '&#' + char.codePointAt(0) + ';');
+        return '[' + label + '](' + href + ')';
+      }
       return href ? '[' + children() + '](' + href + ')' : children();
     }
     if (tag === 'img') {
@@ -190,6 +194,10 @@
       const match = (link?.getAttribute('href') || '').match(/fn(\d+)/);
       const index = match ? Number(match[1]) - 1 : 0;
       return '[^' + (footnoteLabels[index] || String(index + 1)) + ']';
+    }
+    if (node.matches('.markdown-math-display, .katex-display')) {
+      const latex = getLatexSource(node.querySelector('.katex'));
+      return latex ? '$$' + latex.trim() + '$$' : '';
     }
     if (node.classList.contains('katex')) {
       const latex = getLatexSource(node);
@@ -450,13 +458,16 @@
     if ((!inserting && !latex) || !root.katex?.renderToString || !root.DOMPurify) return;
     closeMathEditor?.(false);
     const noteId = currentNoteId;
-    const displayMode = !inserting && !!math.closest('.markdown-math-display, .katex-display');
+    const originalDisplayMode = !inserting && !!math.closest('.markdown-math-display, .katex-display');
+    let displayMode = originalDisplayMode;
     const dialog = document.createElement('dialog');
     dialog.className = 'note-math-dialog';
     dialog.setAttribute('aria-labelledby', 'noteMathEditorTitle');
     dialog.innerHTML = '<div class="modal-header"><span class="modal-title" id="noteMathEditorTitle">' + (inserting ? '插入公式' : '编辑公式') + '</span>'
       + '<button type="button" class="modal-close" aria-label="关闭公式编辑器">✕</button></div>'
-      + '<div class="note-math-editor-body"><label for="noteMathSource">LaTeX 源码</label>'
+      + '<div class="note-math-editor-body"><label for="noteMathMode">公式类型</label>'
+      + '<select id="noteMathMode"><option value="inline">行内公式</option><option value="display">独立公式</option></select>'
+      + '<label for="noteMathSource">LaTeX 源码</label>'
       + '<textarea id="noteMathSource" spellcheck="false" aria-describedby="noteMathHint noteMathError"></textarea>'
       + '<p id="noteMathHint" class="hint">只填写公式内容，无需添加外层 $ 或 $$。Ctrl+Enter 保存，Esc 取消。</p>'
       + '<label>实时预览</label><div class="note-math-preview" aria-label="公式预览"></div>'
@@ -464,6 +475,8 @@
       + '<div class="note-math-actions"><button type="button" class="note-math-cancel">取消</button>'
       + '<button type="button" class="note-math-save">保存</button></div>';
     const input = dialog.querySelector('textarea');
+    const mode = dialog.querySelector('#noteMathMode');
+    mode.value = displayMode ? 'display' : 'inline';
     const preview = dialog.querySelector('.note-math-preview');
     const error = dialog.querySelector('.note-math-error');
     const save = dialog.querySelector('.note-math-save');
@@ -491,7 +504,7 @@
       dialog.close();
       dialog.remove();
       if (restoreFocus && host.contains(math)) {
-        const atomic = math.closest('.markdown-math-display, .katex-display') || math;
+        const atomic = math.closest('.markdown-math-display') || math.closest('.katex-display') || math;
         const range = document.createRange();
         range.setStartAfter(atomic);
         range.collapse(true);
@@ -509,16 +522,28 @@
       if (!replacement || noteId !== currentNoteId) return;
       if (inserting ? !host.contains(insertionRange?.startContainer) || !host.contains(insertionRange?.endContainer) : !host.contains(math)) return;
       const source = input.value.trim();
-      if (!inserting && source === latex) { close(); return; }
+      if (!inserting && source === latex && displayMode === originalDisplayMode) { close(); return; }
       const updated = replacement.cloneNode(true);
       updated.dataset.latex = source;
       updated.setAttribute('contenteditable', 'false');
       updated.title = '双击编辑公式';
+      const oldAtomic = inserting ? null : math.closest('.markdown-math-display') || math.closest('.katex-display') || math;
+      let atomic = updated;
+      if (displayMode) {
+        atomic = document.createElement(oldAtomic?.tagName === 'DIV' ? 'div' : 'span');
+        atomic.className = 'markdown-math-display';
+        atomic.appendChild(preview.querySelector('.katex-display').cloneNode(true));
+        atomic.querySelector('.katex').replaceWith(updated);
+      } else if (oldAtomic?.tagName === 'DIV') {
+        // A former block formula becomes a normal paragraph at the same location.
+        atomic = document.createElement('p');
+        atomic.appendChild(updated);
+      }
       if (inserting) {
         insertionRange.deleteContents();
-        insertionRange.insertNode(updated);
-        normalizeRenderedDom(host);
-      } else math.replaceWith(updated);
+        insertionRange.insertNode(atomic);
+      } else oldAtomic.replaceWith(atomic);
+      normalizeRenderedDom(host);
       math = updated;
       notifyChange({ historyBoundary: true });
       close();
@@ -536,6 +561,10 @@
     });
     input.addEventListener('input', event => { if (!event.isComposing) renderPreview(); });
     input.addEventListener('compositionend', renderPreview);
+    mode.addEventListener('change', () => {
+      displayMode = mode.value === 'display';
+      renderPreview();
+    });
     document.body.appendChild(dialog);
     renderPreview();
     dialog.showModal();
@@ -617,6 +646,35 @@
       const text = savedRange ? savedRange.toString() : '';
       if (savedRange) restoreRange(savedRange);
       insertHtml('<code>' + (text || '代码').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code>');
+      return;
+    } else if (type === 'note-jump') {
+      const noteId = currentNoteId;
+      const result = await root.openNoteLinkDialog?.(noteId);
+      if (!result || currentNoteId !== noteId || !host.isConnected) return;
+      if (savedRange && (!host.contains(savedRange.startContainer) || !host.contains(savedRange.endContainer))) return;
+      host.focus({ preventScroll: true });
+      if (savedRange) restoreRange(savedRange);
+      const range = window.getSelection()?.rangeCount ? window.getSelection().getRangeAt(0) : document.createRange();
+      if (!host.contains(range.startContainer)) { range.selectNodeContents(host); range.collapse(false); }
+      // Native insertHTML inherits an enclosing link, nesting the new anchor
+      // and losing its destination during serialization. Insert DOM directly.
+      const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
+      const enclosingLink = element.closest('a');
+      if (enclosingLink && host.contains(enclosingLink)) { range.setStartAfter(enclosingLink); range.collapse(true); }
+      const anchor = document.createElement('a');
+      anchor.className = 'note-jump-block';
+      anchor.setAttribute('href', result.href);
+      anchor.textContent = result.label;
+      range.deleteContents();
+      range.insertNode(anchor);
+      range.setStartAfter(anchor);
+      range.collapse(true);
+      const boundary = document.createTextNode('\u200b');
+      range.insertNode(boundary);
+      range.setStart(boundary, 1);
+      range.collapse(true);
+      restoreRange(range);
+      notifyChange({ historyBoundary: true });
       return;
     } else if (type === 'link') {
       const url = await root.showCustomPrompt?.('输入链接地址', 'https://');

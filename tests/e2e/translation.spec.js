@@ -18,6 +18,7 @@ test.beforeAll(async () => {
   });
   page = await electronApp.firstWindow();
   await page.waitForLoadState('domcontentloaded');
+  await page.waitForFunction(() => !!window.GlobalTranslation && !!document.getElementById('globalTranslateMenu') && !!document.getElementById('section-today'));
 });
 
 test.afterAll(async () => {

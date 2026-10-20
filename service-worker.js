@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v248';
+const VERSION = 'mst-v255';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -17,7 +17,7 @@ const PRECACHE_URLS = [
   './js/settings-sync.js?v=20261016-web-r1',
   './reset-site-data.html',
   './manifest.webmanifest?v=20260926-icon-v3',
-  './css/style.css?v=20261017-todo-status-r1',
+  './css/style.css?v=20261019-habit-debug-r1',
   './js/inbox.js?v=20261017-inbox-images-r1',
   './js/trash.js?v=20261010-r1',
   './css/workspace.css?v=20261017-table-actions-r1',
@@ -27,7 +27,8 @@ const PRECACHE_URLS = [
   './js/appearance.js?v=20260929-r1',
   './js/timer-types.js?v=20261013-custom-types-r1',
   './js/todos.js?v=20261017-status-r1',
-  './js/today.js?v=20261017-todo-status-r1',
+  './js/today.js?v=20261019-timer-totals-r1',
+  './js/habits.js?v=20261019-habit-debug-r1',
   './js/todo-queue.js?v=20261017-todo-status-r1',
   './lib/lucide/lucide.min.js',
   './lib/katex/katex.min.css',
@@ -39,18 +40,18 @@ const PRECACHE_URLS = [
   './lib/markdown/highlight-github-dark-dimmed.min.css',
   './lib/cloudbase/cloudbase.js',
   './js/cloud-client.js?v=20260913-r2',
-  './js/markdown.js?v=20261015-fold-toc-r1',
+  './js/markdown.js?v=20261019-note-links-r1',
   './js/note-reading-renderer.js?v=20261015-fold-toc-r1',
   './js/note-view-position.js?v=20261004-r1',
-  './js/note-rich-editor.js?v=20261017-table-actions-r1',
+  './js/note-rich-editor.js?v=20261019-note-links-r1',
   './js/ai-tree.js?v=20261012-visual-fold-r1',
   './js/ai-conv.js?v=20261012-protocol-r2',
-  './js/ai-attach.js?v=20261015-ipad-paste-r1',
-  './js/ai-render.js?v=20261015-ipad-paste-r1',
+  './js/ai-attach.js?v=20261019-paste-capsule-r1',
+  './js/ai-render.js?v=20261019-paste-capsule-r1',
   './js/web-access.js?v=20261016-web-r1',
   './js/ai-tools.js?v=20261016-web-r1',
   './js/ai-search.js?v=20261017-ai-notify-r1',
-  './js/notes.js?v=20261015-fold-toc-r1',
+  './js/notes.js?v=20261019-note-links-r1',
   './js/utils.js?v=20261014-idb-r1',
   './js/file-library.js?v=20260923-r1',
   './js/stats.js?v=20261012-focus',
@@ -65,7 +66,7 @@ const PRECACHE_URLS = [
   './js/ai-client.js?v=20260914-r3',
   './js/ai-stream.js?v=20261012-protocol-r2',
   './js/ai-api.js?v=20261016-web-r1',
-  './js/ai-send.js?v=20261017-ai-notify-r1',
+  './js/ai-send.js?v=20261019-ipad-send-r1',
   './js/skills.js?v=20261010-r1',
   './js/prompts.js?v=20261014-completed-review-r1',
   './js/env.js?v=20260911-r2',
@@ -74,7 +75,7 @@ const PRECACHE_URLS = [
   './js/friends-polling-policy.js?v=20260910-r1',
   './js/friends.js?v=20260913-r4',
   './js/friends-chat.js?v=20260910-r1',
-  './js/settings.js?v=20261017-ai-notify-r1',
+  './js/settings.js?v=20261019-ipad-send-r1',
   './js/site-data-reset.js?v=20261010-r1',
   './js/store.js?v=20260913-r2',
   './js/sync-policy.js?v=20261008-r1',
@@ -90,7 +91,7 @@ const PRECACHE_URLS = [
   './js/calendar.js?v=20261013-custom-types-r1',
   './js/bootstrap.js?v=20261014-idb-r1',
   './lib/cet/vocabulary.js?v=20261008-r1',
-  './js/translation.js?v=20261013-flashcards-r1',
+  './js/translation.js?v=20261018-note-selection-r1',
   './icons/apple-touch-icon-v3.png',
   './icons/icon-192-v3.png',
   './icons/icon-512-v3.png'

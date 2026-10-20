@@ -176,7 +176,7 @@ function renderAiChat(options) {
   if (!layout) return;
   const conv = getActiveConv();
   if (!conv) return;
-  const hasApiKey = !!(loadApiKeys().length > 0);
+  const hasApiKey = !!String(getEffectiveApiConfig().apiKey || '').trim();
 
   // The AI DOM is intentionally kept when navigating to another page. On a
   // return visit it is already current (streaming/sync paths update it in
@@ -212,7 +212,7 @@ function renderAiChat(options) {
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" width="16" height="16">
         <path d="M12 2a4 4 0 014 4c0 1.1-.5 2.1-1.2 2.8l3.4 6.5A3 3 0 0115.5 19H8.5a3 3 0 01-2.7-3.7l3.4-6.5A4 4 0 0112 2z"/><circle cx="12" cy="8" r="2"/><path d="M12 22v-2"/>
       </svg>
-      <span>尚未配置 AI API Key，当前仅可查看历史聊天记录。发送消息需先在设置中配置。</span>
+      <span>当前 Key 在本机没有可用密钥。同步只包含名称和模型，不包含密钥；请在 Key 菜单中选择已配置密钥的 Key，或到设置中为当前 Key 填入密钥。</span>
       <button class="ai-no-key-setup" onclick="openSettingsModal()">去设置</button>
     </div>` : '';
 
@@ -321,11 +321,6 @@ function renderAiChat(options) {
         <svg id="aiSendIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 2L11 13"/><path d="M22 2l-7 20-4-9-9-4 20-7z"/></svg>
       </button>
     </div>
-    <div id="aiPasteTextHint" class="ai-paste-text-hint" hidden role="status">
-      <span>刚粘贴的文字可作为附件</span>
-      <button type="button" onclick="convertAiPastedText()">转为 TXT</button>
-      <button type="button" onclick="clearAiPasteTextHint()" aria-label="关闭粘贴提示">✕</button>
-    </div>
   `;
   layout.dataset.aiConvId = String(conv.id);
   layout.dataset.aiHasApiKey = hasApiKey ? '1' : '0';
@@ -344,7 +339,7 @@ function renderAiChat(options) {
     const _send = document.getElementById('aiSendBtn');
     const _at = document.getElementById('aiAttachBtn');
     if (_inp) _inp.disabled = true;
-    if (_send) _send.disabled = true;
+    if (_send) _send.disabled = !isAiLoading(conv.id);
     if (_at) _at.disabled = true;
     const _note = document.getElementById('aiInsertNoteBtn');
     const _todo = document.getElementById('aiInsertTodoBtn');

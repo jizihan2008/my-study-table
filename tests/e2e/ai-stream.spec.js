@@ -567,10 +567,11 @@ test('pasting files into the chat area attaches them, while plain text paste sta
   expect(output.bodyAdded).toBe(1);
 });
 
-test('plain-text paste offers conversion and the keyboard shortcut can create a named txt attachment', async () => {
-  const previousKeys = await page.evaluate(() => {
+test('long text opens the attachment dialog and declining does not offer a capsule', async () => {
+  const previousKeys = await page.evaluate(async () => {
     const keys = window.loadApiKeys();
-    window.saveApiKeys([{ id: 'e2e-large-paste', name: '长文本粘贴测试', apiKey: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }]);
+    await window.saveApiKeys([{ id: 'e2e-large-paste', name: '长文本粘贴测试', key: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }], { sync: false });
+    localStorage.setItem('study_active_api_key_id', 'e2e-large-paste');
     window.switchTab('ai');
     window.createNewConv();
     window.renderAiChat();
@@ -645,9 +646,8 @@ test('plain-text paste offers conversion and the keyboard shortcut can create a 
       }
       return event.defaultPrevented;
     }, longText);
-    expect(prevented).toBe(false);
-    await expect(page.locator('#aiPasteTextHint')).toBeVisible();
-    await page.getByRole('button', { name: '转为 TXT', exact: true }).click();
+    expect(prevented).toBe(true);
+    await expect(page.locator('#aiPasteTextHint')).toBeHidden();
     await expect(page.locator('#aiLargePasteOverlay')).toHaveClass(/open/);
     await expect(page.locator('.ai-large-paste-summary')).toContainText(longText.length.toLocaleString());
     await page.locator('#aiLargePasteFileName').fill('课程笔记');
@@ -668,18 +668,22 @@ test('plain-text paste offers conversion and the keyboard shortcut can create a 
       const input = document.getElementById('aiInput');
       input.value = '开头结尾';
       input.setSelectionRange(2, 2);
-      input.dispatchEvent(new KeyboardEvent('keydown', { key: 'V', ctrlKey: true, shiftKey: true, bubbles: true }));
       const dt = new DataTransfer();
       dt.setData('text/plain', '甲'.repeat(2000));
       input.dispatchEvent(new ClipboardEvent('paste', { clipboardData: dt, bubbles: true, cancelable: true }));
-      input.dispatchEvent(new KeyboardEvent('keyup', { key: 'V', bubbles: true }));
     });
     await page.getByRole('button', { name: '直接粘贴' }).click();
     await expect.poll(() => page.locator('#aiInput').inputValue()).toBe('开头' + '甲'.repeat(2000) + '结尾');
     expect(await page.evaluate(() => window.getAiAttachmentsSnapshot().length)).toBe(0);
+    await expect(page.locator('#aiPasteTextHint')).toBeHidden();
+    await page.evaluate(() => {
+      document.getElementById('aiInput').dispatchEvent(new Event('input', { bubbles: true }));
+      window.dispatchEvent(new Event('resize'));
+    });
+    await expect(page.locator('#aiPasteTextHint')).toBeHidden();
   } finally {
-    await page.evaluate(keys => {
-      window.saveApiKeys(keys);
+    await page.evaluate(async keys => {
+      await window.saveApiKeys(keys, { sync: false });
       window.renderAiChat();
       while (window.getAiAttachmentsSnapshot().length > 0) window.removeAttachment(0);
     }, previousKeys);
@@ -687,9 +691,10 @@ test('plain-text paste offers conversion and the keyboard shortcut can create a 
 });
 
 test('touch text attachments preserve questions and track only the latest unedited paste', async () => {
-  const keys = await page.evaluate(() => {
+  const keys = await page.evaluate(async () => {
     const keys = loadApiKeys();
-    saveApiKeys([{ id: 'touch-paste', apiKey: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }]);
+    await saveApiKeys([{ id: 'touch-paste', key: 'fake', baseUrl: 'https://paste-test.invalid/v1', model: 'deepseek-chat' }], { sync: false });
+    localStorage.setItem('study_active_api_key_id', 'touch-paste');
     switchTab('ai'); createNewConv(); renderAiChat();
     return keys;
   });
@@ -721,7 +726,18 @@ test('touch text attachments preserve questions and track only the latest unedit
         input.dispatchEvent(new InputEvent('input', { bubbles: true, inputType: 'insertFromPaste', data: text }));
       }
     }, text);
+    const messageHeight = await page.locator('#aiMessages').evaluate(el => el.clientHeight);
     await paste('第一段');
+    await expect(page.locator('#aiPasteTextHint')).toBeVisible();
+    const capsule = await page.locator('#aiPasteTextHint').evaluate(el => ({
+      position: getComputedStyle(el).position, parent: el.parentElement.tagName,
+      bottom: el.getBoundingClientRect().bottom, inputTop: document.getElementById('aiInput').getBoundingClientRect().top,
+      messageHeight: document.getElementById('aiMessages').clientHeight
+    }));
+    expect(capsule.position).toBe('fixed');
+    expect(capsule.parent).toBe('BODY');
+    expect(capsule.bottom).toBeLessThanOrEqual(capsule.inputTop);
+    expect(capsule.messageHeight).toBe(messageHeight);
     await page.getByRole('button', { name: '转为 TXT', exact: true }).click();
     await page.getByRole('button', { name: '保留在输入框', exact: true }).click();
     await expect(page.locator('#aiInput')).toHaveValue('请总结这些资料第一段');
@@ -758,7 +774,7 @@ test('touch text attachments preserve questions and track only the latest unedit
     expect(await page.evaluate(() => aiAttachments[0].file.text())).toBe('上传原文');
     await page.evaluate(() => removeAttachment(0));
   } finally {
-    await page.evaluate(keys => { saveApiKeys(keys); renderAiChat(); }, keys);
+    await page.evaluate(async keys => { await saveApiKeys(keys, { sync: false }); renderAiChat(); }, keys);
     await page.setViewportSize({ width: 1280, height: 720 });
   }
 });

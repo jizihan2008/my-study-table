@@ -284,6 +284,85 @@ test('invalid drafts, cancel and unchanged saves do not modify notes or history'
   expect(await page.evaluate(() => notesUndoStack.length)).toBe(0);
 });
 
+for (const [name, source] of [
+  ['paragraph', '前文 $x^2$ 后文'],
+  ['quote', '> 前文 $x^2$ 后文'],
+  ['fold title', ':::fold 标题 $x^2$\n正文\n:::'],
+  ['fold body', ':::fold 标题\n前文 $x^2$ 后文\n:::'],
+  ['table cell', '| 内容 |\n| --- |\n| 前文 $x^2$ 后文 |']
+]) {
+  test(`formula type switches both ways and survives round trips in ${name}`, async () => {
+    await setup(source);
+    await doubleClickMath();
+    await expect(page.getByLabel('公式类型')).toHaveValue('inline');
+    await page.getByLabel('公式类型').selectOption('display');
+    await expect(page.locator('.note-math-preview .katex-display')).toHaveCount(1);
+    expect(await page.evaluate(() => getActiveNote().content)).toBe(source);
+    await page.locator('.note-math-save').click();
+    await expect(page.locator('#notesRichEditor .markdown-math-display')).toHaveCount(1);
+    const displayed = await page.evaluate(() => getActiveNote().content);
+    expect(displayed).toBe(source.replace('$x^2$', () => '$$x^2$$'));
+    await page.evaluate(() => undoNote());
+    expect(await page.evaluate(() => getActiveNote().content)).toBe(source);
+    await page.evaluate(() => redoNote());
+    await page.evaluate(() => switchNoteView('edit'));
+    await expect(page.locator('#notesTextarea')).toHaveValue(displayed);
+    await page.evaluate(() => switchNoteView('preview'));
+    await expect(page.locator('#notesPreview .katex-display')).toHaveCount(1);
+    await page.evaluate(() => switchNoteView('rich'));
+    await doubleClickMath();
+    await expect(page.getByLabel('公式类型')).toHaveValue('display');
+    await page.getByLabel('公式类型').selectOption('inline');
+    await expect(page.locator('.note-math-preview .katex-display')).toHaveCount(0);
+    await page.getByLabel('LaTeX 源码').press('Control+Enter');
+    await expect(page.locator('#notesRichEditor .katex-display, #notesRichEditor .markdown-math-display')).toHaveCount(0);
+    expect(await page.evaluate(() => getActiveNote().content)).toBe(source);
+  });
+}
+
+test('new formula can be inserted in display mode', async () => {
+  await setup('前文 x^2 后文');
+  await page.locator('#notesRichEditor p').evaluate(paragraph => {
+    const range = document.createRange();
+    range.setStart(paragraph.firstChild, 3);
+    range.setEnd(paragraph.firstChild, 6);
+    paragraph.closest('[contenteditable="true"]').focus();
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+  });
+  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.getByLabel('公式类型').selectOption('display');
+  await page.locator('.note-math-save').click();
+  await expect(page.locator('#notesRichEditor .katex-display')).toHaveCount(1);
+  expect(await page.evaluate(() => getActiveNote().content)).toBe('前文 $$x^2$$ 后文');
+});
+
+test('block formula switches to inline without retaining a display wrapper', async () => {
+  await setup('前文\n\n$$\nx^2\n$$\n\n后文');
+  await doubleClickMath();
+  await page.getByLabel('公式类型').selectOption('inline');
+  await page.locator('.note-math-save').click();
+  await expect(page.locator('#notesRichEditor .katex-display, #notesRichEditor .markdown-math-display')).toHaveCount(0);
+  expect(await page.evaluate(() => getActiveNote().content)).toBe('前文\n\n$x^2$\n\n后文');
+  await page.evaluate(() => switchNoteView('edit'));
+  await page.evaluate(() => switchNoteView('rich'));
+  await expect(page.locator('#notesRichEditor .katex-display')).toHaveCount(0);
+});
+
+test('cancel and reverting the type leave content and history unchanged', async () => {
+  const source = '前文 $x^2$ 后文';
+  await setup(source);
+  await doubleClickMath();
+  await page.getByLabel('公式类型').selectOption('display');
+  await page.getByLabel('公式类型').press('Escape');
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(source);
+  await doubleClickMath();
+  await page.getByLabel('公式类型').selectOption('display');
+  await page.getByLabel('公式类型').selectOption('inline');
+  await page.locator('.note-math-save').click();
+  expect(await page.evaluate(() => notesUndoStack.length)).toBe(0);
+});
+
 test('secondary formula edits and history remain in the secondary pane', async () => {
   await setup('左侧 $a$');
   const ids = await page.evaluate(() => {
@@ -302,11 +381,14 @@ test('secondary formula edits and history remain in the secondary pane', async (
     return { left: left.id, right: right.id };
   });
   await doubleClickMath('#notesSplitRichEditor .katex');
+  await page.getByLabel('公式类型').selectOption('display');
   await page.getByLabel('LaTeX 源码').fill('x^3');
   await page.locator('.note-math-dialog').getByRole('button', { name: '保存', exact: true }).click();
   await expect(page.locator('#notesSplitRichEditor .katex')).toHaveAttribute('data-latex', 'x^3');
+  await expect(page.locator('#notesSplitRichEditor .katex-display')).toHaveCount(1);
   await page.keyboard.press('Control+Z');
   await expect(page.locator('#notesSplitRichEditor .katex')).toHaveAttribute('data-latex', 'x^2');
+  await expect(page.locator('#notesSplitRichEditor .katex-display')).toHaveCount(0);
   await expect(page.locator('#notesRichEditor .katex')).toHaveAttribute('data-latex', 'a');
   expect(await page.evaluate(() => activeNoteId)).toBe(ids.left);
   await page.keyboard.press('Control+Y');

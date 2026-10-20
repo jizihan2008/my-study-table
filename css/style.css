@@ -2288,6 +2288,29 @@ body {
   transition: opacity 0.25s ease;
 }
 .modal-overlay.open { opacity: 1; pointer-events: auto; }
+.note-jump-block {
+  display: block;
+  padding: 12px 14px;
+  margin: 8px 0;
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--primary);
+  border-radius: 8px;
+  background: var(--path-bg);
+  color: var(--primary);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+.note-jump-block:hover, .note-jump-block:focus-visible { background: var(--hover-bg); outline: 2px solid var(--primary); }
+.notes-rich-editor a.note-jump-block { text-decoration: none; }
+#noteLinkOverlay { z-index: 12000; }
+.modal.note-link-dialog { width: min(480px, 94vw); height: auto; max-height: 90dvh; overflow-y: auto; }
+.note-link-fields { display: grid; gap: 10px; padding: 18px 20px; }
+.note-link-fields input, .note-link-fields select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); }
+.note-link-fields p { color: var(--text-secondary); font-size: 12px; }
+.note-link-dialog .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; }
+.note-link-dialog button:disabled { opacity: .5; cursor: not-allowed; }
+.note-link-dialog .confirm-btn-ok { background: var(--primary); }
 .note-math-dialog {
   position: fixed; inset: 0; margin: auto; height: fit-content;
   width: min(640px, calc(100vw - 32px)); max-height: 85vh; max-height: 85dvh;
@@ -2299,6 +2322,10 @@ body {
 .note-math-dialog::backdrop { background: var(--modal-overlay); }
 .note-math-editor-body { padding: 16px 20px; display: flex; flex-direction: column; gap: 10px; overflow-y: auto; }
 .note-math-editor-body label { font-size: 13px; font-weight: 600; color: var(--text-secondary); }
+.note-math-editor-body select {
+  width: 100%; padding: 8px 10px; border: 1px solid var(--border); border-radius: var(--radius-sm);
+  background: var(--input-bg, var(--bg)); color: var(--text); font: inherit;
+}
 .note-math-editor-body textarea {
   box-sizing: border-box; width: 100%; min-height: 130px; max-height: 35vh; padding: 12px;
   resize: vertical; border: 1px solid var(--border); border-radius: var(--radius-sm);
@@ -2514,6 +2541,12 @@ body {
 .today-timer-card .today-checkin-header { margin-bottom: 12px; }
 .today-timer-card .today-section-title { display: flex; align-items: center; gap: 7px; }
 .today-timer-card .today-section-title .lucide-icon { color: var(--primary); }
+.today-timer-totals { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+.today-timer-total { min-width: 0; padding: 10px 12px; border: 1px solid var(--border); border-radius: 9px; background: var(--input-bg); }
+.today-timer-total span { display: block; color: var(--text-secondary); font-size: 12px; line-height: 1.5; }
+.today-timer-total strong { display: block; margin-top: 4px; font-size: clamp(16px, 2vw, 21px); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.today-timer-total:first-child strong { color: var(--primary); }
+.habit-debug-fields { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); }
 .today-timer-link {
   padding: 4px 8px; border: 0; border-radius: 7px; background: transparent;
   color: var(--primary); font: 600 12px/1.3 inherit; cursor: pointer;
@@ -3863,7 +3896,9 @@ body.ai-message-immersive-open { overflow: hidden; }
 .ai-text-attachment-choices[hidden], .ai-paste-text-hint[hidden] { display: none; }
 .ai-text-attachment-choices button, .ai-paste-text-hint button { min-height: 44px; padding: 8px 12px; border: 1px solid var(--border); border-radius: var(--radius-sm); background: var(--input-bg); color: var(--text); font: inherit; cursor: pointer; }
 .ai-text-attachment-dialog .btn-save-modal { min-height: 44px; }
-.ai-paste-text-hint { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 6px 12px; font-size: 13px; color: var(--text-secondary); }
+.ai-paste-text-hint { position: fixed; z-index: 190; display: flex; align-items: center; gap: 2px; padding: 3px 5px; border: 1px solid var(--border); border-radius: 999px; background: var(--card); box-shadow: 0 4px 18px rgba(0,0,0,0.16); font-size: 13px; color: var(--text-secondary); }
+.ai-paste-text-hint button { border: none; border-radius: 999px; background: transparent; }
+.ai-paste-text-hint button:hover { background: var(--hover-bg); }
 .ai-paste-text-hint button:first-of-type { color: var(--primary); }
 .ai-large-paste-summary { margin: 0; color: var(--text-secondary); font-size: 13px; line-height: 1.6; }
 .ai-large-paste-dialog .modal-field span { font-size: 13px; font-weight: 600; color: var(--text-secondary); }

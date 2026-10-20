@@ -1288,7 +1288,7 @@ function bindNoteSelectionAiMenu() {
     }
     e.preventDefault();
     showNoteAiExplainMenu(e.clientX, e.clientY, text, ctx, offsets?.start, offsets?.end, note, secondary);
-    // Own note selections before the global English translation capture handler.
+    // Keep note actions and translation together in one selection menu.
     e.stopImmediatePropagation();
   }, true);
 }
@@ -1299,6 +1299,7 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
     menu.id = 'noteAiExplainMenu';
     menu.className = 'context-menu visible';
     menu.innerHTML = '<div class="context-menu-item" onclick="aiExplainSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>AI 解释选中文字</div>'
+      + '<div class="context-menu-item" id="noteSelectionTranslate" onclick="translateNoteSelection()">翻译所选英文</div>'
       + '<div class="context-menu-sep"></div>'
       + '<div class="context-menu-item" id="noteAiExplainAddAnn" onclick="addAnnFromSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>添加批注</div>';
     document.body.appendChild(menu);
@@ -1309,6 +1310,8 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   menu.dataset.text = text;
+  const translateItem = menu.querySelector('#noteSelectionTranslate');
+  if (translateItem) translateItem.style.display = window.GlobalTranslation?.isEnglishSelection(text) ? '' : 'none';
   menu.dataset.noteId = note?.id ?? '';
   menu.dataset.noteTitle = note?.title || '未命名笔记';
   menu.dataset.ctx = ctx ? JSON.stringify(ctx) : '';
@@ -1318,6 +1321,13 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   const addAnnItem = menu.querySelector('#noteAiExplainAddAnn');
   if (addAnnItem) addAnnItem.style.display = (!secondary && Number(menu.dataset.srcStart) >= 0) ? '' : 'none';
   menu.style.display = 'block';
+}
+function translateNoteSelection() {
+  const menu = document.getElementById('noteAiExplainMenu');
+  const text = menu?.dataset.text || '';
+  const anchor = { x: parseFloat(menu?.style.left) || 0, y: parseFloat(menu?.style.top) || 0 };
+  closeNoteAiExplainMenu();
+  if (text) window.GlobalTranslation?.openTranslation(text, anchor);
 }
 // 从右键菜单「添加批注」：打开批注输入模态
 function addAnnFromSelection() {
@@ -1930,6 +1940,142 @@ document.getElementById('notesHeadingMenu')?.addEventListener('keydown', event =
   buttons[next].focus();
 });
 
+// Internal links use note IDs in Markdown so renaming/moving a note keeps them valid.
+function openNoteLinkDialog(sourceId) {
+  if (document.getElementById('noteLinkOverlay')) return Promise.resolve(null);
+  const candidates = getNoteItems().filter(note => String(note.id) !== String(sourceId));
+  if (!candidates.length) {
+    showMiniToast('请先创建另一篇笔记', 'error');
+    return Promise.resolve(null);
+  }
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.id = 'noteLinkOverlay';
+    overlay.className = 'modal-overlay open';
+    overlay.innerHTML = '<div class="modal note-link-dialog" role="dialog" aria-modal="true" aria-labelledby="noteLinkTitle">'
+      + '<div class="modal-header"><span class="modal-title" id="noteLinkTitle">插入笔记跳转块</span></div>'
+      + '<div class="note-link-fields"><label for="noteLinkSearch">搜索笔记</label><input id="noteLinkSearch" type="search" placeholder="输入笔记标题">'
+      + '<label for="noteLinkTarget">目标笔记</label><select id="noteLinkTarget"></select>'
+      + '<label for="noteLinkPosition">跳转位置</label><select id="noteLinkPosition"></select>'
+      + '<p>可选择标题或折叠块；不指定时跳到笔记开头。</p></div>'
+      + '<div class="modal-footer"><button type="button" id="noteLinkCancel" class="confirm-btn confirm-btn-cancel">取消</button>'
+      + '<button type="button" id="noteLinkInsert" class="confirm-btn confirm-btn-ok">插入</button></div></div>';
+    const previousFocus = document.activeElement;
+    document.body.appendChild(overlay);
+    const search = overlay.querySelector('#noteLinkSearch');
+    const target = overlay.querySelector('#noteLinkTarget');
+    const position = overlay.querySelector('#noteLinkPosition');
+    const insert = overlay.querySelector('#noteLinkInsert');
+    function updatePositions() {
+      const note = findNoteByLooseId(target.value);
+      const entries = note ? StudyMarkdown.createReadingPlan(note.content || '')?.tocEntries || [] : [];
+      position.innerHTML = '<option value="">笔记开头（默认）</option>' + entries.map(entry =>
+        '<option value="' + escapeHtml(entry.id) + '">' + escapeHtml((entry.tagName === 'SUMMARY' ? '折叠块：' : '') + (entry.textContent || '无标题')) + '</option>').join('');
+      position.disabled = !note;
+      insert.disabled = !note;
+    }
+    function updateNotes() {
+      const selected = target.value;
+      const query = search.value.trim().toLocaleLowerCase();
+      const matches = candidates.filter(note => (note.title || '未命名笔记').toLocaleLowerCase().includes(query));
+      target.innerHTML = matches.map(note => '<option value="' + escapeHtml(String(note.id)) + '">'
+        + escapeHtml((note.title || '未命名笔记') + (getNoteParentPath(note) ? ' · ' + getNoteParentPath(note) : '')) + '</option>').join('');
+      if (matches.some(note => String(note.id) === selected)) target.value = selected;
+      if (!matches.length) target.innerHTML = '<option value="">没有匹配的笔记</option>';
+      updatePositions();
+    }
+    function close(result) {
+      document.removeEventListener('keydown', onKey, true);
+      overlay.remove();
+      previousFocus?.focus({ preventScroll: true });
+      resolve(result);
+    }
+    function onKey(event) {
+      if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); close(null); }
+      if (event.key === 'Tab') {
+        const fields = Array.from(overlay.querySelectorAll('input,select,button')).filter(el => !el.disabled);
+        if (event.shiftKey && document.activeElement === fields[0]) { event.preventDefault(); fields.at(-1).focus(); }
+        else if (!event.shiftKey && document.activeElement === fields.at(-1)) { event.preventDefault(); fields[0].focus(); }
+      }
+    }
+    search.addEventListener('input', updateNotes);
+    target.addEventListener('change', updatePositions);
+    overlay.querySelector('#noteLinkCancel').onclick = () => close(null);
+    overlay.onclick = event => { if (event.target === overlay) close(null); };
+    insert.onclick = () => {
+      const note = findNoteByLooseId(target.value);
+      if (!note) { updateNotes(); return; }
+      const params = new URLSearchParams({ note: String(note.id) });
+      if (position.value) params.set('heading', position.value);
+      const label = '↗ ' + (note.title || '未命名笔记') + (position.value ? ' › ' + position.selectedOptions[0].textContent : '');
+      close({ href: '#' + params.toString(), label });
+    };
+    document.addEventListener('keydown', onKey, true);
+    updateNotes();
+    search.focus();
+  });
+}
+
+function getNoteParentPath(note) {
+  const parts = [], seen = new Set();
+  for (let id = note.parentId; id && !seen.has(String(id));) {
+    seen.add(String(id));
+    const folder = notes.find(item => item.type === 'folder' && String(item.id) === String(id));
+    if (!folder) break;
+    parts.unshift(folder.title || '未命名文件夹');
+    id = folder.parentId;
+  }
+  return parts.join(' / ');
+}
+
+function followNoteLink(href, secondary = false) {
+  const params = new URLSearchParams(href.slice(1));
+  const note = findNoteByLooseId(params.get('note'));
+  if (!note) { showMiniToast('目标笔记不存在，可能已被删除', 'error'); return; }
+  // Keep navigation in the clicked pane whenever the split layout permits it.
+  secondary = secondary && notesImmersive && notesImmersiveSplit && String(note.id) !== String(activeNoteId);
+  if (secondary) {
+    notesSplitMode = 'preview';
+    localStorage.setItem('study_notes_split_mode', notesSplitMode);
+    selectNotesSplitNote(note.id);
+  } else {
+    selectNotesPrimaryPane(note.id);
+    switchNoteView('preview');
+  }
+  const container = document.getElementById(secondary ? 'notesSplitPreview' : 'notesPreview');
+  const headingId = params.get('heading');
+  requestAnimationFrame(() => {
+    // A second click or note switch can supersede this navigation.
+    if (String(secondary ? notesSplitNoteId : activeNoteId) !== String(note.id)) return;
+    const reading = typeof NoteReadingRenderer !== 'undefined' ? NoteReadingRenderer.get(container) : null;
+    let heading = headingId && reading?.ensureHeading(headingId);
+    if (headingId && !reading) {
+      const entries = StudyMarkdown.createReadingPlan(note.content || '')?.tocEntries || [];
+      const index = entries.findIndex(entry => entry.id === headingId);
+      heading = Array.from(container.querySelectorAll('h1[id],h2[id],h3[id],h4[id],h5[id],h6[id],details.note-fold > summary'))[index];
+    }
+    if (heading) {
+      for (let ancestor = heading.parentElement; ancestor && ancestor !== container; ancestor = ancestor.parentElement) {
+        if (ancestor.matches('details.note-fold')) ancestor.open = true;
+      }
+      container.scrollTo({ top: Math.max(0, container.scrollTop + heading.getBoundingClientRect().top - container.getBoundingClientRect().top - 12), behavior: 'auto' });
+      if (!secondary) setActiveNoteTocItem(heading.id);
+    } else {
+      container.scrollTo({ top: 0, behavior: 'auto' });
+      if (headingId) showMiniToast('指定位置已不存在，已跳到笔记开头');
+    }
+    container.focus({ preventScroll: true });
+  });
+}
+
+document.addEventListener('click', event => {
+  const anchor = event.target.closest?.('a[href^="#note="]');
+  if (!anchor?.closest('#notesPreview, #notesRichEditor, #notesSplitPreview, #notesSplitRichEditor, #noteFloat')) return;
+  event.preventDefault();
+  if (anchor.closest('#noteFloat')) { closeNoteFloat(); switchTab('notes'); }
+  followNoteLink(anchor.getAttribute('href'), !!anchor.closest('#notesSplitPreview, #notesSplitRichEditor'));
+});
+
 function formatText(type) {
   const selectionNode=window.getSelection()?.anchorNode;
   const selectionElement=selectionNode?.nodeType===Node.ELEMENT_NODE?selectionNode:selectionNode?.parentElement;
@@ -1948,6 +2094,19 @@ function formatText(type) {
   const end = ta.selectionEnd;
   const text = ta.value;
   const sel = text.substring(start, end);
+
+  if (type === 'note-jump') {
+    const noteId = activeNoteId;
+    openNoteLinkDialog(noteId).then(result => {
+      if (!result || activeNoteId !== noteId || ta.value !== text) return;
+      const label = result.label.replace(/[&\\[\]<>*`_]/g, char => '&#' + char.codePointAt(0) + ';');
+      const block = '\n\n[' + label + '](' + result.href + ')\n\n';
+      ta.setRangeText(block, start, end, 'end');
+      ta.focus();
+      onNotesChange();
+    });
+    return;
+  }
 
   if (/^heading[1-6]$/.test(type) || type === 'paragraph' || type === 'heading') {
     const level = type === 'heading' ? 2 : type === 'paragraph' ? 0 : Number(type.slice(-1));

@@ -1687,7 +1687,8 @@ const PASTE_FILE_MIME_EXT = {
   'text/plain': '.txt', 'text/markdown': '.md', 'application/json': '.json'
 };
 
-// 普通粘贴保留原生行为，并提供转换提示；键盘快捷键可直接打开附件确认。
+// 长文本保持自动确认；短文本原生粘贴后提供悬浮转换入口。
+const LARGE_PASTE_TEXT_THRESHOLD = 2000;
 let largePasteDialogResolver = null;
 let largePasteReturnFocus = null;
 let aiPasteAsTextFile = false;
@@ -1700,8 +1701,31 @@ function clearAiPasteTextHint() {
 
 function rememberAiPastedText(input, text, start) {
   aiPastedTextRange = { input, text, start, value: input.value };
+  let hint = document.getElementById('aiPasteTextHint');
+  if (!hint) {
+    hint = document.createElement('div');
+    hint.id = 'aiPasteTextHint';
+    hint.className = 'ai-paste-text-hint';
+    hint.setAttribute('role', 'status');
+    hint.innerHTML = '<button type="button" onclick="convertAiPastedText()">转为 TXT</button><button type="button" onclick="clearAiPasteTextHint()" aria-label="关闭粘贴提示">✕</button>';
+    document.body.appendChild(hint);
+  }
+  hint.hidden = false;
+  positionAiPasteTextHint();
+}
+
+function positionAiPasteTextHint() {
   const hint = document.getElementById('aiPasteTextHint');
-  if (hint) hint.hidden = false;
+  if (!hint || hint.hidden || !aiPastedTextRange) return;
+  const input = aiPastedTextRange.input;
+  if (!isAiPasteInputCurrent(input) || !input.getClientRects().length) { clearAiPasteTextHint(); return; }
+  const rect = input.getBoundingClientRect();
+  const viewport = window.visualViewport;
+  const left = viewport ? viewport.offsetLeft : 0, top = viewport ? viewport.offsetTop : 0;
+  const width = viewport ? viewport.width : window.innerWidth;
+  const height = viewport ? viewport.height : window.innerHeight;
+  hint.style.left = Math.max(left + 8, Math.min(rect.right - hint.offsetWidth, left + width - hint.offsetWidth - 8)) + 'px';
+  hint.style.top = Math.max(top + 8, Math.min(rect.top - hint.offsetHeight - 8, top + height - hint.offsetHeight - 8)) + 'px';
 }
 
 // 原生粘贴完成后记录范围；后续编辑只要碰到这段文字，就撤掉转换入口。
@@ -1716,6 +1740,7 @@ function trackAiPasteTextEdit(event) {
   if (oldEnd <= range.start) range.start += newEnd - oldEnd;
   else if (start < range.start + range.text.length) { clearAiPasteTextHint(); return; }
   range.value = after;
+  positionAiPasteTextHint();
 }
 
 function isAiPasteInputCurrent(input) {
@@ -1725,8 +1750,10 @@ function isAiPasteInputCurrent(input) {
 async function convertAiPastedText() {
   const range = aiPastedTextRange;
   if (!range || !isAiPasteInputCurrent(range.input)) { clearAiPasteTextHint(); return; }
+  document.getElementById('aiPasteTextHint').hidden = true;
   const name = await askLargePasteAsFile(range.text, { converting: true });
-  if (!name || aiPastedTextRange !== range || !isAiPasteInputCurrent(range.input)) return;
+  if (!name) { if (aiPastedTextRange === range) clearAiPasteTextHint(); return; }
+  if (aiPastedTextRange !== range || !isAiPasteInputCurrent(range.input)) return;
   if (range.input.value !== range.value || range.input.value.slice(range.start, range.start + range.text.length) !== range.text) {
     clearAiPasteTextHint(); return;
   }
@@ -1932,7 +1959,7 @@ function isAiPasteZone(event) {
   return !!(section && section.classList.contains('active'));
 }
 
-// 粘贴文件 → 加入附件；纯文本走原生粘贴并提供可命名的 TXT 转换入口。
+// 粘贴文件 → 加入附件；长文本自动询问，短文本粘贴后显示悬浮胶囊。
 async function handleAiPaste(event) {
   const dt = event.clipboardData;
   if (!dt) return;
@@ -1949,7 +1976,7 @@ async function handleAiPaste(event) {
     if (!input || !plainText) return;
     if (!asTextFile && event.target !== input) return;
     clearAiPasteTextHint();
-    if (!asTextFile) {
+    if (!asTextFile && plainText.length < LARGE_PASTE_TEXT_THRESHOLD) {
       const text = plainText.replace(/\r\n?/g, '\n');
       const start = input.selectionStart;
       const expected = input.value.slice(0, start) + text + input.value.slice(input.selectionEnd);
@@ -1968,8 +1995,6 @@ async function handleAiPaste(event) {
       if (added.length && typeof showAiToast === 'function') showAiToast(`📎 已添加文本附件：${added[0]}`);
     } else {
       insertPastedInputText(plainText, selection);
-      const text = plainText.replace(/\r\n?/g, '\n');
-      if (input.value.slice(selection.start, selection.start + text.length) === text) rememberAiPastedText(input, text, selection.start);
     }
     return;
   }
@@ -1996,6 +2021,13 @@ function initAiPasteZone() {
   window.addEventListener('blur', () => { aiPasteAsTextFile = false; });
   document.addEventListener('paste', handleAiPaste);
   document.addEventListener('input', trackAiPasteTextEdit);
+  document.addEventListener('scroll', positionAiPasteTextHint, true);
+  document.addEventListener('click', positionAiPasteTextHint);
+  window.addEventListener('resize', positionAiPasteTextHint);
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', positionAiPasteTextHint);
+    window.visualViewport.addEventListener('scroll', positionAiPasteTextHint);
+  }
 }
 
 // Check if a file is an image (for Kimi vision inline base64 analysis)

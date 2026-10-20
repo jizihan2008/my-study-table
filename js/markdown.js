@@ -41,6 +41,7 @@
   function isSafeUrl(value, kind) {
     const raw = String(value || '').trim();
     if (!raw) return false;
+    if (kind !== 'image' && /^#note=[A-Za-z0-9_%+.*-]+(?:&heading=[A-Za-z0-9_%+.*-]+)?$/.test(raw)) return true;
     if (kind !== 'image' && raw.startsWith('#')) return /^#[A-Za-z0-9_\-:.\u00A0-\uFFFF]+$/.test(raw);
     try {
       const parsed = new URL(raw);
@@ -274,15 +275,58 @@
       return true;
     }, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
 
+    // Parse folds within the document's core pass so references and footnotes
+    // are resolved once, including those in titles and nested fold bodies.
+    md.core.ruler.before('inline', 'collapsible_inline', state => {
+      if (state.inlineMode) return;
+      const expand = (items, offset = 0) => {
+        const result = [];
+        items.forEach(token => {
+          if (token.map && offset) token.map = token.map.map(line => line + offset);
+          result.push(token);
+          if (token.type !== 'collapsible_block') return;
+          const title = new state.Token('inline', '', 0);
+          title.content = token.meta.title;
+          title.children = [];
+          result.push(title);
+          const body = [];
+          md.block.parse(token.meta.body, md, state.env, body);
+          for (const child of expand(body, token.map[0] + 1)) result.push(child);
+          result.push(new state.Token('collapsible_end', '', 0));
+        });
+        return result;
+      };
+      state.tokens = expand(state.tokens);
+    });
+    md.core.ruler.push('collapsible_collect', state => {
+      if (state.inlineMode) return;
+      const stack = [], result = [];
+      let target = result;
+      state.tokens.forEach((token, index) => {
+        if (token.type === 'collapsible_end') {
+          target = stack.pop();
+        } else if (token.type === 'collapsible_block') {
+          target.push(token);
+          token.meta.titleToken = state.tokens[index + 1];
+          token.meta.bodyTokens = [];
+          stack.push(target);
+          target = token.meta.bodyTokens;
+        } else if (index === 0 || state.tokens[index - 1].type !== 'collapsible_block') {
+          target.push(token);
+        }
+      });
+      state.tokens = result;
+    });
+
     md.renderer.rules.collapsible_block = function (tokens, idx, options, env) {
       const meta = tokens[idx].meta || {};
-      const title = md.renderInline(meta.title || '折叠内容', env).trim();
+      const title = md.renderer.renderInline(meta.titleToken?.children || [], options, env).trim();
       if (env.__readingPlan && meta.readingFoldId != null) {
         return '<details class="note-fold" data-fold-index="' + meta.readingFoldId + '" data-lazy-fold="' + meta.readingFoldId + '"' +
           (env.__readingPlan.foldStates[meta.readingFoldId] ? ' open' : '') + '><summary id="' + md.utils.escapeHtml(meta.readingTitleId) + '">' + title + '</summary>' +
           '<div class="note-fold-body">' + md.utils.escapeHtml(meta.body || '') + '</div></details>\n';
       }
-      const body = md.render(meta.body || '', { ...env, __sourceLineOffset: Number(tokens[idx].attrGet('data-source-line')) + 1 });
+      const body = md.renderer.render(meta.bodyTokens || [], options, env);
       return '<details class="note-fold"><summary>' + title + '</summary>' +
         '<div class="note-fold-body">' + body + '</div></details>\n';
     };
@@ -332,6 +376,7 @@
 
     function mapSourceLines(tokens, offset = 0) {
       tokens.forEach(token => {
+        if (token.meta?.bodyTokens) mapSourceLines(token.meta.bodyTokens, offset);
         if (!token.block || !token.map || !token.tag) return;
         token.attrSet('data-source-line', token.map[0] + offset);
         token.attrSet('data-source-end', token.map[1] + offset);
@@ -375,6 +420,7 @@
     md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
       const hrefIndex = tokens[idx].attrIndex('href');
       const href = hrefIndex >= 0 ? tokens[idx].attrs[hrefIndex][1] : '';
+      if (href.startsWith('#note=')) tokens[idx].attrSet('class', 'note-jump-block');
       if (!isSafeUrl(href, 'link')) {
         if (hrefIndex >= 0) tokens[idx].attrs.splice(hrefIndex, 1);
         return defaultLinkOpen(tokens, idx, options, env, self);
@@ -454,13 +500,13 @@
             const base = 'note-fold-title-' + id, count = counts[base] || 0;
             counts[base] = count + 1;
             token.meta.readingTitleId = count ? base + '-' + count : base;
-            const title = md.parseInline(token.meta.title || '折叠内容', env)[0];
+            const title = token.meta.titleToken;
             tocEntries.push({ id: token.meta.readingTitleId, tagName: 'SUMMARY',
               textContent: (title?.children || []).map(child => child.content || '').join(''),
               blockIndex, ancestors: [...ancestors, id] });
-            const bodyTokens = md.parse(token.meta.body || '', env);
+            const bodyTokens = token.meta.bodyTokens || [];
             folds.set(id, bodyTokens);
-            visit(bodyTokens, blockIndex, [...ancestors, id], Number(token.attrGet('data-source-line')) + 1);
+            visit(bodyTokens, blockIndex, [...ancestors, id]);
           }
         });
       };

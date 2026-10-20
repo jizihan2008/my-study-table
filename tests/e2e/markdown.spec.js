@@ -25,6 +25,32 @@ test.afterAll(async () => {
   if (userDataPath) await fs.rm(userDataPath, { recursive: true, force: true });
 });
 
+test('fold titles stay clean after a preceding footnote in note reading and editing', async () => {
+  await page.waitForSelector('#section-today.active', { state: 'visible' });
+  await page.evaluate(() => {
+    switchTab('notes');
+    const note = getActiveNote();
+    note.content = '行列式第一个[^1]精彩应用与可逆矩阵有关.\n\n[^1]: 并非历史事实.\n\n:::fold 定理 3.21\n\n方阵 $A$ 可逆当且仅当其行列式不为 0.\n\n:::';
+    note._dirtyContent = true;
+    renderNotes();
+    switchNoteView('preview');
+  });
+  for (const mode of ['preview', 'rich']) {
+    await page.locator(mode === 'preview' ? '#notesPreviewBtn' : '#notesRichBtn').click();
+    const view = page.locator(mode === 'preview' ? '#notesPreview' : '#notesRichEditor');
+    await expect(view).toBeVisible();
+    await expect(view.locator('summary')).toHaveText('定理 3.21');
+    await expect(view.locator('summary .footnotes, summary hr, summary .footnote-backref')).toHaveCount(0);
+    await expect(view.locator('.note-fold-body .footnotes')).toHaveCount(0);
+    await expect(view.locator('.footnotes')).toHaveCount(1);
+    await expect(view.locator('.footnotes')).toContainText('并非历史事实.');
+    const summary = view.locator('summary');
+    await summary.click();
+    await expect(view.locator('.note-fold-body')).toContainText('可逆当且仅当');
+    await expect(view.locator('.note-fold-body .katex')).toHaveCount(1);
+  }
+});
+
 test('note views follow content across virtual reading, rich editing and source', async () => {
   await page.evaluate(() => {
     switchTab('notes');
