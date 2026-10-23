@@ -98,6 +98,63 @@ test('note explanation captures source offsets in reading, rich editing, source 
     });
     expect(source).toEqual({ text: '选中文字', start: 6, end: 10 });
     await expect(page.locator('#noteSelectionTranslate')).toBeHidden();
+    // Asking reuses the explanation path, retaining the selection while the dialog takes focus.
+    const sentBeforeAsk = await page.evaluate(() => sentExplanations.length);
+    for (const surface of ['notesPreview', 'notesRichEditor', 'notesTextarea', 'notesSplitPreview', 'notesSplitRichEditor', 'notesSplitTextarea']) {
+      const captured = await page.evaluate(surface => {
+        switchTab('notes');
+        const host = document.getElementById(surface);
+        const secondary = surface.startsWith('notesSplit');
+        notesSplitNoteId = '99002';
+        const note = notes.find(n => n.id === (secondary ? 99002 : 99001));
+        note.content = '前文 **选中文字** 后文';
+        if (host.tagName === 'TEXTAREA') {
+          host.value = note.content; host.setSelectionRange(5, 9);
+        } else {
+          host.innerHTML = formatNoteContent(note.content);
+          const range = document.createRange(); range.selectNodeContents(host.querySelector('strong'));
+          getSelection().removeAllRanges(); getSelection().addRange(range);
+        }
+        host.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 50, clientY: 50 }));
+        const menu = document.getElementById('noteAiExplainMenu');
+        return { start: menu.dataset.srcStart, end: menu.dataset.srcEnd, nid: menu.dataset.noteId };
+      }, surface);
+      await expect(page.locator('#noteSelectionExplain + #noteSelectionAsk')).toBeVisible();
+      await page.locator('#noteSelectionAsk').click();
+      await expect(page.locator('#noteAskQuestion')).toBeFocused();
+      await expect(page.locator('.note-ask-selection')).toHaveText('选中文字');
+      await expect(page.locator('#noteAskSend')).toBeDisabled();
+      await page.locator('#noteAskQuestion').fill('   ');
+      await expect(page.locator('#noteAskSend')).toBeDisabled();
+      await page.evaluate(() => {
+        getSelection().removeAllRanges();
+        // A later menu must not overwrite the dialog's captured source.
+        showNoteAiExplainMenu(0, 0, '其他文字', null, 0, 4, { id: 123, title: '其他笔记' });
+        closeNoteAiExplainMenu();
+      });
+      const question = '为什么这样说？\n请举一个例子。';
+      await page.locator('#noteAskQuestion').fill(question);
+      await page.locator('#noteAskSend').click();
+      await expect(page.locator('#noteAskOverlay')).toHaveCount(0);
+      await expect.poll(() => page.evaluate(() => sentExplanations.length)).toBe(sentBeforeAsk + ['notesPreview', 'notesRichEditor', 'notesTextarea', 'notesSplitPreview', 'notesSplitRichEditor', 'notesSplitTextarea'].indexOf(surface) + 1);
+      const prompt = await page.evaluate(() => sentExplanations.at(-1));
+      expect(prompt).toContain('我的问题：\n' + question);
+      expect(prompt).toContain('⟪⟫选中文字⟪⟫');
+      expect(prompt).toContain('笔记ID：' + captured.nid);
+      expect(prompt).toContain('offset=' + captured.start + '，endOffset=' + captured.end);
+    }
+    const countBeforeCancel = await page.evaluate(() => sentExplanations.length);
+    for (const cancel of ['button', 'escape']) {
+      await page.evaluate(() => {
+        showNoteAiExplainMenu(20, 20, '取消测试', null, 0, 4);
+        aiAskSelection();
+      });
+      await page.locator('#noteAskQuestion').fill('不发送这个问题');
+      if (cancel === 'button') await page.locator('#noteAskCancel').click();
+      else await page.locator('#noteAskQuestion').press('Escape');
+      await expect(page.locator('#noteAskOverlay')).toHaveCount(0);
+    }
+    expect(await page.evaluate(() => sentExplanations.length)).toBe(countBeforeCancel);
     await page.evaluate(() => {
       window.getEffectiveApiConfig = () => ({ apiKey: 'test-key', model: 'test-model' });
       window.translationRequests = [];

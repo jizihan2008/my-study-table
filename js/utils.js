@@ -71,7 +71,7 @@ document.addEventListener('keydown', function(e) {
   // 焦点在任意输入框时保留浏览器原生撤销/重做，避免 Ctrl+Z 误触发待办回滚
   const activeEl = document.activeElement;
   const inTextInput = activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA' || activeEl.isContentEditable);
-  const inNoteField = activeEl && (activeEl.id === 'notesTextarea' || activeEl.id === 'noteTitleInput' || activeEl.id === 'notesRichEditor' || activeEl.id === 'notesSplitRichEditor');
+  const inNoteField = activeEl && (activeEl.id === 'notesTextarea' || activeEl.id === 'notesSplitTextarea' || activeEl.id === 'noteTitleInput' || activeEl.id === 'notesRichEditor' || activeEl.id === 'notesSplitRichEditor' || activeEl.closest?.('#notesPreview, #notesSplitPreview'));
   const historyKey = e.key.toLowerCase();
   if (e.ctrlKey && !e.shiftKey && historyKey === 'z') {
     if (inTextInput && !inNoteField) return; // 交给原生输入撤销

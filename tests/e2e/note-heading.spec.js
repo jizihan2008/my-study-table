@@ -42,11 +42,11 @@ async function choose(level) {
 test('table row and column edits support undo, view switches and durable reload', async () => {
   const initial = '| 标题 | 相邻列 |\n| --- | --- |\n| 第一行 | 保留 |';
   await setup('rich', initial);
-  await page.locator('#notesRichEditor td').first().click();
-  const toolbar = page.locator('.note-table-toolbar[data-editor="notesRichEditor"]');
-  await toolbar.getByRole('button', { name: '下方插入行' }).click();
+  await page.locator('#notesRichEditor td').first().click({ button: 'right' });
+  await page.locator('#noteTableMenuActions [data-table-action="row-after"]').click();
   await page.keyboard.insertText('新增行');
-  await toolbar.getByRole('button', { name: '右侧插入列' }).click();
+  await page.locator('#notesRichEditor td').filter({ hasText: '新增行' }).click({ button: 'right' });
+  await page.locator('#noteTableMenuActions [data-table-action="column-after"]').click();
   const changed = await page.evaluate(() => getActiveNote().content);
   expect(changed).toContain('新增行');
   await page.evaluate(() => undoNote());

@@ -15,8 +15,9 @@
   let closeMathEditor = null;
   let pendingFoldTitle = null;
   let composingFoldTitle = null;
-  let tableToolbar = null;
-  let activeTableCell = null;
+  const tableActions = { 'row-before': '上方插入行', 'row-after': '下方插入行',
+    'column-before': '左侧插入列', 'column-after': '右侧插入列',
+    'delete-row': '删除行', 'delete-column': '删除列' };
 
   const blockTags = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'PRE', 'BLOCKQUOTE', 'TABLE', 'HR', 'DETAILS']);
 
@@ -118,7 +119,6 @@
   }
 
   function setMarkdown(markdown, noteId) {
-    hideTableToolbar();
     closeMathEditor?.(false);
     pendingFoldTitle = null;
     composingFoldTitle = null;
@@ -760,34 +760,10 @@
     });
   }
 
-  function hideTableToolbar() {
-    activeTableCell = null;
-    if (tableToolbar) tableToolbar.hidden = true;
-  }
-
-  function updateTableToolbar() {
-    const selection = window.getSelection();
-    const anchor = selection?.anchorNode;
-    const element = anchor?.nodeType === Node.ELEMENT_NODE ? anchor : anchor?.parentElement;
-    const cell = element?.closest('th, td');
-    if (cell && host.contains(cell) && cell.contains(selection.focusNode)) activeTableCell = cell;
-    else if (!tableToolbar?.contains(document.activeElement)) return hideTableToolbar();
-    if (!activeTableCell || !host.contains(activeTableCell) || !host.getClientRects().length) return hideTableToolbar();
-    const rect = activeTableCell.getBoundingClientRect();
-    const bounds = host.getBoundingClientRect();
-    if (rect.bottom < Math.max(0, bounds.top) || rect.top > Math.min(innerHeight, bounds.bottom)) return hideTableToolbar();
-    tableToolbar.hidden = false;
-    const width = tableToolbar.offsetWidth;
-    const height = tableToolbar.offsetHeight;
-    tableToolbar.style.left = Math.max(8, Math.min(rect.left, innerWidth - width - 8)) + 'px';
-    tableToolbar.style.top = Math.max(8, Math.min(rect.top - height - 8 >= Math.max(8, bounds.top)
-      ? rect.top - height - 8 : rect.bottom + 8, innerHeight - height - 8)) + 'px';
-  }
-
-  function editTable(action) {
-    const cell = activeTableCell;
+  function editTable(action, cell) {
+    if (!Object.prototype.hasOwnProperty.call(tableActions, action)) return;
     const table = cell?.closest('table');
-    if (!table || !host.contains(table)) return hideTableToolbar();
+    if (!table || !host?.contains(table)) return;
     const row = cell.parentElement;
     const rows = Array.from(table.rows);
     const rowIndex = rows.indexOf(row);
@@ -850,44 +826,6 @@
     range.collapse(true);
     restoreRange(range);
     notifyChange({ historyBoundary: true });
-    updateTableToolbar();
-  }
-
-  function initTableToolbar() {
-    tableToolbar = document.createElement('div');
-    tableToolbar.className = 'note-table-toolbar';
-    tableToolbar.hidden = true;
-    tableToolbar.setAttribute('role', 'group');
-    tableToolbar.setAttribute('aria-label', '表格行列操作');
-    tableToolbar.dataset.editor = host.id;
-    const actions = { 'row-before': '上方插入行', 'row-after': '下方插入行',
-      'column-before': '左侧插入列', 'column-after': '右侧插入列',
-      'delete-row': '删除行', 'delete-column': '删除列' };
-    Object.entries(actions).forEach(([action, label]) => {
-      const button = document.createElement('button');
-      button.type = 'button';
-      button.textContent = label;
-      button.dataset.tableAction = action;
-      button.addEventListener('pointerdown', event => event.preventDefault());
-      button.addEventListener('click', () => editTable(action));
-      tableToolbar.appendChild(button);
-    });
-    tableToolbar.addEventListener('keydown', event => {
-      if (event.key !== 'Escape') return;
-      host.focus({ preventScroll: true });
-      hideTableToolbar();
-      event.preventDefault();
-    });
-    document.body.appendChild(tableToolbar);
-    document.addEventListener('selectionchange', updateTableToolbar);
-    document.addEventListener('pointerdown', event => {
-      if (!host.contains(event.target) && !tableToolbar.contains(event.target)) hideTableToolbar();
-    });
-    document.addEventListener('focusin', event => {
-      if (!host.contains(event.target) && !tableToolbar.contains(event.target)) hideTableToolbar();
-    });
-    document.addEventListener('scroll', updateTableToolbar, true);
-    window.addEventListener('resize', updateTableToolbar);
   }
 
   function foldTitleRange() {
@@ -906,6 +844,24 @@
     const element = range.startContainer.nodeType === Node.ELEMENT_NODE ? range.startContainer : range.startContainer.parentElement;
     const summary = element.closest('summary');
     return { summary, fold: summary.parentElement };
+  }
+
+  function stabilizeFoldTitleComposition() {
+    const range = foldTitleRange();
+    if (!range || !range.collapsed) return;
+    const { summary } = captureFoldTitle();
+    const prefix = document.createRange();
+    prefix.selectNodeContents(summary);
+    prefix.setEnd(range.startContainer, range.startOffset);
+    if (prefix.toString()) return;
+    // Blink can map an IME range at a summary's leading boundary into the
+    // previous fold's final block. Give that boundary its own text position;
+    // zero-width caret nodes are already excluded from Markdown serialization.
+    const boundary = document.createTextNode('\u200b');
+    range.insertNode(boundary);
+    range.setStartAfter(boundary);
+    range.collapse(true);
+    restoreRange(range);
   }
 
   function hasTitleContent(fragment) {
@@ -1322,6 +1278,20 @@
       || protectClosedFoldBoundary(backward) || removeSingleEmptyQuote();
   }
 
+  function deleteFold(fold) {
+    if (!fold?.matches('details.note-fold') || !host?.contains(fold)) return false;
+    const parent = fold.parentNode;
+    const offset = Array.prototype.indexOf.call(parent.childNodes, fold);
+    fold.remove();
+    if (!parent.childNodes.length) parent.appendChild(document.createElement('p')).appendChild(document.createElement('br'));
+    const range = document.createRange();
+    range.setStart(parent, Math.min(offset, parent.childNodes.length));
+    range.collapse(true);
+    restoreRange(range);
+    notifyChange({ historyBoundary: true });
+    return true;
+  }
+
   function getEditableFoldSummary(event) {
     const summary = event.target?.closest?.('summary');
     const fold = summary?.parentElement;
@@ -1370,13 +1340,15 @@
     host = document.getElementById(options.hostId || 'notesRichEditor');
     if (!host || host.dataset.ready === 'true') return;
     host.dataset.ready = 'true';
-    initTableToolbar();
     host.addEventListener('input', event => {
       repairFoldTitle(pendingFoldTitle || composingFoldTitle || captureFoldTitle(), event.isComposing);
       pendingFoldTitle = null;
       notifyChange(event);
     });
-    host.addEventListener('compositionstart', () => { composingFoldTitle = captureFoldTitle(); });
+    host.addEventListener('compositionstart', () => {
+      composingFoldTitle = captureFoldTitle();
+      if (composingFoldTitle) stabilizeFoldTitleComposition();
+    });
     host.addEventListener('compositionend', () => {
       if (!composingFoldTitle) return;
       repairFoldTitle(composingFoldTitle);
@@ -1515,6 +1487,9 @@
     getMarkdown,
     command,
     focusHistoryChange,
+    deleteFold,
+    editTable,
+    getTableActions: () => ({ ...tableActions }),
     isSyncing: () => syncing,
     getCurrentNoteId: () => currentNoteId
   };

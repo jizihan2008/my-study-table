@@ -48,6 +48,7 @@ test('approved preferences synchronize with exact local encodings; device settin
     study_reminder_checkin_time: '08:45', study_reminder_focus_after_min: '45', study_reminder_idle_after_min: '90',
     study_reminder_idle_exempt_ranges: '[{"start":"12:00","end":"14:00"}]',
     study_reminder_idle_exempt_enabled: 'true', study_reminder_idle_max_count: '5', study_reminder_idle_unlimited: 'false',
+    study_reminder_idle_skip_calendar: 'true',
     study_web_search_engine: 'deepseek', study_web_read_mode: 'deepseek', study_ai_library_pdf_max_mib: '0', study_ai_image_upload: 'never',
     study_active_api_key_id: 'key_shared', study_dayreport_key_id: 'key_shared',
     study_summary_ai_key_id: 'key_shared', study_auto_title_ai_key_id: 'key_shared'

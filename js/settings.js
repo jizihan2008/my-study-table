@@ -1861,6 +1861,7 @@ function _checkIdleReminder() {
 
   // 豁免时间段
   if (_isInIdleExemptRange()) return;
+  if (_isInIdleCalendarRange()) return;
 
   const msg = '你已经有一段时间没有进行聚焦计时了。' + _pick(ENCOURAGEMENTS_IDLE);
   localStorage.setItem('study_reminder_idle_count_today', String(sentCount + 1));
@@ -1868,6 +1869,28 @@ function _checkIdleReminder() {
   if (typeof sendNotification === 'function') {
     sendNotification('空闲提醒', msg);
   }
+}
+
+// 日程使用日历自身的场次与跨天规则；全天和仅有时间点的日程不作为免打扰时段。
+function _isInIdleCalendarRange(now = Date.now()) {
+  if (localStorage.getItem('study_reminder_idle_skip_calendar') !== 'true') return false;
+  if (typeof loadCalendarEvents !== 'function' || typeof resolveCalEventRange !== 'function') return false;
+  const date = new Date(now);
+  const today = date.getFullYear() + '-' + String(date.getMonth() + 1).padStart(2, '0') + '-' + String(date.getDate()).padStart(2, '0');
+  return loadCalendarEvents().some(ev => {
+    if (!ev || ev.allDay) return false;
+    const baseRange = resolveCalEventRange(ev);
+    if (!baseRange || !baseRange.hasEnd) return false;
+    if (!isCalEventRecurring(ev)) return now >= baseRange.startTs && now < baseRange.endTs;
+    // 包含前一天开始的跨午夜场次，以及显式跨多天的重复场次。
+    for (let back = 0; back <= getCalEventDurationDays(ev) + 1; back++) {
+      const day = calDateOffset(today, -back);
+      if (!isCalEventSeriesDate(ev, day) || isCalEventSkippedOn(ev, day)) continue;
+      const range = resolveCalEventRange(ev, day);
+      if (range && now >= range.startTs && now < range.endTs) return true;
+    }
+    return false;
+  });
 }
 
 // ── Helper: check if current time is within idle exempt range ──
@@ -1999,6 +2022,8 @@ function loadReminderSettings() {
 
   const exemptCb = document.getElementById('reminderIdleExemptEnabled');
   if (exemptCb) exemptCb.checked = localStorage.getItem('study_reminder_idle_exempt_enabled') === 'true';
+  const calendarCb = document.getElementById('reminderIdleSkipCalendar');
+  if (calendarCb) calendarCb.checked = localStorage.getItem('study_reminder_idle_skip_calendar') === 'true';
   renderIdleExemptRanges();
 }
 
@@ -2024,6 +2049,8 @@ function saveReminderSettings() {
 
   const exemptCb = document.getElementById('reminderIdleExemptEnabled');
   if (exemptCb) setSyncedSetting('study_reminder_idle_exempt_enabled', String(exemptCb.checked));
+  const calendarCb = document.getElementById('reminderIdleSkipCalendar');
+  if (calendarCb) setSyncedSetting('study_reminder_idle_skip_calendar', String(calendarCb.checked));
 
   const maxCountEl = document.getElementById('reminderIdleMaxCount');
   const unlimitedCb = document.getElementById('reminderIdleUnlimited');
@@ -4394,6 +4421,23 @@ function showMiniToast(msg, type, persist) {
   _miniToastTimer = setTimeout(() => { el.className = 'mini-toast'; }, 2600);
 }
 
+// Reports run with tools disabled. Carry prose and user preferences forward,
+// without replaying tool batches that a history limit could split in half.
+function buildDailyReportHistory(conv) {
+  const history = [];
+  for (const message of conv.messages || []) {
+    if (message.role !== 'user' && message.role !== 'assistant') continue;
+    const raw = message.role === 'assistant' ? (message._apiContent ?? message.content) : message.content;
+    let content = typeof raw === 'string' ? raw : Array.isArray(raw)
+      ? raw.filter(part => part.type === 'text').map(part => part.text || '').join('\n') : '';
+    if (message.role === 'assistant' && typeof extractToolCalls === 'function') {
+      content = extractToolCalls(content).cleanText;
+    }
+    if (content.trim()) history.push({ role: message.role, content });
+  }
+  return history.slice(-20);
+}
+
 // Auto-generate daily report after check-in (morning review style)
 // 返回 { ok, error }：手动触发（debugTriggerReport）可 force=true 绕过晨间开关
 async function generateDailyReport(force, userInstruction) {
@@ -4534,7 +4578,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
     const apiMessages = [
       { role: 'system', content: resolvePromptTemplate(getPromptTemplate('morning'), { reportData: reportPromptData('morning', data, reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
-      ...conv.messages.slice(-20),
+      ...buildDailyReportHistory(conv),
       { role: 'user', content: '请生成本次日报。' }
     ];
     const { cleanText, reasoning, finishReason } = await callAiApiForFinalText(apiMessages, apiCfg, null, {
@@ -4983,7 +5027,7 @@ ${data.taskline ? `【任务线】已完成 ${data.taskline.doneCount} 个任务
     // Kimi 的 max_tokens 命名 / temperature 跳过 / reasoning_content 提取。
     const apiMessages = [
       { role: 'system', content: resolvePromptTemplate(getPromptTemplate('evening'), { reportData: reportPromptData('evening', data, reportPrompt), userInstruction }) + (typeof formatMemoryForPrompt === 'function' ? formatMemoryForPrompt() : '') },
-      ...conv.messages.slice(-20),
+      ...buildDailyReportHistory(conv),
       { role: 'user', content: '请生成本次日报。' }
     ];
     const { cleanText, reasoning, finishReason } = await callAiApiForFinalText(apiMessages, apiCfg, null, {

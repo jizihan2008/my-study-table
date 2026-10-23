@@ -286,10 +286,13 @@ async function commitNoteTitleChange() {
   setTimeout(renderNoteList, 0);
 }
 
-function onNotesChange() {
+function onNotesChange(textarea = document.getElementById('notesTextarea')) {
+  if (textarea?.id === 'notesSplitTextarea') {
+    onNotesSplitRichChange(textarea.value, notesSplitNoteId);
+    return;
+  }
   const note = getActiveNote();
   if (!note) return;
-  const textarea = document.getElementById('notesTextarea');
   if (!textarea) return;
   const previousContent = note.content || '';
   if (!note._dirtyContent) {
@@ -298,6 +301,7 @@ function onNotesChange() {
     notesRedoStack = [];
   }
   note.content = textarea.value;
+  syncNotesSplitContent(note, 'primary', previousContent);
   note.updatedAt = new Date().toISOString();
   const chars = note.content.replace(/\s/g, '').length;
   document.getElementById('notesWordCount').textContent = chars + ' 字';
@@ -321,16 +325,17 @@ function onNotesChange() {
   }, 500);
 }
 
-function onRichNotesChange(markdown, previousMarkdown, change = {}) {
+function onRichNotesChange(markdown, previousMarkdown, change = {}, source = 'primary') {
   const note = getActiveNote();
   if (!note || typeof RichNoteEditor === 'undefined') return;
-  if (RichNoteEditor.getCurrentNoteId() !== note.id || markdown === note.content) return;
+  if ((source === 'primary' && noteViewMode === 'rich' && RichNoteEditor.getCurrentNoteId() !== note.id) || markdown === note.content) return;
   if (!note._dirtyContent || change.historyBoundary) {
     pushNotesUndo(note.id, change.historyBoundary ? (note.content || '') : previousMarkdown == null ? (note.content || '') : previousMarkdown, note.title);
     note._dirtyContent = true;
     notesRedoStack = [];
   }
   note.content = markdown;
+  syncNotesSplitContent(note, source, previousMarkdown);
   if (change.historyBoundary) note._dirtyContent = false;
   note.updatedAt = new Date().toISOString();
   const textarea = document.getElementById('notesTextarea');
@@ -340,6 +345,9 @@ function onRichNotesChange(markdown, previousMarkdown, change = {}) {
   const status = document.getElementById('notesStatus');
   if (count) count.textContent = chars + ' 字';
   if (status) status.textContent = '保存中…';
+  const splitStatus = notesImmersive && notesImmersiveSplit && String(note.id) === String(notesSplitNoteId)
+    ? document.getElementById('notesSplitStatus') : null;
+  if (splitStatus) splitStatus.textContent = '保存中…';
   updateLastEditedDisplay(note);
   renderNoteToc();
   if (notesDebounceId) clearTimeout(notesDebounceId);
@@ -349,12 +357,14 @@ function onRichNotesChange(markdown, previousMarkdown, change = {}) {
     if (await saveDataDurable('study_notes_v2', notes) === true) {
       if (note.content !== savingContent) return;
       if (status) status.textContent = '已保存';
+      if (splitStatus) splitStatus.textContent = '已保存';
       note._dirtyContent = false;
       const current = notes.find(n => n.id === note.id);
       if (current) current._dirtyContent = false;
       renderNoteList();
     } else if (status) {
       status.textContent = '保存失败，内容仍保留在当前页：' + (saveData.lastError || '未知原因');
+      if (splitStatus) splitStatus.textContent = status.textContent;
     }
   }, 500);
 }
@@ -423,10 +433,17 @@ function locateNotesHistoryChange(before, after, titleOnly) {
   textarea.scrollIntoView({ block: 'nearest', behavior: 'instant' });
 }
 
+function isNotesSplitHistoryTarget(note){
+  return notesImmersive&&notesImmersiveSplit&&String(note.id)===String(notesSplitNoteId)
+    &&(String(note.id)!==String(activeNoteId)||(noteViewMode==='preview'&&notesSplitMode!=='preview'));
+}
+
 function restoreSplitNoteHistory(note,snapshot,beforeChange,status){
-  if(!notesImmersive||!notesImmersiveSplit||String(note.id)!==String(notesSplitNoteId)||String(note.id)===String(activeNoteId))return false;
-  setNotesSplitSecondaryMode('rich');
-  getNotesSplitRichEditor()?.focusHistoryChange(beforeChange.content,snapshot.content);
+  if(!isNotesSplitHistoryTarget(note))return false;
+  if(notesSplitMode!=='edit'){
+    setNotesSplitSecondaryMode('rich');
+    getNotesSplitRichEditor()?.focusHistoryChange(beforeChange.content,snapshot.content);
+  }
   note.content=snapshot.content;
   note.title=snapshot.title;
   note.updatedAt=new Date().toISOString();
@@ -434,8 +451,10 @@ function restoreSplitNoteHistory(note,snapshot,beforeChange,status){
   note._dirtyTitle=false;
   saveData('study_notes_v2',notes);
   renderNotesImmersiveSplit();
-  getNotesSplitRichEditor()?.setMarkdown(note.content||'',note.id);
-  getNotesSplitRichEditor()?.focusHistoryChange(beforeChange.content,snapshot.content);
+  if(notesSplitMode==='rich')getNotesSplitRichEditor()?.setMarkdown(note.content||'',note.id);
+  syncNotesSplitContent(note,'secondary',beforeChange.content);
+  if(notesSplitMode==='rich')getNotesSplitRichEditor()?.focusHistoryChange(beforeChange.content,snapshot.content);
+  else document.getElementById('notesSplitTextarea')?.focus({preventScroll:true});
   const label=document.getElementById('notesSplitStatus');
   if(label)label.textContent=status;
   updateUndoRedoButtons();
@@ -445,16 +464,16 @@ function restoreSplitNoteHistory(note,snapshot,beforeChange,status){
 
 function undoNote() {
   if (notesUndoStack.length === 0) return;
-  if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   const snapshot = notesUndoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
   if (!note) { updateUndoRedoButtons(); return; }
   const beforeChange = { content: note.content || '', title: note.title || '' };
-  if(notesImmersive&&notesImmersiveSplit&&String(note.id)===String(notesSplitNoteId)&&String(note.id)!==String(activeNoteId)){
+  if(isNotesSplitHistoryTarget(note)){
     notesRedoStack.push({noteId:note.id,content:note.content,title:note.title,timestamp:Date.now()});
     restoreSplitNoteHistory(note,snapshot,beforeChange,'已撤销');
     return;
   }
+  if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   if(String(note.id)!==String(activeNoteId))selectNote(note.id);
   const titleOnly = beforeChange.content === (snapshot.content || '');
   locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
@@ -470,6 +489,7 @@ function undoNote() {
   if (textarea) textarea.value = note.content;
   if (titleInput) titleInput.value = note.title;
   if (typeof RichNoteEditor !== 'undefined' && noteViewMode === 'rich') RichNoteEditor.setMarkdown(note.content || '', note.id);
+  syncNotesSplitContent(note,'primary',beforeChange.content);
   document.getElementById('notesStatus').textContent = '已撤销';
   updateLastEditedDisplay(note);
   const chars = (note.content || '').replace(/\s/g, '').length;
@@ -481,16 +501,16 @@ function undoNote() {
 
 function redoNote() {
   if (notesRedoStack.length === 0) return;
-  if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   const snapshot = notesRedoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
   if (!note) { updateUndoRedoButtons(); return; }
   const beforeChange = { content: note.content || '', title: note.title || '' };
-  if(notesImmersive&&notesImmersiveSplit&&String(note.id)===String(notesSplitNoteId)&&String(note.id)!==String(activeNoteId)){
+  if(isNotesSplitHistoryTarget(note)){
     notesUndoStack.push({noteId:note.id,content:note.content,title:note.title,timestamp:Date.now()});
     restoreSplitNoteHistory(note,snapshot,beforeChange,'已恢复');
     return;
   }
+  if (noteViewMode === 'preview' || noteViewMode === 'summary') switchNoteView('rich');
   if(String(note.id)!==String(activeNoteId))selectNote(note.id);
   const titleOnly = beforeChange.content === (snapshot.content || '');
   locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
@@ -506,6 +526,7 @@ function redoNote() {
   if (textarea) textarea.value = note.content;
   if (titleInput) titleInput.value = note.title;
   if (typeof RichNoteEditor !== 'undefined' && noteViewMode === 'rich') RichNoteEditor.setMarkdown(note.content || '', note.id);
+  syncNotesSplitContent(note,'primary',beforeChange.content);
   document.getElementById('notesStatus').textContent = '已恢复';
   updateLastEditedDisplay(note);
   const chars = (note.content || '').replace(/\s/g, '').length;
@@ -1258,58 +1279,91 @@ function buildNoteCtx(fullText, selStart, selEnd, N) {
     suffix: fullText.slice(selEnd, e) + (e < fullText.length ? '…' : '')
   };
 }
+let noteFoldMenuTarget = null;
+let noteTableMenuTarget = null;
 function bindNoteSelectionAiMenu() {
   // Delegate so the immersive/split editors work even when mounted later.
   document.addEventListener('contextmenu', function (e) {
-    const container = e.target.closest?.('#notesPreview, #notesRichEditor, #notesTextarea, #notesSplitPreview, #notesSplitRichEditor');
+    const container = e.target.closest?.('#notesPreview, #notesRichEditor, #notesTextarea, #notesSplitPreview, #notesSplitRichEditor, #notesSplitTextarea');
     if (!container) return;
     closeNoteAnnFloat();
     const secondary = container.id.startsWith('notesSplit');
     const note = secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote();
     if (!note) return;
-    let text, ctx, offsets;
+    const fold = e.target.closest?.('details.note-fold');
+    const cell = e.target.closest?.('th, td');
+    const table = cell?.closest('table');
+    let text = '', ctx, offsets;
     if (container.tagName === 'TEXTAREA') {
       const raw = container.value.slice(container.selectionStart, container.selectionEnd);
       text = raw.trim();
-      if (!text) return;
+      if (!text && !fold) return;
       offsets = { start: container.selectionStart + raw.length - raw.trimStart().length,
         end: container.selectionStart + raw.trimEnd().length };
       ctx = buildNoteCtx(container.value, offsets.start, offsets.end);
     } else {
       const selected = getNotePreviewSelRange(container);
-      if (!selected) return;
-      const raw = selected.fullText.slice(selected.start, selected.end);
-      text = raw.trim();
-      if (!text) return;
-      selected.start += raw.length - raw.trimStart().length;
-      selected.end -= raw.length - raw.trimEnd().length;
-      offsets = getNoteSelectionSourceRange(container, selected, note.content || '');
-      ctx = buildNoteCtx(selected.fullText, selected.start, selected.end);
+      if (selected) {
+        const raw = selected.fullText.slice(selected.start, selected.end);
+        text = raw.trim();
+        selected.start += raw.length - raw.trimStart().length;
+        selected.end -= raw.length - raw.trimEnd().length;
+        offsets = getNoteSelectionSourceRange(container, selected, note.content || '');
+        ctx = buildNoteCtx(selected.fullText, selected.start, selected.end);
+      }
     }
+    if (!text && !fold && !cell) return;
     e.preventDefault();
-    showNoteAiExplainMenu(e.clientX, e.clientY, text, ctx, offsets?.start, offsets?.end, note, secondary);
+    showNoteAiExplainMenu(e.clientX, e.clientY, text, ctx, offsets?.start, offsets?.end, note, secondary,
+      fold ? { fold, container, noteId: note.id, content: note.content || '', secondary } : null,
+      cell ? { cell, table, container, noteId: note.id, content: note.content || '', secondary,
+        row: Array.from(table.rows).indexOf(cell.parentElement), column: cell.cellIndex, sourceLine: table.dataset.sourceLine } : null);
     // Keep note actions and translation together in one selection menu.
     e.stopImmediatePropagation();
   }, true);
 }
-function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActiveNote(), secondary = false) {
+function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActiveNote(), secondary = false, foldTarget = null, tableTarget = null) {
   let menu = document.getElementById('noteAiExplainMenu');
   if (!menu) {
     menu = document.createElement('div');
     menu.id = 'noteAiExplainMenu';
     menu.className = 'context-menu visible';
-    menu.innerHTML = '<div class="context-menu-item" onclick="aiExplainSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>AI 解释选中文字</div>'
+    menu.innerHTML = '<div class="context-menu-item" id="noteSelectionExplain" onclick="aiExplainSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M12 3l1.9 5.7a2 2 0 0 0 1.3 1.3L21 12l-5.8 1.9a2 2 0 0 0-1.3 1.3L12 21l-1.9-5.8a2 2 0 0 0-1.3-1.3L3 12l5.8-1.9a2 2 0 0 0 1.3-1.3z"/></svg>AI 解释选中文字</div>'
+      + '<div class="context-menu-item" id="noteSelectionAsk" onclick="aiAskSelection()">询问AI这句话</div>'
       + '<div class="context-menu-item" id="noteSelectionTranslate" onclick="translateNoteSelection()">翻译所选英文</div>'
-      + '<div class="context-menu-sep"></div>'
+      + '<div class="context-menu-sep" id="noteSelectionSeparator"></div>'
       + '<div class="context-menu-item" id="noteAiExplainAddAnn" onclick="addAnnFromSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>添加批注</div>';
+    menu.insertAdjacentHTML('beforeend', '<div class="context-menu-sep" id="noteTableMenuSeparator"></div><div id="noteTableMenuActions"></div><div class="context-menu-sep" id="noteFoldDeleteSeparator"></div><div class="context-menu-item" id="noteFoldDelete" onclick="deleteNoteFoldFromMenu()" title="删除整个折叠块（含标题和正文），可撤销">删除折叠块</div>');
+    Object.entries(RichNoteEditor.getTableActions()).forEach(([action, label]) => {
+      const item = document.createElement('div');
+      item.className = 'context-menu-item';
+      item.dataset.tableAction = action;
+      item.textContent = label;
+      item.addEventListener('click', () => editNoteTableFromMenu(action));
+      menu.querySelector('#noteTableMenuActions').appendChild(item);
+    });
     document.body.appendChild(menu);
     document.addEventListener('click', function (e) {
       if (!e.target.closest('#noteAiExplainMenu')) closeNoteAiExplainMenu();
     });
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && menu.classList.contains('visible')) {
+        closeNoteAiExplainMenu();
+        e.preventDefault(); e.stopImmediatePropagation();
+      }
+    }, true);
   }
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   menu.dataset.text = text;
+  noteFoldMenuTarget = foldTarget;
+  noteTableMenuTarget = tableTarget;
+  menu.querySelector('#noteTableMenuActions').style.display = tableTarget ? '' : 'none';
+  menu.querySelector('#noteTableMenuSeparator').style.display = tableTarget && text ? '' : 'none';
+  menu.querySelector('#noteSelectionExplain').style.display = text ? '' : 'none';
+  menu.querySelector('#noteSelectionAsk').style.display = text ? '' : 'none';
+  menu.querySelector('#noteFoldDelete').style.display = foldTarget ? '' : 'none';
+  menu.querySelector('#noteFoldDeleteSeparator').style.display = foldTarget && (text || tableTarget) ? '' : 'none';
   const translateItem = menu.querySelector('#noteSelectionTranslate');
   if (translateItem) translateItem.style.display = window.GlobalTranslation?.isEnglishSelection(text) ? '' : 'none';
   menu.dataset.noteId = note?.id ?? '';
@@ -1319,8 +1373,68 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   menu.dataset.srcEnd = (srcEnd === undefined || srcEnd === null) ? -1 : srcEnd;
   // 无法定位原文或来自分屏副笔记时，不使用主笔记的批注入口。
   const addAnnItem = menu.querySelector('#noteAiExplainAddAnn');
-  if (addAnnItem) addAnnItem.style.display = (!secondary && Number(menu.dataset.srcStart) >= 0) ? '' : 'none';
+  const canAnnotate = !!text && !secondary && Number(menu.dataset.srcStart) >= 0;
+  if (addAnnItem) addAnnItem.style.display = canAnnotate ? '' : 'none';
+  menu.querySelector('#noteSelectionSeparator').style.display = canAnnotate ? '' : 'none';
   menu.style.display = 'block';
+  menu.classList.add('visible');
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = Math.max(0, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
+  menu.style.top = Math.max(0, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+}
+function editNoteTableFromMenu(action) {
+  const target = noteTableMenuTarget;
+  closeNoteAiExplainMenu();
+  if (!target || !target.cell.isConnected || !target.container.contains(target.cell)) return;
+  const note = findNoteByLooseId(target.noteId);
+  const currentId = target.secondary ? notesSplitNoteId : activeNoteId;
+  if (!note || String(currentId) !== String(note.id) || (note.content || '') !== target.content) return;
+  const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
+  if (!editor) return;
+  const reading = target.container.matches('#notesPreview, #notesSplitPreview');
+  let cell = target.cell;
+  if (reading) {
+    // Reuse the editor's row/column engine and history boundary for reading views.
+    // Parser line maps locate the table even when earlier tables are virtualized.
+    if (target.sourceLine === undefined) return;
+    editor.setMarkdown(note.content || '', note.id);
+    const host = document.getElementById(target.secondary ? 'notesSplitRichEditor' : 'notesRichEditor');
+    const table = Array.from(host.querySelectorAll('table')).find(item => item.dataset.sourceLine === target.sourceLine);
+    cell = table?.rows[target.row]?.cells[target.column];
+  }
+  if (!cell || String(editor.getCurrentNoteId()) !== String(note.id)) return;
+  editor.editTable(action, cell);
+  if (reading) {
+    if (target.secondary) renderNotesImmersiveSplit(); else switchNoteView('preview');
+    target.container.tabIndex = 0;
+    target.container.focus({ preventScroll: true });
+  }
+}
+function deleteNoteFoldFromMenu() {
+  const target = noteFoldMenuTarget;
+  closeNoteAiExplainMenu();
+  if (!target || !target.fold.isConnected || !target.container.contains(target.fold)) return;
+  const note = findNoteByLooseId(target.noteId);
+  const currentId = target.secondary ? notesSplitNoteId : activeNoteId;
+  if (!note || String(currentId) !== String(note.id) || (note.content || '') !== target.content) return;
+  if (target.container.matches('#notesRichEditor, #notesSplitRichEditor')) {
+    const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
+    if (String(editor?.getCurrentNoteId()) === String(note.id)) editor.deleteFold(target.fold);
+    return;
+  }
+  // Reading surfaces carry parser source ranges, including nested and lazy folds.
+  // Remove exactly those Markdown lines rather than searching for a title.
+  const start = Number(target.fold.dataset.sourceLine), end = Number(target.fold.dataset.sourceEnd);
+  const lines = target.content.split('\n');
+  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > lines.length) return;
+  lines.splice(start, end - start);
+  const markdown = lines.join('\n');
+  if (target.secondary) onNotesSplitRichChange(markdown, note.id, { historyBoundary: true });
+  else onRichNotesChange(markdown, target.content, { historyBoundary: true });
+  if (target.secondary) renderNotesImmersiveSplit();
+  else switchNoteView('preview');
+  target.container.tabIndex = 0;
+  target.container.focus({ preventScroll: true });
 }
 function translateNoteSelection() {
   const menu = document.getElementById('noteAiExplainMenu');
@@ -1341,31 +1455,87 @@ function addAnnFromSelection() {
 }
 function closeNoteAiExplainMenu() {
   const menu = document.getElementById('noteAiExplainMenu');
-  if (menu) menu.style.display = 'none';
+  if (menu) { menu.style.display = 'none'; menu.classList.remove('visible'); }
+  noteFoldMenuTarget = null;
+  noteTableMenuTarget = null;
 }
-function aiExplainSelection() {
+function captureNoteAiSelection() {
   const menu = document.getElementById('noteAiExplainMenu');
   const text = menu ? (menu.dataset.text || '') : '';
   let ctx = null;
   try { ctx = menu?.dataset.ctx ? JSON.parse(menu.dataset.ctx) : null; } catch (e) { ctx = null; }
   closeNoteAiExplainMenu();
-  if (!text) return;
+  if (!text) return null;
+  return { text, ctx, title: menu.dataset.noteTitle, nid: menu.dataset.noteId,
+    start: Number(menu.dataset.srcStart), end: Number(menu.dataset.srcEnd) };
+}
+function aiExplainSelection() {
+  sendNoteAiSelection(captureNoteAiSelection());
+}
+function aiAskSelection() {
+  if (document.getElementById('noteAskOverlay')) return;
+  const selection = captureNoteAiSelection();
+  if (!selection) return;
+  const previousFocus = document.activeElement;
+  const overlay = document.createElement('div');
+  overlay.id = 'noteAskOverlay';
+  overlay.className = 'modal-overlay open';
+  overlay.innerHTML = '<div class="modal note-link-dialog" role="dialog" aria-modal="true" aria-labelledby="noteAskTitle">'
+    + '<div class="modal-header"><span class="modal-title" id="noteAskTitle">询问AI这句话</span></div>'
+    + '<div class="note-link-fields"><blockquote class="note-ask-selection"></blockquote>'
+    + '<label for="noteAskQuestion">你的问题</label><textarea id="noteAskQuestion" rows="4" placeholder="输入你想问的问题…"></textarea></div>'
+    + '<div class="modal-footer"><button type="button" id="noteAskCancel" class="confirm-btn confirm-btn-cancel">取消</button>'
+    + '<button type="button" id="noteAskSend" class="confirm-btn confirm-btn-ok" disabled>发送给AI</button></div></div>';
+  overlay.querySelector('blockquote').textContent = selection.text;
+  document.body.appendChild(overlay);
+  const question = overlay.querySelector('#noteAskQuestion');
+  const send = overlay.querySelector('#noteAskSend');
+  function close() {
+    document.removeEventListener('keydown', onKey, true);
+    overlay.remove();
+    previousFocus?.focus({ preventScroll: true });
+  }
+  function submit() {
+    const value = question.value.trim();
+    if (!value) { question.focus(); return; }
+    close();
+    sendNoteAiSelection(selection, value);
+  }
+  function onKey(event) {
+    if (event.key === 'Escape') { event.preventDefault(); event.stopImmediatePropagation(); close(); }
+    else if (event.key === 'Enter' && (event.ctrlKey || event.metaKey) && !event.isComposing) {
+      event.preventDefault(); event.stopImmediatePropagation(); submit();
+    } else if (event.key === 'Tab') {
+      const fields = Array.from(overlay.querySelectorAll('textarea,button')).filter(el => !el.disabled);
+      if (event.shiftKey && document.activeElement === fields[0]) { event.preventDefault(); fields.at(-1).focus(); }
+      else if (!event.shiftKey && document.activeElement === fields.at(-1)) { event.preventDefault(); fields[0].focus(); }
+    }
+  }
+  question.addEventListener('input', () => { send.disabled = !question.value.trim(); });
+  overlay.querySelector('#noteAskCancel').onclick = close;
+  overlay.onclick = event => { if (event.target === overlay) close(); };
+  send.onclick = submit;
+  document.addEventListener('keydown', onKey, true);
+  question.focus();
+}
+function sendNoteAiSelection(selection, question = '') {
+  if (!selection) return;
+  const { text, ctx, title, nid, start, end } = selection;
   // Use the captured source note; switching panes must not change its identity.
-  const title = menu.dataset.noteTitle;
-  const nid = menu.dataset.noteId;
-  const start = Number(menu.dataset.srcStart), end = Number(menu.dataset.srcEnd);
-  let prompt = '请解释下面这段内容，它出自笔记「' + title + '」（笔记ID：' + nid + '）。\n';
+  let prompt = (question ? '请结合下面的选中内容及上下文回答我的问题' : '请解释下面这段内容')
+    + '，它出自笔记「' + title + '」（笔记ID：' + nid + '）。\n';
   if (start >= 0 && end > start) {
     prompt += '选区原文 offset=' + start + '，endOffset=' + end + '（UTF-16，范围 [' + start + ', ' + end + ')，基于笔记 Markdown 正文）。\n\n';
   } else {
     prompt += '选区无法可靠映射到 Markdown 原文，offset 未确定；请根据以下选中文字和上下文定位。\n\n';
   }
   if (ctx && (ctx.prefix || ctx.suffix)) {
-    prompt += '以下是选中内容及其上下文片段（⟪⟫ 内为需要解释的选中内容）：\n';
+    prompt += '以下是选中内容及其上下文片段（⟪⟫ 内为' + (question ? '需要询问' : '需要解释') + '的选中内容）：\n';
     prompt += ctx.prefix + '⟪⟫' + text + '⟪⟫' + ctx.suffix;
   } else {
     prompt += text;
   }
+  if (question) prompt += '\n\n我的问题：\n' + question;
   // 切到 AI 页 → 新开一个对话标签页
   if (typeof switchTab === 'function') switchTab('ai');
   if (typeof createNewConv === 'function') createNewConv();
@@ -1887,8 +2057,9 @@ function toggleNotesHeadingMenu() {
   const selection = window.getSelection();
   const node = selection?.anchorNode;
   const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
-  const editor = element?.closest('#notesRichEditor, #notesSplitRichEditor');
-  const textarea = document.getElementById('notesTextarea');
+  const sourceFocused = document.activeElement?.matches('#notesTextarea, #notesSplitTextarea');
+  const editor = !sourceFocused && element?.closest('#notesRichEditor, #notesSplitRichEditor');
+  const textarea = document.getElementById(document.activeElement?.id==='notesSplitTextarea'?'notesSplitTextarea':'notesTextarea');
   notesHeadingSelection = editor && selection.rangeCount
     ? { editor, range: selection.getRangeAt(0).cloneRange() }
     : { textarea, start: textarea.selectionStart, end: textarea.selectionEnd };
@@ -2033,7 +2204,7 @@ function followNoteLink(href, secondary = false) {
   const note = findNoteByLooseId(params.get('note'));
   if (!note) { showMiniToast('目标笔记不存在，可能已被删除', 'error'); return; }
   // Keep navigation in the clicked pane whenever the split layout permits it.
-  secondary = secondary && notesImmersive && notesImmersiveSplit && String(note.id) !== String(activeNoteId);
+  secondary = secondary && notesImmersive && notesImmersiveSplit;
   if (secondary) {
     notesSplitMode = 'preview';
     localStorage.setItem('study_notes_split_mode', notesSplitMode);
@@ -2079,16 +2250,17 @@ document.addEventListener('click', event => {
 function formatText(type) {
   const selectionNode=window.getSelection()?.anchorNode;
   const selectionElement=selectionNode?.nodeType===Node.ELEMENT_NODE?selectionNode:selectionNode?.parentElement;
-  const editingSecondary=notesImmersive&&notesImmersiveSplit&&selectionElement?.closest('#notesSplitRichEditor');
+  const sourceSecondary=document.activeElement?.id==='notesSplitTextarea';
+  const editingSecondary=!document.activeElement?.matches('#notesTextarea, #notesSplitTextarea')&&notesImmersive&&notesImmersiveSplit&&selectionElement?.closest('#notesSplitRichEditor');
   if (editingSecondary&&notesSplitMode==='rich') {
     getNotesSplitRichEditor()?.command(type);
     return;
   }
-  if (noteViewMode === 'rich' && typeof RichNoteEditor !== 'undefined') {
+  if (!sourceSecondary && noteViewMode === 'rich' && typeof RichNoteEditor !== 'undefined') {
     RichNoteEditor.command(type);
     return;
   }
-  const ta = document.getElementById('notesTextarea');
+  const ta = document.getElementById(sourceSecondary?'notesSplitTextarea':'notesTextarea');
   if (!ta) return;
   const start = ta.selectionStart;
   const end = ta.selectionEnd;
@@ -2096,14 +2268,14 @@ function formatText(type) {
   const sel = text.substring(start, end);
 
   if (type === 'note-jump') {
-    const noteId = activeNoteId;
+    const noteId = sourceSecondary?notesSplitNoteId:activeNoteId;
     openNoteLinkDialog(noteId).then(result => {
-      if (!result || activeNoteId !== noteId || ta.value !== text) return;
+      if (!result || (sourceSecondary?notesSplitNoteId:activeNoteId) !== noteId || ta.value !== text) return;
       const label = result.label.replace(/[&\\[\]<>*`_]/g, char => '&#' + char.codePointAt(0) + ';');
       const block = '\n\n[' + label + '](' + result.href + ')\n\n';
       ta.setRangeText(block, start, end, 'end');
       ta.focus();
-      onNotesChange();
+      onNotesChange(ta);
     });
     return;
   }
@@ -2126,7 +2298,7 @@ function formatText(type) {
     }
     ta.focus();
     updateNotesHeadingState(level);
-    onNotesChange();
+    onNotesChange(ta);
     return;
   }
 
@@ -2141,7 +2313,7 @@ function formatText(type) {
       ta.selectionStart = start;
       ta.selectionEnd = start + inner.length;
       ta.focus();
-      onNotesChange();
+      onNotesChange(ta);
       return;
     }
   }
@@ -2174,7 +2346,7 @@ function formatText(type) {
       ta.selectionStart = firstCell;
       ta.selectionEnd = firstCell + 3;
       ta.focus();
-      onNotesChange();
+      onNotesChange(ta);
       return;
     }
     case 'fold': {
@@ -2187,7 +2359,7 @@ function formatText(type) {
       ta.selectionStart = titleStart;
       ta.selectionEnd = titleStart + '折叠标题'.length;
       ta.focus();
-      onNotesChange();
+      onNotesChange(ta);
       return;
     }
     case 'footnote': {
@@ -2200,7 +2372,7 @@ function formatText(type) {
       ta.selectionStart = defStart;
       ta.selectionEnd = ta.value.length;
       ta.focus();
-      onNotesChange();
+      onNotesChange(ta);
       return;
     }
     case 'hr': {
@@ -2211,7 +2383,7 @@ function formatText(type) {
       ta.value = text.substring(0, start) + beforeNl + '---' + afterNl + text.substring(end);
       ta.selectionStart = ta.selectionEnd = start + beforeNl.length + 3 + afterNl.length;
       ta.focus();
-      onNotesChange();
+      onNotesChange(ta);
       return;
     }
     default: return;
@@ -2242,7 +2414,7 @@ function formatText(type) {
   }
   
   ta.focus();
-  onNotesChange();
+  onNotesChange(ta);
 }
 
 function handleNotesTabKey(e, ta) {
@@ -2257,7 +2429,7 @@ function handleNotesTabKey(e, ta) {
   // focus to the next control (notably the immersive-mode exit button).
   if (!e.shiftKey && start === end) {
     ta.setRangeText('\t', start, end, 'end');
-    onNotesChange();
+    onNotesChange(ta);
     return true;
   }
 
@@ -2283,14 +2455,14 @@ function handleNotesTabKey(e, ta) {
     ta.selectionEnd = Math.max(ta.selectionStart, end - removed.reduce((sum, count) => sum + count, 0));
   }
 
-  onNotesChange();
+  onNotesChange(ta);
   return true;
 }
 
 // Keyboard shortcuts for formatting and editor indentation
 document.addEventListener('keydown', function(e) {
-  const ta = document.getElementById('notesTextarea');
-  if (!ta || document.activeElement !== ta) return;
+  const ta = e.target;
+  if (!ta?.matches('#notesTextarea, #notesSplitTextarea')) return;
   if (handleNotesTabKey(e, ta)) return;
   if (!e.ctrlKey && !e.metaKey) return;
   
@@ -2321,8 +2493,7 @@ notesImmersiveZoom=Math.min(180,Math.max(70,Math.round(notesImmersiveZoom/10)*10
 let notesImmersiveSplit=localStorage.getItem('study_notes_immersive_split')==='true';
 let notesSplitNoteId=localStorage.getItem('study_notes_split_note')||'';
 let notesSplitMode=localStorage.getItem('study_notes_split_mode')||'preview';
-if(notesSplitMode==='edit')notesSplitMode='rich';
-if(!['preview','rich'].includes(notesSplitMode))notesSplitMode='preview';
+if(!['preview','rich','edit'].includes(notesSplitMode))notesSplitMode='preview';
 let notesSplitDebounceId=null;
 let notesSplitRichEditor=null;
 
@@ -2343,10 +2514,10 @@ function findNoteByLooseId(id){
 }
 
 function ensureNotesSplitNote(){
-  const candidates=notes.filter(item=>item.type==='note'&&String(item.id)!==String(activeNoteId));
+  const candidates=notes.filter(item=>item.type==='note');
   if(!candidates.length){notesSplitNoteId='';return null;}
   let note=candidates.find(item=>String(item.id)===String(notesSplitNoteId));
-  if(!note)note=candidates[0];
+  if(!note)note=candidates.find(item=>String(item.id)===String(activeNoteId))||candidates[0];
   notesSplitNoteId=String(note.id);
   localStorage.setItem('study_notes_split_note',notesSplitNoteId);
   return note;
@@ -2356,12 +2527,43 @@ function notesSplitOptions(items,selectedId){
   return items.map(note=>`<option value="${escapeHtml(String(note.id))}"${String(note.id)===String(selectedId)?' selected':''}>${escapeHtml(note.title||'未命名笔记')}</option>`).join('');
 }
 
+// 只刷新另一侧；输入中的 DOM、光标和撤销上下文保持原位。
+function syncNotesSplitContent(note,source,previousContent=''){
+  if(!notesImmersive||!notesImmersiveSplit||String(note.id)!==String(activeNoteId)||String(note.id)!==String(notesSplitNoteId))return;
+  const secondary=source==='primary';
+  const mode=secondary?notesSplitMode:noteViewMode;
+  const host=document.getElementById(secondary
+    ?mode==='preview'?'notesSplitPreview':mode==='edit'?'notesSplitTextarea':'notesSplitRichEditor'
+    :mode==='preview'?'notesPreview':mode==='edit'?'notesTextarea':'notesRichEditor');
+  if(!host)return;
+  const anchor=typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(host,previousContent||'',note.id):null;
+  if(mode==='preview'){
+    if(typeof NoteReadingRenderer!=='undefined')NoteReadingRenderer.mount(host,note.content||'',note);
+    else{host.innerHTML=formatNoteContent(note.content||'');applyNoteFoldStates(host,note.id);}
+  }else if(mode==='edit'){
+    host.value=note.content||'';
+  }else if(mode==='rich'){
+    const editor=secondary?getNotesSplitRichEditor():RichNoteEditor;
+    editor?.setMarkdown(note.content||'',note.id);
+  }
+  if(typeof NoteViewPosition!=='undefined')NoteViewPosition.restore(host,note.content||'',note.id,anchor);
+  if(!secondary){
+    const textarea=document.getElementById('notesTextarea');
+    if(textarea)textarea.value=note.content||'';
+  }
+}
+
 function renderNotesImmersiveSplit(){
   const section=document.getElementById('section-notes');
   const pane=document.getElementById('notesSplitPane');
   const toggle=document.getElementById('notesImmersiveSplit');
   if(!section||!pane)return;
   const enabled=notesImmersive&&notesImmersiveSplit;
+  document.getElementById('notesSplitPrimaryRead')?.classList.toggle('active',noteViewMode==='preview');
+  document.getElementById('notesSplitPrimaryEdit')?.classList.toggle('active',noteViewMode==='rich');
+  document.getElementById('notesSplitPrimarySource')?.classList.toggle('active',noteViewMode==='edit');
+  const toolbar=document.getElementById('notesFormatToolbar');
+  if(toolbar)toolbar.style.display=noteViewMode==='rich'||noteViewMode==='edit'||(enabled&&notesSplitMode!=='preview')?'':'none';
   section.classList.toggle('notes-split',enabled);
   if(toggle){
     toggle.classList.toggle('active',enabled);
@@ -2381,18 +2583,26 @@ function renderNotesImmersiveSplit(){
   const allNotes=notes.filter(item=>item.type==='note');
   const primarySelect=document.getElementById('notesSplitPrimarySelect');
   const secondarySelect=document.getElementById('notesSplitSecondarySelect');
-  if(primarySelect)primarySelect.innerHTML=notesSplitOptions(allNotes.filter(item=>String(item.id)!==String(secondary.id)),activeNoteId);
-  if(secondarySelect)secondarySelect.innerHTML=notesSplitOptions(allNotes.filter(item=>String(item.id)!==String(activeNoteId)),secondary.id);
+  if(primarySelect)primarySelect.innerHTML=notesSplitOptions(allNotes,activeNoteId);
+  if(secondarySelect)secondarySelect.innerHTML=notesSplitOptions(allNotes,secondary.id);
 
   const primaryReading=noteViewMode==='preview';
   document.getElementById('notesSplitPrimaryRead')?.classList.toggle('active',primaryReading);
-  document.getElementById('notesSplitPrimaryEdit')?.classList.toggle('active',!primaryReading);
+  document.getElementById('notesSplitPrimaryEdit')?.classList.toggle('active',noteViewMode==='rich');
+  document.getElementById('notesSplitPrimarySource')?.classList.toggle('active',noteViewMode==='edit');
   document.getElementById('notesSplitSecondaryRead')?.classList.toggle('active',notesSplitMode==='preview');
   document.getElementById('notesSplitSecondaryEdit')?.classList.toggle('active',notesSplitMode==='rich');
+  document.getElementById('notesSplitSecondarySource')?.classList.toggle('active',notesSplitMode==='edit');
 
   const preview=document.getElementById('notesSplitPreview');
   const editor=document.getElementById('notesSplitRichEditor');
-  const splitAnchor=typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(preview?.clientHeight?preview:editor,secondary.content||'',secondary.id):null;
+  const textarea=document.getElementById('notesSplitTextarea');
+  const splitAnchor=typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(preview?.clientHeight?preview:textarea?.clientHeight?textarea:editor,secondary.content||'',secondary.id):null;
+  if(textarea){
+    textarea.classList.toggle('hidden',notesSplitMode!=='edit');
+    if(textarea.value!==(secondary.content||''))textarea.value=secondary.content||'';
+    textarea.dataset.noteId=String(secondary.id);
+  }
   const richEditor=getNotesSplitRichEditor();
   if(preview){
     preview.style.display=notesSplitMode==='preview'?'block':'none';
@@ -2403,21 +2613,19 @@ function renderNotesImmersiveSplit(){
   }
   if(editor){
     editor.classList.toggle('active',notesSplitMode==='rich');
-    if(editor.dataset.noteId!==String(secondary.id)||document.activeElement!==editor){
+    if(editor.dataset.noteId!==String(secondary.id)||richEditor?.getMarkdown()!==(secondary.content||'')){
       richEditor?.setMarkdown(secondary.content||'',secondary.id);
       editor.dataset.noteId=String(secondary.id);
     }
   }
   const status=document.getElementById('notesSplitStatus');
-  if(status&&document.activeElement!==editor)status.textContent='已保存';
-  if(typeof NoteViewPosition!=='undefined')NoteViewPosition.restore(notesSplitMode==='preview'?preview:editor,secondary.content||'',secondary.id,splitAnchor);
+  if(status&&document.activeElement!==editor&&document.activeElement!==textarea)status.textContent='已保存';
+  if(typeof NoteViewPosition!=='undefined')NoteViewPosition.restore(notesSplitMode==='preview'?preview:notesSplitMode==='edit'?textarea:editor,secondary.content||'',secondary.id,splitAnchor);
 }
 
 function setNotesImmersiveSplit(force){
   const enabled=typeof force==='boolean'?force:!notesImmersiveSplit;
-  if(enabled&&notes.filter(item=>item.type==='note').length<2){
-    if(typeof showMiniToast==='function')showMiniToast('至少需要两篇笔记才能开启分屏','error');
-    else alert('至少需要两篇笔记才能开启分屏');
+  if(enabled&&!getActiveNote()){
     return;
   }
   notesImmersiveSplit=enabled;
@@ -2430,46 +2638,58 @@ function toggleNotesImmersiveSplit(force){setNotesImmersiveSplit(force)}
 function selectNotesPrimaryPane(id){
   const next=findNoteByLooseId(id);
   if(!next)return;
-  if(String(next.id)===String(notesSplitNoteId))notesSplitNoteId=String(activeNoteId);
   selectNote(next.id);
   renderNotesImmersiveSplit();
 }
 
 function selectNotesSplitNote(id){
   const next=findNoteByLooseId(id);
-  if(!next||String(next.id)===String(activeNoteId))return;
+  if(!next)return;
   notesSplitNoteId=String(next.id);
   localStorage.setItem('study_notes_split_note',notesSplitNoteId);
   renderNotesImmersiveSplit();
 }
 
 function setNotesSplitPrimaryMode(mode){
-  switchNoteView(mode==='preview'?'preview':'rich');
+  switchNoteView(['preview','rich','edit'].includes(mode)?mode:'preview');
   renderNotesImmersiveSplit();
 }
 
 function setNotesSplitSecondaryMode(mode){
-  notesSplitMode=(mode==='rich'||mode==='edit')?'rich':'preview';
+  notesSplitMode=['preview','rich','edit'].includes(mode)?mode:'preview';
   localStorage.setItem('study_notes_split_mode',notesSplitMode);
   renderNotesImmersiveSplit();
   if(notesSplitMode==='rich')setTimeout(()=>document.getElementById('notesSplitRichEditor')?.focus({preventScroll:true}),0);
+  else if(notesSplitMode==='edit')setTimeout(()=>document.getElementById('notesSplitTextarea')?.focus({preventScroll:true}),0);
 }
 
 function onNotesSplitRichChange(value,noteId,change={}){
   const note=findNoteByLooseId(noteId||notesSplitNoteId);
-  if(!note||String(note.id)===String(activeNoteId)||note.content===String(value))return;
-  if(change.historyBoundary){
+  if(!note||note.content===String(value))return;
+  if(String(note.id)===String(activeNoteId)){
+    onRichNotesChange(String(value),note.content||'',change,'secondary');
+    return;
+  }
+  if(!note._dirtyContent||change.historyBoundary){
     pushNotesUndo(note.id,note.content||'',note.title);
     notesRedoStack=[];
+    note._dirtyContent=true;
   }
   note.content=String(value);
+  if(change.historyBoundary)note._dirtyContent=false;
   note.updatedAt=new Date().toISOString();
   note._summaryFresh=false;
   const status=document.getElementById('notesSplitStatus');
   if(status)status.textContent='保存中…';
   if(notesSplitDebounceId)clearTimeout(notesSplitDebounceId);
-  notesSplitDebounceId=setTimeout(()=>{
-    saveData('study_notes_v2',notes);
+  notesSplitDebounceId=setTimeout(async()=>{
+    const savingContent=note.content;
+    if(await saveDataDurable('study_notes_v2',notes)!==true){
+      if(status)status.textContent='保存失败，内容仍保留在当前页';
+      return;
+    }
+    if(note.content!==savingContent)return;
+    note._dirtyContent=false;
     if(status)status.textContent='已保存';
     renderNoteList();
   },500);

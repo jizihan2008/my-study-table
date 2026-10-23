@@ -13,6 +13,7 @@
     study_reminder_idle_after_min: '空闲提醒间隔', study_reminder_idle_exempt_ranges: '提醒免打扰时段',
     study_reminder_idle_exempt_enabled: '提醒免打扰开关', study_reminder_idle_max_count: '空闲提醒次数',
     study_reminder_idle_unlimited: '空闲提醒次数限制', study_web_search_engine: '网络搜索引擎',
+    study_reminder_idle_skip_calendar: '日程时间段内不提醒',
     study_web_read_mode: '网页读取方式',
     study_ai_library_pdf_max_mib: '文件库 PDF 读取限制', study_ai_image_upload: '图片附件上传方式',
     study_active_api_key_id: '当前 AI Key', study_dayreport_key_id: '日报 AI Key',

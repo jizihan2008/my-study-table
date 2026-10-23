@@ -2303,10 +2303,12 @@ body {
 }
 .note-jump-block:hover, .note-jump-block:focus-visible { background: var(--hover-bg); outline: 2px solid var(--primary); }
 .notes-rich-editor a.note-jump-block { text-decoration: none; }
-#noteLinkOverlay { z-index: 12000; }
+#noteLinkOverlay, #noteAskOverlay { z-index: 12000; }
 .modal.note-link-dialog { width: min(480px, 94vw); height: auto; max-height: 90dvh; overflow-y: auto; }
 .note-link-fields { display: grid; gap: 10px; padding: 18px 20px; }
-.note-link-fields input, .note-link-fields select { width: 100%; min-width: 0; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); }
+.note-link-fields input, .note-link-fields select, .note-link-fields textarea { width: 100%; min-width: 0; box-sizing: border-box; padding: 9px; border: 1px solid var(--border); border-radius: 6px; background: var(--input-bg); color: var(--text); }
+.note-link-fields textarea { resize: vertical; min-height: 100px; font: inherit; }
+.note-ask-selection { margin: 0; padding: 10px; max-height: 140px; overflow-y: auto; white-space: pre-wrap; overflow-wrap: anywhere; border-left: 3px solid var(--primary); background: var(--input-bg); color: var(--text-secondary); }
 .note-link-fields p { color: var(--text-secondary); font-size: 12px; }
 .note-link-dialog .modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 20px; }
 .note-link-dialog button:disabled { opacity: .5; cursor: not-allowed; }

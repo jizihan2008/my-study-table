@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v255';
+const VERSION = 'mst-v263';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -17,7 +17,7 @@ const PRECACHE_URLS = [
   './js/settings-sync.js?v=20261016-web-r1',
   './reset-site-data.html',
   './manifest.webmanifest?v=20260926-icon-v3',
-  './css/style.css?v=20261019-habit-debug-r1',
+  './css/style.css?v=20261021-note-ask-r1',
   './js/inbox.js?v=20261017-inbox-images-r1',
   './js/trash.js?v=20261010-r1',
   './css/workspace.css?v=20261017-table-actions-r1',
@@ -51,7 +51,7 @@ const PRECACHE_URLS = [
   './js/web-access.js?v=20261016-web-r1',
   './js/ai-tools.js?v=20261016-web-r1',
   './js/ai-search.js?v=20261017-ai-notify-r1',
-  './js/notes.js?v=20261019-note-links-r1',
+  './js/notes.js?v=20261021-note-ask-r1',
   './js/utils.js?v=20261014-idb-r1',
   './js/file-library.js?v=20260923-r1',
   './js/stats.js?v=20261012-focus',
