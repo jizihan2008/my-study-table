@@ -43,7 +43,7 @@ function getCalColor(key) {
   return CAL_EVENT_COLORS.find(c => c.key === key) || CAL_EVENT_COLORS[4]; // default blue
 }
 
-function addCalendarEvent(date, title, time, color, note, times, auto) {
+function addCalendarEvent(date, title, time, color, note, times, auto, location = '') {
   const events = loadCalendarEvents();
   const now = Date.now();
   const startTime = normalizeCalTime((times && times.start) || time);
@@ -66,6 +66,7 @@ function addCalendarEvent(date, title, time, color, note, times, auto) {
     allDay,
     color: color || 'blue',
     note: note || '',
+    location: String(location || '').trim(),
     repeat,
     weekdays,
     skippedDates: [],
@@ -86,6 +87,7 @@ function updateCalendarEvent(id, updates) {
   if (updates.title !== undefined) ev.title = updates.title.trim();
   if (updates.color !== undefined) ev.color = updates.color;
   if (updates.note !== undefined) ev.note = updates.note;
+  if (updates.location !== undefined) ev.location = String(updates.location || '').trim();
   if (updates.allDay !== undefined) {
     ev.allDay = !!updates.allDay;
     if (ev.allDay) { ev.time = ''; ev.startTime = ''; ev.endTime = ''; ev.autoRecord = false; }
@@ -896,6 +898,7 @@ function openCalEventModal(dateStr, eventId) {
   const autoRecordInput = document.getElementById('calEventAutoRecord');
   const autoTimerInput = document.getElementById('calEventAutoTimer');
   const noteInput = document.getElementById('calEventNote');
+  const locationInput = document.getElementById('calEventLocation');
   const dateLabel = document.getElementById('calEventDateLabel');
   const startDateInput = document.getElementById('calEventStartDate');
   const endDateInput = document.getElementById('calEventEndDate');
@@ -926,6 +929,7 @@ function openCalEventModal(dateStr, eventId) {
       const typeSelect = document.getElementById('calEventActivityType');
       if (typeSelect) { typeSelect.innerHTML = renderTimerActivityOptions(getCalendarTimerActivityType(ev)); typeSelect.value = getCalendarTimerActivityType(ev); }
       noteInput.value = ev.note || '';
+      locationInput.value = ev.location || '';
       repeatSelect.value = isCalEventRecurring(ev) ? 'weekly' : 'none';
       setCalEventWeekdaySelection(isCalEventRecurring(ev) ? getCalEventWeekdays(ev) : []);
       // Select the color
@@ -947,6 +951,7 @@ function openCalEventModal(dateStr, eventId) {
     const typeSelect = document.getElementById('calEventActivityType');
     if (typeSelect) { typeSelect.innerHTML = renderTimerActivityOptions('focus'); typeSelect.value = 'focus'; }
     noteInput.value = '';
+    locationInput.value = '';
     repeatSelect.value = 'none';
     // 新建时默认勾选「这一天是星期几」，切到每周重复就直接可用
     const anchor = parseCalDate(dateStr);
@@ -1126,6 +1131,7 @@ function confirmCalDeleteChoice(scope) {
 }
 
 function submitCalEvent() {
+  const location = document.getElementById('calEventLocation').value.trim();
   const titleInput = document.getElementById('calEventTitle');
   const startInput = document.getElementById('calEventStartTime');
   const endInput = document.getElementById('calEventEndTime');
@@ -1170,17 +1176,18 @@ function submitCalEvent() {
 
   if (calendarEditingEventId) {
     updateCalendarEvent(calendarEditingEventId, {
-      title, startTime, endTime, endDate, allDay, color, note: noteInput.value.trim(), repeat, weekdays, date: anchorDate, ...auto
+      title, location, startTime, endTime, endDate, allDay, color, note: noteInput.value.trim(), repeat, weekdays, date: anchorDate, ...auto
     });
   } else {
     addCalendarEvent(anchorDate, title, startTime, color, noteInput.value.trim(),
-      { start: startTime, end: endTime, endDate, allDay, repeat, weekdays }, auto);
+      { start: startTime, end: endTime, endDate, allDay, repeat, weekdays }, auto, location);
   }
 
   // 新增/修改后立刻安排自动巡检，无需等待设置页开关
   if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
 
   renderCalendar();
+  if (typeof renderTodaySchedule === 'function') renderTodaySchedule();
   closeCalEventModal();
 }
 

@@ -2596,6 +2596,8 @@ body {
 .today-schedule-dot { width: 7px; height: 7px; border-radius: 50%; }
 .today-schedule-time { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
 .today-schedule-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.today-schedule-details { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.today-schedule-location { color: var(--text-secondary); font-size: 11px; overflow-wrap: anywhere; }
 .today-schedule-repeat { color: var(--text-secondary); font-size: 10px; }
 .today-schedule-empty { width: 100%; padding: 16px; border: 1px dashed var(--border); border-radius: 8px; background: transparent; color: var(--text-secondary); font: 13px/1.4 inherit; text-align: center; cursor: pointer; }
 @media (max-width: 900px) {

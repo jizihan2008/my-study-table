@@ -1,6 +1,16 @@
 // Hydrate the synchronous memory view before any business module reads data.
 (async function loadApplication() {
   const scripts = [...document.querySelectorAll('script[data-app-src]')];
+  // Fetch in parallel without executing modules before IndexedDB hydration.
+  // Keep the sequential execution below so dependencies and fail-stop behavior remain intact.
+  const preloads = scripts.map(placeholder => {
+    const link = document.createElement('link');
+    link.rel = 'preload';
+    link.as = 'script';
+    link.href = placeholder.dataset.appSrc;
+    document.head.append(link);
+    return link;
+  });
   try {
     await window.StudyData.initialize();
     window.StudyPlatform.events.on('storage:failed', ({ error }) => {
@@ -51,5 +61,7 @@
     retry.onclick = () => location.reload();
     message.append(text, retry);
     document.body.append(message);
+  } finally {
+    preloads.forEach(link => link.remove());
   }
 })();

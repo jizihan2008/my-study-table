@@ -1457,7 +1457,7 @@ function renderTodaySchedule() {
         return `<button type="button" class="today-schedule-event" onclick="openTodayScheduleEvent('${day.dateStr}', ${JSON.stringify(ev.id)})">
           <span class="today-schedule-dot" style="background:${color.dot}"></span>
           <span class="today-schedule-time">${time || '全天'}</span>
-          <span class="today-schedule-name">${escapeHtml(ev.title || '未命名日程')}</span>
+          <span class="today-schedule-details"><span class="today-schedule-name">${escapeHtml(ev.title || '未命名日程')}</span>${ev.location ? `<span class="today-schedule-location">地点：${escapeHtml(ev.location)}</span>` : ''}</span>
           ${repeat ? `<span class="today-schedule-repeat">${escapeHtml(repeat)}</span>` : ''}
         </button>`;
       }).join('')}</div>

@@ -21,7 +21,7 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261021-note-ask-r1">
+<link rel="stylesheet" href="css/style.css?v=20261026-calendar-location-r1">
 <link rel="stylesheet" href="css/workspace.css?v=20261020-table-context-only-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -853,6 +853,7 @@
         <span class="cal-event-color-label">颜色：</span>
         <div id="calEventColorPicker"></div>
       </div>
+      <input type="text" id="calEventLocation" class="cal-event-input" aria-label="地点（可选）" placeholder="地点（可选，如教室、会议室或线上链接）" maxlength="200" onkeydown="if(event.key==='Enter')submitCalEvent()">
       <textarea id="calEventNote" class="cal-event-input" placeholder="备注（可选）" rows="2" maxlength="300"></textarea>
       <div class="cal-event-actions">
         <button class="cal-event-save-btn" onclick="submitCalEvent()">保存</button>
@@ -1857,7 +1858,7 @@
 <script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
 <script type="application/x-study-script" data-app-src="js/timer-types.js?v=20261013-custom-types-r1"></script>
-<script type="application/x-study-script" data-app-src="js/today.js?v=20261019-timer-totals-r1"></script>
+<script type="application/x-study-script" data-app-src="js/today.js?v=20261026-calendar-location-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
@@ -1901,7 +1902,7 @@
 <script type="application/x-study-script" data-app-src="js/books-annot.js?v=20260914-r5"></script>
 <script type="application/x-study-script" data-app-src="js/keywords.js?v=20260818-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
-<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261013-custom-types-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261026-calendar-location-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
 <script type="application/x-study-script" data-app-src="js/timer.js?v=20261014-shared-picker-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habits.js?v=20261019-habit-debug-r1"></script>
@@ -1935,7 +1936,7 @@
 <script type="application/x-study-script" data-app-src="js/desktop-pet.js?v=20261005-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/cet/vocabulary.js?v=20261008-r1"></script>
 <script type="application/x-study-script" data-app-src="js/translation.js?v=20261018-note-selection-r1"></script>
-<script src="js/app-loader.js?v=20261014-idb-r1"></script>
+<script src="js/app-loader.js?v=20261026-startup-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->
 <div class="context-menu" id="notesContextMenu">
