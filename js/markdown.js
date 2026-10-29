@@ -41,7 +41,7 @@
   function isSafeUrl(value, kind) {
     const raw = String(value || '').trim();
     if (!raw) return false;
-    if (kind !== 'image' && /^#note=[A-Za-z0-9_%+.*-]+(?:&heading=[A-Za-z0-9_%+.*-]+)?$/.test(raw)) return true;
+    if (kind !== 'image' && /^#note=[A-Za-z0-9_%+.*-]+(?:(?:&heading=[A-Za-z0-9_%+.*-]+)|(?:&offset=\d+(?:&endOffset=\d+)?(?:&revision=[A-Za-z0-9_%+.*-]+)?))?$/.test(raw)) return true;
     if (kind !== 'image' && raw.startsWith('#')) return /^#[A-Za-z0-9_\-:.\u00A0-\uFFFF]+$/.test(raw);
     try {
       const parsed = new URL(raw);
@@ -256,7 +256,7 @@
           fence = { char: fenceMatch[1][0], length: fenceMatch[1].length };
           continue;
         }
-        if (openPattern.test(line)) depth++;
+        if (openPattern.test(line) || /^ {0,3}:::important(?:\s|$)/.test(line)) depth++;
         else if (closePattern.test(line) && --depth === 0) break;
       }
       if (nextLine >= endLine) return false;
@@ -332,6 +332,63 @@
     };
   }
 
+  function installImportant(md) {
+    // Inline syntax: =={label}content==. Escaped delimiters remain literal.
+    md.inline.ruler.before('emphasis', 'note_important_inline', (state, silent) => {
+      const match = /^==\{((?:\\.|[^}\\\n])*)\}((?:\\.|[^\\\n])*?)==/.exec(state.src.slice(state.pos));
+      if (!match) return false;
+      if (!silent) {
+        const token = state.push('note_important_inline', 'span', 0);
+        token.meta = { title: match[1].replace(/\\(.)/g, '$1'), body: match[2] };
+      }
+      state.pos += match[0].length;
+      return true;
+    });
+    md.renderer.rules.note_important_inline = (tokens, index, options, env) => {
+      const meta = tokens[index].meta;
+      return '<span class="note-important note-important-inline"><span class="note-important-title">'
+        + md.utils.escapeHtml(meta.title) + '</span><span class="note-important-body">'
+        + md.renderInline(meta.body, env) + '</span></span>';
+    };
+    md.block.ruler.before('fence', 'note_important', (state, startLine, endLine, silent) => {
+      const lineAt = line => state.src.slice(state.bMarks[line] + state.tShift[line], state.eMarks[line]);
+      const match = /^:::important(?:[ \t]+(.*))?$/.exec(lineAt(startLine));
+      if (!match || state.sCount[startLine] - state.blkIndent >= 4) return false;
+      let end = startLine + 1, depth = 1, fence = null;
+      for (; end < endLine; end++) {
+        const line = lineAt(end);
+        if (state.sCount[end] - state.blkIndent >= 4) continue;
+        const marker = /^(`{3,}|~{3,})(.*)$/.exec(line);
+        if (fence) {
+          if (marker && marker[1][0] === fence[0] && marker[1].length >= fence.length && !marker[2].trim()) fence = null;
+          continue;
+        }
+        if (marker) { fence = marker[1]; continue; }
+        if (/^:::(?:important|fold)(?:\s|$)/.test(line)) depth++;
+        else if (/^:::\s*$/.test(line) && --depth === 0) break;
+      }
+      if (end >= endLine) return false;
+      if (silent) return true;
+      const open = state.push('note_important_open', 'div', 1);
+      open.block = true; open.map = [startLine, end + 1];
+      open.attrSet('class', 'note-important note-important-block');
+      const title = state.push('note_important_title', 'div', 0);
+      title.content = (match[1] || '').replace(/\\(.)/g, '$1');
+      const body = state.push('note_important_body_open', 'div', 1);
+      body.attrSet('class', 'note-important-body'); body.block = true;
+      const oldMax = state.lineMax, oldParent = state.parentType;
+      state.lineMax = end; state.parentType = 'note_important';
+      state.md.block.tokenize(state, startLine + 1, end);
+      state.lineMax = oldMax; state.parentType = oldParent;
+      state.push('note_important_body_close', 'div', -1).block = true;
+      state.push('note_important_close', 'div', -1).block = true;
+      state.line = end + 1;
+      return true;
+    }, { alt: ['paragraph', 'reference', 'blockquote', 'list'] });
+    md.renderer.rules.note_important_title = (tokens, index) => '<div class="note-important-title">'
+      + md.utils.escapeHtml(tokens[index].content) + '</div>';
+  }
+
   function createRenderer(deps) {
     const markdownit = deps && deps.markdownit;
     if (typeof markdownit !== 'function') return null;
@@ -373,6 +430,7 @@
     installMath(md, katex);
     installTaskLists(md);
     installCollapsibleBlocks(md);
+    installImportant(md);
 
     function mapSourceLines(tokens, offset = 0) {
       tokens.forEach(token => {

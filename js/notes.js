@@ -2204,6 +2204,26 @@ function followNoteLink(href, secondary = false) {
   const note = findNoteByLooseId(params.get('note'));
   if (!note) { showMiniToast('目标笔记不存在，可能已被删除', 'error'); return; }
   // Keep navigation in the clicked pane whenever the split layout permits it.
+  if (params.has('offset')) {
+    const source = String(note.content || '');
+    const start = Number(params.get('offset'));
+    const end = params.has('endOffset') ? Number(params.get('endOffset')) : start;
+    if (!/^\d+$/.test(params.get('offset')) || (params.has('endOffset') && !/^\d+$/.test(params.get('endOffset')))
+      || !Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start < 0 || end < start || end > source.length) {
+      showMiniToast('引用位置无效或已超出笔记正文，请让 AI 重新读取笔记', 'error'); return;
+    }
+    if (params.has('revision') && getNoteReferenceRevision(note) !== params.get('revision')) {
+      showMiniToast('笔记已修改，此引用位置可能失效，请让 AI 重新读取笔记', 'error'); return;
+    }
+    selectNotesPrimaryPane(note.id);
+    switchNoteView('edit');
+    requestAnimationFrame(() => {
+      if (String(activeNoteId) !== String(note.id) || noteViewMode !== 'edit') return;
+      locateNotesHistoryChange({ content: source.slice(0, start) }, { content: source }, false);
+      document.getElementById('notesTextarea')?.setSelectionRange(start, end);
+    });
+    return;
+  }
   secondary = secondary && notesImmersive && notesImmersiveSplit;
   if (secondary) {
     notesSplitMode = 'preview';
@@ -2241,8 +2261,12 @@ function followNoteLink(href, secondary = false) {
 
 document.addEventListener('click', event => {
   const anchor = event.target.closest?.('a[href^="#note="]');
-  if (!anchor?.closest('#notesPreview, #notesRichEditor, #notesSplitPreview, #notesSplitRichEditor, #noteFloat')) return;
+  if (!anchor?.closest('#notesPreview, #notesRichEditor, #notesSplitPreview, #notesSplitRichEditor, #noteFloat, #aiMessages, #aiMessageImmersive')) return;
   event.preventDefault();
+  if (anchor.closest('#aiMessages, #aiMessageImmersive')) {
+    if (typeof closeAiMessageImmersive === 'function') closeAiMessageImmersive();
+    switchTab('notes');
+  }
   if (anchor.closest('#noteFloat')) { closeNoteFloat(); switchTab('notes'); }
   followNoteLink(anchor.getAttribute('href'), !!anchor.closest('#notesSplitPreview, #notesSplitRichEditor'));
 });
@@ -2321,6 +2345,13 @@ function formatText(type) {
   let prefix = '', suffix = '', placeholder = '';
 
   switch (type) {
+    case 'important-inline': {
+      const body = (sel || '重点内容').replace(/\r?\n/g, '<br>');
+      ta.setRangeText('=={重点}' + body + '==', start, end, 'end');
+      ta.setSelectionRange(start + 3, start + 5);
+      ta.focus(); onNotesChange(ta); return;
+    }
+    case 'important-block': prefix = '\n\n:::important 重点\n'; suffix = '\n:::\n\n'; placeholder = '重点内容'; break;
     case 'bold':        prefix = '**';  suffix = '**';  placeholder = '粗体文字'; break;
     case 'italic':      prefix = '*';   suffix = '*';   placeholder = '斜体文字'; break;
     case 'strikethrough': prefix = '~~'; suffix = '~~'; placeholder = '删除的文字'; break;
@@ -2459,25 +2490,55 @@ function handleNotesTabKey(e, ta) {
   return true;
 }
 
-// Keyboard shortcuts for formatting and editor indentation
+// One command map for the toolbar and all four editing surfaces.
+const NOTES_FORMAT_SHORTCUTS = [
+  ['bold', 'B'], ['italic', 'I'], ['strikethrough', 'U'], ['link', 'K'],
+  ['code', 'E'], ['strikethrough', 'Shift+X'],
+  ['codeblock', 'Alt+C'], ['latex', 'Alt+M'], ['note-jump', 'Alt+K'],
+  ['image', 'Alt+I'], ['ul', 'Shift+8'], ['ol', 'Shift+7'],
+  ['quote', 'Shift+9'], ['task', 'Alt+L'], ['table', 'Alt+T'],
+  ['fold', 'Alt+F'], ['footnote', 'Alt+N'], ['hr', 'Alt+R'],
+  ...Array.from({ length: 7 }, (_, level) => [level ? 'heading' + level : 'paragraph', 'Alt+' + level])
+];
+
+function initNotesFormatShortcuts() {
+  const mac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const label = chord => (mac ? '⌘+' : 'Ctrl+') + chord.replace('Alt+', mac ? 'Option+' : 'Alt+');
+  const aria = chord => ['Control+', 'Meta+'].map(modifier => modifier + chord).join(' ');
+  document.querySelectorAll('#notesFormatToolbar button').forEach(button => {
+    const action = /formatText\('([^']+)'\)/.exec(button.getAttribute('onclick') || '')?.[1]
+      || (button.dataset.heading !== undefined ? (Number(button.dataset.heading) ? 'heading' + button.dataset.heading : 'paragraph') : '');
+    const chords = NOTES_FORMAT_SHORTCUTS.filter(([command]) => command === action).map(([, chord]) => chord);
+    if (!chords.length) return;
+    const title = (button.title || button.textContent.trim()).replace(/ \(Ctrl\+[^)]+\)/, '');
+    button.title = title + ' (' + chords.map(label).join(' / ') + ')';
+    button.setAttribute('aria-keyshortcuts', chords.map(aria).join(' '));
+  });
+  const heading = document.getElementById('notesHeadingButton');
+  if (heading) heading.title = '标题级别 (' + label('Alt+1') + '～' + label('Alt+6') + '；正文 ' + label('Alt+0') + ')';
+}
+initNotesFormatShortcuts();
+
+// Capture before contenteditable's native formatting and global shortcuts.
 document.addEventListener('keydown', function(e) {
-  const ta = e.target;
-  if (!ta?.matches('#notesTextarea, #notesSplitTextarea')) return;
-  if (handleNotesTabKey(e, ta)) return;
-  if (!e.ctrlKey && !e.metaKey) return;
-  
-  const key = e.key.toLowerCase();
-  let action = null;
-  if (key === 'b') action = 'bold';
-  else if (key === 'i') action = 'italic';
-  else if (key === 'u') action = 'strikethrough';
-  else if (key === 'k') action = 'link';
-  
-  if (action) {
-    e.preventDefault();
-    formatText(action);
-  }
-});
+  if (e.defaultPrevented || e.isComposing || e.keyCode === 229 || e.getModifierState?.('AltGraph')) return;
+  const editor = e.target?.closest?.('#notesTextarea, #notesSplitTextarea, #notesRichEditor, #notesSplitRichEditor');
+  if (!editor || !editor.getClientRects().length) return;
+  if (editor.matches('textarea') && !e.ctrlKey && !e.metaKey && !e.altKey && handleNotesTabKey(e, editor)) return;
+  if (!(e.ctrlKey || e.metaKey)) return;
+  const action = NOTES_FORMAT_SHORTCUTS.find(([, chord]) => {
+    const parts = chord.split('+');
+    const key = parts[parts.length - 1];
+    // Shift changes digit key values to symbols on many keyboards.
+    const matchesKey = e.key.toLowerCase() === key.toLowerCase()
+      || (/^\d$/.test(key) && e.code === 'Digit' + key);
+    return matchesKey && e.shiftKey === parts.includes('Shift') && e.altKey === parts.includes('Alt');
+  })?.[0];
+  if (!action) return;
+  e.preventDefault();
+  e.stopPropagation();
+  if (!e.repeat) formatText(action);
+}, true);
 
 let noteViewMode=localStorage.getItem('study_note_view_mode')||'rich';
 if(!['rich','edit','summary','preview'].includes(noteViewMode))noteViewMode='rich';

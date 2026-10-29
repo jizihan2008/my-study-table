@@ -507,6 +507,7 @@ function buildToolsSystemPrompt(conv = getActiveConv(), apiCfg = getEffectiveApi
   prompt += '4. 定时自动化触发时，你会收到一条以「[🤖 系统自动触发]」开头的消息，其中包含任务内容，请直接执行任务并在回复中向用户说明完成了什么。这条消息不是用户手动发送的，而是系统自动注入的\n';
   prompt += '5. 如果用户只是聊天/提问/问知识类问题，不需要调用工具，正常回答即可。\n';
   prompt += '6. 给笔记打标签时：名字保持稳定、按学科/主题归一（如统一用「数据结构」而不是「数据结构」「DS」混用）；一批笔记要归类时用 batch_set_note_tags 一次写完，不要逐篇调用 update_note。标签会出现在「今天」页待复习列表的标签筛选里，所以别造只用一次的一次性标签。\n';
+  prompt += '   引用笔记片段时，在回答旁输出 Markdown 链接 [笔记标题 · 查看原文](#note=123&offset=10&endOffset=30&revision=实际contentRevision)。先调用 get_note_detail 获取真实正文和 contentRevision；可直接复用 referenceLink 引用返回的整段。引用其中一块时，用该段 offset 加片段内的 UTF-16 偏移作为绝对范围 [offset,endOffset)，不是行号或大纲索引，不猜测位置。版本用 contentRevision（正文版本），不要用编辑工具的 revision。仅已有可靠选区偏移时可省略版本。链接不包在代码块内，点击会打开笔记源码并选中原文。\n';
   prompt += '   编辑笔记正文时优先使用 patch_note 局部修改或 append_note 末尾追加，避免重发整篇正文。长文先用 get_note_outline 定位标题，再用 get_note_detail 读取相关段落和 revision；提交唯一匹配的 oldText/newText。多个修改必须基于同一份原文且互不重叠。版本冲突或匹配失败时重新读取，成功后使用返回的新 revision 和 editRanges 的最终正文偏移定点回读校验；读取时携带 revision 锁定版本。ambiguous 时根据 matches 上下文扩大 oldText，整批不会写入。只有确实要全文重写时才使用 update_note 的 content。所有正文原样保存，不进行二次转义。\n';
   if (_wsEnabled) {
     if (_isKimiNative) {
@@ -949,6 +950,14 @@ function formatAiNoteTags(note) {
 const aiNoteVersions = new Map();
 const aiNoteVersionSession = Date.now().toString(36) + '-' + Math.random().toString(36).slice(2);
 let aiNoteVersionSequence = 0;
+// Body-only citation version remains stable across reloads and devices.
+function getNoteReferenceRevision(note) {
+  const source = String(note.content || '');
+  let hash = 2166136261;
+  for (let i = 0; i < source.length; i++) hash = Math.imul(hash ^ source.charCodeAt(i), 16777619);
+  return 'body-' + source.length + '-' + (hash >>> 0).toString(16);
+}
+
 function getAiNoteRevision(note) {
   const snapshot = JSON.stringify(note);
   let entry = aiNoteVersions.get(note.id);
@@ -2853,6 +2862,8 @@ async function executeToolCall(action, params, context = {}) {
       }
       const hasMore = end < content.length;
       const page = { revision: getAiNoteRevision(n), totalLength: content.length, offset, endOffset: end, hasMore, nextOffset: hasMore ? end : null, content: content.slice(offset, end), updatedAt: n.updatedAt || null };
+      page.contentRevision = getNoteReferenceRevision(n);
+      page.referenceLink = `#note=${encodeURIComponent(n.id)}&offset=${offset}&endOffset=${end}&revision=${page.contentRevision}`;
       let result = `📝 笔记详情 [ID:${n.id}]\n`;
       result += `📌 标题：${n.title || '未命名'}\n`;
       result += formatAiNoteTags(n);
@@ -2863,6 +2874,7 @@ async function executeToolCall(action, params, context = {}) {
       if (result.length > 2000) result = result.slice(0, 1900) + '\n[笔记元信息过长，已省略部分]\n';
       result += `📑 正文范围：[${offset}, ${end}) / ${content.length}（UTF-16）\n`;
       result += `hasMore=${hasMore}；nextOffset=${page.nextOffset}\nrevision=${page.revision}\n`;
+      result += `contentRevision=${page.contentRevision}\nreferenceLink=${page.referenceLink}\n`;
       if (hasMore) result += `⚠️ 正文尚未读完。继续读取：get_note_detail ${JSON.stringify({ id: n.id, offset: end, limit, revision })}\n`;
       result += `\n📄 正文：\n${page.content || '(空)'}\n`;
       return { ok: true, text: result, data: page };

@@ -202,6 +202,44 @@ test('note explanation captures source offsets in reading, rich editing, source 
       return event.defaultPrevented;
     });
     expect(outside).toBe(false);
+    // The actual prompts captured above should render compactly, including old
+    // conversations with no presentation metadata. Raw/API content stays intact.
+    const originalPrompts = await page.evaluate(askIndex => {
+      GlobalTranslation.close();
+      getSelection().removeAllRanges();
+      createNewConv();
+      const conv = getActiveConv();
+      const prompts = [sentExplanations[0], sentExplanations[askIndex]];
+      for (const content of prompts) appendMessage(conv, { role: 'user', content });
+      switchTab('ai');
+      renderAiMessages();
+      return prompts;
+    }, sentBeforeAsk);
+    const cards = page.locator('#aiMessages .ai-note-selection-message');
+    await expect(cards).toHaveCount(2);
+    await expect(cards.first().locator('.ai-note-selection-request')).toHaveText('请解释这段内容');
+    await expect(cards.first().locator('.ai-note-selection-source')).toContainText('选区测试');
+    await expect(cards.first().locator('blockquote')).toHaveText('重复 文字');
+    await expect(cards.last().locator('.ai-note-selection-request')).toHaveText('为什么这样说？\n请举一个例子。');
+    await expect(cards.first().locator('.ai-note-selection-raw')).toBeHidden();
+    await cards.first().locator('summary').focus();
+    await page.keyboard.press('Enter');
+    await expect(cards.first().locator('.ai-note-selection-raw')).toHaveText(originalPrompts[0]);
+    await page.keyboard.press('Enter');
+    await page.screenshot({ path: '.tmp-note-selection-render-desktop.png' });
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(cards.first()).toBeVisible();
+    await cards.first().scrollIntoViewIfNeeded();
+    expect(await cards.first().evaluate(el => el.scrollWidth <= el.clientWidth + 1)).toBe(true);
+    await page.screenshot({ path: '.tmp-note-selection-render-mobile.png' });
+    await page.evaluate(() => {
+      const conv = getActiveConv();
+      window.noteSelectionRoundTrip = JSON.parse(JSON.stringify(conv));
+      Object.assign(conv, noteSelectionRoundTrip);
+      renderAiMessages();
+    });
+    await expect(cards).toHaveCount(2);
+    expect(await page.evaluate(() => getActiveConv().messages.filter(m => m.role === 'user').map(m => m.content))).toEqual(originalPrompts);
   } finally {
     await app?.close();
     await fs.rm(userDataPath, { recursive: true, force: true });

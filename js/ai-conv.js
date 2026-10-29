@@ -5,6 +5,46 @@
 let aiToolSettingsModalOpen = false; // 「接口组与删除策略」窗口
 const _aiAttachmentDrafts = new Map(); // File 引用只在本次运行期间保存，按对话隔离。
 
+// The target belongs to the tab that was right-clicked, not the active chat.
+function closeAiConvTabContextMenu() {
+  const menu = document.getElementById('aiConvTabContextMenu');
+  if (menu) menu.remove();
+}
+
+function showAiConvTabContextMenu(event, convId) {
+  event.preventDefault();
+  closeAiConvTabContextMenu();
+  const conv = aiConvs.find(item => String(item.id) === String(convId));
+  const sync = window.SyncLogs;
+  if (!conv || !sync) return;
+  const enabled = sync.isItemEnabled('ai_conv', conv.id);
+  const menu = document.createElement('div');
+  menu.id = 'aiConvTabContextMenu';
+  menu.className = 'context-menu visible';
+  menu.setAttribute('role', 'menu');
+  menu.setAttribute('aria-label', '对话同步');
+  const action = document.createElement('div');
+  action.className = 'context-menu-item';
+  action.setAttribute('role', 'menuitem');
+  action.tabIndex = 0;
+  action.textContent = enabled ? '关闭本对话同步' : '开启本对话同步';
+  const toggle = () => {
+    if (aiConvs.some(item => String(item.id) === String(conv.id))) {
+      sync.setItemEnabled('ai_conv', conv.id, !enabled);
+    }
+    closeAiConvTabContextMenu();
+  };
+  action.onclick = toggle;
+  action.onkeydown = e => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); }
+  };
+  menu.appendChild(action);
+  document.body.appendChild(menu);
+  menu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - menu.offsetWidth - 8)) + 'px';
+  menu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - menu.offsetHeight - 8)) + 'px';
+  action.focus();
+}
+
 // ═══════════ Conversation Settings Modal ═══════════
 function openConvSettingsModal() {
   convSettingsModalOpen = true;

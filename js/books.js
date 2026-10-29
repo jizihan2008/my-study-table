@@ -123,6 +123,93 @@ function bkToggleShelf() { _bkShelfHidden = !_bkShelfHidden; bkApplyPanes(); }
 function bkToggleToc() { _bkTocHidden = !_bkTocHidden; bkApplyPanes(); }
 
 // ═══════════ 主入口：渲染整个工作台 ═══════════
+let bkSyncedViewSignature = null;
+let bkSyncedRefreshTimer = null;
+let bkSyncedBlurTarget = null;
+let bkSyncedModelRaw = null;
+
+// 保留生成任务持有的书/章节对象引用，使其完成时也基于最新云端字段保存。
+function bkMergeSyncedBooks(current, incoming) {
+  if (Array.isArray(incoming)) {
+    const previous = Array.isArray(current) ? current : [];
+    const byId = new Map(previous.filter(item => item && item.id != null).map(item => [String(item.id), item]));
+    const items = incoming.map(item => item && item.id != null
+      ? bkMergeSyncedBooks(byId.get(String(item.id)), item) : bkMergeSyncedBooks(null, item));
+    previous.splice(0, previous.length, ...items);
+    return previous;
+  }
+  if (incoming && typeof incoming === 'object') {
+    const target = current && typeof current === 'object' && !Array.isArray(current) ? current : {};
+    for (const key of Object.keys(target)) if (!Object.prototype.hasOwnProperty.call(incoming, key)) delete target[key];
+    for (const key of Object.keys(incoming)) target[key] = bkMergeSyncedBooks(target[key], incoming[key]);
+    return target;
+  }
+  return incoming;
+}
+
+function refreshSyncedBooks() {
+  const keys = ['study_books_v1', 'study_books_meta', 'study_bk_quiz_state_v1',
+    'study_bk_explain_logs_v1', 'study_bk_qa_logs_v1'];
+  const signature = keys.map(key => localStorage.getItem(key));
+  if (bkSyncedViewSignature && signature.every((raw, i) => raw === bkSyncedViewSignature[i])) return;
+  const modelRaw = localStorage.getItem('study_books_v1');
+  if (modelRaw !== bkSyncedModelRaw) {
+    const loaded = loadData('study_books_v1');
+    booksData = bkMergeSyncedBooks(booksData, Array.isArray(loaded) ? loaded : []);
+    bkSyncedModelRaw = modelRaw;
+  }
+  // 不拆掉生成中的消息或测验 DOM，结束后补刷新最新版本。
+  if ((typeof _bkAiBusy !== 'undefined' && _bkAiBusy) ||
+      (typeof _bkQuizGenerating !== 'undefined' && _bkQuizGenerating)) {
+    if (!bkSyncedRefreshTimer) bkSyncedRefreshTimer = setTimeout(() => {
+      bkSyncedRefreshTimer = null;
+      refreshSyncedBooks();
+    }, 500);
+    return;
+  }
+  const root = document.getElementById('booksApp');
+  if (!root) return;
+  const active = document.activeElement;
+  // 问题草稿可按稳定 id 恢复；作答和其它编辑控件等用户失焦再更新。
+  if (active && root.contains(active) && active.matches('input, textarea, select, [contenteditable="true"]') &&
+      !['bkExplainInput', 'bkQaInput'].includes(active.id)) {
+    if (bkSyncedBlurTarget !== active) {
+      bkSyncedBlurTarget = active;
+      active.addEventListener('blur', () => {
+        bkSyncedBlurTarget = null;
+        setTimeout(refreshSyncedBooks, 0);
+      }, { once: true });
+    }
+    return;
+  }
+  const drafts = ['bkExplainInput', 'bkQaInput'].map(id => {
+    const input = document.getElementById(id);
+    return input ? { id, value: input.value, focused: input === active,
+      start: input.selectionStart, end: input.selectionEnd } : null;
+  }).filter(Boolean);
+  const scrolls = Array.from(root.querySelectorAll('[id]')).filter(node => node.scrollTop > 0)
+    .map(node => ({ id: node.id, top: node.scrollTop }));
+  const bookId = bkActiveBookId, chapterId = bkActiveChapterId;
+  renderBooks();
+  // 远端删除了当前书/章节时，不把旧问题放到另一份教材上。
+  if (bookId === bkActiveBookId && chapterId === bkActiveChapterId) {
+    for (const draft of drafts) {
+      const input = document.getElementById(draft.id);
+      if (!input) continue;
+      input.value = draft.value;
+      if (draft.focused) {
+        input.focus({ preventScroll: true });
+        if (draft.start != null) input.setSelectionRange(draft.start, draft.end);
+      }
+    }
+  }
+  for (const scroll of scrolls) {
+    const node = document.getElementById(scroll.id);
+    if (node) node.scrollTop = scroll.top;
+  }
+  bkSyncedViewSignature = signature;
+}
+
 function renderBooks() {
   const app = document.getElementById('booksApp');
   if (!app) return;

@@ -39,6 +39,7 @@
     'study_notes_folders',     // 笔记文件夹结构
     'study_timer_activity_types', // 自定义计时类型
     'study_timer_records',     // 专注计时记录
+    'study_timer_live_state',  // 用户操作时发布的计时状态，不包含逐 tick 的本地存档
     'study_taskline_v1',       // 任务线（学习任务进度）
     'study_habits_v2',         // 习惯打卡（当前版 v2，habits.js HABITS_KEY）
     'study_habits',            // 习惯打卡（旧版）
@@ -76,7 +77,7 @@
     { id: 'habits', label: '习惯与打卡', keys: ['study_habits_v2', 'study_habits', 'study_habits_v1', 'study_checkin', 'study_habits_archive'] },
     { id: 'books', label: '教材', keys: ['study_books_v1', 'study_books_meta', 'study_bk_quiz_state_v1'] },
     { id: 'calendar', label: '日历', keys: ['study_calendar_events'] },
-    { id: 'timer', label: '计时记录', keys: ['study_timer_records', 'study_timer_activity_types'] },
+    { id: 'timer', label: '计时记录', keys: ['study_timer_records', 'study_timer_activity_types', 'study_timer_live_state'] },
     { id: 'taskline', label: '任务线与目标', keys: ['study_taskline_v1', 'study_longterm_goals', 'study_today_focus'] },
     { id: 'stats', label: '学习统计', keys: ['study_stats'] },
     { id: 'skills', label: 'AI 技能', keys: ['study_ai_skills_v1'] },
@@ -129,6 +130,7 @@
     'study_notes': '笔记（旧版）',
     'study_notes_folders': '笔记文件夹',
     'study_timer_records': '计时记录',
+    'study_timer_live_state': '计时运行状态',
     'study_timer_activity_types': '计时类型',
     'study_taskline_v1': '任务线',
     'study_habits': '习惯打卡',
@@ -160,7 +162,7 @@
 
   if (settingsSync) Object.assign(SYNC_LABELS, settingsSync.labels);
 
-  const SYNC_VER = '20261014-settings-r1';           // 同步模块版本（面板诊断用，需与 index.html 同步）
+  const SYNC_VER = '20261029-sync-refresh-r1';           // 同步模块版本（面板诊断用，需与 index.html 同步）
   const CONFLICT_HISTORY_KEY = 'study_sync_conflict_history';
   const EVENT_LOG_KEY = 'study_sync_event_log_v1';
   const EVENT_LOG_LIMIT = 300;
@@ -205,6 +207,7 @@
   // 判断某 key 是否参与同步
   function isSyncKey(key) {
     if (!key) return false;
+    if (key === 'study_timer_live_state' && !getConfig().timerStateSync) return false;
     if (global.SyncCollections && global.SyncCollections.isCollection(key)) return false;
     if (SENSITIVE_KEYS.indexOf(key) !== -1) return false;
     return SYNC_KEYS.indexOf(key) !== -1;
@@ -754,6 +757,9 @@
     _clearLocalDirty(key);
     dirtyKeys.delete(key);
     await _outboxRemove(key);
+    if (key === 'study_timer_live_state' && typeof global.applySyncedTimerState === 'function') {
+      global.applySyncedTimerState(value);
+    }
     _logSync('remote-applied', { key, action: 'pull', remoteTimestamp: updatedAt });
   }
   // 判断本地时间戳是否为「未来值」（旧版本用设备时钟写 localTs 的污染残留）：
@@ -1106,6 +1112,7 @@
         if (error) throw new Error(error.message || '读取云端版本失败');
         if (!data || !data.updated_at) throw new Error('云端版本已不存在，暂时无法覆盖本地');
         await _applyRemoteValue(data.key, data.value, data.updated_at);
+        _refreshUI();
       }
 
       _clearPendingConflict(key);
@@ -1408,8 +1415,10 @@
     }
     const calls = [
       'renderNotes', 'renderTodos', 'renderToday', 'renderLinks', 'renderCalendar',
-      'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats', 'renderArchive'
+      'renderTaskLine', 'renderFocusList', 'renderHabits', 'renderStats', 'renderArchive', 'renderTimer', 'updateTimerFloat',
+      'refreshSyncedBooks', 'refreshSyncedPromptStudio'
     ];
+    try { global.GlobalTranslation?.refreshSyncedData?.(); } catch (e) { console.warn('[sync] 翻译页面刷新失败:', e); }
     try {
       if (typeof refreshAiSkillViews === 'function' &&
           (skillDraftBeforeRemoteApply !== null ? !skillDraftBeforeRemoteApply :
@@ -1426,7 +1435,7 @@
       if (fn === 'renderNotes' && editSnap && preserveNoteEditor) continue;
       try {
         if (typeof window[fn] === 'function') {
-          if (global.SyncDOM) global.SyncDOM.run(() => window[fn]());
+          if (global.SyncDOM && !fn.startsWith('refreshSynced')) global.SyncDOM.run(() => window[fn]());
           else window[fn]();
         }
       } catch (e) { /* 忽略单个模块失败 */ }
@@ -1487,6 +1496,7 @@
       ver: SYNC_VER,
       enabled: enabled,
       autoSync: !!cfg.autoSync,
+      timerStateSync: !!cfg.timerStateSync,
       loggedIn: !!sess,
       pendingCount: Object.keys(_getDirtyMap()).filter(isSyncKey).length +
         (global.SyncCollections ? global.SyncCollections.pendingCount() : 0),
@@ -1522,8 +1532,17 @@
     _emitStatus();
   }
 
-  // 子开关：开启自动同步（本地变更自动上传、定时拉取、Realtime 实时、登录后自动同步）。
-  // 关闭后仍可手动「立即同步」「上传全部」。
+  // 计时状态为设备级选项，关闭时仍同步已保存的计时记录。
+  function setTimerStateSync(on) {
+    const cfg = getConfig();
+    cfg.timerStateSync = !!on;
+    // 开启后需要重新检查此前被过滤的云端状态，不沿用增量游标。
+    delete cfg.syncCursor;
+    setConfig(cfg);
+    if (on && enabled && autoSync) void _pullAll(true);
+    _emitStatus();
+  }
+
   function setAutoSync(on) {
     const cfg = getConfig();
     cfg.autoSync = !!on;
@@ -1697,6 +1716,7 @@
     init,
     setEnabled,
     setAutoSync,
+    setTimerStateSync,
     isSyncKey,
     onLocalChange,
     manualSync,
@@ -1716,6 +1736,7 @@
     onProgress,
     get enabled() { return enabled; },
     get autoSync() { return autoSync; },
+    get timerStateSync() { return !!getConfig().timerStateSync; },
     get loggedIn() { return loggedIn; }
   };
   if (global.__MST_TEST__) {

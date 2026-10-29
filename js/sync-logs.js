@@ -1092,7 +1092,7 @@
     _clearConflict(kind, itemId);
   }
 
-  function _applyRemoteDeletion(kind, itemId) {
+  async function _applyRemoteDeletion(kind, itemId) {
     if (kind !== 'ai_conv') return false;
     if (typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') {
       throw new Error('AI 对话存储尚未就绪');
@@ -1102,7 +1102,10 @@
     const previousActiveId = typeof activeConvId === 'undefined' ? null : activeConvId;
     const previousLength = aiConvs.length;
     aiConvs = aiConvs.filter(conv => conv && String(conv.id) !== String(itemId));
-    if (aiConvs.length === previousLength) return false;
+    if (aiConvs.length === previousLength) {
+      if (global.StudyData?.flush) await global.StudyData.flush(['study_ai_convs']);
+      return false;
+    }
     if (!aiConvs.length) {
       const replacement = { id: genId(), title: '默认对话', systemPrompt: '', messages: [] };
       if (typeof initTreeOnConv === 'function') initTreeOnConv(replacement);
@@ -1112,12 +1115,23 @@
       activeConvId = aiConvs[0].id;
       localStorage.setItem('study_active_conv', String(activeConvId));
     }
-    if (!safeSaveAiConvs()) {
-      aiConvs = previousConvs;
-      if (typeof activeConvId !== 'undefined') activeConvId = previousActiveId;
-      if (previousActiveId != null) localStorage.setItem('study_active_conv', String(previousActiveId));
-      throw new Error('保存云端删除结果失败');
+    const previousRaw = localStorage.getItem('study_ai_convs');
+    let appliedRaw;
+    try {
+      if (!safeSaveAiConvs()) throw new Error('保存云端删除结果失败');
+      appliedRaw = localStorage.getItem('study_ai_convs');
+      if (global.StudyData?.flush) await global.StudyData.flush(['study_ai_convs']);
+    } catch (error) {
+      if (appliedRaw === undefined || localStorage.getItem('study_ai_convs') === appliedRaw) {
+        aiConvs = previousConvs;
+        if (typeof activeConvId !== 'undefined') activeConvId = previousActiveId;
+        if (previousActiveId != null) localStorage.setItem('study_active_conv', String(previousActiveId));
+        if (previousRaw === null) localStorage.removeItem('study_ai_convs');
+        else localStorage.setItem('study_ai_convs', previousRaw);
+      } else _markKindDirty(kind);
+      throw error;
     }
+    if (localStorage.getItem('study_ai_convs') !== appliedRaw) _markKindDirty(kind);
     try {
       const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
       delete drafts[itemId];
@@ -1196,6 +1210,7 @@
     }
     let aiViewChanged = false;
     let activeAiConvChanged = false;
+    let booksViewChanged = false;
     applyingRemote = true;
     try {
       for (const key of Object.keys(grouped)) {
@@ -1210,6 +1225,7 @@
           await _acceptCloudOnlyDeletion(baseId, cloudOnlyMarker.updated_at);
           continue;
         }
+        if (kind === 'ai_conv' && !_isItemOn(kind, baseId)) continue;
         if (_isItemDirty(kind, baseId) || _isConflicted(kind, baseId)) {
           await _acceptSameLogContent(kind, baseId, g.rows);
           continue;
@@ -1225,7 +1241,7 @@
         if (!built) continue;
         if (kind === 'ai_conv' && built.deleted) {
           const previousActiveId = typeof activeConvId === 'undefined' ? null : activeConvId;
-          aiViewChanged = _applyRemoteDeletion(kind, baseId) || aiViewChanged;
+          aiViewChanged = await _applyRemoteDeletion(kind, baseId) || aiViewChanged;
           if (typeof activeConvId !== 'undefined' && String(previousActiveId) !== String(activeConvId)) {
             activeAiConvChanged = true;
           }
@@ -1238,16 +1254,20 @@
           _clearItemDirty(kind, baseId);
           _clearConflict(kind, baseId);
         } else {
-          _applyToLocal(kind, baseId, built);
+          const stable = await _applyToLocal(kind, baseId, built);
           if (kind === 'ai_conv') aiViewChanged = true;
-          _recordPulledContent(kind, baseId);
+          else booksViewChanged = true;
+          if (stable) _recordPulledContent(kind, baseId);
+          else { _markKindDirty(kind); _markItemDirty(kind, baseId); }
         }
         _setTs(key, remoteUpdated);
       }
     } finally {
       applyingRemote = false;
+      // 即使后续某条保存失败，已经落盘的条目仍须更新页面。
+      if (booksViewChanged && typeof global.refreshSyncedBooks === 'function') global.refreshSyncedBooks();
+      if (aiViewChanged && typeof renderAiChat === 'function') renderAiChat({ skipDraftSave: activeAiConvChanged });
     }
-    if (aiViewChanged && typeof renderAiChat === 'function') renderAiChat({ skipDraftSave: activeAiConvChanged });
     let newest = cfg.pullCursor || null;
     for (const row of data) {
       if (!newest || policy.compareTimestamps(row.updated_at, newest) > 0) newest = row.updated_at;
@@ -1286,6 +1306,7 @@
     const currentItem = () => _extractAll().find(item => item.kind === kind && String(item.itemId) === String(itemId));
     let local = currentItem();
     if (!local || !policy.sameContent(_logContent(local), _logContent(built))) return false;
+    if (global.StudyData?.flush) await global.StudyData.flush([Object.keys(LOG_KEYS).find(key => LOG_KEYS[key] === kind)]);
     await _removeOutboxForBase(kind, itemId);
     local = currentItem();
     if (!local || _getTombstones()[key] || !policy.sameContent(_logContent(local), _logContent(built))) return false;
@@ -1294,7 +1315,12 @@
     return true;
   }
   // 写回本地对应 key（注意：不触发 SyncLogs.onLocalChange，靠 applyingRemote 防回环）
-  function _applyToLocal(kind, itemId, built) {
+  async function _applyToLocal(kind, itemId, built) {
+    const storageKey = Object.keys(LOG_KEYS).find(key => LOG_KEYS[key] === kind);
+    const previousRaw = localStorage.getItem(storageKey);
+    const previousConvs = kind === 'ai_conv' && typeof aiConvs !== 'undefined'
+      ? (aiConvs || []).slice() : null;
+    let appliedRaw;
     try {
       if (kind === 'bk_explain' || kind === 'bk_qa') {
         const key = kind === 'bk_explain' ? 'study_bk_explain_logs_v1' : 'study_bk_qa_logs_v1';
@@ -1303,6 +1329,8 @@
         if (!Array.isArray(built.items)) throw new Error('云端日志格式无效');
         store[itemId] = built.items;
         localStorage.setItem(key, JSON.stringify(store));
+        appliedRaw = localStorage.getItem(key);
+        if (global.StudyData?.flush) await global.StudyData.flush([key]);
       } else if (kind === 'ai_conv') {
         if (typeof aiConvs === 'undefined' || typeof safeSaveAiConvs !== 'function') {
           throw new Error('AI 对话存储尚未就绪');
@@ -1347,6 +1375,11 @@
               }
             }
             if (localDaily) {
+              // 仅复制会被原地修改的日报，避免复制全部历史或序列化运行期日志。
+              const dailyIndex = aiConvs.indexOf(localDaily);
+              previousConvs[dailyIndex] = { ...localDaily, messages: (localDaily.messages || []).slice(),
+                ...(localDaily.tree ? { tree: JSON.parse(JSON.stringify(localDaily.tree)) } : {}),
+                ...(localDaily.activePath ? { activePath: localDaily.activePath.slice() } : {}) };
               appliedConv = localDaily;
               // 回填标记 + 统一标题（与 settings.getOrCreateDailyReportConv 保持一致）
               if (!localDaily._dailyReport) localDaily._dailyReport = true;
@@ -1395,6 +1428,17 @@
           appliedConv.aiCompletions = built.meta.aiCompletions.slice(-20);
         }
         if (!safeSaveAiConvs()) throw new Error('保存云端对话失败');
+        appliedRaw = localStorage.getItem('study_ai_convs');
+        if (global.StudyData?.flush) await global.StudyData.flush(['study_ai_convs']);
+        // Cloud conversations opt in by default, independently of the new-chat
+        // default. Never overwrite a deliberate per-conversation choice.
+        if (appliedConv) {
+          const marks = _getMarks();
+          const key = _baseKey('ai_conv', appliedConv.id);
+          if (!Object.prototype.hasOwnProperty.call(marks, key)) {
+            _setItemEnabled('ai_conv', appliedConv.id, true);
+          }
+        }
         if (appliedConv && built.meta && Array.isArray(built.meta.aiCompletions)) {
           if (typeof global.receiveAiTaskCompletions === 'function') {
             // Notifications are best effort and must never make a successful pull fail.
@@ -1403,7 +1447,16 @@
           }
         }
       }
-    } catch (e) { throw e; }
+      return localStorage.getItem(storageKey) === appliedRaw;
+    } catch (e) {
+      // 等待提交时可能发生新编辑：只能回滚本次远端写入，不能撤掉用户的新内容。
+      if (appliedRaw === undefined || localStorage.getItem(storageKey) === appliedRaw) {
+        if (previousConvs) aiConvs = previousConvs;
+        if (previousRaw === null) localStorage.removeItem(storageKey);
+        else localStorage.setItem(storageKey, previousRaw);
+      } else { _markKindDirty(kind); _markItemDirty(kind, itemId); }
+      throw e;
+    }
   }
 
   // ── TTL 清理远端（纯云端时间戳，跨设备安全）────────────────
@@ -1589,14 +1642,18 @@
           if (!selected.length) throw new Error('云端版本已不存在');
           const built = await _rebuildPieces(selected);
           if (!built) throw new Error('云端分片损坏或不完整');
+          let stable;
           applyingRemote = true;
-          try { _applyToLocal(kind, String(itemId), built); }
+          try { stable = await _applyToLocal(kind, String(itemId), built); }
           finally { applyingRemote = false; }
           const tombstones = _getTombstones();
           delete tombstones[key];
           _setLocal(TOMBSTONE_KEY, tombstones);
           _setTs(key, _latestTimestamp(selected));
-          _recordPulledContent(kind, String(itemId));
+          if (stable) _recordPulledContent(kind, String(itemId));
+          else { _markKindDirty(kind); _markItemDirty(kind, String(itemId)); }
+          if (kind === 'ai_conv' && typeof renderAiChat === 'function') renderAiChat();
+          else if (typeof global.refreshSyncedBooks === 'function') global.refreshSyncedBooks();
         }
         _clearConflict(kind, itemId);
         _emitProgress({
@@ -2333,6 +2390,7 @@
     markItemDeleted,
     renderPanel: renderPanelSafe,
     setItemEnabled,
+    isItemEnabled: _isItemOn,
     registerNewItem,
     setKindAutoSync,
     deleteAllRemote,

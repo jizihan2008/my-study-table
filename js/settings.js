@@ -607,6 +607,8 @@ async function renderSyncPanel() {
   if (enabledEl) enabledEl.checked = !!st.enabled;
   const autoEl = document.getElementById('syncAutoEnabled');
   if (autoEl) autoEl.checked = !!st.autoSync;
+  const timerStateEl = document.getElementById('syncTimerStateEnabled');
+  if (timerStateEl) timerStateEl.checked = !!st.timerStateSync;
   if (statusEl) {
     const loggedTxt = st.loggedIn ? '已登录' : '未登录';
     const pendingTxt = st.pendingCount > 0 ? '，待上传 ' + st.pendingCount + ' 项' : '';
@@ -993,6 +995,13 @@ function toggleSyncAutoEnabled() {
   const autoEl = document.getElementById('syncAutoEnabled');
   if (!autoEl || typeof window.Sync === 'undefined') return;
   window.Sync.setAutoSync(autoEl.checked);
+  renderSyncPanel();
+}
+
+function toggleSyncTimerStateEnabled() {
+  const el = document.getElementById('syncTimerStateEnabled');
+  if (!el || !window.Sync) return;
+  window.Sync.setTimerStateSync(el.checked);
   renderSyncPanel();
 }
 

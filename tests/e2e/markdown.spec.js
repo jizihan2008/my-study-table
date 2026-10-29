@@ -443,6 +443,7 @@ test('Ctrl+A in a rich-text fold selects only its title or body', async () => {
 });
 
 test('rich-text fold toggles only from its disclosure control', async () => {
+  await page.waitForFunction(() => document.querySelector('#section-today.active') && !document.querySelector('script[data-app-src]'));
   await page.evaluate(() => {
     window.switchTab('notes');
     const note = window.getActiveNote();
@@ -1658,7 +1659,7 @@ test('toolbar folds selected existing content and keeps it through undo and redo
     getSelection().removeAllRanges();
     getSelection().addRange(range);
   });
-  await page.locator('#notesFormatToolbar button[title="折叠文字块"]').click();
+  await page.locator('#notesFormatToolbar button[title^="折叠文字块"]').click();
   await expect(page.locator('#notesRichEditor .note-fold-body')).toContainText('Actual body to fold');
   await page.locator('#notesUndoBtn').click();
   await page.locator('#notesRedoBtn').click();

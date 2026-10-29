@@ -2,6 +2,42 @@
 //  AI 渲染：聊天界面、消息列表、Markdown格式化、LaTeX数学公式
 // ═══════════════════════════════════════════════
 
+// Recognize the note-selection prompt at render time so saved conversations also
+// get the compact view. Keep the stored/API content intact, including offsets.
+function renderAiNoteSelectionMessage(content) {
+  if (typeof content !== 'string') return '';
+  const header = content.match(/^(请解释下面这段内容|请结合下面的选中内容及上下文回答我的问题)，它出自笔记「([^\n]*)」（笔记ID：([^\n]+)）。\n(选区原文 offset=\d+，endOffset=\d+（UTF-16，范围 \[\d+, \d+\)，基于笔记 Markdown 正文）。|选区无法可靠映射到 Markdown 原文，offset 未确定；请根据以下选中文字和上下文定位。)\n\n/);
+  if (!header) return '';
+  const asking = header[1] !== '请解释下面这段内容';
+  let body = content.slice(header[0].length);
+  const contextHeader = '以下是选中内容及其上下文片段（⟪⟫ 内为' + (asking ? '需要询问' : '需要解释') + '的选中内容）：\n';
+  let selected = body;
+  let question = '';
+  if (body.startsWith(contextHeader)) {
+    body = body.slice(contextHeader.length);
+    const parts = body.split('⟪⟫');
+    // Unusual delimiter collisions should retain the original message view.
+    if (parts.length !== 3) return '';
+    selected = parts[1];
+    if (asking) {
+      const questionStart = parts[2].indexOf('\n\n我的问题：\n');
+      if (questionStart < 0) return '';
+      question = parts[2].slice(questionStart + '\n\n我的问题：\n'.length);
+    }
+  } else if (asking) {
+    const questionStart = body.indexOf('\n\n我的问题：\n');
+    if (questionStart < 0) return '';
+    selected = body.slice(0, questionStart);
+    question = body.slice(questionStart + '\n\n我的问题：\n'.length);
+  }
+  return `<div class="ai-note-selection-message">
+    <div class="ai-note-selection-request">${escapeHtml(asking ? question : '请解释这段内容')}</div>
+    <div class="ai-note-selection-source">📝 ${escapeHtml(header[2] || '未命名笔记')}</div>
+    <blockquote class="ai-note-selection-text">${escapeHtml(selected)}</blockquote>
+    <details class="ai-note-selection-details"><summary>查看上下文与定位</summary><div class="ai-note-selection-raw">${escapeHtml(content)}</div></details>
+  </div>`;
+}
+
 let _aiForceScrollBottom = false; // 强制滚动到底部标志（发送/切换对话时置位）
 const _aiStreamingDrafts = new Map(); // convId -> transient assistant output (never persisted)
 const _aiStreamingPaintTimers = new Map();
@@ -258,7 +294,8 @@ function renderAiChat(options) {
     <div class="ai-toolbar" id="aiToolbar">
       <div class="ai-toolbar-row">
         <select class="ai-toolbar-key-select" id="aiToolbarKeySelect" onchange="onAiToolbarKeyChange()"></select>
-        <div class="ai-toolbar-toggles">
+        <button type="button" class="ai-float-toolbar-toggle" onclick="toggleAiFloatToolbar()" aria-controls="aiToolbarToggles aiToolbarQuick" aria-expanded="${typeof aiFloatToolbarCollapsed === 'undefined' || !aiFloatToolbarCollapsed}">${typeof aiFloatToolbarCollapsed !== 'undefined' && aiFloatToolbarCollapsed ? '展开工具' : '收起工具'}</button>
+        <div class="ai-toolbar-toggles" id="aiToolbarToggles">
           <button type="button" class="ai-pill-toggle" id="aiToolbarDeepThinkBtn" onclick="toggleAiDeepThink()" title="深度思考（部分模型支持）">
             <i data-lucide="atom" class="lucide-icon" style="width:16px;height:16px;"></i>
             <span>深度思考</span>
@@ -962,7 +999,7 @@ function renderAiMessages() {
     } else if (m._streaming) {
       contentHtml = `<div class="ai-streaming-content">${escapeHtml(cleanContent || '')}</div>`;
     } else {
-      contentHtml = formatAiContent(cleanContent);
+      contentHtml = (item.type === 'user' ? renderAiNoteSelectionMessage(cleanContent) : '') || formatAiContent(cleanContent);
       if (!contentHtml && isAssistant && hasToolCall) {
         isToolPlaceholder = true;
         contentHtml = m._malformedToolProtocol
@@ -1864,6 +1901,13 @@ function showAiToast(msg) {
 
 // 全局右键：仅当目标是 AI 消息区时接管；否则恢复默认并关闭本菜单
 document.addEventListener('contextmenu', function(e) {
+  closeAiConvTabContextMenu();
+  const tab = e.target.closest('.ai-conv-tab[data-conv-id]');
+  if (tab) {
+    closeAiChatContextMenu();
+    showAiConvTabContextMenu(e, tab.dataset.convId);
+    return;
+  }
   const container = document.getElementById('aiMessages');
   if (container && container.contains(e.target)) {
     showAiChatContextMenu(e);
@@ -1872,6 +1916,7 @@ document.addEventListener('contextmenu', function(e) {
   }
 });
 document.addEventListener('click', function(e) {
+  if (!e.target.closest('#aiConvTabContextMenu')) closeAiConvTabContextMenu();
   const todoLink = e.target.closest && e.target.closest('.ai-action-link[data-todo-id]');
   if (todoLink) {
     e.stopPropagation();
@@ -1886,5 +1931,10 @@ document.addEventListener('keydown', function(e) {
     aiNavigateToTodo(Number(todoLink.dataset.todoId));
     return;
   }
-  if (e.key === 'Escape') closeAiChatContextMenu();
+  if (e.key === 'Escape') {
+    closeAiChatContextMenu();
+    closeAiConvTabContextMenu();
+  }
 });
+window.addEventListener('resize', closeAiConvTabContextMenu);
+document.addEventListener('scroll', closeAiConvTabContextMenu, true);

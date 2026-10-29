@@ -21,9 +21,9 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261026-calendar-location-r1">
+<link rel="stylesheet" href="css/style.css?v=20261028-ai-float-r4">
 <link rel="stylesheet" href="css/workspace.css?v=20261020-table-context-only-r1">
-<link rel="stylesheet" href="css/appearance.css?v=20260929-r2">
+<link rel="stylesheet" href="css/appearance.css?v=20261028-ai-float-r2">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
 <script src="lib/lucide/lucide.min.js"></script>
@@ -245,6 +245,8 @@
             <button class="fmt-btn" data-format="ul" onclick="formatText('ul')" title="无序列表">•</button>
             <button class="fmt-btn" data-format="ol" onclick="formatText('ol')" title="有序列表">1.</button>
             <button class="fmt-btn" onclick="formatText('quote')" title="引用">❝</button>
+            <button class="fmt-btn" onclick="formatText('important-inline')" title="行内重点：黄色标题可直接编辑" aria-label="插入行内重点">☆</button>
+            <button class="fmt-btn" onclick="formatText('important-block')" title="行间重点：黄色标题可直接编辑" aria-label="插入行间重点">☆▤</button>
             <span class="fmt-sep"></span>
             <button class="fmt-btn" onclick="formatText('task')" title="任务列表">☐</button>
             <button class="fmt-btn" onclick="formatText('table')" title="表格">▦</button>
@@ -610,6 +612,7 @@
 
   <!-- ── AI Assistant Section ── -->
   <div class="section" id="section-ai">
+    <button type="button" class="timer-link-btn" onclick="showAiFloat()" aria-keyshortcuts="Control+Shift+A Meta+Shift+A" title="打开 AI 对话浮窗（Ctrl+Shift+A）">AI 浮窗 <small>Ctrl+Shift+A</small></button>
     <div class="card" style="padding: 0; overflow: hidden; border-radius: var(--radius);">
       <div class="ai-chat-layout" id="aiChatLayout"></div>
     </div>
@@ -1531,6 +1534,13 @@
           </label>
           <span class="hint">开启后本地数据变更自动上传、定时拉取、其他设备变更实时同步。关闭后仅在点击「立即同步」「上传全部」时同步。</span>
         </div>
+        <div class="settings-field" style="margin-top:10px;">
+          <label style="display:flex;align-items:center;gap:8px;cursor:pointer;">
+            <input type="checkbox" id="syncTimerStateEnabled" style="width:18px;height:18px;accent-color:var(--primary);" onchange="toggleSyncTimerStateEnabled()">
+            计时状态自动同步
+          </label>
+          <span class="hint">默认关闭，仅控制此设备。开启后在开始、暂停、停止或重置计时时同步运行状态；各端需登录同一账号并开启云同步、自动同步和此开关。计时记录仍按原有设置同步。</span>
+        </div>
         <div id="syncStatus" class="settings-status" aria-live="polite" style="display:block;margin-top:8px;">同步状态：加载中…</div>
         <button type="button" id="syncRetryButton" class="btn-save-settings" hidden onclick="syncRetryNow()" style="align-self:flex-start;width:auto;margin-top:0;padding:7px 16px;">立即重试</button>
         <div id="syncProgressWrap" style="display:none;margin-top:12px;">
@@ -1836,10 +1846,10 @@
 <script src="lib/markdown/purify.min.js"></script>
 <script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/markdown.js?v=20261019-note-links-r1"></script>
+<script src="js/markdown.js?v=20261029-note-reference-r1"></script>
 <script src="js/note-reading-renderer.js?v=20261015-fold-toc-r1"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261020-table-context-only-r1"></script>
+<script src="js/note-rich-editor.js?v=20261029-fold-touch-r1"></script>
 <script src="js/platform.js?v=20261014-idb-r1"></script>
 <script src="js/secrets.js?v=20261016-web-r1"></script>
 <script src="js/data-store.js?v=20261014-idb-r1"></script>
@@ -1848,12 +1858,12 @@
 <script type="application/x-study-script" data-app-src="js/diagnostics.js?v=20260825-r1"></script>
 <script type="application/x-study-script" data-app-src="js/env.js?v=20260911-r2"></script>
 <script type="application/x-study-script" data-app-src="js/theme-model.js?v=20260914-r5"></script>
-<script type="application/x-study-script" data-app-src="js/liquid-glass.js?v=20260929-r1"></script>
+<script type="application/x-study-script" data-app-src="js/liquid-glass.js?v=20261028-ai-float-r2"></script>
 <script type="application/x-study-script" data-app-src="js/nav-shortcuts.js?v=20260920-r1"></script>
-<script type="application/x-study-script" data-app-src="js/core.js?v=20261014-idb-r1"></script>
+<script type="application/x-study-script" data-app-src="js/core.js?v=20261028-ai-float-r1"></script>
 <script type="application/x-study-script" data-app-src="js/trash.js?v=20261010-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todos.js?v=20261017-status-r1"></script>
-<script type="application/x-study-script" data-app-src="js/notes.js?v=20261021-note-ask-r1"></script>
+<script type="application/x-study-script" data-app-src="js/notes.js?v=20261029-note-reference-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/file-library-order.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
@@ -1862,18 +1872,19 @@
 <!-- AI 模块（按依赖顺序加载） -->
 <script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261012-protocol-r2"></script>
+<script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261028-conv-sync-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261019-paste-capsule-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261019-paste-capsule-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261028-conv-sync-r1"></script>
 <script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261016-web-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261029-note-reference-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-client.js?v=20260914-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
 <script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261016-web-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261019-ipad-send-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261028-ai-float-r3"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
-<script type="application/x-study-script" data-app-src="js/prompts.js?v=20261014-completed-review-r1"></script>
+<script type="application/x-study-script" data-app-src="js/prompts.js?v=20261029-sync-refresh-r1"></script>
 <script type="application/x-study-script" data-app-src="js/music.js"></script>
 <script type="application/x-study-script" data-app-src="js/memory.js?v=20261014-complete-summary-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bg-media-idb.js?v=20260906-r2"></script>
@@ -1882,7 +1893,7 @@
 <script type="application/x-study-script" data-app-src="js/habit-status-text.js?v=20260920-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261017-todo-status-r1"></script>
 <script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261014-idb-r1"></script>
-<script type="application/x-study-script" data-app-src="js/settings.js?v=20261020-report-history-r1"></script>
+<script type="application/x-study-script" data-app-src="js/settings.js?v=20261029-timer-state-sync-r1"></script>
 <script type="application/x-study-script" data-app-src="js/utils.js?v=20261020-fold-menu-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script type="application/x-study-script" data-app-src="lib/qq-chat-media.js?v=20261017-images-r1"></script>
@@ -1895,7 +1906,7 @@
   pdfjsLib.GlobalWorkerOptions.workerSrc = './lib/pdfjs/pdf.worker.min.mjs';
 </script>
 <script type="application/x-study-script" data-app-src="js/books-pdfstore.js?v=20260812-r2"></script>
-<script type="application/x-study-script" data-app-src="js/books.js?v=20260814-r1"></script>
+<script type="application/x-study-script" data-app-src="js/books.js?v=20261029-sync-refresh-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-pdf.js?v=20260914-r7"></script>
 <script type="application/x-study-script" data-app-src="js/books-kb.js?v=20260914-r2"></script>
 <script type="application/x-study-script" data-app-src="js/books-ai.js?v=20260914-r8"></script>
@@ -1904,7 +1915,7 @@
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
 <script type="application/x-study-script" data-app-src="js/calendar.js?v=20261026-calendar-location-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
-<script type="application/x-study-script" data-app-src="js/timer.js?v=20261014-shared-picker-r1"></script>
+<script type="application/x-study-script" data-app-src="js/timer.js?v=20261029-timer-state-sync-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habits.js?v=20261019-habit-debug-r1"></script>
 <script type="application/x-study-script" data-app-src="js/stats.js?v=20261012-focus"></script>
 <script type="application/x-study-script" data-app-src="js/updater.js?v=20260802-r1"></script>
@@ -1929,13 +1940,13 @@
 <script type="application/x-study-script" data-app-src="js/sync-diff.js?v=20261008-r1"></script>
 <script type="application/x-study-script" data-app-src="js/sync-collections.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/sync-dom.js?v=20260930-r1"></script>
-<script type="application/x-study-script" data-app-src="js/sync.js?v=20261014-settings-r1"></script>
+<script type="application/x-study-script" data-app-src="js/sync.js?v=20261029-sync-refresh-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261017-cloud-manage-r1"></script>
+<script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261029-sync-refresh-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bootstrap.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/desktop-pet.js?v=20261005-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/cet/vocabulary.js?v=20261008-r1"></script>
-<script type="application/x-study-script" data-app-src="js/translation.js?v=20261018-note-selection-r1"></script>
+<script type="application/x-study-script" data-app-src="js/translation.js?v=20261029-sync-refresh-r1"></script>
 <script src="js/app-loader.js?v=20261026-startup-r1"></script>
 
 <!-- Right-click context menu for notes (at body level to avoid backdrop-filter containing block) -->

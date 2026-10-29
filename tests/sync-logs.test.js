@@ -21,6 +21,8 @@ function loadSyncLogs(seed = {}, options = {}) {
     Sync: { enabled: true, autoSync: false }
   };
   const state = { renders: 0, renderOptions: [] };
+  window.StudyData = options.StudyData;
+  window.refreshSyncedBooks = options.refreshSyncedBooks;
   window.receiveAiTaskCompletions = options.receiveAiTaskCompletions;
   const context = {
     window,
@@ -456,6 +458,31 @@ test('a pulled conversation refreshes the visible chat', async () => {
   assert.equal(state.renders, 1);
 });
 
+test('cloud conversations default to syncing even when new local conversations default off', async () => {
+  const rows = [{ kind: 'ai_conv', item_id: '7', updated_at: '2026-10-28T01:00:00Z',
+    data: { meta: { id: 7, title: '来自云端' }, items: [] } }];
+  const client = { from() { return {
+    select() { return this; }, eq() { return this; }, in() { return this; },
+    then(resolve, reject) { return Promise.resolve({ data: rows, error: null }).then(resolve, reject); }
+  }; } };
+  const { SyncLogs, values, context } = loadSyncLogs({
+    study_sync_logs_cfg: { autoKinds: { ai_conv: false } }
+  }, { aiConvs: [] });
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.equal(context.aiConvs[0].title, '来自云端');
+  assert.equal(JSON.parse(values.get('study_sync_logs_marks'))['ai_conv/7'], true);
+  assert.equal(SyncLogs.isItemEnabled('ai_conv', 7), true);
+  SyncLogs.setItemEnabled('ai_conv', 7, false);
+  rows[0].updated_at = '2026-10-28T02:00:00Z';
+  rows[0].data.meta.title = '不能覆盖本地';
+  await SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client, [{ kind: 'ai_conv', itemId: '7' }]);
+  assert.equal(context.aiConvs[0].title, '来自云端');
+  assert.equal(SyncLogs.isItemEnabled('ai_conv', 7), false);
+  SyncLogs.setItemEnabled('ai_conv', 7, true);
+  assert.equal(SyncLogs.isItemEnabled('ai_conv', 7), true);
+  assert.equal(JSON.parse(values.get('study_sync_logs_dirty_v2'))['ai_conv/7'], true);
+});
+
 test('cross-device daily report merge persists new messages in the tree without duplicates', async () => {
   const row = {
     kind: 'ai_conv', item_id: '20', updated_at: '2026-08-25T08:02:00Z',
@@ -709,4 +736,119 @@ test('cancelling a cloud deletion does not write to the cloud', async () => {
   const { SyncLogs } = loadSyncLogs({}, { client: cloud.client, confirm: () => false });
   assert.equal((await SyncLogs.deleteCloudConversation('7')).cancelled, true);
   assert.equal(cloud.writes(), 0);
+});
+
+function logRowsClient(rows) {
+  return {
+    auth: { getSession: () => ({ data: { session: { user: { id: 'u1' } } } }) },
+    from() { return {
+      select() { return this; }, eq() { return this; }, in() { return this; },
+      then(resolve, reject) { return Promise.resolve({ data: rows, error: null }).then(resolve, reject); }
+    }; }
+  };
+}
+
+for (const kind of ['bk_explain', 'bk_qa', 'ai_conv']) {
+  test(`${kind}: failed IndexedDB commit rolls back and retries without advancing timestamps`, async () => {
+    const storageKey = kind === 'ai_conv' ? 'study_ai_convs' : kind === 'bk_qa' ? 'study_bk_qa_logs_v1' : 'study_bk_explain_logs_v1';
+    const oldMessages = [{ role: 'user', content: 'old' }];
+    const cloudMessages = [{ role: 'assistant', content: 'cloud' }];
+    const initial = kind === 'ai_conv' ? [{ id: 7, title: 'old', messages: oldMessages }] : { '7': oldMessages };
+    const rows = [{ kind, item_id: '7', updated_at: '2026-10-29T00:00:00Z',
+      data: { meta: { id: 7, title: 'cloud' }, items: cloudMessages } }];
+    let fail = true, refreshed = 0;
+    const commits = [];
+    const client = logRowsClient(rows);
+    const h = loadSyncLogs({ [storageKey]: initial }, { client,
+      aiConvs: kind === 'ai_conv' ? JSON.parse(JSON.stringify(initial)) : [],
+      refreshSyncedBooks: () => refreshed++,
+      StudyData: { flush: async keys => { commits.push(keys); if (fail) throw new Error('disk full'); } }
+    });
+    await assert.rejects(h.SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client), /disk full/);
+    assert.deepEqual(JSON.parse(h.values.get(storageKey)), initial);
+    assert.equal(JSON.parse(h.values.get('study_sync_logs_ts') || '{}')[kind + '/7'], undefined);
+    assert.equal(JSON.parse(h.values.get('study_sync_logs_cfg') || '{}').pullCursor, undefined);
+    assert.equal(h.state.renders, 0);
+    assert.equal(refreshed, 0);
+    fail = false;
+    await h.SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client);
+    const saved = JSON.parse(h.values.get(storageKey));
+    assert.deepEqual(kind === 'ai_conv' ? saved[0].messages : saved['7'], cloudMessages);
+    assert.equal(JSON.parse(h.values.get('study_sync_logs_ts'))[kind + '/7'], rows[0].updated_at);
+    assert.ok(commits.every(keys => keys[0] === storageKey));
+    assert.equal(kind === 'ai_conv' ? h.state.renders : refreshed, 1);
+  });
+}
+
+test('pull waits for durable commit before acknowledging data or redrawing books', async () => {
+  let finish, refreshed = 0;
+  const client = logRowsClient([{ kind: 'bk_qa', item_id: '7', updated_at: '2026-10-29T00:00:00Z', data: { items: [{ content: 'new' }] } }]);
+  const h = loadSyncLogs({}, { client, refreshSyncedBooks: () => refreshed++,
+    StudyData: { flush: () => new Promise(resolve => { finish = resolve; }) } });
+  const pulling = h.SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client);
+  for (let i = 0; !finish && i < 30; i++) await Promise.resolve();
+  assert.equal(typeof finish, 'function');
+  assert.equal(refreshed, 0);
+  assert.equal(JSON.parse(h.values.get('study_sync_logs_ts') || '{}')['bk_qa/7'], undefined);
+  finish();
+  await pulling;
+  assert.equal(refreshed, 1);
+  assert.equal(JSON.parse(h.values.get('study_sync_logs_ts'))['bk_qa/7'], '2026-10-29T00:00:00Z');
+});
+
+test('resolving a textbook log conflict applies the cloud version durably and refreshes books', async () => {
+  let refreshed = 0;
+  const client = logRowsClient([{ kind: 'bk_qa', item_id: '7', updated_at: '2026-10-29T00:00:00Z', data: { items: [{ content: 'new' }] } }]);
+  const h = loadSyncLogs({ study_sync_logs_conflicts_v2: { 'bk_qa/7': { kind: 'bk_qa', itemId: '7' } } },
+    { client, refreshSyncedBooks: () => refreshed++, StudyData: { flush: async () => {} } });
+  assert.equal((await h.SyncLogs.resolveConflict('bk_qa', '7', 'remote')).ok, true);
+  assert.equal(refreshed, 1);
+});
+
+for (const fail of [false, true]) {
+  test(`a local log edit during remote commit remains pending when commit ${fail ? 'fails' : 'succeeds'}`, async () => {
+    let finish;
+    const client = logRowsClient([{ kind: 'bk_qa', item_id: '7', updated_at: '2026-10-29T00:00:00Z', data: { items: [{ content: 'cloud' }] } }]);
+    const h = loadSyncLogs({}, { client,
+      StudyData: { flush: () => new Promise((resolve, reject) => { finish = fail ? () => reject(new Error('disk full')) : resolve; }) } });
+    const pulling = h.SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client);
+    for (let i = 0; !finish && i < 30; i++) await Promise.resolve();
+    assert.equal(typeof finish, 'function');
+    h.values.set('study_bk_qa_logs_v1', JSON.stringify({ '7': [{ content: 'cloud' }, { content: 'local edit' }] }));
+    finish();
+    if (fail) await assert.rejects(pulling, /disk full/);
+    else await pulling;
+    assert.equal(JSON.parse(h.values.get('study_bk_qa_logs_v1'))['7'][1].content, 'local edit');
+    assert.equal(JSON.parse(h.values.get('study_sync_logs_dirty_v2'))['bk_qa/7'], true);
+  });
+}
+
+test('failed durable remote deletion restores the conversation and active selection', async () => {
+  const conv = { id: 7, title: 'local', messages: [] };
+  const client = logRowsClient([{ kind: 'ai_conv', item_id: '7', updated_at: '2026-10-29T00:00:00Z', data: { deleted: true, items: [] } }]);
+  const h = loadSyncLogs({ study_ai_convs: [conv] }, { client, aiConvs: [conv], activeConvId: 7,
+    StudyData: { flush: async () => { throw new Error('disk full'); } } });
+  await assert.rejects(h.SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client), /disk full/);
+  assert.equal(h.context.activeConvId, 7);
+  assert.equal(h.context.aiConvs[0].id, 7);
+  assert.equal(JSON.parse(h.values.get('study_ai_convs'))[0].id, 7);
+  assert.equal(JSON.parse(h.values.get('study_sync_logs_ts') || '{}')['ai_conv/7'], undefined);
+});
+
+test('a concurrent local conversation edit is not rolled back by a failed remote deletion commit', async () => {
+  let rejectCommit;
+  const conv = { id: 7, title: 'local', messages: [] };
+  const client = logRowsClient([{ kind: 'ai_conv', item_id: '7', updated_at: '2026-10-29T00:00:00Z', data: { deleted: true, items: [] } }]);
+  const h = loadSyncLogs({ study_ai_convs: [conv] }, { client, aiConvs: [conv], activeConvId: 7,
+    StudyData: { flush: () => new Promise((_, reject) => { rejectCommit = reject; }) } });
+  const pulling = h.SyncLogs.__test.pullItems({ user: { id: 'u1' } }, client);
+  for (let i = 0; !rejectCommit && i < 30; i++) await Promise.resolve();
+  assert.equal(typeof rejectCommit, 'function');
+  h.context.aiConvs[0].title = 'new local edit';
+  h.context.safeSaveAiConvs();
+  rejectCommit(new Error('disk full'));
+  await assert.rejects(pulling, /disk full/);
+  assert.equal(h.context.aiConvs[0].title, 'new local edit');
+  assert.equal(JSON.parse(h.values.get('study_ai_convs'))[0].title, 'new local edit');
+  assert.equal(JSON.parse(h.values.get('study_sync_logs_dirty_v2'))['ai_conv/*'], true);
 });

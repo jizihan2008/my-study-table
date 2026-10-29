@@ -34,6 +34,51 @@ async function setup(source) {
   }, source);
 }
 
+for (const split of [false, true]) {
+  test(`radical SVG survives formula editing and paste in ${split ? 'split' : 'main'} editor`, async () => {
+    const latex = String.raw`\sqrt[3]{\frac{1+x^2}{\sqrt{y}}}`;
+    await setup('公式 $x$');
+    if (split) await page.evaluate(() => {
+      setNotesImmersive(true);
+      setNotesImmersiveSplit(true);
+      setNotesSplitSecondaryMode('rich');
+    });
+    const host = split ? '#notesSplitRichEditor' : '#notesRichEditor';
+    await doubleClickMath(`${host} .katex`);
+    await page.getByLabel('LaTeX 源码').fill(latex);
+    for (const mode of ['display', 'inline']) {
+      await page.getByLabel('公式类型').selectOption(mode);
+      await expect(page.locator('.note-math-preview .sqrt svg path')).toHaveCount(2);
+    }
+    await page.locator('.note-math-save').click();
+    await expect(page.locator(`${host} .sqrt svg path`)).toHaveCount(2);
+    expect(await page.locator(`${host} .sqrt svg`).first().evaluate(node => {
+      const box = node.getBoundingClientRect();
+      return box.width > 0 && box.height > 0 && !!node.getAttribute('viewBox');
+    })).toBe(true);
+    const saved = await page.evaluate(() => getActiveNote().content);
+    expect(saved).toContain('$' + latex + '$');
+    await page.locator(host).evaluate((element, latex) => {
+      element.focus();
+      const range = document.createRange();
+      range.selectNodeContents(element);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      const data = new DataTransfer();
+      data.setData('text/html', katex.renderToString(latex));
+      element.dispatchEvent(new ClipboardEvent('paste', { clipboardData: data, bubbles: true, cancelable: true }));
+    }, latex);
+    await expect(page.locator(`${host} .sqrt svg path`)).toHaveCount(2);
+    if (split) await page.evaluate(() => setNotesImmersiveSplit(false));
+    await page.evaluate(() => switchNoteView('edit'));
+    expect(await page.locator('#notesTextarea').inputValue()).toContain(latex);
+    await page.evaluate(() => switchNoteView('preview'));
+    await expect(page.locator('#notesPreview .sqrt svg path')).toHaveCount(2);
+    await page.evaluate(() => switchNoteView('rich'));
+    await expect(page.locator('#notesRichEditor .sqrt svg path')).toHaveCount(2);
+  });
+}
+
 test('LaTeX toolbar inserts an editable inline formula at the selected text', async () => {
   await setup('前文 x^2 后文');
   await page.evaluate(() => {
@@ -46,7 +91,7 @@ test('LaTeX toolbar inserts an editable inline formula at the selected text', as
     getSelection().removeAllRanges();
     getSelection().addRange(range);
   });
-  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.locator('#notesFormatToolbar button[title^="LaTeX 公式"]').click();
   await expect(page.locator('.note-math-dialog')).toBeVisible();
   await expect(page.getByLabel('LaTeX 源码')).toHaveValue('x^2');
   await page.getByLabel('LaTeX 源码').fill(String.raw`\frac{x}{2}`);
@@ -79,7 +124,7 @@ for (const [name, source, selector] of [
       getSelection().removeAllRanges();
       getSelection().addRange(range);
     }, selector);
-    await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+    await page.locator('#notesFormatToolbar button[title^="LaTeX 公式"]').click();
     await page.locator('.note-math-save').click();
     await expect(page.locator(`#notesRichEditor ${selector} .katex`)).toHaveAttribute('data-latex', 'x^2');
     expect(await page.evaluate(() => getActiveNote().content)).toBe(source.replace('x^2', '$x^2$'));
@@ -98,7 +143,7 @@ test('invalid or cancelled LaTeX insertion keeps the original note and caret', a
     getSelection().removeAllRanges();
     getSelection().addRange(range);
   });
-  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.locator('#notesFormatToolbar button[title^="LaTeX 公式"]').click();
   await page.getByLabel('LaTeX 源码').fill(String.raw`\frac{`);
   await expect(page.locator('.note-math-save')).toBeDisabled();
   await page.getByLabel('LaTeX 源码').press('Control+Enter');
@@ -134,7 +179,7 @@ test('LaTeX toolbar inserts only into the secondary editor without switching pan
   });
   await page.mouse.move(400, 2);
   await expect(page.locator('#section-notes')).toHaveClass(/show-top-controls/);
-  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.locator('#notesFormatToolbar button[title^="LaTeX 公式"]').click();
   await page.getByLabel('LaTeX 源码').fill('x^2');
   await page.locator('.note-math-save').click();
   await expect(page.locator('#notesSplitRichEditor .katex')).toHaveAttribute('data-latex', 'x^2');
@@ -330,7 +375,7 @@ test('new formula can be inserted in display mode', async () => {
     getSelection().removeAllRanges();
     getSelection().addRange(range);
   });
-  await page.locator('#notesFormatToolbar button[title="LaTeX 公式 (∑)"]').click();
+  await page.locator('#notesFormatToolbar button[title^="LaTeX 公式"]').click();
   await page.getByLabel('公式类型').selectOption('display');
   await page.locator('.note-math-save').click();
   await expect(page.locator('#notesRichEditor .katex-display')).toHaveCount(1);

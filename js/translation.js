@@ -19,6 +19,44 @@
   let cetLevel = 'cet4';
   const CET_SESSION_SIZE = 20;
   const cetCards = new Map();
+  let syncedViewSignature = '';
+  let searchComposing = false;
+  let syncedRefreshPending = false;
+
+  function refreshSyncedData() {
+    const signature = JSON.stringify([HISTORY_KEY, cetProgressKey('cet4'), cetProgressKey('cet6')]
+      .map(key => global.localStorage.getItem(key)));
+    if (signature === syncedViewSignature) return;
+    if (searchComposing) { syncedRefreshPending = true; return; }
+    cache.clear();
+    if (reviewSession) {
+      // 保留当前卡和翻面状态；远端已复习/删除的后续卡从本轮队列移除。
+      const remaining = new Set(currentReviewQueue(false).map(entry => entry.id));
+      const existing = new Set(currentReviewEntries().map(entry => entry.id));
+      const current = reviewSession.ids[reviewSession.index];
+      const before = reviewSession.ids.slice(0, reviewSession.index);
+      const after = reviewSession.ids.slice(reviewSession.index + 1).filter(id => remaining.has(id));
+      reviewSession.ids = [...before, ...(existing.has(current) ? [current] : []), ...after];
+      if (!existing.has(current)) reviewSession.revealed = false;
+    }
+    const app = document.getElementById('translationApp');
+    if (app) {
+      const search = document.getElementById('translationPageSearch');
+      const focused = search && document.activeElement === search;
+      const selection = focused ? [search.selectionStart, search.selectionEnd] : null;
+      const scrollTop = app.scrollTop;
+      renderTranslationPage();
+      app.scrollTop = scrollTop;
+      if (focused) {
+        const next = document.getElementById('translationPageSearch');
+        next?.focus({ preventScroll: true });
+        if (selection[0] != null) next?.setSelectionRange(...selection);
+      }
+    }
+    refreshTodayFlashcards();
+    syncedViewSignature = signature;
+    syncedRefreshPending = false;
+  }
 
   function cetProgressKey(level) {
     return 'study_translation_' + level + '_progress_v1';
@@ -760,6 +798,11 @@
       reviewSession = null;
       renderTranslationPage();
     });
+    app.querySelector('#translationPageSearch').addEventListener('compositionstart', () => { searchComposing = true; });
+    app.querySelector('#translationPageSearch').addEventListener('compositionend', () => {
+      searchComposing = false;
+      if (syncedRefreshPending) refreshSyncedData();
+    });
     app.querySelector('#translationPageSearch').addEventListener('input', event => {
       pageQuery = event.target.value;
       renderTranslationList();
@@ -868,6 +911,7 @@
     getCetReviewQueue,
     gradeCetReview: (level, entryId, rating, reviewedAt) => gradeReview(entryId, rating, reviewedAt, level),
     renderPage: renderTranslationPage,
+    refreshSyncedData,
     translate: getTranslation,
     openTranslation(text, anchor = {}) {
       const normalized = normalizeSelection(text);

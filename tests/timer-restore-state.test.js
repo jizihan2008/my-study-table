@@ -42,6 +42,7 @@ function createContext(options) {
   const opts = options || {};
   let records = [];
   const store = new Map();
+  const published = [];
   if (opts.savedState) store.set('study_timer_state', JSON.stringify(opts.savedState));
 
   const elements = new Map();
@@ -62,12 +63,14 @@ function createContext(options) {
     console,
     Date, JSON, String, Number, Math, Array, Object, RegExp, parseInt, parseFloat, isNaN, Boolean, Set, Map,
     setTimeout: () => 0,
+    requestAnimationFrame: () => 0,
     setInterval: () => 1,
     clearInterval: () => {},
     performance: opts.navigationType ? { getEntriesByType: type => type === 'navigation' ? [{ type: opts.navigationType }] : [] } : undefined,
     formatDate: d => localDateStr(d.getTime()),
     saveData: (key, value) => {
       if (key === 'study_timer_records') records = JSON.parse(JSON.stringify(value));
+      if (key === 'study_timer_live_state') published.push(JSON.parse(JSON.stringify(value)));
       return true;
     },
     localStorage: {
@@ -85,7 +88,7 @@ function createContext(options) {
     makeTimerFloatDraggable: () => {},
     showCustomConfirm: () => Promise.resolve(true),
     document: documentStub,
-    window: { addEventListener: () => {}, innerWidth: 1200, innerHeight: 800 },
+    window: { Sync: { timerStateSync: !!opts.timerStateSync }, addEventListener: () => {}, innerWidth: 1200, innerHeight: 800 },
     lucide: { createIcons: () => {} },
     todos: [],
     getChildren: () => [],
@@ -100,6 +103,7 @@ function createContext(options) {
   vm.runInContext(timerSource, context);
   return {
     ctx: context,
+    published,
     getRecords: () => records,
     state: () => (store.has('study_timer_state') ? JSON.parse(store.get('study_timer_state')) : null)
   };
@@ -479,4 +483,44 @@ test('相同名称的休息与其它时段不会自动合并', () => {
     { id: 2, name: '间歇', date: '2026-10-12', activityType: 'other', affectsFocus: false, totalMs: 1000, sessions: [{ start: 2000, end: 3000 }] }
   ];
   assert.equal(ctx.mergeAdjacentTimerRecords(records).length, 2);
+});
+
+test('计时状态开关仅在控制操作发布，tick 和接收远端不回传、不重复生成记录', () => {
+  const h = createContext({ timerStateSync: true });
+  vm.runInContext(`timerStart(); saveTimerState(); saveTimerState();`, h.ctx);
+  assert.equal(h.published.length, 1);
+  assert.equal(h.published[0].running, true);
+  vm.runInContext('timerPause();', h.ctx);
+  assert.equal(h.published.length, 2);
+  assert.equal(h.published[1].running, false);
+  vm.runInContext('timerStart(); timerSessionStart -= 60000; timerStop();', h.ctx);
+  assert.equal(h.published.length, 4);
+  assert.equal(h.published[3].running, false);
+  assert.equal(h.published[3].elapsed, 0);
+  assert.equal(h.getRecords().length, 1);
+  const snapshot = { ...h.published[0], elapsed: 1000, sessionStart: Date.now() - 30000, name: '远端开始' };
+  h.ctx.remoteState = snapshot;
+  vm.runInContext('applySyncedTimerState(remoteState); saveTimerState();', h.ctx);
+  assert.equal(timerState(h).running, true);
+  assert.equal(timerState(h).sessionStart, snapshot.sessionStart);
+  assert.equal(timerState(h).elapsed, 1000);
+  assert.equal(h.published.length, 4);
+  h.ctx.remoteState = h.published[3];
+  vm.runInContext('applySyncedTimerState(remoteState);', h.ctx);
+  assert.equal(timerState(h).running, false);
+  assert.equal(timerState(h).elapsed, 0);
+  assert.equal(h.getRecords().length, 1);
+  assert.equal(h.published.length, 4);
+  vm.runInContext('timerStart(); timerReset();', h.ctx);
+  assert.equal(h.published.at(-1).running, false);
+  assert.equal(h.published.at(-1).elapsed, 0);
+});
+
+test('默认关闭时开始停止仍保存记录，但不发布或接收云端状态', () => {
+  const h = createContext();
+  vm.runInContext(`timerStart(); timerSessionStart -= 60000; timerStop();
+    applySyncedTimerState({ running: true, elapsed: 0, sessionStart: Date.now() });`, h.ctx);
+  assert.equal(h.published.length, 0);
+  assert.equal(h.getRecords().length, 1);
+  assert.equal(timerState(h).running, false);
 });

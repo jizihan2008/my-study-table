@@ -26,6 +26,68 @@ let selectedPromptTemplate = 'chat';
 let selectedPromptView = 'source';
 let promptSelection = { start: 0, end: 0 };
 let promptEditorResizeObserver = null;
+const promptSyncedDrafts = new Map();
+let promptRenderedValue = '';
+let promptRenderedId = null;
+let promptRenderedDef = null;
+let promptViewSignature = '';
+let promptComposing = false;
+
+function showPromptSyncNotice() {
+  const draft = promptSyncedDrafts.get(promptRenderedId);
+  const root = document.getElementById('promptStudio');
+  if (!draft || !root || document.getElementById('promptSyncNotice')) return;
+  const notice = document.createElement('div');
+  notice.id = 'promptSyncNotice';
+  notice.setAttribute('role', 'status');
+  notice.style.cssText = 'grid-column:1/-1;padding:12px;border:1px solid var(--border);border-radius:8px;';
+  notice.innerHTML = '提示词已有同步更新，当前编辑内容已保留。 <button type="button" data-keep>保留我的版本</button> <button type="button" data-cloud>使用同步版本</button>';
+  notice.querySelector('[data-keep]').addEventListener('click', () => {
+    const area = document.getElementById('promptTemplateText');
+    const saved = loadPromptTemplates();
+    if (draft.def.id.startsWith('custom-') && !getPromptTemplateDefs().some(def => def.id === draft.def.id)) {
+      saved.customTemplates = [...(saved.customTemplates || []), { id: draft.def.id, name: draft.def.name }];
+    }
+    saved[draft.def.id] = area ? area.value : draft.value;
+    persistPromptTemplates(saved);
+    promptSyncedDrafts.delete(draft.def.id);
+    renderPromptStudio();
+  });
+  notice.querySelector('[data-cloud]').addEventListener('click', () => {
+    promptSyncedDrafts.delete(draft.def.id);
+    renderPromptStudio();
+  });
+  root.prepend(notice);
+}
+
+function refreshSyncedPromptStudio() {
+  const signature = localStorage.getItem(PROMPT_TEMPLATES_KEY) || '';
+  if (signature === promptViewSignature) return;
+  const area = document.getElementById('promptTemplateText');
+  if (area && promptRenderedId && area.value !== getPromptTemplate(promptRenderedId) &&
+      (area.value !== promptRenderedValue || promptComposing || promptSyncedDrafts.has(promptRenderedId))) {
+    const def = promptRenderedDef || getPromptTemplateDefs().find(def => def.id === promptRenderedId) ||
+      promptSyncedDrafts.get(promptRenderedId)?.def || { id: promptRenderedId, name: '当前模板', icon: 'file-text' };
+    promptSyncedDrafts.set(promptRenderedId, { value: area.value, def });
+    showPromptSyncNotice();
+    promptViewSignature = signature;
+    return;
+  }
+  if (promptComposing) return;
+  const root = document.getElementById('promptStudio');
+  if (root) {
+    const focused = area && document.activeElement === area;
+    const selection = focused ? [area.selectionStart, area.selectionEnd] : null;
+    const scrollTop = area?.scrollTop || 0;
+    renderPromptStudio();
+    const next = document.getElementById('promptTemplateText');
+    if (focused && next) {
+      next.focus({ preventScroll: true });
+      if (selection[0] != null) next.setSelectionRange(...selection);
+      next.scrollTop = scrollTop;
+    }
+  }
+}
 
 function promptEsc(value) {
   if (typeof escapeHtml === 'function') return escapeHtml(String(value ?? ''));
@@ -263,8 +325,13 @@ function renderPromptStudio() {
   if (!root) return;
   if (promptEditorResizeObserver) promptEditorResizeObserver.disconnect();
   const defs = getPromptTemplateDefs();
+  for (const { def } of promptSyncedDrafts.values()) if (!defs.some(item => item.id === def.id)) defs.push(def);
   const def = defs.find(item => item.id === selectedPromptTemplate) || defs[0];
-  const value = getPromptTemplate(def.id);
+  const value = promptSyncedDrafts.get(def.id)?.value ?? getPromptTemplate(def.id);
+  promptRenderedId = def.id;
+  promptRenderedDef = def;
+  promptRenderedValue = value;
+  promptViewSignature = localStorage.getItem(PROMPT_TEMPLATES_KEY) || '';
   const previewContext = promptPreviewContext(def.id);
   root.innerHTML = `
     <aside class="prompt-library" aria-label="提示词模板">
@@ -273,7 +340,7 @@ function renderPromptStudio() {
       <div class="prompt-template-list">${defs.map(item => `<button type="button" class="prompt-template-card ${item.id === def.id ? 'active' : ''}" data-template-id="${item.id}"><span class="prompt-template-icon"><i data-lucide="${item.icon}"></i></span><span class="prompt-template-copy"><strong>${promptEsc(item.name)}</strong><small>${item.description}</small></span></button>`).join('')}</div>
     </aside>
     <main class="prompt-editor-shell">
-      <header class="prompt-editor-header"><div class="prompt-title-fields"><span class="prompt-current-label">正在编辑模板</span><strong class="prompt-name-input">${promptEsc(def.name)}</strong></div><div class="prompt-editor-actions"><span class="prompt-save-state" id="promptSaveState">已保存</span>${def.id.startsWith('custom-') ? '<button class="prompt-copy-btn" type="button" id="promptDeleteBtn"><i data-lucide="trash-2"></i>删除模板</button>' : '<button class="prompt-copy-btn" type="button" id="promptResetBtn"><i data-lucide="rotate-ccw"></i>恢复默认</button>'}</div></header>
+      <header class="prompt-editor-header"><div class="prompt-title-fields"><span class="prompt-current-label">正在编辑模板</span><strong class="prompt-name-input">${promptEsc(def.name)}</strong></div><div class="prompt-editor-actions"><span class="prompt-save-state" id="promptSaveState">${promptSyncedDrafts.has(def.id) ? '本地草稿，待选择同步版本' : '已保存'}</span>${def.id.startsWith('custom-') ? '<button class="prompt-copy-btn" type="button" id="promptDeleteBtn"><i data-lucide="trash-2"></i>删除模板</button>' : '<button class="prompt-copy-btn" type="button" id="promptResetBtn"><i data-lucide="rotate-ccw"></i>恢复默认</button>'}</div></header>
       <div class="prompt-workspace prompt-template-workspace">
         <section class="prompt-builder prompt-full-editor">
           <div class="prompt-builder-intro prompt-view-header"><div class="prompt-view-tabs" role="tablist" aria-label="提示词视图"><button type="button" class="${selectedPromptView === 'source' ? 'active' : ''}" data-prompt-view="source" role="tab" aria-selected="${selectedPromptView === 'source'}">提示词全文</button><button type="button" class="${selectedPromptView === 'preview' ? 'active' : ''}" data-prompt-view="preview" role="tab" aria-selected="${selectedPromptView === 'preview'}">当前数据预览</button><button type="button" class="${selectedPromptView === 'data' ? 'active' : ''}" data-prompt-view="data" role="tab" aria-selected="${selectedPromptView === 'data'}">数据概览</button></div><div class="prompt-view-meta"><span id="promptLength">${value.length} 字符</span><button type="button" class="prompt-copy-btn" id="promptCopyBtn" ${selectedPromptView === 'preview' ? '' : 'hidden'}><i data-lucide="copy"></i>复制示例</button></div></div>
@@ -294,11 +361,15 @@ function renderPromptStudio() {
     }
   }, true);
   const area = root.querySelector('#promptTemplateText');
+  area.value = value;
+  area.addEventListener('compositionstart', () => { promptComposing = true; });
+  area.addEventListener('compositionend', () => { promptComposing = false; refreshSyncedPromptStudio(); });
   area.addEventListener('input', () => {
     promptSelection = { start: area.selectionStart, end: area.selectionEnd };
-    savePromptTemplate(def.id, area.value);
+    if (promptSyncedDrafts.has(def.id)) promptSyncedDrafts.get(def.id).value = area.value;
+    else savePromptTemplate(def.id, area.value);
     root.querySelector('#promptLength').textContent = `${area.value.length} 字符`;
-    root.querySelector('#promptSaveState').textContent = '已保存';
+    root.querySelector('#promptSaveState').textContent = promptSyncedDrafts.has(def.id) ? '本地草稿，待选择同步版本' : '已保存';
     refreshPromptTokenHighlights();
     refreshPromptTemplatePreview();
   });
@@ -340,6 +411,7 @@ function renderPromptStudio() {
   });
   refreshPromptTemplatePreview();
   refreshPromptTokenHighlights();
+  showPromptSyncNotice();
   if (typeof lucide !== 'undefined') lucide.createIcons();
 }
 

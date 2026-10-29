@@ -445,6 +445,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
 // ═══════════ Tab Switching ═══════════
 function switchTab(tab) {
+  if (tab === 'ai' && typeof closeAiFloat === 'function') closeAiFloat(false);
   // Save AI chat draft when leaving AI page
   if (document.getElementById('section-ai')?.classList.contains('active') && tab !== 'ai') {
     if (typeof saveAiDraft === 'function') saveAiDraft();

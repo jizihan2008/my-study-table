@@ -12,6 +12,8 @@
   let footnoteLabels = [];
   let footnoteDefinitions = '';
   let mathPointerStart = null;
+  let foldPointerType = '';
+  let foldTouchToggle = null;
   let closeMathEditor = null;
   let pendingFoldTitle = null;
   let composingFoldTitle = null;
@@ -147,6 +149,12 @@
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const tag = node.tagName.toLowerCase();
     const children = () => Array.from(node.childNodes).map(inline).join('');
+    if (node.matches('.note-important-inline')) {
+      const title = node.querySelector(':scope > .note-important-title')?.textContent || '';
+      const body = node.querySelector(':scope > .note-important-body');
+      return '=={' + title.replace(/([\\}])/g, '\\$1').replace(/\n/g, ' ') + '}'
+        + Array.from(body?.childNodes || []).map(inline).join('').replace(/==/g, '\\=\\=').replace(/\n/g, '<br>') + '==';
+    }
     if (tag === 'br') return '\n';
     const emphasis = (marker, selector) => {
       const value = children();
@@ -295,6 +303,12 @@
     // Native paste may place an atomic inline formula directly inside a quote.
     // Keep it as TeX instead of serializing its MathML and visual DOM separately.
     if (node.classList.contains('katex')) return inline(node);
+    if (node.matches('.note-important-block')) {
+      const title = node.querySelector(':scope > .note-important-title')?.textContent || '';
+      const body = node.querySelector(':scope > .note-important-body');
+      return ':::important ' + title.replace(/\\/g, '\\\\').replace(/\n/g, ' ') + '\n'
+        + serializeBlocks(body?.childNodes || []) + '\n:::';
+    }
     if (tag === 'details') {
       const summary = Array.from(node.children).find(child => child.tagName === 'SUMMARY');
       const body = Array.from(node.children).find(child => child.classList.contains('note-fold-body'));
@@ -317,7 +331,15 @@
       // request to create a fold. Never inject the new-fold placeholder here.
       return ':::fold ' + (title || '折叠内容') + '\n' + bodyMarkdown + '\n:::';
     }
-    if (tag === 'p') return Array.from(node.childNodes).map(inline).join('').replace(/\n+$/g, '');
+    if (tag === 'p' || (tag === 'div' && !node.matches('.markdown-math-display, .katex-display, .footnotes')
+      && !Array.from(node.children).some(child => blockTags.has(child.tagName)))) {
+      const value = Array.from(node.childNodes).map(inline).join('').replace(/\n+$/g, '');
+      // Markdown ignores empty paragraphs. An explicit break keeps authored
+      // blank lines through saving, reading and rich/source round trips.
+      // Bare zero-width nodes are caret boundaries added around display math.
+      if (!value.trim() && node.textContent === '\u200b') return '';
+      return value.trim() ? value : '<br>';
+    }
     if (/^h[1-6]$/.test(tag)) return '#'.repeat(Number(tag[1])) + ' ' + Array.from(node.childNodes).map(inline).join('').trim();
     if (tag === 'ul' || tag === 'ol') return serializeList(node, 0);
     if (tag === 'pre') {
@@ -424,7 +446,7 @@
       }
     };
     mergeFormatting(source);
-    let markdown = serializeBlocks(source.childNodes).replace(/\n{3,}/g, '\n\n').trim();
+    let markdown = serializeBlocks(source.childNodes).trim();
     if (footnoteDefinitions) markdown += (markdown ? '\n\n' : '') + footnoteDefinitions;
     currentMarkdown = markdown;
     return markdown;
@@ -491,7 +513,7 @@
         preview.innerHTML = root.DOMPurify.sanitize(root.katex.renderToString(
           root.StudyMarkdown?.normalizeLatex ? root.StudyMarkdown.normalizeLatex(input.value.trim()) : input.value.trim(),
           { displayMode, throwOnError: true, trust: false, strict: 'warn', output: 'htmlAndMathml' }
-        ), { USE_PROFILES: { html: true, mathMl: true } });
+        ), { USE_PROFILES: { html: true, svg: true, mathMl: true } });
         replacement = preview.querySelector('.katex');
       } catch (reason) {
         error.textContent = reason.message || '公式暂时无法渲染，请检查源码。';
@@ -647,6 +669,49 @@
       if (savedRange) restoreRange(savedRange);
       insertHtml('<code>' + (text || '代码').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code>');
       return;
+    } else if (type === 'important-inline' || type === 'important-block') {
+      const isBlock = type === 'important-block';
+      const range = isBlock ? expandWholeBlockSelection(savedRange) : savedRange;
+      restoreRange(range);
+      const tag = isBlock ? 'div' : 'span';
+      let body = '重点内容';
+      if (range && !range.collapsed) {
+        if (isBlock) body = rangeContentsHtml(range);
+        else {
+          const fragment = document.createElement('div');
+          fragment.appendChild(range.cloneContents());
+          Array.from(fragment.querySelectorAll('p, div, h1, h2, h3, h4, h5, h6, li, ul, ol, blockquote')).reverse().forEach(node => {
+            node.replaceWith(...node.childNodes, document.createElement('br'));
+          });
+          body = fragment.innerHTML.replace(/(?:<br>)+$/, '');
+        }
+      }
+      const html = '<' + tag + ' class="note-important note-important-' + (isBlock ? 'block' : 'inline')
+        + '"><' + tag + ' class="note-important-title">重点</' + tag + '><' + tag
+        + ' class="note-important-body">' + body + '</' + tag + '></' + tag + '>'
+        + (isBlock ? '<p><br></p>' : '&#8203;');
+      const insertion = range || document.createRange();
+      if (!range) { insertion.selectNodeContents(host); insertion.collapse(false); }
+      insertion.deleteContents();
+      if (isBlock) {
+        const element = insertion.startContainer.nodeType === Node.ELEMENT_NODE ? insertion.startContainer : insertion.startContainer.parentElement;
+        const paragraph = element.closest('p,h1,h2,h3,h4,h5,h6');
+        if (paragraph && host.contains(paragraph)) {
+          const tailRange = insertion.cloneRange();
+          tailRange.setEnd(paragraph, paragraph.childNodes.length);
+          const tail = paragraph.cloneNode(false);
+          tail.appendChild(tailRange.extractContents());
+          if (tail.textContent || tail.querySelector('img,br,.katex')) paragraph.after(tail);
+          insertion.setStartAfter(paragraph); insertion.collapse(true);
+        }
+      }
+      const fragment = insertion.createContextualFragment(html);
+      const title = fragment.firstChild.querySelector('.note-important-title');
+      insertion.insertNode(fragment);
+      const caret = document.createRange(); caret.selectNodeContents(title);
+      restoreRange(caret);
+      notifyChange({ historyBoundary: true });
+      return;
     } else if (type === 'note-jump') {
       const noteId = currentNoteId;
       const result = await root.openNoteLinkDialog?.(noteId);
@@ -740,8 +805,17 @@
       return;
     } else if (type === 'footnote') {
       // Complex source-oriented nodes keep the existing proven Markdown workflow.
-      root.switchNoteView?.('edit');
-      setTimeout(() => root.formatText?.(type), 0);
+      const split = host.id === 'notesSplitRichEditor';
+      if (split) root.setNotesSplitSecondaryMode?.('edit');
+      else root.switchNoteView?.('edit');
+      setTimeout(() => {
+        const source = document.getElementById(split ? 'notesSplitTextarea' : 'notesTextarea');
+        source?.focus({ preventScroll: true });
+        // The source pane can retain a selection from an earlier editing session.
+        // Append the reference instead of replacing that unrelated selection.
+        source?.setSelectionRange(source.value.length, source.value.length);
+        root.formatText?.(type);
+      }, 0);
       return;
     } else return;
     notifyChange();
@@ -976,11 +1050,11 @@
     const html = clipboard?.getData('text/html') || '';
     const titleRange = foldTitleRange();
     if (html && root.DOMPurify) {
-      // Keep the renderer's spans, MathML, images and task checkboxes.
-      // DOMPurify's default HTML/MathML profiles still remove executable content.
+      // Keep KaTeX's SVG radicals and stretchy operators along with MathML.
+      // DOMPurify's profiles still remove executable content.
       const container = document.createElement('div');
       container.innerHTML = root.DOMPurify.sanitize(html, {
-        USE_PROFILES: { html: true, mathMl: true },
+        USE_PROFILES: { html: true, svg: true, mathMl: true },
         ADD_ATTR: ['contenteditable']
       });
       container.querySelectorAll('input').forEach(input => {
@@ -1004,7 +1078,7 @@
                 displayMode: !!math.closest('.katex-display, .markdown-math-display'),
                 throwOnError: false, trust: false, strict: 'warn', output: 'htmlAndMathml'
               }
-            ), { USE_PROFILES: { html: true, mathMl: true } });
+            ), { USE_PROFILES: { html: true, svg: true, mathMl: true } });
             const replacement = rendered.querySelector('.katex');
             if (replacement) {
               replacement.dataset.latex = latex;
@@ -1108,11 +1182,11 @@
 
   function exitEditingBlock() {
     const element = caretElement();
-    let target = element?.closest('pre, ul, ol, table, blockquote, details.note-fold');
+    let target = element?.closest('pre, ul, ol, table, blockquote, details.note-fold, .note-important-block');
     if (!target || !host.contains(target)) return false;
     // Exit all levels of the same structure, while staying in a containing fold
     // or quote when leaving a different structure such as a list or code block.
-    const selector = target.matches('ul, ol') ? 'ul, ol' : target.tagName.toLowerCase();
+    const selector = target.matches('ul, ol') ? 'ul, ol' : target.matches('.note-important-block') ? '.note-important-block' : target.tagName.toLowerCase();
     let parent = target.parentElement?.closest(selector);
     while (parent && host.contains(parent)) {
       target = parent;
@@ -1386,13 +1460,29 @@
       host.addEventListener('scroll', root.onNotePreviewScroll);
     }
     host.addEventListener('pointerdown', event => {
+      foldPointerType = event.pointerType || '';
+      foldTouchToggle = null;
       mathPointerStart = event.target.closest('.katex') && event.button === 0
         ? { x: event.clientX, y: event.clientY } : null;
       const summary = getEditableFoldSummary(event);
       if (summary && isFoldToggleClick(event, summary)) {
         // Keep clicking the disclosure control from moving the editing caret
-        // into the title. The following click still performs the native toggle.
+        // into the title. WebKit suppresses click after a cancelled touch
+        // pointerdown, so complete touch activation on pointerup instead.
         event.preventDefault();
+        if (event.pointerType === 'touch') {
+          foldTouchToggle = { summary, pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+        }
+      }
+    });
+    host.addEventListener('pointercancel', () => { foldTouchToggle = null; });
+    host.addEventListener('pointerup', event => {
+      const tap = foldTouchToggle;
+      foldTouchToggle = null;
+      if (tap && tap.pointerId === event.pointerId && host.contains(tap.summary)
+        && Math.abs(event.clientX - tap.x) < 8 && Math.abs(event.clientY - tap.y) < 8) {
+        const fold = tap.summary.parentElement;
+        fold.open = !fold.open;
       }
     });
     host.addEventListener('click', event => {
@@ -1415,6 +1505,12 @@
         return;
       }
       const summary = getEditableFoldSummary(event);
+      if (summary && isFoldToggleClick(event, summary)
+        && (event.pointerType || foldPointerType) === 'touch' && event.detail !== 0) {
+        // Chromium can still send click after pointerup; do not toggle twice.
+        event.preventDefault();
+        return;
+      }
       if (summary && !isFoldToggleClick(event, summary)) {
         // In editing mode the title is editable text. Cancel the native
         // <summary> activation everywhere except around the disclosure marker.
@@ -1422,7 +1518,13 @@
         // Mouseup has already established drag, Shift-click and multi-click
         // selections. Do not replace those selections with a collapsed caret.
         const selection = window.getSelection();
-        if (event.detail === 1 && !event.shiftKey && selection?.isCollapsed) {
+        // iPad may scroll the visual viewport while placing the native touch
+        // caret with the keyboard open. Repeating hit testing with the click's
+        // coordinates can then move that caret to a different title position.
+        // Keep native touch placement when it has reached this title already.
+        const touchCaretInTitle = (event.pointerType || foldPointerType) === 'touch'
+          && summary.contains(selection?.anchorNode);
+        if (event.detail === 1 && !event.shiftKey && selection?.isCollapsed && !touchCaretInTitle) {
           placeEditingCaretAtPoint(event.clientX, event.clientY, summary);
         }
       }
@@ -1433,6 +1535,15 @@
     host.addEventListener('mouseup', updateToolbarState);
     host.addEventListener('keydown', event => {
       const modifier = event.ctrlKey || event.metaKey;
+      if (!modifier && !event.shiftKey && !event.altKey && !event.isComposing && event.key === 'Enter') {
+        const title = caretElement()?.closest('.note-important-title');
+        const body = title?.parentElement.querySelector(':scope > .note-important-body');
+        if (title && body && host.contains(title)) {
+          event.preventDefault(); event.stopPropagation();
+          const range = document.createRange(); range.selectNodeContents(body); range.collapse(false);
+          restoreRange(range); return;
+        }
+      }
       if (!modifier && !event.shiftKey && !event.altKey && !event.isComposing
         && event.key === 'Enter' && enterFoldBodyFromTitle()) {
         event.preventDefault();
@@ -1460,13 +1571,6 @@
       if (modifier) {
         if (event.key.toLowerCase() === 'a' && selectFoldSectionAtCaret()) {
           event.preventDefault();
-          return;
-        }
-        const actions = { b: 'bold', i: 'italic', u: 'strikethrough', k: 'link' };
-        const action = actions[event.key.toLowerCase()];
-        if (action) {
-          event.preventDefault();
-          command(action);
           return;
         }
       }

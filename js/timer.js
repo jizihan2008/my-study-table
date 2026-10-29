@@ -265,6 +265,39 @@ function clearTimerState() {
   localStorage.removeItem('study_timer_state');
 }
 
+// 云端状态只在明确的控制操作后发布，逐 tick 存档保持本地。
+function publishTimerState() {
+  if (!window.Sync || !window.Sync.timerStateSync) return;
+  saveTimerState();
+  const state = JSON.parse(localStorage.getItem('study_timer_state'));
+  if (typeof saveData === 'function') saveData('study_timer_live_state', state);
+}
+
+function applySyncedTimerState(state) {
+  if (!window.Sync || !window.Sync.timerStateSync || !state || typeof state.running !== 'boolean' ||
+      !Number.isFinite(state.elapsed) || state.elapsed < 0 ||
+      (state.running && (!Number.isFinite(state.sessionStart) || state.sessionStart <= 0))) return;
+  clearInterval(timerInterval);
+  timerInterval = null;
+  timerRunning = state.running;
+  timerElapsed = state.elapsed;
+  timerSessionStart = state.sessionStart || 0;
+  timerSessions = mergeContiguousTimerSessions(state.sessions);
+  timerSessionName = typeof state.name === 'string' ? state.name.slice(0, 80) : '';
+  timerActivityType = getTimerActivityType(state);
+  timerLinkedTodoId = state.linkedTodoId ?? null;
+  timerLinkedGoalId = state.linkedGoalId ?? null;
+  timerLinkedTaskId = state.linkedTaskId ?? null;
+  timerStaleNotice = null;
+  timerResumedFromRestart = false;
+  if (timerRunning) {
+    timerFloatVisible = true;
+    timerInterval = setInterval(() => { updateTimerTick(); saveTimerState(); }, 500);
+  }
+  // 保存到本地恢复存档，绝不反向发布或生成计时记录。
+  saveTimerState();
+}
+
 function loadAndRestoreTimerState() {
   let state;
   try { state = JSON.parse(localStorage.getItem('study_timer_state')); }
@@ -754,6 +787,7 @@ function timerStart() {
     saveTimerState();
   }, 500);
   saveTimerState();
+  publishTimerState();
   renderTimer();
   // 计时开始 → 显示右下角浮窗（只有点击关闭按钮才关闭）
   timerFloatVisible = true;
@@ -770,6 +804,7 @@ function timerPause() {
   clearInterval(timerInterval);
   timerInterval = null;
   saveTimerState();
+  publishTimerState();
   renderTimer();
 }
 
@@ -815,6 +850,7 @@ function timerStop() {
   timerSessions = [];
   timerSessionName = '';
   timerStaleNotice = null;
+  publishTimerState();
   clearTimerState();
   if (!timerHistoryExpanded) { timerHistoryExpanded = true; animateTimerHistoryExpand(); }
   else renderTimer();
@@ -835,6 +871,7 @@ function timerSave() {
   timerSessions = [];
   timerSessionName = '';
   timerStaleNotice = null;
+  publishTimerState();
   clearTimerState();
   if (!timerHistoryExpanded) { timerHistoryExpanded = true; animateTimerHistoryExpand(); }
   else renderTimer();
@@ -850,6 +887,7 @@ function timerReset() {
   timerSessions = [];
   timerSessionName = '';
   timerStaleNotice = null;
+  publishTimerState();
   clearTimerState();
   renderTimer();
 }
@@ -863,6 +901,7 @@ function unlinkTimerTodo() {
   }
   timerElapsed = 0;
   timerSessions = [];
+  publishTimerState();
   clearTimerState();
   renderTimer();
 }
@@ -876,6 +915,7 @@ function unlinkTimerGoal() {
   }
   timerElapsed = 0;
   timerSessions = [];
+  publishTimerState();
   clearTimerState();
   renderTimer();
 }
@@ -889,6 +929,7 @@ function unlinkTimerTask() {
   }
   timerElapsed = 0;
   timerSessions = [];
+  publishTimerState();
   clearTimerState();
   renderTimer();
 }
@@ -916,6 +957,7 @@ function pickTimerGoal(id) {
   }
   timerElapsed = 0;
   timerSessions = [];
+  publishTimerState();
   clearTimerState();
   renderTimer();
 }
@@ -952,6 +994,7 @@ function pickTimerTask(id) {
   }
   timerElapsed = 0;
   timerSessions = [];
+  publishTimerState();
   clearTimerState();
   renderTimer();
 }
@@ -1168,6 +1211,7 @@ function selectTimerTodo(id) {
   timerElapsed = 0;
   timerSessions = [];
   if (timerRunning) { clearInterval(timerInterval); timerInterval = null; timerRunning = false; }
+  publishTimerState();
   clearTimerState();
   closeTimerTodoPicker();
   renderTimer();

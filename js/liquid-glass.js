@@ -13,7 +13,7 @@
   const urlSupported = chromium && typeof CSS !== 'undefined' && CSS.supports('backdrop-filter','url("#' + FILTER_ID + '")');
   let config = { material:'solid', glassQuality:'auto', glassBlur:18, glassCurve:35, glassDeflect:25, glassMotion:true };
   let frame = 0, pointerFrame = 0, mapKey = '', mapUrl = '', lastSurface = null, lastPointer = null;
-  const surfaces = '.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .appearance-preview-card';
+  const surfaces = '.sidebar, .section > .card, .today-dashboard > [class$="-card"], .today-welcome, .modal, .appearance-preview-card, .ai-float';
   function generateMap(edge) {
     const key = edge.toFixed(3);
     if (mapKey === key && mapUrl) return mapUrl;
