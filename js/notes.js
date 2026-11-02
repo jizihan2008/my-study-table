@@ -325,6 +325,35 @@ function onNotesChange(textarea = document.getElementById('notesTextarea')) {
   }, 500);
 }
 
+// Source mode uses the same embedded image representation as the rich editor.
+document.addEventListener('paste', async event => {
+  const textarea = event.target?.closest?.('#notesTextarea, #notesSplitTextarea');
+  if (!textarea || event.defaultPrevented || !window.NoteImageClipboard) return;
+  const files = NoteImageClipboard.getFiles(event.clipboardData);
+  if (!files.length) return;
+  event.preventDefault();
+  const secondary = textarea.id === 'notesSplitTextarea';
+  const noteId = secondary ? notesSplitNoteId : activeNoteId;
+  const note = notes.find(item => String(item.id) === String(noteId));
+  if (!note) return;
+  const previous = textarea.value;
+  const start = textarea.selectionStart, end = textarea.selectionEnd;
+  try {
+    const sources = await NoteImageClipboard.read(files);
+    const currentId = secondary ? notesSplitNoteId : activeNoteId;
+    if (String(currentId) !== String(noteId) || textarea.value !== previous
+      || note.content !== previous || (secondary ? notesSplitMode : noteViewMode) !== 'edit') {
+      showMiniToast('笔记内容或视图已变化，请在目标位置重新粘贴图片', 'info');
+      return;
+    }
+    textarea.setRangeText(sources.map(src => '![图片](' + src + ')').join('\n\n'), start, end, 'end');
+    note._dirtyContent = false;
+    textarea.dispatchEvent(new Event('input', { bubbles: true }));
+  } catch (error) {
+    showMiniToast(error.message || '粘贴图片失败，请重试', 'error');
+  }
+});
+
 function onRichNotesChange(markdown, previousMarkdown, change = {}, source = 'primary') {
   const note = getActiveNote();
   if (!note || typeof RichNoteEditor === 'undefined') return;
@@ -1290,7 +1319,8 @@ function bindNoteSelectionAiMenu() {
     const secondary = container.id.startsWith('notesSplit');
     const note = secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote();
     if (!note) return;
-    const fold = e.target.closest?.('details.note-fold');
+    const summary = e.target.closest?.('summary');
+    const fold = summary?.parentElement?.matches('details.note-fold') ? summary.parentElement : null;
     const cell = e.target.closest?.('th, td');
     const table = cell?.closest('table');
     let text = '', ctx, offsets;
@@ -1312,7 +1342,7 @@ function bindNoteSelectionAiMenu() {
         ctx = buildNoteCtx(selected.fullText, selected.start, selected.end);
       }
     }
-    if (!text && !fold && !cell) return;
+    if (!text && !fold && !cell) { closeNoteAiExplainMenu(); return; }
     e.preventDefault();
     showNoteAiExplainMenu(e.clientX, e.clientY, text, ctx, offsets?.start, offsets?.end, note, secondary,
       fold ? { fold, container, noteId: note.id, content: note.content || '', secondary } : null,
@@ -1354,6 +1384,9 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
     }, true);
   }
   menu.style.left = x + 'px';
+  if (!menu.querySelector('#noteFoldUnwrap')) {
+    menu.querySelector('#noteFoldDelete').insertAdjacentHTML('beforebegin', '<div class="context-menu-item" id="noteFoldUnwrap" onclick="unwrapNoteFoldFromMenu()" title="移除折叠结构，保留标题与内容，可撤销">拆除折叠块（保留标题与内容）</div>');
+  }
   menu.style.top = y + 'px';
   menu.dataset.text = text;
   noteFoldMenuTarget = foldTarget;
@@ -1363,6 +1396,7 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   menu.querySelector('#noteSelectionExplain').style.display = text ? '' : 'none';
   menu.querySelector('#noteSelectionAsk').style.display = text ? '' : 'none';
   menu.querySelector('#noteFoldDelete').style.display = foldTarget ? '' : 'none';
+  menu.querySelector('#noteFoldUnwrap').style.display = foldTarget ? '' : 'none';
   menu.querySelector('#noteFoldDeleteSeparator').style.display = foldTarget && (text || tableTarget) ? '' : 'none';
   const translateItem = menu.querySelector('#noteSelectionTranslate');
   if (translateItem) translateItem.style.display = window.GlobalTranslation?.isEnglishSelection(text) ? '' : 'none';
@@ -1410,7 +1444,10 @@ function editNoteTableFromMenu(action) {
     target.container.focus({ preventScroll: true });
   }
 }
-function deleteNoteFoldFromMenu() {
+function unwrapNoteFoldFromMenu() {
+  deleteNoteFoldFromMenu(true);
+}
+function deleteNoteFoldFromMenu(unwrap = false) {
   const target = noteFoldMenuTarget;
   closeNoteAiExplainMenu();
   if (!target || !target.fold.isConnected || !target.container.contains(target.fold)) return;
@@ -1419,7 +1456,21 @@ function deleteNoteFoldFromMenu() {
   if (!note || String(currentId) !== String(note.id) || (note.content || '') !== target.content) return;
   if (target.container.matches('#notesRichEditor, #notesSplitRichEditor')) {
     const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
-    if (String(editor?.getCurrentNoteId()) === String(note.id)) editor.deleteFold(target.fold);
+    if (String(editor?.getCurrentNoteId()) === String(note.id)) {
+      if (unwrap) editor.unwrapFold(target.fold); else editor.deleteFold(target.fold);
+    }
+    return;
+  }
+  if (unwrap) {
+    const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
+    if (!editor || target.fold.dataset.sourceLine === undefined) return;
+    editor.setMarkdown(target.content, note.id);
+    const host = document.getElementById(target.secondary ? 'notesSplitRichEditor' : 'notesRichEditor');
+    const fold = Array.from(host.querySelectorAll('details.note-fold')).find(item => item.dataset.sourceLine === target.fold.dataset.sourceLine);
+    if (!fold || !editor.unwrapFold(fold)) return;
+    if (target.secondary) renderNotesImmersiveSplit(); else switchNoteView('preview');
+    target.container.tabIndex = 0;
+    target.container.focus({ preventScroll: true });
     return;
   }
   // Reading surfaces carry parser source ranges, including nested and lazy folds.
@@ -2548,6 +2599,27 @@ let _noteTocScrollFrame=0;
 let _noteTocJumpTarget='';
 let _noteTocJumpTimer=0;
 let notesImmersive=false;
+let notesToolbarPinned=localStorage.getItem('study_notes_toolbar_pinned')==='true';
+
+function applyNotesToolbarPinned(){
+  const section=document.getElementById('section-notes');
+  const button=document.getElementById('notesToolbarPinBtn');
+  section?.classList.toggle('notes-toolbar-pinned',notesToolbarPinned);
+  if(button){
+    button.classList.toggle('active',notesToolbarPinned);
+    button.setAttribute('aria-pressed',String(notesToolbarPinned));
+    button.setAttribute('aria-label',notesToolbarPinned?'取消固定顶部工具栏':'固定顶部工具栏');
+    button.title=notesToolbarPinned?'取消固定顶部工具栏（沉浸模式下自动收起）':'固定顶部工具栏（沉浸模式下保持显示）';
+  }
+  if(notesImmersive)updateNotesImmersiveControls(window.innerHeight/2);
+}
+
+function toggleNotesToolbarPinned(){
+  notesToolbarPinned=!notesToolbarPinned;
+  localStorage.setItem('study_notes_toolbar_pinned',String(notesToolbarPinned));
+  applyNotesToolbarPinned();
+}
+applyNotesToolbarPinned();
 let _notesImmersiveMoveFrame=0;
 let notesImmersiveZoom=Number(localStorage.getItem('study_notes_immersive_zoom'))||100;
 notesImmersiveZoom=Math.min(180,Math.max(70,Math.round(notesImmersiveZoom/10)*10));
@@ -2800,6 +2872,7 @@ function setNotesImmersive(force){
   if(enabled&&noteViewMode==='rich')setTimeout(()=>document.getElementById('notesRichEditor')?.focus(),0);
   else if(enabled&&noteViewMode==='edit')setTimeout(()=>document.getElementById('notesTextarea')?.focus(),0);
   renderNotesImmersiveSplit();
+  if(enabled)updateNotesImmersiveControls(window.innerHeight/2);
 }
 
 function toggleNotesImmersive(force){setNotesImmersive(force)}
@@ -2813,7 +2886,7 @@ function updateNotesImmersiveControls(clientY){
   const zoom=document.getElementById('notesImmersiveZoom');
   const topLimit=section.classList.contains('show-top-controls')?Math.max((toolbar?.offsetTop||0)+(toolbar?.offsetHeight||0),(zoom?.offsetTop||0)+(zoom?.offsetHeight||0))+12:18;
   const bottomLimit=section.classList.contains('show-bottom-controls')?(footer?.offsetHeight||42)+12:18;
-  section.classList.toggle('show-top-controls',clientY<=topLimit || !!document.getElementById('notesHeadingMenu')?.matches(':popover-open'));
+  section.classList.toggle('show-top-controls',notesToolbarPinned || clientY<=topLimit || !!document.getElementById('notesHeadingMenu')?.matches(':popover-open'));
   section.classList.toggle('show-bottom-controls',clientY>=window.innerHeight-bottomLimit);
 }
 
@@ -2828,7 +2901,17 @@ document.addEventListener('pointermove',function(event){
 document.addEventListener('mouseleave',function(){
   if(!notesImmersive)return;
   document.getElementById('section-notes')?.classList.remove('show-top-controls','show-bottom-controls');
+  if(notesToolbarPinned)updateNotesImmersiveControls(window.innerHeight/2);
 });
+// Wrapping on narrow screens and switching either pane's mode can change height.
+if(typeof ResizeObserver!=='undefined'){
+  const toolbar=document.getElementById('notesFormatToolbar');
+  if(toolbar)new ResizeObserver(()=>{
+    const section=document.getElementById('section-notes');
+    section?.style.setProperty('--notes-immersive-toolbar-height',toolbar.offsetHeight+'px');
+    if(notesImmersive&&notesToolbarPinned)section?.classList.add('show-top-controls');
+  }).observe(toolbar);
+}
 document.addEventListener('keydown',function(event){
   if(notesImmersive&&(event.ctrlKey||event.metaKey)&&!event.altKey){
     if(event.key==='0'){event.preventDefault();setNotesImmersiveZoom(100);return;}

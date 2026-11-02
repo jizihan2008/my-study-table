@@ -12,6 +12,18 @@ function createRenderer() {
   return StudyMarkdown.createRenderer({ markdownit, footnote, hljs, katex });
 }
 
+test('embedded raster images render in notes and reading plans without allowing data links or SVG', () => {
+  const renderer = createRenderer();
+  const src = 'data:image/png;base64,aGVsbG8=';
+  assert.match(renderer.render(`![图片](${src})`), /<img src="data:image\/png;base64,aGVsbG8="/);
+  assert.match(renderer.createReadingPlan(`![图片](${src})`).renderBlock(0), /<img src="data:image\/png/);
+  assert.doesNotMatch(renderer.render(`[链接](${src})`), /href="data:/);
+  for (const value of ['data:text/html;base64,aGVsbG8=', 'data:image/svg+xml;base64,aGVsbG8=', 'blob:https://example.com/temporary']) {
+    assert.equal(StudyMarkdown.isSafeUrl(value, 'image'), false);
+    assert.doesNotMatch(renderer.render(`![图](${value})`), /<img /);
+  }
+});
+
 test('table line breaks render safely without enabling arbitrary HTML', () => {
   const renderer = createRenderer();
   const source = '| 标题 |\n| --- |\n| 第一行<br>第二行<BR/><br />第三行 |';

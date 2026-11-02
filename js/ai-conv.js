@@ -291,63 +291,56 @@ function switchConv(id) {
 }
 
 function deleteConv(id, e) {
-  e.stopPropagation();
-  // Extract memory before deleting
-  if (typeof scheduleMemoryExtract === 'function') {
-    const targetConv = aiConvs.find(c => c.id === id);
-    if (targetConv) scheduleMemoryExtract(targetConv);
-  }
-  if (aiConvs.length <= 1) {
-    // Don't delete the last one, just clear it
-    const lastConv = aiConvs[0];
-    releaseAiConversationFiles(lastConv.id);
-    if (typeof resetConvTree === 'function') resetConvTree(lastConv);
-    else lastConv.messages = [];
-    lastConv.title = '默认对话';
-    lastConv.systemPrompt = '';
-    safeSaveAiConvs();
-    renderAiChat();
-    return;
-  }
-
-  // Check for associated automations
+  if (e) e.stopPropagation();
   const linkedAutos = automations.filter(a => a.convId === id);
-  let confirmMsg = '确定要删除此对话吗？';
+  let confirmMsg = '确定要删除此对话吗？<br><small>删除后可在回收站中恢复。</small>';
   if (linkedAutos.length > 0) {
-    const autoNames = linkedAutos.map(a => `"${a.prompt.slice(0, 30)}${a.prompt.length > 30 ? '…' : ''}"`).join('、');
-    confirmMsg = `此对话关联了 ${linkedAutos.length} 个自动化任务：\n${autoNames}\n\n删除对话将同时删除这些自动化任务。\n确定要删除吗？`;
+    confirmMsg += `<br><small>关联的 ${linkedAutos.length} 个自动化任务将一并移入回收站，恢复后默认暂停。</small>`;
   }
-
-  showCustomConfirm(confirmMsg, { dontAskKey: 'study_dontask_delete_conv' }).then(confirmed => {
+  return showCustomConfirm(confirmMsg, { dontAskKey: 'study_dontask_delete_conv' }).then(confirmed => {
     if (!confirmed) return;
-
-    // Delete associated automations
-    if (linkedAutos.length > 0) {
-      automations = automations.filter(a => a.convId !== id);
+    const conv = aiConvs.find(c => c.id === id);
+    if (!conv) return;
+    if (activeConvId === id && typeof saveAiDraft === 'function') saveAiDraft();
+    const trash = loadTrash('ai');
+    let draft;
+    try { draft = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}')[id]; } catch (_) {}
+    // 先完整写入回收站；失败时保留原对话及附件。
+    const archived = { ...conv, deletedAt: new Date().toISOString(),
+      _trashAutomations: automations.filter(a => a.convId === id), _trashDraft: draft };
+    if (!saveTrash('ai', [archived, ...trash.filter(c => c.id !== id)])) {
+      if (typeof showAiToast === 'function') showAiToast('移入回收站失败，请检查存储空间');
+      return;
+    }
+    const previous = aiConvs;
+    aiConvs = aiConvs.filter(c => c.id !== id);
+    if (!aiConvs.length) {
+      const replacement = { id: genId(), title: '默认对话', systemPrompt: '', messages: [], autoTitled: false };
+      if (typeof initTreeOnConv === 'function') initTreeOnConv(replacement);
+      aiConvs.push(replacement);
+    }
+    safeSaveAiConvs();
+    try {
+      if (JSON.parse(localStorage.getItem('study_ai_convs') || '[]').some(c => c.id === id)) throw new Error('not saved');
+    } catch (_) { aiConvs = previous; return; }
+    if (typeof setAiStopRequested === 'function') setAiStopRequested(id, true);
+    if (typeof AIClient !== 'undefined') AIClient.cancel(id);
+    if (typeof _aiSendQueue !== 'undefined') _aiSendQueue = _aiSendQueue.filter(item => item.convId !== id);
+    if (window.SyncLogs && typeof window.SyncLogs.markItemDeleted === 'function') window.SyncLogs.markItemDeleted('ai_conv', id);
+    automations = automations.filter(a => a.convId !== id);
+    if (linkedAutos.length) {
       saveData('study_automations', automations);
-      if (automations.length === 0 || automations.every(a => a.enabled === false)) {
-        if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
-        else stopAutomationTimer();
-      }
+      if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
     }
-
-    // 云同步删除墓碑必须在本地数组移除前写入，防止其他设备/下次拉取将对话复活。
-    if (window.SyncLogs && typeof window.SyncLogs.markItemDeleted === 'function') {
-      window.SyncLogs.markItemDeleted('ai_conv', id);
-    }
-    releaseAiConversationFiles(id);
     _aiAttachmentDrafts.delete(id);
     if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
-    aiConvs = aiConvs.filter(c => c.id !== id);
     if (activeConvId === id) activeConvId = aiConvs[0].id;
     localStorage.setItem('study_active_conv', activeConvId);
-    // Clean up draft for deleted conv
     try {
       const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
       delete drafts[id];
       localStorage.setItem('study_ai_drafts', JSON.stringify(drafts));
-    } catch {}
-    safeSaveAiConvs();
+    } catch (_) {}
     renderAiChat();
     restoreAiDraft();
   });

@@ -138,6 +138,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .notes-immersive-exit, .notes-immersive-toc, .notes-immersive-zoom, .notes-immersive-split-toggle,
 .notes-split-pane, .notes-split-primary-bar { display: none; }
 .notes-format-toolbar { background: var(--card); border-color: var(--border); padding-top: 8px; padding-bottom: 8px; }
+.notes-toolbar-pin.active { color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, var(--card)); }
 .notes-editor-footer { color: var(--text-secondary); font-size: 10px; }
 .modal { border: 1px solid var(--border); border-radius: 20px; box-shadow: var(--shadow-lg); }
 .modal-overlay { backdrop-filter: blur(5px); -webkit-backdrop-filter: blur(5px); }
@@ -409,9 +410,14 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   bottom: 0; transform: translateY(calc(100% + 2px));
 }
 #section-notes.notes-immersive.show-top-controls .notes-format-toolbar,
+#section-notes.notes-immersive.notes-toolbar-pinned .notes-format-toolbar,
 #section-notes.notes-immersive.show-bottom-controls .notes-editor-footer {
   opacity: 1; visibility: visible; pointer-events: auto; transform: translateY(0);
   transition-delay: 0s;
+}
+/* Keep the first lines of both panes below a permanently visible toolbar. */
+#section-notes.notes-immersive.notes-toolbar-pinned .notes-editor {
+  padding-top: var(--notes-immersive-toolbar-height, 0px);
 }
 #section-notes.notes-immersive .notes-immersive-exit,
 #section-notes.notes-immersive .notes-immersive-split-toggle,

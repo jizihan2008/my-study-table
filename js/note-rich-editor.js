@@ -3,17 +3,43 @@
 (function (root) {
   'use strict';
 
+  // Embed clipboard images in the canonical Markdown so backups and note sync
+  // retain their bytes without a device-specific URL or a separate file store.
+  const imageTypes = /^image\/(?:png|jpeg|gif|webp|bmp|avif)$/i;
+  root.NoteImageClipboard = {
+    getFiles(clipboard) {
+      const items = Array.from(clipboard?.items || [])
+        .filter(item => item.kind === 'file' && /^image\//i.test(item.type))
+        .map(item => item.getAsFile()).filter(Boolean);
+      return items.length ? items : Array.from(clipboard?.files || []).filter(file => /^image\//i.test(file.type));
+    },
+    async read(files) {
+      return Promise.all(files.map(file => new Promise((resolve, reject) => {
+        if (!imageTypes.test(file.type)) {
+          reject(new Error('暂不支持这种图片格式，请使用 PNG、JPEG、GIF、WebP、BMP 或 AVIF'));
+          return;
+        }
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result));
+        reader.onerror = reader.onabort = () => reject(new Error('图片读取失败，请重新复制后粘贴'));
+        reader.readAsDataURL(file);
+      })));
+    }
+  };
+
   function createRichNoteEditor(options = {}) {
 
   let host = null;
   let currentMarkdown = '';
   let currentNoteId = null;
+  let renderRevision = 0;
   let syncing = false;
   let footnoteLabels = [];
   let footnoteDefinitions = '';
   let mathPointerStart = null;
   let foldPointerType = '';
   let foldTouchToggle = null;
+  let foldTouchClick = null;
   let closeMathEditor = null;
   let pendingFoldTitle = null;
   let composingFoldTitle = null;
@@ -121,6 +147,7 @@
   }
 
   function setMarkdown(markdown, noteId) {
+    renderRevision++;
     closeMathEditor?.(false);
     pendingFoldTitle = null;
     composingFoldTitle = null;
@@ -1047,6 +1074,11 @@
   function handlePaste(event) {
     event.preventDefault();
     const clipboard = event.clipboardData;
+    const images = root.NoteImageClipboard.getFiles(clipboard);
+    if (images.length) {
+      pasteImages(images);
+      return;
+    }
     const html = clipboard?.getData('text/html') || '';
     const titleRange = foldTitleRange();
     if (html && root.DOMPurify) {
@@ -1142,6 +1174,41 @@
       insertTitleContent(titleRange, fragment);
     } else document.execCommand('insertText', false, clipboard?.getData('text/plain') || '');
     notifyChange();
+  }
+
+  async function pasteImages(files) {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return;
+    const range = selection.getRangeAt(0).cloneRange();
+    if (!host.contains(range.commonAncestorContainer)) return;
+    const revision = renderRevision;
+    try {
+      const sources = await root.NoteImageClipboard.read(files);
+      if (revision !== renderRevision || !host.isConnected || !host.getClientRects().length
+        || !host.contains(range.commonAncestorContainer)) {
+        root.showMiniToast?.('笔记已切换，请在目标位置重新粘贴图片', 'info');
+        return;
+      }
+      const fragment = document.createDocumentFragment();
+      sources.forEach(src => {
+        const image = document.createElement('img');
+        image.src = src;
+        image.alt = '图片';
+        image.setAttribute('contenteditable', 'false');
+        fragment.appendChild(image);
+      });
+      // A text boundary allows typing immediately after the atomic image.
+      const boundary = document.createTextNode('\u200b');
+      fragment.appendChild(boundary);
+      range.deleteContents();
+      range.insertNode(fragment);
+      range.setStartAfter(boundary);
+      range.collapse(true);
+      if (document.activeElement === host) restoreRange(range);
+      notifyChange({ historyBoundary: true });
+    } catch (error) {
+      root.showMiniToast?.(error.message || '粘贴图片失败，请重试', 'error');
+    }
   }
 
   function selectFoldSectionAtCaret() {
@@ -1352,6 +1419,23 @@
       || protectClosedFoldBoundary(backward) || removeSingleEmptyQuote();
   }
 
+  function unwrapFold(fold) {
+    if (!fold?.matches('details.note-fold') || !host?.contains(fold)) return false;
+    const summary = Array.from(fold.children).find(child => child.matches('summary'));
+    const body = Array.from(fold.children).find(child => child.matches('.note-fold-body'));
+    const title = document.createElement('p');
+    if (summary) title.append(...Array.from(summary.childNodes));
+    if (!title.childNodes.length) title.appendChild(document.createElement('br'));
+    const contents = body ? Array.from(body.childNodes) : Array.from(fold.childNodes).filter(child => child !== summary);
+    fold.replaceWith(title, ...contents);
+    const range = document.createRange();
+    range.selectNodeContents(title);
+    range.collapse(false);
+    restoreRange(range);
+    notifyChange({ historyBoundary: true });
+    return true;
+  }
+
   function deleteFold(fold) {
     if (!fold?.matches('details.note-fold') || !host?.contains(fold)) return false;
     const parent = fold.parentNode;
@@ -1459,9 +1543,31 @@
     if (host.id === 'notesRichEditor' && typeof root.onNotePreviewScroll === 'function') {
       host.addEventListener('scroll', root.onNotePreviewScroll);
     }
+    host.addEventListener('touchstart', event => {
+      const summary = getEditableFoldSummary(event);
+      const touch = event.touches[0];
+      // WebKit's native text selection is also driven by touch events; a
+      // cancelled pointerdown alone does not reliably keep the caret in place.
+      if (summary && touch && isFoldToggleClick(touch, summary)) event.preventDefault();
+    }, { passive: false });
+    const isFoldTouchCompatibilityEvent = event => foldTouchClick
+      && performance.now() - foldTouchClick.time < 1500
+      && getEditableFoldSummary(event) === foldTouchClick.summary;
+    host.addEventListener('mousedown', event => {
+      if (isFoldTouchCompatibilityEvent(event)) event.preventDefault();
+    }, true);
+    host.addEventListener('click', event => {
+      if (!isFoldTouchCompatibilityEvent(event)) return;
+      // Match the original gesture, not coordinates or click.detail: iPad's
+      // delayed click can have detail=0 or land over the title after scrolling.
+      foldTouchClick = null;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    }, true);
     host.addEventListener('pointerdown', event => {
       foldPointerType = event.pointerType || '';
       foldTouchToggle = null;
+      foldTouchClick = null;
       mathPointerStart = event.target.closest('.katex') && event.button === 0
         ? { x: event.clientX, y: event.clientY } : null;
       const summary = getEditableFoldSummary(event);
@@ -1472,6 +1578,7 @@
         event.preventDefault();
         if (event.pointerType === 'touch') {
           foldTouchToggle = { summary, pointerId: event.pointerId, x: event.clientX, y: event.clientY };
+          foldTouchClick = { summary, time: performance.now() };
         }
       }
     });
@@ -1479,6 +1586,7 @@
     host.addEventListener('pointerup', event => {
       const tap = foldTouchToggle;
       foldTouchToggle = null;
+      if (tap && foldTouchClick) foldTouchClick.time = performance.now();
       if (tap && tap.pointerId === event.pointerId && host.contains(tap.summary)
         && Math.abs(event.clientX - tap.x) < 8 && Math.abs(event.clientY - tap.y) < 8) {
         const fold = tap.summary.parentElement;
@@ -1505,12 +1613,6 @@
         return;
       }
       const summary = getEditableFoldSummary(event);
-      if (summary && isFoldToggleClick(event, summary)
-        && (event.pointerType || foldPointerType) === 'touch' && event.detail !== 0) {
-        // Chromium can still send click after pointerup; do not toggle twice.
-        event.preventDefault();
-        return;
-      }
       if (summary && !isFoldToggleClick(event, summary)) {
         // In editing mode the title is editable text. Cancel the native
         // <summary> activation everywhere except around the disclosure marker.
@@ -1534,6 +1636,7 @@
     host.addEventListener('keyup', updateToolbarState);
     host.addEventListener('mouseup', updateToolbarState);
     host.addEventListener('keydown', event => {
+      foldTouchClick = null;
       const modifier = event.ctrlKey || event.metaKey;
       if (!modifier && !event.shiftKey && !event.altKey && !event.isComposing && event.key === 'Enter') {
         const title = caretElement()?.closest('.note-important-title');
@@ -1592,6 +1695,7 @@
     command,
     focusHistoryChange,
     deleteFold,
+    unwrapFold,
     editTable,
     getTableActions: () => ({ ...tableActions }),
     isSyncing: () => syncing,

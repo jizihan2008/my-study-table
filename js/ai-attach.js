@@ -458,8 +458,9 @@ async function listDeepSeekFiles(apiCfg = getEffectiveApiConfig()) {
 function collectReferencedFileIds() {
   const used = new Set();
   const convs = (typeof aiConvs !== 'undefined' && Array.isArray(aiConvs)) ? aiConvs : [];
-  for (const conv of convs) {
-    const messages = (conv && Array.isArray(conv.messages)) ? conv.messages : [];
+  const trashed = typeof loadTrash === 'function' ? loadTrash('ai') : [];
+  for (const conv of [...convs, ...trashed]) {
+    const messages = conv && conv.tree ? Object.values(conv.tree) : ((conv && Array.isArray(conv.messages)) ? conv.messages : []);
     for (const m of messages) {
       if (!m || !Array.isArray(m.visionFiles)) continue;
       for (const vf of m.visionFiles) {

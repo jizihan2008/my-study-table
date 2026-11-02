@@ -33,7 +33,37 @@ async function setup(secondary, mode, open = false, same = false) {
 }
 
 for (const secondary of [false, true]) for (const mode of ['preview', 'rich']) {
+  test(`${secondary ? 'split' : 'main'} ${mode} body context menu hides fold actions, including a nested table`, async () => {
+    const host = await setup(secondary, mode, true);
+    await page.locator(host + ' summary').first().click({ button: 'right' });
+    await expect(page.locator('#noteFoldDelete')).toBeVisible();
+    await page.evaluate(host => {
+      const body = document.querySelector(host + ' .note-fold-body');
+      body.insertAdjacentHTML('beforeend', '<table><tbody><tr><td>表格正文</td></tr></tbody></table>');
+      body.querySelector('td').dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true, clientX: 200, clientY: 200 }));
+    }, host);
+    await expect(page.locator('#noteFoldDelete')).toBeHidden();
+    await expect(page.locator('#noteFoldUnwrap')).toBeHidden();
+    await expect(page.locator('#noteTableMenuActions')).toBeVisible();
+    await page.locator(host + ' .note-fold-body p').first().click({ button: 'right' });
+    await expect(page.locator('#noteFoldDelete')).toBeHidden();
+    await expect(page.locator('#noteFoldUnwrap')).toBeHidden();
+  });
   for (const open of [false, true]) {
+    test(`${secondary ? 'split' : 'main'} ${mode} unwraps ${open ? 'open' : 'closed'} fold and preserves title, nested content and history`, async () => {
+      const host = await setup(secondary, mode, open);
+      const current = () => page.evaluate(secondary => (secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote()).content, secondary);
+      await page.locator(host + ' > details > summary').filter({ hasText: /^待删标题$/ }).click({ button: 'right' });
+      await page.locator('#noteFoldUnwrap').click();
+      const unwrapped = await current();
+      expect(unwrapped).not.toContain(':::fold 待删标题');
+      for (const text of ['待删标题', '待删正文', ':::fold 内层标题', 'const nested = 1;', ':::fold 后方标题', '保留前文', '保留末文']) expect(unwrapped).toContain(text);
+      await expect(page.locator(host + ' > details')).toHaveCount(2);
+      expect(await page.evaluate(() => notesUndoStack.length)).toBe(1);
+      await page.keyboard.press('Control+z'); expect(await current()).toBe(source);
+      await page.keyboard.press('Control+y'); expect(await current()).toBe(unwrapped);
+      await expect(page.locator(secondary ? '#notesSplitStatus' : '#notesStatus')).not.toHaveText('保存中…');
+    });
     test(`${secondary ? 'split' : 'main'} ${mode} deletes ${open ? 'open' : 'closed'} fold as one undoable operation`, async () => {
       const host = await setup(secondary, mode, open);
       const original = await page.evaluate(secondary => (secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote()).content, secondary);
@@ -114,6 +144,21 @@ test('same-note reading deletion updates the editor and persists through undo, r
   await page.reload();
   await page.waitForFunction(() => typeof deleteNoteFoldFromMenu === 'function' && !document.querySelector('script[data-app-src]'));
   expect(await page.evaluate(() => findNoteByLooseId('fold-main').content)).not.toContain('待删标题');
+});
+
+test('same-note reading unwrap survives source/rich round trip and reload', async () => {
+  await setup(true, 'preview', false, true);
+  await page.evaluate(() => setNotesSplitPrimaryMode('rich'));
+  await page.locator('#notesSplitPreview > details > summary').filter({ hasText: /^待删标题$/ }).click({ button: 'right' });
+  await page.locator('#noteFoldUnwrap').click();
+  await expect(page.locator('#notesRichEditor > p').filter({ hasText: /^待删标题$/ })).toBeVisible();
+  const content = await page.evaluate(() => getActiveNote().content);
+  await page.evaluate(() => { switchNoteView('edit'); switchNoteView('rich'); });
+  expect(await page.evaluate(() => RichNoteEditor.getMarkdown())).toBe(content);
+  await expect(page.locator('#notesStatus')).not.toHaveText('保存中…');
+  await page.reload();
+  await page.waitForFunction(() => typeof unwrapNoteFoldFromMenu === 'function' && !document.querySelector('script[data-app-src]'));
+  expect(await page.evaluate(() => findNoteByLooseId('fold-main').content)).toBe(content);
 });
 
 test('selected text keeps AI and translation actions beside fold deletion, ordinary text hides deletion', async () => {

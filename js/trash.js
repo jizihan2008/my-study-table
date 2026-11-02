@@ -5,7 +5,8 @@ const TRASH_KEYS = {
   todos: 'study_todos_trash',
   notes: 'study_notes_trash',
   links: 'study_links_trash',
-  habits: 'study_habits_trash'
+  habits: 'study_habits_trash',
+  ai: 'study_ai_convs_trash'
 };
 
 const ARCHIVE_KEYS = {
@@ -19,14 +20,16 @@ const MODULE_LABELS = {
   todos: '待办',
   notes: '笔记',
   links: '快捷访问',
-  habits: '习惯'
+  habits: '习惯',
+  ai: 'AI 聊天'
 };
 
 const MODULE_ICONS = {
   todos: 'check-square',
   notes: 'file-text',
   links: 'layout-grid',
-  habits: 'target'
+  habits: 'target',
+  ai: 'message-circle'
 };
 
 // ── 加载/保存 ──
@@ -232,8 +235,49 @@ function storedTreeToggle(view, module, item, hasChildren, folded) {
   return `<button type="button" class="stored-tree-toggle" onclick="${action}" aria-expanded="${!folded}" aria-label="${folded ? '展开子项' : '折叠子项'}" title="${folded ? '展开子项' : '折叠子项'}"><i data-lucide="${folded ? 'chevron-right' : 'chevron-down'}" class="lucide-icon" style="width:14px;height:14px;"></i></button>`;
 }
 
+// AI 附件原文件在软删除期间保留，只在永久删除时释放。
+function restoreAiConvFromTrash(id) {
+  const trash = loadTrash('ai');
+  const stored = trash.find(c => c.id === id);
+  if (!stored) return;
+  if (aiConvs.some(c => c.id === id)) {
+    if (typeof showAiToast === 'function') showAiToast('同一对话已存在，保留回收站副本');
+    return;
+  }
+  const { deletedAt, _trashAutomations, _trashDraft, ...conv } = stored;
+  aiConvs.push(conv);
+  safeSaveAiConvs();
+  try {
+    if (!JSON.parse(localStorage.getItem('study_ai_convs') || '[]').some(c => c.id === id)) throw new Error('not saved');
+  } catch (_) { aiConvs = aiConvs.filter(c => c !== conv); return; }
+  if (window.SyncLogs && typeof window.SyncLogs.restoreItem === 'function') window.SyncLogs.restoreItem('ai_conv', id);
+  if (Array.isArray(_trashAutomations) && typeof automations !== 'undefined') {
+    _trashAutomations.forEach(auto => {
+      if (!automations.some(a => a.id === auto.id)) automations.push({ ...auto, enabled: false });
+    });
+    saveData('study_automations', automations);
+  }
+  if (_trashDraft !== undefined) {
+    try {
+      const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
+      drafts[id] = _trashDraft;
+      localStorage.setItem('study_ai_drafts', JSON.stringify(drafts));
+    } catch (_) {}
+  }
+  saveTrash('ai', trash.filter(c => c.id !== id));
+  if (typeof renderAiChat === 'function') renderAiChat();
+  renderTrash();
+}
+function releaseTrashedAiFiles(items) {
+  if (typeof releaseAiConversationFiles !== 'function') return;
+  items.forEach(item => {
+    if (typeof aiConvs === 'undefined' || !aiConvs.some(c => c.id === item.id)) releaseAiConversationFiles(item.id);
+  });
+}
+
 // ── 从回收站恢复 ──
 function restoreFromTrash(module, id) {
+  if (module === 'ai') return restoreAiConvFromTrash(id);
   const trash = loadTrash(module);
   const idx = trash.findIndex(item => item.id === id);
   if (idx === -1) return;
@@ -361,7 +405,8 @@ function permanentlyDelete(module, id) {
     } else {
       trash.splice(currentIdx, 1);
     }
-    saveTrash(module, trash);
+    if (!saveTrash(module, trash)) return;
+    if (module === 'ai') releaseTrashedAiFiles([{ id }]);
     
     const activeSection = document.querySelector('.section.active');
     if (activeSection && activeSection.id === 'section-trash') renderTrash();
@@ -413,7 +458,10 @@ function emptyTrash(module) {
     ? `确定要永久清空回收站中的所有 ${totalCount} 项内容吗？此操作不可撤销！`
     : '确定要永久清空回收站吗？此操作不可撤销！';
   const doEmpty = () => {
-    Object.keys(TRASH_KEYS).forEach(m => saveTrash(m, []));
+    Object.keys(TRASH_KEYS).forEach(m => {
+      const items = loadTrash(m);
+      if (saveTrash(m, []) && m === 'ai') releaseTrashedAiFiles(items);
+    });
     // 一并清空扩展回收站（文件系统目录）
     if (window.ExtensionRepository && window.ExtensionRepository.trashEmpty) {
       window.ExtensionRepository.trashEmpty().catch(() => {});
@@ -433,7 +481,7 @@ function renderTrash() {
   const container = document.getElementById('trashContainer');
   if (!container) return;
   
-  const allModules = ['todos', 'notes', 'links', 'habits'];
+  const allModules = Object.keys(TRASH_KEYS);
   let totalItems = 0;
   let html = '';
   
@@ -494,6 +542,22 @@ function renderTrash() {
           <div class="trash-item-actions">
             <button onclick="restoreFromTrash('${module}', ${item.id})" title="恢复" class="trash-action-btn restore"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
             <button onclick="permanentlyDelete('${module}', ${item.id})" title="永久删除" class="trash-action-btn perm-del"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+          </div>
+        </div>`;
+      });
+    } else if (module === 'ai') {
+      trash.forEach(item => {
+        const restore = escapeHtml(`restoreFromTrash('ai', ${JSON.stringify(item.id)})`);
+        const remove = escapeHtml(`permanentlyDelete('ai', ${JSON.stringify(item.id)})`);
+        html += `<div class="trash-item">
+          <div class="trash-item-info">
+            <span class="trash-item-type-badge note">AI 聊天</span>
+            <span class="trash-item-name">${escapeHtml(item.title || '（无标题）')}</span>
+            <span class="trash-item-date">删除于 ${formatDate(new Date(item.deletedAt))}</span>
+          </div>
+          <div class="trash-item-actions">
+            <button onclick="${restore}" title="恢复" class="trash-action-btn restore"><i data-lucide="undo-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
+            <button onclick="${remove}" title="永久删除" class="trash-action-btn perm-del"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;"></i></button>
           </div>
         </div>`;
       });

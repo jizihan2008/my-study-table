@@ -1578,6 +1578,22 @@
     });
   }
 
+  function restoreItem(kind, itemId) {
+    if (!KIND_LABELS[kind] || itemId == null) return;
+    const tombstones = _getTombstones();
+    delete tombstones[_baseKey(kind, itemId)];
+    _setLocal(TOMBSTONE_KEY, tombstones);
+    const key = _baseKey(kind, itemId);
+    const contentHashes = _getLocal(CONTENT_HASH_KEY, {});
+    delete contentHashes[key];
+    _setLocal(CONTENT_HASH_KEY, contentHashes);
+    const hashes = _getLocal(HASH_KEY, {});
+    Object.keys(hashes).filter(k => k === key || k.startsWith(key + '_p')).forEach(k => delete hashes[k]);
+    _setLocal(HASH_KEY, hashes);
+    _markItemDirty(kind, itemId);
+    onLocalChange(kind === 'ai_conv' ? 'study_ai_convs' : kind);
+  }
+
   function markItemDeleted(kind, itemId) {
     if (!KIND_LABELS[kind] || itemId == null) return;
     const key = _baseKey(kind, itemId);
@@ -2388,6 +2404,7 @@
     resolveConflict,
     resolveConflictToken,
     markItemDeleted,
+    restoreItem,
     renderPanel: renderPanelSafe,
     setItemEnabled,
     isItemEnabled: _isItemOn,

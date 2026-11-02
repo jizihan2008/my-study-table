@@ -231,6 +231,14 @@ function getFocusTodoDisplayPath(todo) {
   return { parents, full: [...parents, title].join(' › ') };
 }
 
+// 首页两处都读取原待办日期，避免聚焦快照保留过期的日期。
+function buildTodayTodoDueHTML(todo, done = todo.done) {
+  if (!todo.dueDate) return '';
+  const date = String(todo.dueDate);
+  const overdue = !done && date < getTodayStr();
+  return `<span class="today-todo-due${overdue ? ' overdue' : ''}">📅 截止 ${escapeHtml(date)}${overdue ? '（已逾期）' : ''}</span>`;
+}
+
 // Render a focus todo node recursively, showing children if expanded
 function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const todo = todos.find(t => t.id === todoId);
@@ -261,6 +269,7 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
           ${displayPath.parents.length ? `<span class="focus-parent-path">${displayPath.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>')}</span>` : ''}
           <span class="focus-title">${escapeHtml(todo.text)}</span>
           ${buildTodoQuickStatusHTML(todo)}
+          ${buildTodayTodoDueHTML(todo, done)}
         </span>
         <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录" aria-label="跳转到待办目录">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>

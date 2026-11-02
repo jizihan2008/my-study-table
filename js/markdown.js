@@ -41,6 +41,7 @@
   function isSafeUrl(value, kind) {
     const raw = String(value || '').trim();
     if (!raw) return false;
+    if (kind === 'image' && /^data:image\/(?:png|jpeg|gif|webp|bmp|avif);base64,[A-Za-z0-9+/]+={0,2}$/i.test(raw)) return true;
     if (kind !== 'image' && /^#note=[A-Za-z0-9_%+.*-]+(?:(?:&heading=[A-Za-z0-9_%+.*-]+)|(?:&offset=\d+(?:&endOffset=\d+)?(?:&revision=[A-Za-z0-9_%+.*-]+)?))?$/.test(raw)) return true;
     if (kind !== 'image' && raw.startsWith('#')) return /^#[A-Za-z0-9_\-:.\u00A0-\uFFFF]+$/.test(raw);
     try {

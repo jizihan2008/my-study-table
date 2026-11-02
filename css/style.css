@@ -12775,3 +12775,13 @@ html.env-pwa .electron-only { display: none; }
 .chat-image-settings input[type=number], .chat-image-settings select { padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text); background: var(--input-bg); }
 .chat-image-settings p { font-size: 11px; line-height: 1.7; margin-bottom: 0; }
 .chat-image-analysis { margin-top: 12px; color: var(--text-secondary); font-size: 11px; line-height: 1.7; overflow-wrap: anywhere; }
+
+/* 首页聚焦与待办队列的截止日期 */
+.today-focus-item .today-todo-due {
+  font-size: 11px;
+  font-weight: 400;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.today-focus-item .today-todo-due.overdue { color: var(--danger); }

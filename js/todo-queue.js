@@ -290,6 +290,7 @@ function renderTodoQueue() {
         ${path.parents.length ? '<span class="focus-parent-path">' + path.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>') + '</span>' : ''}
         <span class="focus-title">${escapeHtml(todo.text)}</span>
         ${buildTodoQuickStatusHTML(todo)}
+        ${buildTodayTodoDueHTML(todo)}
       </span>
       <button class="focus-nav" onclick="goToTodoFromFocus(${id})" title="跳转到待办目录" aria-label="跳转到待办目录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></button>
       <button class="focus-note-edit" onclick="event.stopPropagation(); editQueueTodoNote(${id})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>

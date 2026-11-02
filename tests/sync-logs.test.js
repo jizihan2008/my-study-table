@@ -57,6 +57,19 @@ function loadSyncLogs(seed = {}, options = {}) {
   return { SyncLogs: window.SyncLogs, values, context, state };
 }
 
+test('restoring a conversation clears deletion and stale shard hashes so unchanged history can upload again', async () => {
+  const { SyncLogs, values } = loadSyncLogs({
+    study_sync_logs_tombstones_v2: { 'ai_conv/9': { kind: 'ai_conv', itemId: '9' } },
+    study_sync_logs_content_hash_v2: { 'ai_conv/9': 'old', 'ai_conv/90': 'keep' },
+    study_sync_logs_hash: { 'ai_conv/9_p0': 'old', 'ai_conv/9_p1': 'old', 'ai_conv/90': 'keep' }
+  });
+  SyncLogs.restoreItem('ai_conv', 9);
+  assert.equal(JSON.parse(values.get('study_sync_logs_tombstones_v2'))['ai_conv/9'], undefined);
+  assert.deepEqual(JSON.parse(values.get('study_sync_logs_hash')), { 'ai_conv/90': 'keep' });
+  assert.deepEqual(JSON.parse(values.get('study_sync_logs_content_hash_v2')), { 'ai_conv/90': 'keep' });
+  assert.equal(JSON.parse(values.get('study_sync_logs_dirty_v2'))['ai_conv/9'], true);
+});
+
 for (const different of [false, true]) {
   test(`dirty log shards ${different ? 'retain real conflicts' : 'acknowledge identical content and clear old conflicts'}`, async () => {
     const items = [{ role: 'user', content: 'one' }, { role: 'assistant', content: 'two' }];
