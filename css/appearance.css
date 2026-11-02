@@ -150,6 +150,25 @@
 }
 .ai-float > .ai-float-header { position:relative; z-index:1; }
 
+/* Experimental WebKit scroll-edge workaround: a fixed, full-width surface
+   taller than 10px lets WebKit recognize an opaque top edge. Clip its paint
+   to empty text so it neither covers content nor consumes layout space.
+   Keep a real background color and visibility: opacity:0/display:none would
+   exclude it from WebKit's fixed-edge detection. Verify on physical iPadOS.
+   https://qiita.com/na-trium-144/items/0add98a80ca2391e3f17 */
+.ios-top-edge-guard { display:none; }
+html[data-mobile-webkit="true"] .ios-top-edge-guard {
+  display:block;
+  position:fixed;
+  top:0; left:0; right:0;
+  height:11px;
+  z-index:2147483647;
+  pointer-events:none;
+  background-color:var(--bg);
+  -webkit-background-clip:text;
+  background-clip:text;
+}
+
 /* iPadOS Edge/Safari share WebKit's tiled compositor. Large and nested
    backdrop-filter layers can leave stale tiles or black rectangles while
    scrolling. Preserve the selected palette, but render ordinary surfaces. */

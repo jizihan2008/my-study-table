@@ -6,7 +6,7 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v286';
+const VERSION = 'mst-v287';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
@@ -19,7 +19,7 @@ const PRECACHE_URLS = [
   "./icons/apple-touch-icon-v3.png",
   "./css/style.css?v=20261031-todo-due-r1",
   "./css/workspace.css?v=20261102-note-controls-align",
-  "./css/appearance.css?v=20261028-ai-float-r2",
+  "./css/appearance.css?v=20261102-ipad-top-edge-r1",
   "./lib/katex/katex.min.css",
   "./lib/markdown/highlight-github-dark-dimmed.min.css",
   "./lib/lucide/lucide.min.js",
