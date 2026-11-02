@@ -478,7 +478,7 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
 #section-notes.notes-immersive.notes-split:has(.notes-toc-panel.visible) .notes-immersive-split-toggle { right: 54px; }
 #section-notes.notes-immersive.notes-split .notes-split-pane > .notes-split-pane-bar { padding-right: 100px; }
 #section-notes.notes-immersive .notes-split-primary-bar {
-  position: absolute; top: 12px; left: 50%; z-index: 5;
+  position: absolute; top: max(12px, env(safe-area-inset-top)); left: 50%; z-index: 5;
   display: flex; transform: translateX(-50%); max-width: calc(100% - 150px);
 }
 .notes-split-pane-bar {
@@ -492,6 +492,9 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
 /* .notes-split-pane-bar 本身是 flex；未开启分屏时需用更高优先级隐藏左栏选择/模式条。 */
 #section-notes:not(.notes-immersive) .notes-split-primary-bar { display: none; }
 #section-notes:not(.notes-split) #notesSplitPrimarySelect { display: none; }
+#section-notes.notes-immersive:not(.notes-split) .notes-split-primary-bar {
+  min-height: 34px; padding: 1px 6px;
+}
 .notes-split-pane-bar select {
   min-width: 0; max-width: 260px; height: 30px; padding: 0 28px 0 9px;
   border: 1px solid var(--border); border-radius: 7px; outline: none;
@@ -553,8 +556,13 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   .notes-split-preview, .notes-split-rich-editor, .notes-split-textarea { padding: 20px 16px 56px; }
 }
 /* Revealing the toolbar puts the floating controls on the row below it. */
-#section-notes.notes-immersive.show-top-controls :is(.notes-immersive-zoom, .notes-immersive-exit, .notes-immersive-toc, .notes-immersive-split-toggle, .notes-split-primary-bar) {
+#section-notes.notes-immersive:is(.show-top-controls, .notes-toolbar-pinned) :is(.notes-immersive-zoom, .notes-immersive-exit, .notes-immersive-toc, .notes-immersive-split-toggle, .notes-split-primary-bar) {
   top: calc(var(--notes-immersive-toolbar-height, 0px) + max(12px, env(safe-area-inset-top)));
+}
+/* The primary bar lives inside the workspace, which pinned mode already moves
+   below the toolbar. Apply the toolbar offset only once. */
+#section-notes.notes-immersive.notes-toolbar-pinned .notes-split-primary-bar {
+  top: max(12px, env(safe-area-inset-top));
 }
 .progress-bar-wrap { background: var(--input-bg); border: 1px solid var(--border); height: 24px; }
 .progress-bar-fill { background: color-mix(in srgb, var(--primary) 22%, var(--card)); }
