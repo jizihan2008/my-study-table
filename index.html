@@ -21,7 +21,7 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261031-todo-due-r1">
+<link rel="stylesheet" href="css/style.css?v=20261104-stats-period-review">
 <link rel="stylesheet" href="css/workspace.css?v=20261102-note-controls-align">
 <link rel="stylesheet" href="css/appearance.css?v=20261102-ipad-top-edge-r1">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -526,7 +526,7 @@
             </div>
           </div>
           <div class="todo-queue-toolbar">
-            <button type="button" data-queue-fill onclick="addQueueToFocus(0)" title="按队列顺序填入今日聚焦的剩余名额">填入今日聚焦</button>
+            <button type="button" data-queue-fill onclick="addQueueToFocus(0)" title="按队列顺序添加到今日聚焦">填入今日聚焦</button>
             <button type="button" data-queue-fill onclick="addQueueToFocus(1)" title="按队列顺序填入明日聚焦的剩余名额">填入明日聚焦</button>
           </div>
           <div id="todayTodoQueueList" class="todo-queue-list"></div>
@@ -965,8 +965,14 @@
         <div class="settings-section-title"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 今日聚焦设置</div>
         <div class="settings-field">
           <label><i data-lucide="list" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 聚焦任务最大数量</label>
-          <input type="number" id="settingsMaxFocusCount" value="3" min="2" max="5" step="1" onchange="saveMaxFocusSetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
-          <span class="hint">每天最多可设置的聚焦任务数（2~5 个）。此设置会同步更新 AI 提示词中的限制描述。</span>
+          <select id="settingsMaxFocusCount" onchange="saveMaxFocusSetting()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);font-size:13px;box-sizing:border-box;">
+            <option value="2">2 个</option>
+            <option value="3" selected>3 个</option>
+            <option value="4">4 个</option>
+            <option value="5">5 个</option>
+            <option value="unlimited">无上限</option>
+          </select>
+          <span class="hint">可选择每天最多 2～5 个聚焦任务，或设为无上限。此设置会同步更新 AI 提示词中的限制描述。</span>
         </div>
 
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
@@ -1130,6 +1136,18 @@
 
         <button class="btn-save-settings" onclick="showApiKeyForm()" style="background:var(--primary);padding:5px 12px;font-size:12px;width:auto;margin-bottom:12px;"><i data-lucide="plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加 Key</button>
 
+        <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
+        <div class="settings-section-title">并行子代理</div>
+        <div class="settings-field">
+          <label for="settingsAiAgentConcurrency">同时运行数量</label>
+          <input type="number" id="settingsAiAgentConcurrency" min="1" max="8" step="1" value="2" onchange="saveAiAgentSetting('concurrency')">
+          <span class="hint">默认 2 个，可设 1～8 个。超出同时运行数量的子任务会排队；数量越多，同时发出的 AI 请求越多。</span>
+        </div>
+        <div class="settings-field">
+          <label for="settingsAiAgentTotal">每次请求的子代理总数上限</label>
+          <input type="number" id="settingsAiAgentTotal" min="1" max="24" step="1" value="6" onchange="saveAiAgentSetting('total')">
+          <span class="hint">默认 6 个，可设 1～24 个。统计同一条用户请求中累计创建的子任务。修改后自动保存并参与设置同步，从下一批子任务生效。子代理可读取资料并整理完整成果，创建、修改或删除数据由主 AI 检查后执行。</span>
+        </div>
         <div style="margin:14px 0;border-top:1px solid var(--border);"></div>
         <div class="settings-section-title">文件库 PDF 读取</div>
         <div class="settings-field" style="margin-bottom:8px;">
@@ -1853,38 +1871,39 @@
 <script src="js/markdown.js?v=20261030-fold-actions-r1"></script>
 <script src="js/note-reading-renderer.js?v=20261015-fold-toc-r1"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261102-fold-touch-r2"></script>
+<script src="js/note-rich-editor.js?v=20261104-fold-clipboard-r1"></script>
 <script src="js/platform.js?v=20261014-idb-r1"></script>
 <script src="js/secrets.js?v=20261016-web-r1"></script>
 <script src="js/data-store.js?v=20261014-idb-r1"></script>
 <!-- app-loader hydrates IndexedDB before loading these modules in dependency order. -->
-<script type="application/x-study-script" data-app-src="js/settings-sync.js?v=20261020-idle-calendar-r1"></script>
+<script type="application/x-study-script" data-app-src="js/settings-sync.js?v=20261103-agent-settings-r2"></script>
 <script type="application/x-study-script" data-app-src="js/diagnostics.js?v=20260825-r1"></script>
 <script type="application/x-study-script" data-app-src="js/env.js?v=20260911-r2"></script>
 <script type="application/x-study-script" data-app-src="js/theme-model.js?v=20260914-r5"></script>
 <script type="application/x-study-script" data-app-src="js/liquid-glass.js?v=20261028-ai-float-r2"></script>
 <script type="application/x-study-script" data-app-src="js/nav-shortcuts.js?v=20260920-r1"></script>
 <script type="application/x-study-script" data-app-src="js/core.js?v=20261028-ai-float-r1"></script>
-<script type="application/x-study-script" data-app-src="js/trash.js?v=20261102-ai-trash-r1"></script>
-<script type="application/x-study-script" data-app-src="js/todos.js?v=20261017-status-r1"></script>
-<script type="application/x-study-script" data-app-src="js/notes.js?v=20261030-fold-actions-r1"></script>
+<script type="application/x-study-script" data-app-src="js/trash.js?v=20261104-todo-batch-r1"></script>
+<script type="application/x-study-script" data-app-src="js/todos.js?v=20261104-focus-unlimited-r1"></script>
+<script type="application/x-study-script" data-app-src="js/notes.js?v=20261104-fold-edit-menu-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/file-library-order.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
 <script type="application/x-study-script" data-app-src="js/timer-types.js?v=20261013-custom-types-r1"></script>
-<script type="application/x-study-script" data-app-src="js/today.js?v=20261031-todo-due-r1"></script>
+<script type="application/x-study-script" data-app-src="js/today.js?v=20261104-focus-unlimited-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
-<script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261012-protocol-r2-timer"></script>
+<script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261102-ai-trash-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261102-ai-trash-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261028-conv-sync-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261029-note-reference-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261104-focus-unlimited-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-client.js?v=20260914-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261016-web-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-agents.js?v=20261103-agent-settings-r2"></script>
+<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261019-ipad-send-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261028-ai-float-r3"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
@@ -1895,9 +1914,9 @@
 <script type="application/x-study-script" data-app-src="js/appearance.js?v=20260929-r1"></script>
 <script type="application/x-study-script" data-app-src="js/backup-idb.js?v=20260812-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habit-status-text.js?v=20260920-r1"></script>
-<script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261031-todo-due-r1"></script>
+<script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261104-todo-batch-r1"></script>
 <script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261014-idb-r1"></script>
-<script type="application/x-study-script" data-app-src="js/settings.js?v=20261029-timer-state-sync-r1"></script>
+<script type="application/x-study-script" data-app-src="js/settings.js?v=20261104-focus-unlimited-r1"></script>
 <script type="application/x-study-script" data-app-src="js/utils.js?v=20261020-fold-menu-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script type="application/x-study-script" data-app-src="lib/qq-chat-media.js?v=20261017-images-r1"></script>
@@ -1917,11 +1936,11 @@
 <script type="application/x-study-script" data-app-src="js/books-annot.js?v=20260914-r5"></script>
 <script type="application/x-study-script" data-app-src="js/keywords.js?v=20260818-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
-<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261026-calendar-location-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261103-calendar-timer-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
-<script type="application/x-study-script" data-app-src="js/timer.js?v=20261029-timer-state-sync-r1"></script>
+<script type="application/x-study-script" data-app-src="js/timer.js?v=20261104-stats-period-review"></script>
 <script type="application/x-study-script" data-app-src="js/habits.js?v=20261019-habit-debug-r1"></script>
-<script type="application/x-study-script" data-app-src="js/stats.js?v=20261012-focus"></script>
+<script type="application/x-study-script" data-app-src="js/stats.js?v=20261104-stats-period-review"></script>
 <script type="application/x-study-script" data-app-src="js/updater.js?v=20260802-r1"></script>
 <!-- 好友系统 -->
 <script type="application/x-study-script" data-app-src="lib/supabase/supabase.js"></script>
@@ -1946,7 +1965,7 @@
 <script type="application/x-study-script" data-app-src="js/sync-dom.js?v=20260930-r1"></script>
 <script type="application/x-study-script" data-app-src="js/sync.js?v=20261029-sync-refresh-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
-<script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261102-ai-trash-r1"></script>
+<script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bootstrap.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/desktop-pet.js?v=20261005-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/cet/vocabulary.js?v=20261008-r1"></script>
@@ -2017,6 +2036,10 @@
 </div>
 
 <!-- Right-click context menu for todos -->
+<div class="context-menu" id="todayTimerContextMenu">
+  <div class="context-menu-item"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑计时记录</div>
+</div>
+
 <div class="context-menu" id="todoContextMenu">
   <div class="context-menu-item" onclick="undoTodo();closeTodoContextMenu();"><i data-lucide="undo" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 撤销</div>
   <div class="context-menu-item" onclick="redoTodo();closeTodoContextMenu();"><i data-lucide="redo" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 重做</div>
@@ -2025,20 +2048,20 @@
   <div class="context-menu-item" id="todoCtxToggleDone" onclick="toggleTodoHideDone();closeTodoContextMenu();"><i data-lucide="eye-off" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 隐藏已完成</div>
   <div class="context-menu-item" onclick="toggleTodoMultiSelect();closeTodoContextMenu();"><i data-lucide="check-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择待办</div>
   <div class="context-menu-sep ctx-need-todo"></div>
-  <div class="context-menu-item ctx-need-todo" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
-  <div class="context-menu-item ctx-need-todo" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
+  <div class="context-menu-item ctx-need-todo" data-single-label="编辑" data-batch-label="批量编辑" onclick="todoCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑</div>
+  <div class="context-menu-item ctx-need-todo ctx-single-todo" onclick="todoCtxAddSub()"><i data-lucide="plus-square" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加子任务</div>
   <div class="context-menu-sep ctx-need-todo"></div>
-  <div class="context-menu-item ctx-need-todo" onclick="todoCtxAddQueue()"><i data-lucide="list-ordered" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 加入待办队列</div>
-  <div class="context-menu-item ctx-need-todo" id="todoCtxAddFocusItem" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到今日聚焦</div>
-  <div class="context-menu-item ctx-need-todo" id="todoCtxAddTomorrowFocusItem" onclick="todoCtxAddTomorrowFocus()"><i data-lucide="calendar-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到明日聚焦</div>
+  <div class="context-menu-item ctx-need-todo" data-single-label="加入待办队列" data-batch-label="批量加入待办队列" onclick="todoCtxAddQueue()"><i data-lucide="list-ordered" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 加入待办队列</div>
+  <div class="context-menu-item ctx-need-todo" id="todoCtxAddFocusItem" data-single-label="添加到今日聚焦" data-batch-label="批量添加到今日聚焦" onclick="todoCtxAddFocus()"><i data-lucide="target" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到今日聚焦</div>
+  <div class="context-menu-item ctx-need-todo" id="todoCtxAddTomorrowFocusItem" data-single-label="添加到明日聚焦" data-batch-label="批量添加到明日聚焦" onclick="todoCtxAddTomorrowFocus()"><i data-lucide="calendar-plus" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 添加到明日聚焦</div>
   <div id="todoCtxSortItems" class="ctx-need-todo">
     <div class="context-menu-sep"></div>
     <div class="context-menu-item" onclick="todoCtxSort('alpha')"><i data-lucide="arrow-up-a-z" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按标题排序</div>
     <div class="context-menu-item" onclick="todoCtxSort('recent')"><i data-lucide="clock" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 按时间排序（新→旧）</div>
   </div>
   <div class="context-menu-sep ctx-need-todo"></div>
-  <div class="context-menu-item ctx-need-todo" onclick="todoCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
-  <div class="context-menu-item danger ctx-need-todo" onclick="todoCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
+  <div class="context-menu-item ctx-need-todo" data-single-label="归档" data-batch-label="批量归档" onclick="todoCtxArchive()"><i data-lucide="archive" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 归档</div>
+  <div class="context-menu-item danger ctx-need-todo" data-single-label="删除" data-batch-label="批量删除" onclick="todoCtxDelete()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 删除</div>
 </div>
 
 <!-- Right-click context menu for taskline graph -->

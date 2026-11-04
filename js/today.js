@@ -109,37 +109,37 @@ function selectFocusDay(offset) {
   renderFocusList();
 }
 
-// Max focus count setting (2-5, default 3)
+// Store unlimited as a string so it can sync alongside numeric settings.
 function getMaxFocusCount() {
-  const val = parseInt(localStorage.getItem('study_max_focus_count'));
+  const raw = localStorage.getItem('study_max_focus_count');
+  if (raw === 'unlimited') return Infinity;
+  const val = parseInt(raw, 10);
   if (val >= 2 && val <= 5) return val;
   return 3;
 }
 
-function saveMaxFocusSetting() {
+function renderMaxFocusSetting() {
   const input = document.getElementById('settingsMaxFocusCount');
-  if (!input) return;
-  let val = parseInt(input.value);
-  if (isNaN(val) || val < 2) val = 2;
-  if (val > 5) val = 5;
-  input.value = val;
-  setSyncedSetting('study_max_focus_count', val);
+  const limit = getMaxFocusCount();
+  if (input) input.value = limit === Infinity ? 'unlimited' : String(limit);
+}
+
+function saveMaxFocusSetting(value = document.getElementById('settingsMaxFocusCount')?.value) {
+  if (!['2', '3', '4', '5', 'unlimited'].includes(value)) return;
+  setSyncedSetting('study_max_focus_count', value);
+  renderMaxFocusSetting();
   renderFocusList();
 }
 
 async function editMaxFocusCount() {
   const current = getMaxFocusCount();
+  const message = '每天最多选择几个聚焦任务？请输入 2～5 或「无上限」。';
+  const initial = current === Infinity ? '无上限' : String(current);
   const raw = typeof showCustomPrompt === 'function'
-    ? await showCustomPrompt('每天最多选择几个今日聚焦任务？（2～5）', String(current))
-    : prompt('每天最多选择几个今日聚焦任务？（2～5）', String(current));
-  if (raw === null) return;
-  let value = parseInt(raw, 10);
-  if (isNaN(value)) value = current;
-  value = Math.max(2, Math.min(5, value));
-  setSyncedSetting('study_max_focus_count', String(value));
-  const settingsInput = document.getElementById('settingsMaxFocusCount');
-  if (settingsInput) settingsInput.value = value;
-  renderFocusList();
+    ? await showCustomPrompt(message, initial)
+    : prompt(message, initial);
+  const value = raw?.trim() ?? '';
+  saveMaxFocusSetting(value === '无上限' ? 'unlimited' : value);
 }
 
 function loadFocusData() {
@@ -324,7 +324,7 @@ function renderFocusList() {
     button.setAttribute('aria-pressed', String(selected));
   });
   const limitLabel = document.getElementById('todayFocusLimitLabel');
-  if (limitLabel) limitLabel.textContent = '上限 ' + maxCount;
+  if (limitLabel) limitLabel.textContent = maxCount === Infinity ? '无上限' : '上限 ' + maxCount;
   if (addBtn) addBtn.style.display = items.length >= maxCount ? 'none' : 'flex';
 
   if (items.length === 0) {
@@ -1387,25 +1387,18 @@ function toggleTodayTimerRecordsExpanded() {
 function renderTodayTimerRecords(records) {
   const list = document.getElementById('todayTimerRecords');
   if (!list || typeof loadTimerRecords !== 'function' || typeof renderTimerHistory !== 'function') return;
+  closeTodayTimerContextMenu();
   const today = getTodayStr();
   const todayRecords = (records || loadTimerRecords()).filter(record => record.date === today);
-  // Union each group across all its types; summing per-type totals double-counts overlaps.
-  for (const [id, affectsFocus] of [['todayTimerFocusTotal', true], ['todayTimerOtherTotal', false]]) {
-    const total = document.getElementById(id);
-    if (!total) continue;
-    const group = todayRecords.filter(record => {
-      const included = typeof record.affectsFocus === 'boolean'
-        ? record.affectsFocus : getTimerActivityAffectsFocus(getTimerActivityType(record));
-      return included === affectsFocus;
-    });
-    total.textContent = formatTimerTime(getTimerRecordsDurationSummary(group, today).totalMs);
-  }
+  const { focusMs, otherMs } = getTimerRecordFocusTotals(todayRecords, today);
+  const focusTotal = document.getElementById('todayTimerFocusTotal');
+  const otherTotal = document.getElementById('todayTimerOtherTotal');
+  if (focusTotal) focusTotal.textContent = formatTimerTime(focusMs);
+  if (otherTotal) otherTotal.textContent = formatTimerTime(otherMs);
   list.classList.toggle('expanded', todayTimerRecordsExpanded);
   const filter = document.getElementById('todayTimerTypeFilter');
   if (filter) {
-    const ids = new Set((records || loadTimerRecords()).filter(record => record.date === today).map(getTimerActivityType));
-    const types = loadTimerActivityTypes().filter(type => !type.disabled || ids.has(type.id));
-    for (const id of ids) if (!types.some(type => type.id === id)) types.push({ id, label: getTimerActivityLabel(id) });
+    const types = getTimerRecordFilterTypes(todayRecords);
     if (!types.some(type => type.id === todayTimerTypeFilter)) todayTimerTypeFilter = 'all';
     filter.innerHTML = '<option value="all">全部</option>' + types.map(type => `<option value="${escapeAttr(type.id)}">${escapeHtml(type.label)}</option>`).join('');
     filter.value = todayTimerTypeFilter;
@@ -1416,9 +1409,30 @@ function renderTodayTimerRecords(records) {
     expand.setAttribute('aria-expanded', String(todayTimerRecordsExpanded));
   }
   const items = todayRecords.filter(record => todayTimerTypeFilter === 'all' || getTimerActivityType(record) === todayTimerTypeFilter);
-  list.innerHTML = renderTimerHistory(items, { readOnly: true })
+  list.innerHTML = renderTimerHistory(items, { readOnly: true, todayContextMenu: true })
     || `<div class="today-goals-empty">${todayTimerTypeFilter === 'all' ? '今天还没有计时记录，完成计时或手动补记后会显示在这里。' : '今天还没有此类型的计时记录。'}</div>`;
 }
+
+function showTodayTimerContextMenu(event, recordId) {
+  event.preventDefault();
+  const menu = document.getElementById('todayTimerContextMenu');
+  menu.firstElementChild.onclick = () => editTimerRecord(recordId, 'today');
+  menu.classList.add('visible');
+  menu.style.left = Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth - 6)) + 'px';
+  menu.style.top = Math.max(0, Math.min(event.clientY, innerHeight - menu.offsetHeight - 6)) + 'px';
+}
+
+function closeTodayTimerContextMenu() {
+  document.getElementById('todayTimerContextMenu')?.classList.remove('visible');
+}
+
+document.addEventListener('click', closeTodayTimerContextMenu);
+document.addEventListener('contextmenu', event => {
+  if (!event.target.closest('#todayTimerRecords .timer-history-item')) closeTodayTimerContextMenu();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeTodayTimerContextMenu();
+});
 
 let todayScheduleCollapsed = false;
 

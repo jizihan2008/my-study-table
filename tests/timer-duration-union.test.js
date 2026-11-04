@@ -16,7 +16,7 @@ function loadFunctions(context, file, names) {
 function load() {
   const context = vm.createContext({});
   vm.runInContext(fs.readFileSync('js/timer-types.js', 'utf8'), context);
-  loadFunctions(context, 'js/timer.js', ['getTimerIntervalUnionMs', 'getTimerRecordsDurationSummary', 'getTodayTimerTotalMs']);
+  loadFunctions(context, 'js/timer.js', ['getTimerIntervalUnionMs', 'allocateTimerTypeMs', 'getTimerRecordsDurationSummary', 'getTodayTimerTotalMs']);
   return context;
 }
 const day = '2026-10-12';
@@ -60,6 +60,19 @@ test('clip intervals to the selected local day; keep unlocated durations separat
   });
 });
 
+test('stacked statistics split overlap among distinct types and keep legacy durations', () => {
+  const context = load();
+  const records = [record('focus', 8, 10), record('focus', 8, 10), record('reading', 9, 11),
+    record('review', 9, 10), { date: day, activityType: 'reading', totalMs: hour }];
+  const result = context.getTimerRecordsDurationSummary(records, day, { splitTypeOverlaps: true });
+  assert.deepEqual(plain(result), {
+    totalMs: 4 * hour,
+    typeMs: { focus: hour + hour / 3, rest: 0, other: 0, reading: 2 * hour + hour / 3, review: hour / 3 },
+    unlocatedMs: hour
+  });
+  assert.equal(Object.values(result.typeMs).reduce((sum, ms) => sum + ms), result.totalMs);
+});
+
 test('both report collectors, JSON and legacy prompt templates use union totals', () => {
   const context = load();
   const records = [day, '2026-10-11'].flatMap(date => [record('focus', 9, 10, date), record('focus', 9.5, 11, date),
@@ -71,7 +84,7 @@ test('both report collectors, JSON and legacy prompt templates use union totals'
     getTodayFocusItems: () => ({ items: [] }), collectReportLongTermGoals: () => [],
     getDailyReportConv: () => null, buildAiCalendarSnapshot: () => '', buildAiTodoTreeSnapshot: () => '', buildAiNoteTreeSnapshot: () => ''
   });
-  loadFunctions(context, 'js/settings.js', ['formatDailyReportTimerLabel', 'collectDailyReportData', 'collectEveningReportData']);
+  loadFunctions(context, 'js/settings.js', ['formatDailyReportTimerLabel', 'collectReportCompletedNoteReviews', 'collectDailyReportData', 'collectEveningReportData']);
   vm.runInContext(fs.readFileSync('js/prompts.js', 'utf8'), context);
   const settings = fs.readFileSync('js/settings.js', 'utf8');
   for (const [type, prefix, collect] of [['morning', 'yday', 'collectDailyReportData'], ['evening', 'today', 'collectEveningReportData']]) {

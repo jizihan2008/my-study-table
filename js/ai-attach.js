@@ -292,7 +292,7 @@ function getAttachSizeLimit(file, apiCfg = getEffectiveApiConfig()) {
 
 // 将文件列表加入附件（供文件选择框、拖拽与粘贴共用）
 // 返回本次真正加入的附件名数组：被拒绝/超限的文件已在这里提示过，调用方只需据返回值给成功反馈。
-function addAiAttachmentFiles(fileList) {
+function addAiAttachmentFiles(fileList, target = aiAttachments) {
   const files = Array.from(fileList || []);
   if (files.length === 0) return [];
   const added = [];
@@ -326,13 +326,13 @@ function addAiAttachmentFiles(fileList) {
     if (isKimiModel(apiCfg) && isImage) {
       attach.ocrMode = false; // false = base64 inline, true = OCR via file-extract
     }
-    aiAttachments.push(attach);
+    target.push(attach);
     added.push(attach.name);
     // 所有视觉模型都先在本地规范化。Kimi 的内联分支过去会绕过这里，导致真实格式正确、
     // 但单边极长的 PNG 被服务端笼统报成 "unsupported image"。
-    if (isImage) preprocessAiImageAttachment(attach);
+    if (isImage && target === aiAttachments) preprocessAiImageAttachment(attach);
   }
-  renderAttachPreview();
+  if (target === aiAttachments) renderAttachPreview();
   return added;
 }
 
@@ -510,7 +510,7 @@ async function fingerprintImageFile(file) {
 // 剔除只能内联、且内联后超出单图限制的图片附件：同时清掉编辑器里的待发附件与本次快照，
 // 返回被剔除的文件名（供调用方在消息中说明）。返回后调用方需按名单过滤自己的快照副本。
 // 已走 Files API（file_id 引用）的图片不在内联限制内，不参与剔除。
-function pruneOversizedImageAttachments(attachments, apiCfg = getEffectiveApiConfig()) {
+function pruneOversizedImageAttachments(attachments, apiCfg = getEffectiveApiConfig(), includeComposer = true) {
   const snapshot = Array.isArray(attachments) ? attachments : [];
   if (snapshot.length === 0 && aiAttachments.length === 0) return [];
   const isKimi = isKimiModel(apiCfg);
@@ -522,8 +522,10 @@ function pruneOversizedImageAttachments(attachments, apiCfg = getEffectiveApiCon
     return getInlineImageBytes(a) > max;
   };
   // 1) 编辑器里的待发附件（用户可见的预览）
-  for (let i = aiAttachments.length - 1; i >= 0; i--) {
-    if (tooLarge(aiAttachments[i])) dropped.unshift(aiAttachments[i].name);
+  if (includeComposer) {
+    for (let i = aiAttachments.length - 1; i >= 0; i--) {
+      if (tooLarge(aiAttachments[i])) dropped.unshift(aiAttachments[i].name);
+    }
   }
   if (dropped.length > 0) {
     aiAttachments = aiAttachments.filter(a => !tooLarge(a));
@@ -542,11 +544,10 @@ function pruneOversizedImageAttachments(attachments, apiCfg = getEffectiveApiCon
 // 两条路径：
 //   · Files API（普通大图/照片）：规范化后上传换 file_id → 之后每轮只发 file_id，另存小缩略图供界面预览
 //   · 内联 base64（小图 / 长图切片 / 非官方端点 / 用户关闭上传）：缩放或切片后内联
-function preprocessAiImageAttachment(attach) {
+function preprocessAiImageAttachment(attach, apiCfg = getEffectiveApiConfig()) {
   if (attach._processPromise) return attach._processPromise;
   attach.imageProcessing = true;
   attach._processPromise = (async () => {
-    const apiCfg = getEffectiveApiConfig();
     attach.imageFingerprint = await fingerprintImageFile(attach.file).catch(() => '');
     // 教材扫描、网页截图等极长图片不能整张缩到 2048px 高，否则文字会小到不可读。
     // 将它们切成多个合规图片块；普通图片仍沿用单图缩放路径。
@@ -584,7 +585,7 @@ function preprocessAiImageAttachment(attach) {
     return attach;
   }).finally(() => {
     attach.imageProcessing = false;
-    renderAttachPreview();
+    if (aiAttachments.includes(attach)) renderAttachPreview();
   });
   return attach._processPromise;
 }

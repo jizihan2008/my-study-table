@@ -500,33 +500,29 @@ function runCalendarAutoRecords(now) {
   return created.length;
 }
 
-function getTimerTotalForDate(dateStr, records) {
-  let totalMs = 0;
-  try {
-    if (!records) records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
-    for (const rec of records) {
-      if (rec.date === dateStr) totalMs += rec.totalMs;
-    }
-  } catch {}
-  return totalMs;
+let calendarTimerTypeFilter = 'all';
+let calendarTimerRecordsExpanded = false;
+
+function setCalendarTimerTypeFilter(type) {
+  calendarTimerTypeFilter = type;
+  const records = loadTimerRecords().filter(record => record.date === calendarSelectedDate);
+  renderCalendarTimerRecords(records);
 }
 
-function getTimerSessionsForDate(dateStr) {
-  const sessions = [];
-  try {
-    const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
-    for (const rec of records) {
-      if (rec.date === dateStr && rec.sessions) {
-        for (const s of rec.sessions) {
-          // Support both new (targetId + targetType) and old (todoId) formats
-          const tid = (rec.targetType === 'todo' && rec.targetId) ? rec.targetId : rec.todoId;
-          const todo = tid ? findTodo(tid) : null;
-          sessions.push({ ...s, todoName: todo ? todo.text : '(自由计时)' });
-        }
-      }
-    }
-  } catch {}
-  return sessions;
+function toggleCalendarTimerRecordsExpanded() {
+  calendarTimerRecordsExpanded = !calendarTimerRecordsExpanded;
+  document.getElementById('calendarTimerRecords').classList.toggle('expanded', calendarTimerRecordsExpanded);
+  const button = document.getElementById('calendarTimerExpand');
+  button.textContent = calendarTimerRecordsExpanded ? '收起' : '展开全部';
+  button.setAttribute('aria-expanded', String(calendarTimerRecordsExpanded));
+}
+
+function renderCalendarTimerRecords(records) {
+  const list = document.getElementById('calendarTimerRecords');
+  if (!list) return;
+  const items = records.filter(record => calendarTimerTypeFilter === 'all' || getTimerActivityType(record) === calendarTimerTypeFilter);
+  list.innerHTML = renderTimerHistory(items, { readOnly: true })
+    || `<div class="today-goals-empty">${calendarTimerTypeFilter === 'all' ? '这一天还没有计时记录。' : '这一天还没有此类型的计时记录。'}</div>`;
 }
 
 function formatTimerShort(ms) {
@@ -552,7 +548,7 @@ function formatTimeOnly(ts) {
   return String(d.getHours()).padStart(2,'0') + ':' + String(d.getMinutes()).padStart(2,'0');
 }
 
-function renderCalendar() {
+function renderCalendar(timerRecords = loadTimerRecords()) {
   const year = calendarCurrentDate.getFullYear();
   const month = calendarCurrentDate.getMonth();
 
@@ -608,7 +604,9 @@ function renderCalendar() {
   // Include timer records for each day of this month
   for (let d = 1; d <= totalDays; d++) {
     const dateStr = `${year}-${String(month+1).padStart(2,'0')}-${String(d).padStart(2,'0')}`;
-    const timerMs = getTimerTotalForDate(dateStr);
+    const dayRecords = timerRecords.filter(record => record.date === dateStr);
+    if (dayRecords.length === 0) continue;
+    const timerMs = getTimerRecordsDurationSummary(dayRecords, dateStr).totalMs;
     if (timerMs > 0) {
       if (!todoMap[dateStr]) todoMap[dateStr] = { due: [], completed: [], timerMs: 0, events: [] };
       todoMap[dateStr].timerMs = timerMs;
@@ -689,7 +687,7 @@ function renderCalendar() {
   grid.innerHTML = html;
 
   // Show todos for selected date
-  renderCalendarTodoList();
+  renderCalendarTodoList(timerRecords);
 }
 
 function selectCalendarDay(dateStr) {
@@ -701,7 +699,7 @@ function selectCalendarDay(dateStr) {
   renderCalendar();
 }
 
-function renderCalendarTodoList() {
+function renderCalendarTodoList(timerRecords = loadTimerRecords()) {
   const container = document.getElementById('calendarTodoList');
   if (!calendarSelectedDate) {
     container.innerHTML = '<div class="calendar-todo-hint">点击日期查看该日的待办事项与事件</div>';
@@ -774,14 +772,13 @@ function renderCalendarTodoList() {
     }
   }
 
-  // Timer total for this date
-  const timerMs = getTimerTotalForDate(calendarSelectedDate);
+  const dayRecords = timerRecords.filter(record => record.date === calendarSelectedDate);
 
   // Review notes for this date
   const reviewNotes = typeof getReviewNotesForDate === 'function'
     ? getReviewNotesForDate(calendarSelectedDate) : [];
 
-  if (dateEvents.length === 0 && dueTodos.length === 0 && completedTodos.length === 0 && logTodos.length === 0 && timerMs === 0 && reviewNotes.length === 0) {
+  if (dateEvents.length === 0 && dueTodos.length === 0 && completedTodos.length === 0 && logTodos.length === 0 && dayRecords.length === 0 && reviewNotes.length === 0) {
     html += `<div class="calendar-todo-hint">这一天暂无安排</div>`;
     container.innerHTML = html;
     if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
@@ -824,22 +821,30 @@ function renderCalendarTodoList() {
     }
   }
 
-  // Show timer total and sessions for this date
-  if (timerMs > 0) {
-    html += `<div class="calendar-todo-section" style="margin-top:8px;">
-      <span class="calendar-todo-section-title">⏱️ 计时（共 ${formatTimerFull(timerMs)}）</span>`;
-    const sessions = getTimerSessionsForDate(calendarSelectedDate);
-    sessions.sort((a, b) => a.start - b.start);
-    for (const s of sessions) {
-      const name = escapeHtml(s.todoName);
-      const dur = formatTimerFull(s.end - s.start);
-      html += `<div class="calendar-todo-item" style="cursor:default;font-size:12px;">
-        <span style="flex:1;">${formatTimeOnly(s.start)} — ${formatTimeOnly(s.end)}</span>
-        <span style="color:var(--text-secondary);margin:0 8px;">${dur}</span>
-        <span style="color:var(--text-secondary);opacity:0.7;max-width:120px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${name}</span>
-      </div>`;
-    }
-    html += `</div>`;
+  if (dayRecords.length > 0) {
+    const { focusMs, otherMs } = getTimerRecordFocusTotals(dayRecords, calendarSelectedDate);
+    const totalMs = getTimerRecordsDurationSummary(dayRecords, calendarSelectedDate).totalMs;
+    const types = getTimerRecordFilterTypes(dayRecords);
+    if (!types.some(type => type.id === calendarTimerTypeFilter)) calendarTimerTypeFilter = 'all';
+    const options = types.map(type =>
+      `<option value="${escapeAttr(type.id)}"${type.id === calendarTimerTypeFilter ? ' selected' : ''}>${escapeHtml(type.label)}</option>`).join('');
+    html += `<div class="calendar-todo-section">
+      <span class="calendar-todo-section-title">⏱️ 计时记录（共 ${formatTimerTime(totalMs)}）</span>
+      <div class="today-timer-totals">
+        <div class="today-timer-total"><span>计入专注时间总量</span><strong>${formatTimerTime(focusMs)}</strong></div>
+        <div class="today-timer-total"><span>其它时间总量</span><strong>${formatTimerTime(otherMs)}</strong></div>
+      </div>
+      <div class="today-timer-toolbar">
+        <label class="today-timer-filter">时段类型
+          <select id="calendarTimerTypeFilter" aria-label="日历计时记录时段类型" onchange="setCalendarTimerTypeFilter(this.value)">
+            <option value="all">全部</option>${options}
+          </select>
+        </label>
+        <button type="button" id="calendarTimerExpand" class="today-timer-link" onclick="toggleCalendarTimerRecordsExpanded()"
+          aria-expanded="${calendarTimerRecordsExpanded}" aria-controls="calendarTimerRecords">${calendarTimerRecordsExpanded ? '收起' : '展开全部'}</button>
+      </div>
+      <div id="calendarTimerRecords" class="today-timer-records${calendarTimerRecordsExpanded ? ' expanded' : ''}"></div>
+    </div>`;
   }
 
   // Review notes for this date
@@ -860,6 +865,7 @@ function renderCalendarTodoList() {
   }
 
   container.innerHTML = html;
+  renderCalendarTimerRecords(dayRecords);
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
 }
 

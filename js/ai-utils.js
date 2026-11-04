@@ -45,6 +45,7 @@ function safeSaveAiConvs() {
           if (c.createdAt !== undefined) copy.createdAt = c.createdAt;
           // 树状对话字段
           if (c.tree !== undefined) copy.tree = c.tree;
+          if (c.agentRuns !== undefined) copy.agentRuns = c.agentRuns;
           if (c.activePath !== undefined) copy.activePath = c.activePath;
           // 关键标记字段（保留，防止日报对话标记丢失导致重复新建）
           if (c._dailyReport !== undefined) copy._dailyReport = c._dailyReport;
@@ -68,7 +69,7 @@ function safeSaveAiConvs() {
       // 最后回退只去掉可重建的 messages 缓存，完整树和活跃路径必须保留。
       console.error('[safeSaveAiConvs] 彻底失败:', e2.message);
       const minimal = aiConvs.map(c => ({
-        id: c.id, title: c.title, systemPrompt: '', autoTitled: c.autoTitled,
+        id: c.id, title: c.title, agentRuns: c.agentRuns, systemPrompt: '', autoTitled: c.autoTitled,
         createdAt: c.createdAt,
         ...(c.tree && c.activePath
           ? { tree: c.tree, activePath: c.activePath }

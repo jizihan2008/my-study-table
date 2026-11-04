@@ -2,9 +2,9 @@
 // Uses existing getDateStr() and getPastDateStr() from habits.js and settings.js
 let STATS_PERIOD = 7;
 
-function collectDateRange(days) {
+function collectDateRange(days, offset = 0) {
   const dates = [];
-  for (let i = days - 1; i >= 0; i--) dates.push(getPastDateStr(i));
+  for (let i = days - 1; i >= 0; i--) dates.push(getPastDateStr(i + offset));
   return dates;
 }
 
@@ -12,12 +12,17 @@ function collectTodoStats(days) {
   const range = collectDateRange(days);
   const todos = JSON.parse(localStorage.getItem('study_todos_v2') || '[]');
   const completed = {}, created = {};
+  const seenCompletions = new Set();
   range.forEach(d => { completed[d] = 0; created[d] = 0; });
+  for (const todo of [...todos, ...loadTodoCompletedLog()]) {
+    const date = String(todo.completedAt || '').slice(0, 10);
+    if (!Object.hasOwn(completed, date)) continue;
+    const key = todo.id == null ? todo : String(todo.id) + '|' + date;
+    if (seenCompletions.has(key)) continue;
+    seenCompletions.add(key);
+    completed[date]++;
+  }
   todos.forEach(t => {
-    // completedAt is set when todo.toggle → completedAt = formatDate(new Date())
-    const rawD = t.completedAt || '';
-    const d = (typeof rawD === 'string' ? rawD : String(rawD)).slice(0, 10);
-    if (d && completed[d] !== undefined) completed[d]++;
     // createdAt 是毫秒时间戳（数字），需格式化为 YYYY-MM-DD 才能与日期键匹配
     const rawCd = t.createdAt;
     let cd = '';
@@ -33,52 +38,102 @@ function collectTodoStats(days) {
   return { range, completed, created };
 }
 
-function collectTimerStats(days) {
-  const range = collectDateRange(days);
+function loadStatsFocusRecords(types = new Map(loadTimerActivityTypes().map(type => [type.id, type]))) {
   const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
-  const dailyMinutes = {}, dailySessions = {};
-  range.forEach(d => { dailyMinutes[d] = 0; dailySessions[d] = 0; });
-  records.forEach(r => {
-    if (r.affectsFocus === false) return;
-    // timer records use { date: "2026-07-24", totalMs: number }
-    const d = (r.date || '').slice(0, 10);
-    if (dailyMinutes[d] !== undefined) {
-      dailyMinutes[d] += (r.totalMs || 0) / 60000;
-      dailySessions[d]++;
+  return records.filter(record => typeof record.affectsFocus === 'boolean'
+    ? record.affectsFocus
+    : types.get(getTimerActivityType(record))?.affectsFocus);
+}
+
+function groupStatsFocusRecords(records) {
+  const byDate = new Map();
+  for (const record of records) {
+    const date = String(record.date || '').slice(0, 10);
+    if (!date) continue;
+    if (!byDate.has(date)) byDate.set(date, []);
+    byDate.get(date).push(record.date === date ? record : { ...record, date });
+  }
+  return byDate;
+}
+
+function collectTimerStats(days, offset = 0) {
+  const range = collectDateRange(days, offset);
+  const dailyMinutes = {}, dailySessions = {}, dailyTypeMinutes = {}, dailyRecords = {};
+  const typeTotals = new Map();
+  const types = new Map(loadTimerActivityTypes().map(type => [type.id, type]));
+  const recordsByDate = groupStatsFocusRecords(loadStatsFocusRecords(types));
+  for (const date of range) {
+    const records = recordsByDate.get(date) || [];
+    dailyRecords[date] = records;
+    dailySessions[date] = records.length;
+    dailyMinutes[date] = 0;
+    const byType = dailyTypeMinutes[date] = new Map();
+    if (!records.length) continue;
+    const summary = getTimerRecordsDurationSummary(records, date, { splitTypeOverlaps: true });
+    dailyMinutes[date] = summary.totalMs / 60000;
+    for (const [type, ms] of Object.entries(summary.typeMs)) {
+      if (ms <= 0) continue;
+      const minutes = ms / 60000;
+      byType.set(type, minutes);
+      typeTotals.set(type, (typeTotals.get(type) || 0) + minutes);
+      if (!types.has(type)) types.set(type, { id: type, label: type });
     }
-  });
-  return { range, dailyMinutes, dailySessions };
+  }
+  return { range, dailyMinutes, dailySessions, dailyTypeMinutes, dailyRecords, typeTotals, types,
+    totalMinutes: range.reduce((sum, date) => sum + dailyMinutes[date], 0) };
 }
 
 function collectHabitStats(days) {
   const range = collectDateRange(days);
   const habits = JSON.parse(localStorage.getItem('study_habits_v2') || '[]');
-  const dailyRate = {};
-  range.forEach(d => { dailyRate[d] = 0; });
-  const activeHabits = habits.filter(h => h.checkins);
-  if (activeHabits.length === 0) return { range, dailyRate, habitCount: 0 };
-  // For each day, average completion rate across all active habits
-  range.forEach(d => {
-    let totalRate = 0;
-    activeHabits.forEach(h => {
-      const target = h.dailyTarget || 1;
-      const done = h.checkins[d] || 0;
-      totalRate += Math.min(1, done / target); // 0~1 per habit
-    });
-    dailyRate[d] = Math.round((totalRate / activeHabits.length) * 100);
+  const dailyRate = {}, dailyEligible = {}, dailyMet = {};
+  const seen = new Set(habits.filter(habit => habit.id != null).map(habit => String(habit.id)));
+  const inactive = [...loadArchive('habits'), ...loadTrash('habits')].filter(habit => {
+    if (habit.id == null) return true;
+    const id = String(habit.id);
+    if (seen.has(id)) return false;
+    seen.add(id);
+    return true;
   });
-  return { range, dailyRate, habitCount: activeHabits.length };
+  const entries = [...habits, ...inactive].map(habit => {
+    const start = statsLocalDate(habit.createdAt);
+    const end = statsLocalDate(habit.archivedAt || habit.deletedAt);
+    const checkins = Array.isArray(habit.checkins) ? habit.checkins.reduce((counts, date) => {
+      counts[date] = (counts[date] || 0) + 1;
+      return counts;
+    }, Object.create(null)) : (habit.checkins || {});
+    return { start, end, checkins, target: Math.max(1, Number(habit.dailyTarget) || 1) };
+  });
+  let eligible = 0, met = 0;
+  for (const date of range) {
+    const active = entries.filter(habit => date >= habit.start && (!habit.end || date <= habit.end));
+    const completed = active.filter(habit => (habit.checkins[date] || 0) >= habit.target).length;
+    dailyEligible[date] = active.length;
+    dailyMet[date] = completed;
+    dailyRate[date] = active.length ? Math.round(completed / active.length * 100) : null;
+    eligible += active.length;
+    met += completed;
+  }
+  return { range, dailyRate, dailyEligible, dailyMet, eligible, met, rate: eligible ? Math.round(met / eligible * 100) : null };
+}
+
+function statsLocalDate(value) {
+  if (!value) return '';
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
+  const date = new Date(value);
+  return Number.isFinite(date.getTime()) ? formatDate(date) : '';
 }
 
 function collectOverallStats() {
   const todos = JSON.parse(localStorage.getItem('study_todos_v2') || '[]');
-  const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
   const notes = JSON.parse(localStorage.getItem('study_notes_v2') || '[]');
   const checkin = JSON.parse(localStorage.getItem('study_checkin') || '{"dates":[],"streak":0}');
   const habits = JSON.parse(localStorage.getItem('study_habits_v2') || '[]');
-  const focusRecords = records.filter(r => r.affectsFocus !== false);
-  const totalMin = focusRecords.reduce((s, r) => s + (r.totalMs || 0) / 60000, 0);
-  const activeDays = new Set(focusRecords.map(r => (r.date || '').slice(0, 10)).filter(Boolean)).size;
+  const focusRecords = loadStatsFocusRecords();
+  const byDate = groupStatsFocusRecords(focusRecords);
+  const totalMin = [...byDate].reduce((sum, [date, records]) =>
+    sum + getTimerRecordsDurationSummary(records, date).totalMs / 60000, 0);
+  const activeDays = byDate.size;
   return {
     totalTodos: todos.length, completedTodos: todos.filter(t => t.done).length,
     totalMin, totalSessions: focusRecords.length,
@@ -93,9 +148,11 @@ function setStatsPeriod(days) {
 }
 
 function formatStatsTime(minutes) {
-  if (minutes < 60) return Math.round(minutes) + '分钟';
-  const h = Math.floor(minutes / 60);
-  const m = Math.round(minutes % 60);
+  const rounded = Math.round(minutes);
+  if (minutes > 0 && rounded === 0) return '<1分钟';
+  if (rounded < 60) return rounded + '分钟';
+  const h = Math.floor(rounded / 60);
+  const m = rounded % 60;
   return m > 0 ? h + 'h ' + m + 'm' : h + '小时';
 }
 
@@ -170,15 +227,27 @@ function bindStatsTooltip(container) {
     tip.hidden = true;
     document.body.appendChild(tip);
   }
+  const showTip = (node, x, y) => {
+    tip.textContent = node.dataset.statsTip;
+    tip.hidden = false;
+    tip.style.left = Math.max(8, Math.min(x + 12, window.innerWidth - tip.offsetWidth - 8)) + 'px';
+    const top = y - tip.offsetHeight >= 20 ? y - tip.offsetHeight - 12 : y + 12;
+    tip.style.top = Math.max(8, Math.min(top, window.innerHeight - tip.offsetHeight - 8)) + 'px';
+  };
   container.addEventListener('pointermove', event => {
     const node = event.target.closest('[data-stats-tip]');
     if (!node || !container.contains(node)) { tip.hidden = true; return; }
-    tip.textContent = node.dataset.statsTip;
-    tip.hidden = false;
-    tip.style.left = Math.min(event.clientX + 12, window.innerWidth - tip.offsetWidth - 8) + 'px';
-    tip.style.top = Math.max(8, event.clientY - tip.offsetHeight - 12) + 'px';
+    showTip(node, event.clientX, event.clientY);
   });
   container.addEventListener('pointerleave', () => { tip.hidden = true; });
+  container.addEventListener('focusin', event => {
+    const node = event.target.closest('[data-stats-date][data-stats-tip]');
+    if (!node) return;
+    const rect = node.getBoundingClientRect();
+    showTip(node, rect.right, rect.top);
+  });
+  container.addEventListener('focusout', () => { tip.hidden = true; });
+  document.addEventListener('keydown', event => { if (event.key === 'Escape') tip.hidden = true; });
 }
 
 function aiUsageBreakdownHtml(entries, labels) {
@@ -265,7 +334,15 @@ function renderTodoLineChart(cId, stats) {
 
 function renderFocusBarChart(cId, stats) {
   const el = document.getElementById(cId); if (!el) return;
-  const { range, dailyMinutes } = stats;
+  const { range, dailyMinutes, dailySessions, dailyTypeMinutes, types } = stats;
+  const palette = ['var(--primary)', '#16805a', '#c26a14', '#a04fac', '#087e9e', '#c74663', '#6869b9', '#73832e'];
+  const activeTypes = [...types.values()].map((type, i) => ({
+    ...type, color: palette[i] || `hsl(${i * 137.508 % 360} 60% 42%)`
+  })).filter(type => stats.typeTotals.has(type.id));
+  if (!activeTypes.length) {
+    el.innerHTML = '<div class="stats-ai-empty">这段时间暂无专注记录</div>';
+    return;
+  }
   const elW = el.parentElement ? el.parentElement.clientWidth : 0;
   const W = Math.max(200, (elW || el.clientWidth || 260) - 30);
   const H = 180;
@@ -273,69 +350,114 @@ function renderFocusBarChart(cId, stats) {
   const vals = range.map(d => dailyMinutes[d]);
   const maxY = Math.max(30, ...vals) || 30;
   const bc = vals.length;
-  const bw = Math.min(26, Math.max(6, (plotW / bc) * 0.62));
   const gap = plotW / bc;
+  const bw = Math.min(26, gap * 0.72);
   let grid = '', bars = '';
   for (let g = 0; g <= 4; g++) {
     const y = padT + plotH * g / 4, v = Math.round(maxY * (1 - g / 4));
     grid += '<line x1="'+padL+'" y1="'+y.toFixed(1)+'" x2="'+(padL+plotW)+'" y2="'+y.toFixed(1)+'" stroke="var(--border)" stroke-dasharray="3,3"/><text x="'+(padL-6)+'" y="'+(y+4).toFixed(1)+'" text-anchor="end" font-size="9" fill="var(--text-secondary)">'+v+'m</text>';
   }
-  const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
   vals.forEach((v, i) => {
+    const date = range[i];
     const x = padL + i * gap + (gap - bw) / 2;
-    const barH = Math.max(2, (v / maxY) * plotH);
-    const y = padT + plotH - barH;
-    bars += '<g class="stats-chart-node" data-stats-tip="'+statsTip(range[i]+'：专注 '+formatStatsTime(v)+'，'+(stats.dailySessions?.[range[i]]||0)+' 次')+'"><rect x="'+x.toFixed(1)+'" y="'+padT+'" width="'+bw.toFixed(1)+'" height="'+plotH+'" fill="transparent"/><rect class="stats-chart-bar" x="'+x.toFixed(1)+'" y="'+y.toFixed(1)+'" width="'+bw.toFixed(1)+'" height="'+barH.toFixed(1)+'" rx="3" fill="'+((v>=avg && v>0)?'var(--primary)':'var(--border)')+'" opacity="'+(v>=avg && v>0?'0.9':'0.5')+'"/></g>';
+    let y = padT + plotH;
+    const lines = [date + ' · 合计 ' + formatTimerTime(Math.round(v * 60000)) + ' · ' + dailySessions[date] + ' 条记录'];
+    const segments = activeTypes.map(type => {
+      const minutes = dailyTypeMinutes[date].get(type.id);
+      if (!minutes) return '';
+      const height = minutes / maxY * plotH;
+      y -= height;
+      lines.push(type.label + ' · ' + formatTimerTime(Math.round(minutes * 60000)));
+      return `<rect class="stats-chart-bar" x="${x}" y="${y}" width="${bw}" height="${height}" fill="${type.color}"/>`;
+    }).join('');
+    const summary = statsTip(lines.join('\n'));
+    bars += `<g class="stats-chart-node stats-focus-day" tabindex="0" role="button" aria-label="${summary}，查看记录" data-stats-date="${date}" data-stats-tip="${summary}">
+      <rect x="${padL + i * gap}" y="${padT}" width="${gap}" height="${plotH}" fill="transparent"/>
+      ${segments}
+    </g>`;
   });
   let xLabels = ''; const li = range.length > 14 ? 4 : (range.length > 7 ? 2 : 1);
   range.forEach((d, i) => { if (i % li === 0) { const x = padL + i * gap + gap / 2; xLabels += '<text x="'+x.toFixed(1)+'" y="'+(H-4)+'" text-anchor="middle" font-size="10" fill="var(--text-secondary)">'+d.slice(5)+'</text>'; } });
-  el.innerHTML = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'">'+grid+bars+xLabels+'</svg>';
+  const legend = activeTypes.map(type =>
+    `<li><span aria-hidden="true" style="background:${type.color}"></span>${escapeHtml(type.label)}</li>`
+  ).join('');
+  el.innerHTML = '<svg width="'+W+'" height="'+H+'" viewBox="0 0 '+W+' '+H+'" role="group" aria-label="每日专注时长按类型堆叠">'+grid+bars+xLabels+'</svg>'
+    + '<ul class="stats-focus-legend" aria-label="专注类型图例">'+legend+'</ul>';
+}
+
+function renderStatsFocusComparison(current, previous) {
+  const ids = [...new Set([...current.typeTotals.keys(), ...previous.typeTotals.keys()])]
+    .sort((a, b) => (current.typeTotals.get(b) || 0) - (current.typeTotals.get(a) || 0)
+      || (previous.typeTotals.get(b) || 0) - (previous.typeTotals.get(a) || 0));
+  if (!ids.length) return '<p class="stats-detail-note">两个周期内均无专注时长。</p>';
+  const rows = ids.map(id => {
+    const label = (current.types.get(id) || previous.types.get(id)).label;
+    const minutes = current.typeTotals.get(id) || 0;
+    const before = previous.typeTotals.get(id) || 0;
+    const share = current.totalMinutes ? (100 * minutes / current.totalMinutes).toFixed(1) + '%' : '—';
+    const change = Math.round((minutes - before) * 60);
+    const delta = change ? (change > 0 ? '+' : '−') + formatStatsTime(Math.abs(change) / 60) : '持平';
+    return `<tr><th scope="row">${escapeHtml(label)}</th><td>${escapeHtml(formatStatsTime(minutes))}</td><td>${share}</td>
+      <td>${escapeHtml(formatStatsTime(before))}</td><td>${escapeHtml(delta)}</td></tr>`;
+  }).join('');
+  return `<div class="stats-comparison-scroll"><table class="stats-comparison">
+    <thead><tr><th scope="col">类型</th><th scope="col">本期时长</th><th scope="col">本期占比</th><th scope="col">上期时长</th><th scope="col">较上期</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function renderStatsDayDetail(el, date, timer, todo, habits) {
+  const records = timer.dailyRecords[date];
+  const rate = habits.dailyRate[date];
+  const habitText = rate === null ? '当天无适用习惯' : `习惯达标 ${habits.dailyMet[date]}/${habits.dailyEligible[date]} 项（${rate}%）`;
+  const list = records.map(record => {
+    const id = getTimerActivityType(record);
+    const label = timer.types.get(id)?.label || id;
+    const duration = formatTimerTime(Math.max(0, Number(record.totalMs) || 0));
+    const periods = (Array.isArray(record.sessions) ? record.sessions : [])
+      .filter(session => session && Number.isFinite(session.start) && Number.isFinite(session.end) && session.end > session.start)
+      .map(session => formatTimeOnly(session.start) + '–' + formatTimeOnly(session.end)).join('、');
+    const title = record.name ? `${escapeHtml(record.name)} <small>${escapeHtml(label)}</small>` : escapeHtml(label);
+    return `<li><span>${title}${periods ? '<small class="stats-day-periods">'+escapeHtml(periods)+'</small>' : ''}</span><span>${duration}</span></li>`;
+  }).join('');
+  el.innerHTML = `<p class="stats-detail-note">专注 ${escapeHtml(formatStatsTime(timer.dailyMinutes[date]))} · 完成待办 ${todo.completed[date]} 项 · ${habitText}</p>`
+    + (list ? '<ul class="stats-day-records" aria-label="原始专注记录">'+list+'</ul><p class="stats-detail-note">单条记录显示原始时长，上方合计已合并重叠时段。</p>'
+      : '<p class="stats-detail-note">当天无专注记录。</p>');
 }
 
 function renderHabitDoughnut(cId, stats) {
   const el = document.getElementById(cId); if (!el) return;
-  const { dailyRate, range } = stats;
-  const overallRate = range.reduce((s, d) => s + dailyRate[d], 0) / range.length;
+  const { rate: overallRate, range, met, eligible } = stats;
+  if (overallRate === null) {
+    el.innerHTML = '<div class="stats-ai-empty">本期无适用习惯</div>';
+    return;
+  }
   const svgW = 150; const svgH = 150; const cx = 75; const cy = 75; const r = 55; const sw = 18;
   const angle = (Math.min(100, overallRate) / 100) * 360;
   const strokeColor = overallRate >= 80 ? '#10b981' : (overallRate >= 50 ? '#f59e0b' : '#ef4444');
   el.innerHTML = `<svg width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">
-    <circle class="stats-chart-node" data-stats-tip="${statsTip('最近 '+range.length+' 天：习惯完成率 '+Math.round(overallRate)+'%')}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${sw}" opacity="0.25"/>
-    <circle class="stats-chart-node stats-doughnut-progress" data-stats-tip="${statsTip('最近 '+range.length+' 天：习惯完成率 '+Math.round(overallRate)+'%')}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${strokeColor}" stroke-width="${sw}"
+    <circle class="stats-chart-node" data-stats-tip="${statsTip('最近 '+range.length+' 天：应达标 '+eligible+' 项次，已达标 '+met+' 项次')}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="var(--border)" stroke-width="${sw}" opacity="0.25"/>
+    <circle class="stats-chart-node stats-doughnut-progress" data-stats-tip="${statsTip('最近 '+range.length+' 天：应达标 '+eligible+' 项次，已达标 '+met+' 项次')}" cx="${cx}" cy="${cy}" r="${r}" fill="none" stroke="${strokeColor}" stroke-width="${sw}"
       stroke-dasharray="${(angle/360)*2*Math.PI*r} ${(1-angle/360)*2*Math.PI*r}"
       stroke-dashoffset="${2*Math.PI*r*0.25}" stroke-linecap="round" transform="rotate(-90 ${cx} ${cy})"/>
     <text x="${cx}" y="${cy-6}" text-anchor="middle" font-size="26" font-weight="700" fill="var(--text)">${Math.round(overallRate)}%</text>
-    <text x="${cx}" y="${cy+16}" text-anchor="middle" font-size="11" fill="var(--text-secondary)">习惯完成率</text>
+    <text x="${cx}" y="${cy+16}" text-anchor="middle" font-size="11" fill="var(--text-secondary)">达标 ${met}/${eligible} 项次</text>
   </svg>`;
 }
 
-function renderHeatmap(cId) {
+function renderHeatmap(cId, timer, todo) {
   const el = document.getElementById(cId); if (!el) return;
-  const days = 35; const cols = 7;
-  const records = JSON.parse(localStorage.getItem('study_timer_records') || '[]');
-  const todos = JSON.parse(localStorage.getItem('study_todos_v2') || '[]');
-  const activityMap = {};
-  for (let i = 0; i < days; i++) activityMap[getPastDateStr(i)] = 0;
-  records.forEach(r => { if (r.affectsFocus === false) return; const d = (r.date || '').slice(0, 10); if (activityMap[d] !== undefined) activityMap[d] += (r.totalMs || 0) / 60000; });
-  todos.forEach(t => { if (t.done && t.completedAt) { const d = t.completedAt.slice(0, 10); if (activityMap[d] !== undefined) activityMap[d] += 15; } });
-  const allVals = Object.values(activityMap).filter(v => v > 0); const maxVal = Math.max(1, ...allVals);
-  const cs = 14, cg = 3, lw = 24;
-  let cells = '';
-  // Loop from today (daysAgo=0) backwards; row 0 = this week, row 4 = oldest
-  for (let daysAgo = 0; daysAgo < days; daysAgo++) {
-    const ds = getPastDateStr(daysAgo); const val = activityMap[ds] || 0;
-    const date = new Date(ds);
-    let col = date.getDay() === 0 ? 6 : date.getDay() - 1; // Mon=0, Sun=6
-    const row = Math.floor(daysAgo / cols);
-    const intensity = maxVal > 0 ? Math.min(1, val / maxVal) : 0;
-    const opacity = intensity < 0.01 ? 0.06 : 0.12 + intensity * 0.88;
-    cells += '<rect class="stats-chart-node stats-heat-cell" data-stats-tip="'+statsTip(ds+'：活动量 '+Math.round(val)+' 分钟（待办按每项 15 分钟计）')+'" x="'+(col*(cs+cg)+lw)+'" y="'+(row*(cs+cg))+'" width="'+cs+'" height="'+cs+'" rx="3" fill="var(--primary)" opacity="'+opacity.toFixed(2)+'"/>';
-  }
-  // Day labels (Mon, Wed, Fri, Sun)
-  const dayPositions = [{idx:0,y:10},{idx:2,y:27},{idx:4,y:44},{idx:6,y:61}];
-  let dl = dayPositions.map(dp => '<text x="0" y="'+dp.y+'" font-size="9" fill="var(--text-secondary)" text-anchor="start">'+['一','三','五','日'][dayPositions.indexOf(dp)]+'</text>').join('');
-  const sw = lw + cols * (cs + cg); const rows = Math.ceil(days / cols); const sh = rows * (cs + cg);
-  el.innerHTML = '<svg width="'+sw+'" height="'+sh+'" viewBox="0 0 '+sw+' '+sh+'">'+dl+cells+'</svg>';
+  const max = Math.max(...Object.values(timer.dailyMinutes));
+  const offset = (new Date(timer.range[0] + 'T00:00:00').getDay() + 6) % 7;
+  const weekdays = [...'一二三四五六日'].map(day => `<span aria-hidden="true">${day}</span>`).join('');
+  const empty = '<span aria-hidden="true"></span>'.repeat(offset);
+  const cells = timer.range.map(date => {
+    const minutes = timer.dailyMinutes[date];
+    const intensity = minutes > 0 ? 18 + 56 * minutes / max : 6;
+    const tip = statsTip(`${date} · 专注 ${formatStatsTime(minutes)} · 完成待办 ${todo.completed[date]} 项`);
+    return `<button type="button" class="stats-heat-cell" data-stats-date="${date}" data-stats-tip="${tip}"
+      aria-label="${tip}，查看记录" style="--stats-heat-intensity:${intensity}%">${Number(date.slice(8))}</button>`;
+  }).join('');
+  el.innerHTML = `<div class="stats-heatmap-grid">${weekdays}${empty}${cells}</div><p class="stats-detail-note">颜色越深，专注时长越长。</p>`;
 }
 
 // ═══════════ Stats: AI Analysis ═══════════
@@ -358,28 +480,27 @@ async function generateStatsAnalysis() {
 
   const days = STATS_PERIOD;
   const ts = collectTodoStats(days); const ms = collectTimerStats(days);
-  const hs = collectHabitStats(days); const ov = collectOverallStats();
+  const hs = collectHabitStats(days);
 
   const todoDone = ts.range.reduce((s, d) => s + ts.completed[d], 0);
-  const totalMin = ms.range.reduce((s, d) => s + ms.dailyMinutes[d], 0);
-  const avgRate = hs.range.reduce((s, d) => s + hs.dailyRate[d], 0) / days;
+  const todoCreated = ts.range.reduce((s, d) => s + ts.created[d], 0);
+  const totalMin = ms.totalMinutes;
+  const sessions = ms.range.reduce((sum, date) => sum + ms.dailySessions[date], 0);
+  const activeDays = ms.range.filter(date => ms.dailyMinutes[date] > 0).length;
 
-  let breakdown = '';
-  ts.range.forEach(d => { breakdown += '- '+d+': 待办完成'+ts.completed[d]+'个, 专注'+Math.round(ms.dailyMinutes[d])+'分, 习惯'+hs.dailyRate[d]+'%\n'; });
+  const breakdown = ts.range.map(date => {
+    const habits = hs.dailyRate[date] === null ? '无适用习惯' : `习惯达标 ${hs.dailyMet[date]}/${hs.dailyEligible[date]} 项`;
+    return `- ${date} · 完成待办 ${ts.completed[date]} 项 · 专注 ${formatStatsTime(ms.dailyMinutes[date])} · ${habits}`;
+  }).join('\n');
 
-  const dataText = `## 最近 ${days} 天统计数据
-- 总待办: ${ov.totalTodos}（已完成${ov.completedTodos}，率 ${ov.totalTodos>0?Math.round(ov.completedTodos/ov.totalTodos*100):0}%）
-- 本次统计完成: ${todoDone}个
-- 总专注: ${Math.round(totalMin)}分(${(totalMin/60).toFixed(1)}h)，日均 ${Math.round(totalMin/days)}分
-- 专注次数: ${ov.totalSessions}次
-- 习惯完成率: ${Math.round(avgRate)}%
-- ${(typeof formatCheckinStreakText === 'function') ? formatCheckinStreakText(loadCheckinData()) : ('连续打卡: ' + ov.streak + '天')} | 笔记: ${ov.totalNotes}篇
-- 活跃天数: ${ov.activeDays}
+  const dataText = `## 最近 ${days} 天（${ts.range[0]} 至 ${ts.range[days - 1]}）
+- 新建待办 ${todoCreated} 项，完成待办 ${todoDone} 项
+- 专注合计 ${formatStatsTime(totalMin)}，日均 ${formatStatsTime(totalMin / days)}，重叠时段已合并
+- 专注记录 ${sessions} 条，有专注时长 ${activeDays} 天
+- ${hs.rate === null ? '本期无适用习惯' : `习惯完成率 ${hs.rate}%（达标 ${hs.met}/${hs.eligible} 项次）`}
 
 ### 每日明细
-${breakdown}
-### 近7天趋势
-${ts.range.slice(-7).map(d => d.slice(5)+': 待办'+ts.completed[d]+' 专注'+Math.round(ms.dailyMinutes[d])+'分 习惯'+hs.dailyRate[d]+'%').join('\n')}`;
+${breakdown}`;
 
   const sp = `你是用户的学习伙伴，分析数据并提供洞察。请按以下结构回复：
 
@@ -424,12 +545,17 @@ function parseAnalysisSections(text) {
 function renderStats() {
   const container = document.getElementById('section-stats');
   if (!container) return;
+  const tip = document.getElementById('statsNodeTooltip');
+  if (tip) tip.hidden = true;
   const days = STATS_PERIOD;
   const ts = collectTodoStats(days); const ms = collectTimerStats(days);
-  const hs = collectHabitStats(days); const ov = collectOverallStats();
+  const hs = collectHabitStats(days);
+  const previous = collectTimerStats(days, days);
+  const checkin = loadCheckinData();
+  const streakLabel = checkin.lastDate ? '连续打卡 · 截至 '+checkin.lastDate : '连续打卡';
   const todoDone = ts.range.reduce((s, d) => s + ts.completed[d], 0);
-  const totalMin = ms.range.reduce((s, d) => s + ms.dailyMinutes[d], 0);
-  const avgRate = hs.range.reduce((s, d) => s + hs.dailyRate[d], 0) / days;
+  const dateOptions = [...ms.range].reverse().map(date => `<option value="${date}">${date}</option>`).join('');
+  const compareDates = `本期 ${ms.range[0]} 至 ${ms.range[days - 1]} · 上期 ${previous.range[0]} 至 ${previous.range[days - 1]}`;
 
   container.innerHTML =
     '<div class="stats-header">'+
@@ -442,15 +568,21 @@ function renderStats() {
     '</div>'+
     '<div class="stats-overview-cards">'+
       '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(79,110,247,.12);color:var(--primary)"><i data-lucide="check-circle" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+todoDone+'</span><span class="stats-oc-label">已完成待办</span></div></div>'+
-      '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(16,185,129,.12);color:#10b981"><i data-lucide="clock" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+formatStatsTime(totalMin)+'</span><span class="stats-oc-label">专注时长</span></div></div>'+
-      '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(245,158,11,.12);color:#f59e0b"><i data-lucide="target" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+Math.round(avgRate)+'%</span><span class="stats-oc-label">习惯完成率</span></div></div>'+
-      '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(139,92,246,.12);color:#8b5cf6"><i data-lucide="flame" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+ov.streak+'天</span><span class="stats-oc-label">连续打卡</span></div></div>'+
+      '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(16,185,129,.12);color:#10b981"><i data-lucide="clock" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+escapeHtml(formatStatsTime(ms.totalMinutes))+'</span><span class="stats-oc-label">专注时长</span></div></div>'+
+      '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(245,158,11,.12);color:#f59e0b"><i data-lucide="target" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+(hs.rate === null ? '—' : hs.rate+'%')+'</span><span class="stats-oc-label">'+(hs.rate === null ? '本期无适用习惯' : '习惯完成率')+'</span></div></div>'+
+      '<div class="stats-oc"><div class="stats-oc-icon" style="background:rgba(139,92,246,.12);color:#8b5cf6"><i data-lucide="flame" class="lucide-icon" style="width:18px;height:18px"></i></div><div class="stats-oc-info"><span class="stats-oc-value">'+(Number(checkin.streak) || 0)+'天</span><span class="stats-oc-label">'+escapeHtml(streakLabel)+'</span></div></div>'+
     '</div>'+
     '<div class="stats-charts-row">'+
       '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="trending-up" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 完成待办趋势</h3><div class="stats-chart-body" id="statsTodoTrend"></div></div>'+
-      '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="bar-chart-horizontal" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 每日专注时长</h3><div class="stats-chart-body" id="statsFocusChart"></div></div>'+
+      '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="bar-chart-horizontal" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 每日专注时长</h3><div class="stats-chart-body stats-focus-chart" id="statsFocusChart"></div></div>'+
       '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="pie-chart" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 习惯完成率</h3><div class="stats-chart-body" id="statsHabitDoughnut" style="justify-content:center"></div></div>'+
-      '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="grid" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 活动热力图</h3><div class="stats-chart-body" id="statsHeatmap" style="justify-content:center;overflow-x:auto"></div></div>'+
+      '<div class="stats-chart-card"><h3 class="stats-chart-title"><i data-lucide="grid" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle"></i> 专注热力图</h3><div class="stats-chart-body stats-heatmap" id="statsHeatmap"></div></div>'+
+    '</div>'+
+    '<div class="stats-details-row">'+
+      '<section class="stats-chart-card"><h3 class="stats-chart-title">专注类型对比</h3><p class="stats-detail-note">'+compareDates+'</p>'+
+        renderStatsFocusComparison(ms, previous)+'<p class="stats-detail-note">重叠时间只计一次，跨类型重叠部分由各类型平分。</p></section>'+
+      '<section class="stats-chart-card"><div class="stats-day-header"><h3 class="stats-chart-title">日期明细</h3>'+
+        '<select id="statsDaySelect" aria-label="选择统计日期">'+dateOptions+'</select></div><div id="statsDayDetail" aria-live="polite"></div></section>'+
     '</div>'+
     '<div class="stats-ai-card">'+
       '<div class="stats-ai-header"><div><h3><i data-lucide="cpu" class="lucide-icon"></i> AI Token 消耗</h3><p id="statsAiAccuracy">按接口返回值统计；缺失 usage 时使用本地估算</p></div><button class="stats-ai-clear" onclick="clearAiUsageStats()"><i data-lucide="trash-2" class="lucide-icon"></i> 清空统计</button></div>'+
@@ -476,6 +608,30 @@ function renderStats() {
     '</div>';
 
   bindStatsTooltip(container);
+  const charts = container.querySelector('.stats-charts-row');
+  const dateSelect = container.querySelector('#statsDaySelect');
+  const detail = container.querySelector('#statsDayDetail');
+  const updateDay = () => {
+    renderStatsDayDetail(detail, dateSelect.value, ms, ts, hs);
+    for (const cell of charts.querySelectorAll('[data-stats-date]')) {
+      cell.setAttribute('aria-pressed', String(cell.dataset.statsDate === dateSelect.value));
+    }
+  };
+  dateSelect.addEventListener('change', updateDay);
+  const selectChartDay = event => {
+    const cell = event.target.closest('[data-stats-date]');
+    if (!cell) return;
+    dateSelect.value = cell.dataset.statsDate;
+    updateDay();
+    dateSelect.focus();
+  };
+  charts.addEventListener('click', selectChartDay);
+  charts.addEventListener('keydown', event => {
+    if (!event.target.matches('.stats-focus-day') || !['Enter', ' '].includes(event.key)) return;
+    event.preventDefault();
+    selectChartDay(event);
+  });
+  updateDay();
 
   // Text summaries do not depend on layout width, so update them even while
   // the stats section is hidden. Charts will be retried once the tab is visible.
@@ -484,12 +640,14 @@ function renderStats() {
   // Render charts — retry until layout is ready
   let tries = 0;
   function tryRenderCharts() {
+    if (!charts.isConnected) return;
     const trendEl = document.getElementById('statsTodoTrend');
     if (trendEl && (trendEl.clientWidth > 0 || (trendEl.parentElement && trendEl.parentElement.clientWidth > 0))) {
       renderTodoLineChart('statsTodoTrend', ts);
       renderFocusBarChart('statsFocusChart', ms);
       renderHabitDoughnut('statsHabitDoughnut', hs);
-      renderHeatmap('statsHeatmap');
+      renderHeatmap('statsHeatmap', ms, ts);
+      updateDay();
       refreshAiUsagePanel();
       if (typeof lucide !== 'undefined') lucide.createIcons();
       return;

@@ -447,9 +447,8 @@
     }
   }
 
-  function getMarkdown() {
-    if (!host) return currentMarkdown;
-    const source = host.cloneNode(true);
+  function serializeContent(node) {
+    const source = node.cloneNode(true);
     const mergeFormatting = container => {
       const aliases = { B: 'strong', I: 'em', S: 'del', STRIKE: 'del' };
       Array.from(container.children).forEach(child => {
@@ -473,7 +472,12 @@
       }
     };
     mergeFormatting(source);
-    let markdown = serializeBlocks(source.childNodes).trim();
+    return source.matches('details.note-fold') ? block(source) : serializeBlocks(source.childNodes).trim();
+  }
+
+  function getMarkdown() {
+    if (!host) return currentMarkdown;
+    let markdown = serializeContent(host);
     if (footnoteDefinitions) markdown += (markdown ? '\n\n' : '') + footnoteDefinitions;
     currentMarkdown = markdown;
     return markdown;
@@ -676,6 +680,20 @@
     return expanded;
   }
 
+  function moveBlockInsertionOutsideParagraph(insertion) {
+    const start = insertion.startContainer;
+    const element = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
+    const paragraph = element.closest('p,h1,h2,h3,h4,h5,h6');
+    if (!paragraph || !host.contains(paragraph)) return;
+    const tailRange = insertion.cloneRange();
+    tailRange.setEnd(paragraph, paragraph.childNodes.length);
+    const tail = paragraph.cloneNode(false);
+    tail.appendChild(tailRange.extractContents());
+    if (tail.textContent || tail.querySelector('img,br,.katex')) paragraph.after(tail);
+    insertion.setStartAfter(paragraph);
+    insertion.collapse(true);
+  }
+
   async function command(type) {
     if (!host) return;
     const selection = window.getSelection();
@@ -720,18 +738,7 @@
       const insertion = range || document.createRange();
       if (!range) { insertion.selectNodeContents(host); insertion.collapse(false); }
       insertion.deleteContents();
-      if (isBlock) {
-        const element = insertion.startContainer.nodeType === Node.ELEMENT_NODE ? insertion.startContainer : insertion.startContainer.parentElement;
-        const paragraph = element.closest('p,h1,h2,h3,h4,h5,h6');
-        if (paragraph && host.contains(paragraph)) {
-          const tailRange = insertion.cloneRange();
-          tailRange.setEnd(paragraph, paragraph.childNodes.length);
-          const tail = paragraph.cloneNode(false);
-          tail.appendChild(tailRange.extractContents());
-          if (tail.textContent || tail.querySelector('img,br,.katex')) paragraph.after(tail);
-          insertion.setStartAfter(paragraph); insertion.collapse(true);
-        }
-      }
+      if (isBlock) moveBlockInsertionOutsideParagraph(insertion);
       const fragment = insertion.createContextualFragment(html);
       const title = fragment.firstChild.querySelector('.note-important-title');
       insertion.insertNode(fragment);
@@ -1145,6 +1152,22 @@
         node.removeAttribute('style');
       });
       normalizeRenderedDom(container);
+      const fold = container.firstElementChild;
+      const selection = window.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (!titleRange && fold?.matches('details.note-fold') && container.childElementCount === 1
+          && container.textContent.trim() === fold.textContent.trim() && range && host.contains(range.commonAncestorContainer)) {
+        // Chromium can discard a closed fold's hidden body when insertHTML
+        // pastes into a paragraph. Insert the sanitized block at the DOM boundary.
+        range.deleteContents();
+        moveBlockInsertionOutsideParagraph(range);
+        range.insertNode(fold);
+        range.setStartAfter(fold);
+        range.collapse(true);
+        restoreRange(range);
+        notifyChange({ historyBoundary: true });
+        return;
+      }
       if (titleRange) {
         // A summary is a single inline title. Strip clipboard block wrappers,
         // keeping inline formatting and separating pasted paragraphs with spaces.
@@ -1694,6 +1717,7 @@
     getMarkdown,
     command,
     focusHistoryChange,
+    getFoldMarkdown: serializeContent,
     deleteFold,
     unwrapFold,
     editTable,

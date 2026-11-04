@@ -31,6 +31,62 @@ async function setup(page) {
   });
 }
 
+test('editing a sent message changes its branch attachments and keeps the composer draft', async ({ page }) => {
+  await page.goto(baseUrl + '/index.html');
+  await setup(page);
+  const originalId = await page.evaluate(() => {
+    createNewConv();
+    const id = appendMessage(getActiveConv(), {
+      role: 'user',
+      content: '阅读资料\n\n[附件：旧资料.txt]\n原文件正文\n\n[附件：保留.txt]\n保留正文',
+      attachments: [
+        { name: '旧资料.txt', content: '原文件正文' },
+        { name: '保留.txt', content: '保留正文' },
+        { name: '旧图.png' }
+      ],
+      visionFiles: [{ type: 'image_url', name: '旧图.png', dataUrl: 'data:image/png;base64,AA==' }]
+    });
+    renderAiMessages();
+    return id;
+  });
+  await page.locator('#aiInput').fill('独立草稿');
+  await page.locator('#aiFileInput').setInputFiles({ name: '草稿.txt', mimeType: 'text/plain', buffer: Buffer.from('draft') });
+  const bubble = page.locator('.ai-chat-msg.user .ai-chat-bubble');
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  await expect(bubble.locator('textarea')).toHaveValue('阅读资料');
+  await bubble.getByRole('button', { name: '移除 旧资料.txt' }).click();
+  await bubble.getByRole('button', { name: '移除 旧图.png' }).click();
+  const picker = page.waitForEvent('filechooser');
+  await bubble.getByRole('button', { name: '添加文件' }).click();
+  await (await picker).setFiles({ name: '新资料.txt', mimeType: 'text/plain', buffer: Buffer.from('新文件正文') });
+  await bubble.getByRole('button', { name: '发送', exact: true }).click();
+  await expect(bubble.getByRole('button', { name: '再次插入 新资料.txt' })).toBeVisible();
+  await expect(page.locator('#aiInput')).toHaveValue('独立草稿');
+  await expect(page.locator('#aiAttachPreview')).toContainText('草稿.txt');
+  const state = await page.evaluate(id => {
+    const conv = getActiveConv();
+    const edited = conv.messages.find(isAiUserQuestion);
+    return { original: conv.tree[id], edited };
+  }, originalId);
+  expect(state.original.attachments).toHaveLength(3);
+  expect(state.original.visionFiles).toHaveLength(1);
+  expect(state.edited.attachments.map(file => file.name)).toEqual(['保留.txt', '新资料.txt']);
+  expect(state.edited.visionFiles).toEqual([]);
+  expect(state.edited.content).toBe('阅读资料\n\n[附件：保留.txt]\n保留正文\n\n[附件：新资料.txt]\n新文件正文');
+
+  await page.evaluate(() => openAiTreeFloat());
+  const treeEditor = page.locator('.ai-tree-edit');
+  await page.locator('.ai-tree-exchange-group.active .ai-tree-edit-ico').click();
+  await expect(treeEditor.locator('textarea')).toHaveValue('阅读资料');
+  await treeEditor.getByRole('button', { name: '移除 新资料.txt' }).click();
+  const treePicker = page.waitForEvent('filechooser');
+  await treeEditor.getByRole('button', { name: '添加文件' }).click();
+  await (await treePicker).setFiles({ name: '取消.txt', mimeType: 'text/plain', buffer: Buffer.from('discarded') });
+  await expect(treeEditor.getByRole('button', { name: '移除 取消.txt' })).toBeVisible();
+  await treeEditor.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(bubble.getByRole('button', { name: '再次插入 新资料.txt' })).toBeVisible();
+});
+
 test('text originals remain readable after sending, reload and context compression', async ({ page }) => {
   await page.goto(baseUrl + '/index.html');
   await setup(page);

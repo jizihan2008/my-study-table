@@ -80,19 +80,23 @@ function buildAiTodoQueueSnapshot() {
 }
 
 function addTodoToQueue(id) {
-  if (!findTodo(id)) return;
+  addTodosToQueue([id]);
+}
+
+function addTodosToQueue(todoIds) {
   const ids = loadTodoQueue();
-  if (ids.includes(id)) { showMiniToast('该待办已在队列中'); return; }
-  ids.push(id);
+  const additions = [...new Set(todoIds)].filter(id => findTodo(id) && !ids.includes(id));
+  if (!additions.length) { showMiniToast('没有可加入队列的待办'); return; }
+  ids.push(...additions);
   if (!saveTodoQueue(ids)) { showMiniToast('队列保存失败', 'error'); return; }
   renderTodoQueue();
-  showMiniToast('已加入待办队列');
+  showMiniToast(todoIds.length === 1 ? '已加入待办队列' : `已将 ${additions.length} 项加入待办队列`);
 }
 
 function todoCtxAddQueue() {
-  const id = todoCtxTargetId;
+  const ids = getTodoContextIds();
   closeTodoContextMenu();
-  if (id != null) addTodoToQueue(id);
+  if (ids.length) addTodosToQueue(ids);
 }
 
 function removeTodoFromQueue(id) {

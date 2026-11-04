@@ -865,3 +865,22 @@ test('a concurrent local conversation edit is not rolled back by a failed remote
   assert.equal(JSON.parse(h.values.get('study_ai_convs'))[0].title, 'new local edit');
   assert.equal(JSON.parse(h.values.get('study_sync_logs_dirty_v2'))['ai_conv/*'], true);
 });
+
+test('subagent artifacts sync with a conversation and active remote jobs remain interrupted', async () => {
+  const runs = [{ id:'agent_1', requestId:'user_1', title:'3.1', task:'整理3.1', result:'完整知识点', sources:[{action:'get_note_detail',params:{id:31}}], status:'running' }];
+  const conv = {id:7,title:'agents',messages:[{id:'user_1',role:'user',content:'整理章节'}],agentRuns:runs};
+  const local = loadSyncLogs({study_ai_convs:[conv]}, {aiConvs:[conv]});
+  const extracted = (await local.SyncLogs.__test.refreshLocalState(true)).items.find(i=>i.kind==='ai_conv');
+  assert.equal(extracted.meta.agentRuns[0].status,'interrupted');
+  assert.equal(conv.agentRuns[0].status,'running');
+  assert.equal(extracted.meta.agentRuns[0].result,'完整知识点');
+  const client = { from() { return {
+    select(){return this;},eq(){return this;},in(){return this;},
+    then(resolve,reject){return Promise.resolve({data:[{kind:'ai_conv',item_id:'7',updated_at:'2026-11-03T00:00:00Z',data:{meta:{...extracted.meta,agentRuns:runs},items:conv.messages}}],error:null}).then(resolve,reject);}
+  };}};
+  const remote=loadSyncLogs({}, {client,aiConvs:[]});
+  await remote.SyncLogs.__test.pullItems({user:{id:'u1'}},client,[{kind:'ai_conv',itemId:'7'}]);
+  const saved=JSON.parse(remote.values.get('study_ai_convs'))[0];
+  assert.equal(saved.agentRuns[0].status,'interrupted');
+  assert.equal(saved.agentRuns[0].sources[0].params.id,31);
+});

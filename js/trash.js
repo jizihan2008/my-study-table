@@ -55,22 +55,10 @@ function saveArchive(module, data) {
 
 // ── 移到回收站 ──
 function moveToTrash(module, item) {
+  if (module === 'todos') return moveTodosToStorage([item.id], false);
   const trash = loadTrash(module);
-  const items = [];
   
-  // Handle hierarchical deletions (todos with children)
-  if (module === 'todos' && typeof getAllDescendantIds === 'function') {
-    const descendantIds = getAllDescendantIds(item.id);
-    const allIds = new Set([item.id, ...descendantIds]);
-    const moved = todos.filter(t => allIds.has(t.id));
-    moved.forEach(t => {
-      trash.unshift({ ...t, deletedAt: new Date().toISOString() });
-    });
-    todos = todos.filter(t => !allIds.has(t.id));
-    if (saveData('study_todos_v2', todos) !== true) return false;
-    expandedTodoIds.delete(item.id);
-    saveExpandedTodoIds();
-  } else if (module === 'notes') {
+  if (module === 'notes') {
     // For notes, preserve folder structure in trash
     if (item.type === 'folder') {
       // Move folder and all its descendants to trash
@@ -115,18 +103,10 @@ function moveToTrash(module, item) {
 
 // ── 移到归档 ──
 function moveToArchive(module, item) {
+  if (module === 'todos') return moveTodosToStorage([item.id], true);
   const archive = loadArchive(module);
   
-  if (module === 'todos') {
-    const ids = new Set(collectStoredDescendantIds(todos, item.id));
-    const archivedAt = new Date().toISOString();
-    todos.filter(t => ids.has(t.id)).forEach(t => archive.unshift({ ...t, archivedAt }));
-    if (!saveArchive(module, archive)) return false;
-    todos = todos.filter(t => !ids.has(t.id));
-    saveData('study_todos_v2', todos);
-    expandedTodoIds.delete(item.id);
-    saveExpandedTodoIds();
-  } else if (module === 'notes') {
+  if (module === 'notes') {
     const ids = item.type === 'folder'
       ? new Set(collectStoredDescendantIds(notes, item.id))
       : new Set([item.id]);
@@ -154,6 +134,29 @@ function moveToArchive(module, item) {
     if (typeof renderHabits === 'function') renderHabits();
   }
   
+  return true;
+}
+
+function moveTodosToStorage(rootIds, archive) {
+  const ids = new Set(rootIds.flatMap(id => collectStoredDescendantIds(todos, id)));
+  const moved = todos.filter(todo => ids.has(todo.id));
+  if (!moved.length) return true;
+
+  const previous = archive ? loadArchive('todos') : loadTrash('todos');
+  const saveDestination = archive ? saveArchive : saveTrash;
+  const timestampKey = archive ? 'archivedAt' : 'deletedAt';
+  const timestamp = new Date().toISOString();
+  const entries = moved.map(todo => ({ ...todo, [timestampKey]: timestamp })).reverse();
+  if (!saveDestination('todos', [...entries, ...previous.filter(todo => !ids.has(todo.id))])) return false;
+  const previousTodos = todos;
+  todos = todos.filter(todo => !ids.has(todo.id));
+  if (!saveData('study_todos_v2', todos)) {
+    todos = previousTodos;
+    saveDestination('todos', previous);
+    return false;
+  }
+  ids.forEach(id => expandedTodoIds.delete(id));
+  saveExpandedTodoIds();
   return true;
 }
 

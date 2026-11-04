@@ -40,7 +40,7 @@ test('approved preferences synchronize with exact local encodings; device settin
     study_backup_interval: '120', study_codex_cli_path: 'local-cli', study_automations: '[{"id":1}]'
   });
   const prefs = {
-    study_max_focus_count: '4', study_todo_statuses: '[{"id":"custom","name":"待检查","color":"#123456"}]',
+    study_max_focus_count: 'unlimited', study_todo_statuses: '[{"id":"custom","name":"待检查","color":"#123456"}]',
     study_review_mode: 'custom', study_review_custom_intervals: '2,5,12', study_auto_summary: 'false',
     study_morning_cfg: '{"enabled":false}', study_evening_report_cfg: '{"enabled":true,"time":"22:30"}',
     study_auto_title_enabled: 'false', study_memory_dedup_mode: 'ai', study_memory_dedup_threshold: '40',

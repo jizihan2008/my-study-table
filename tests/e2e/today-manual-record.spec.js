@@ -79,6 +79,24 @@ test('today manual record shares timer form and updates records and reports', as
     expect(saved.records[0]).toMatchObject({ manual: true, name: '手动补记测试', todoId: 91001, activityType: 'rest', affectsFocus: false, totalMs: 2400000 });
     expect(saved.records[0].sessions).toHaveLength(2);
     expect(saved.report.todayTimerTypeTotals.find(item => item.activityType === 'rest').totalMs).toBe(2400000);
+    const record = page.locator('#todayTimerRecords .timer-history-item').filter({ hasText: '手动补记测试' });
+    const menu = page.locator('#todayTimerContextMenu');
+    await record.click({ button: 'right' });
+    await expect(menu).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(menu).toBeHidden();
+    await record.click({ button: 'right' });
+    await menu.getByText('编辑计时记录').click();
+    await expect(menu).toBeHidden();
+    await expect(page.locator('#section-today')).toHaveClass(/active/);
+    const nameInput = form.locator('#manualRecName');
+    await expect(nameInput).toBeFocused();
+    await expect(nameInput).toHaveValue('手动补记测试');
+    await expect(rows).toHaveCount(2);
+    await nameInput.fill('右键修改后的记录');
+    await form.getByRole('button', { name: '保存修改', exact: false }).click();
+    await expect(page.locator('#todayTimerRecords')).toContainText('右键修改后的记录');
+    expect(await page.evaluate(() => loadTimerRecords().map(record => record.id))).toEqual([saved.records[0].id]);
     // Cancel must discard the draft without adding a second record.
     await button.click();
     await page.locator('#manualRecName').fill('取消的草稿');

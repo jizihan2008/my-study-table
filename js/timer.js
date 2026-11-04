@@ -70,17 +70,39 @@ function getTimerIntervalUnionMs(intervals) {
   return totalMs;
 }
 
-function getTimerRecordsDurationSummary(records, dateStr) {
+// Split each overlapping span equally among its distinct types. Concurrent
+// records within one type still contribute only one share.
+function allocateTimerTypeMs(intervals, unlocatedTypeMs) {
+  const events = Object.entries(intervals).flatMap(([type, sessions]) =>
+    sessions.flatMap(({ start, end }) => [[start, type, 1], [end, type, -1]])
+  ).sort((a, b) => a[0] - b[0]);
+  const typeMs = { ...unlocatedTypeMs };
+  const active = new Map();
+  let previous = events[0]?.[0];
+  for (const [time, type, change] of events) {
+    if (time > previous && active.size) {
+      const share = (time - previous) / active.size;
+      for (const id of active.keys()) typeMs[id] += share;
+    }
+    const count = (active.get(type) || 0) + change;
+    if (count) active.set(type, count);
+    else active.delete(type);
+    previous = time;
+  }
+  return typeMs;
+}
+
+function getTimerRecordsDurationSummary(records, dateStr, { splitTypeOverlaps = false } = {}) {
   const ids = loadTimerActivityTypes().filter(type => !type.disabled).map(type => type.id);
-  const intervals = Object.fromEntries(ids.map(id => [id, []]));
-  const unlocatedTypeMs = Object.fromEntries(ids.map(id => [id, 0]));
+  const intervals = Object.assign(Object.create(null), Object.fromEntries(ids.map(id => [id, []])));
+  const unlocatedTypeMs = Object.assign(Object.create(null), Object.fromEntries(ids.map(id => [id, 0])));
   const dayStart = new Date(dateStr + 'T00:00:00');
   const nextDay = new Date(dayStart);
   nextDay.setDate(nextDay.getDate() + 1);
   for (const record of Array.isArray(records) ? records : []) {
     if (!record || record.date !== dateStr) continue;
     const type = getTimerActivityType(record);
-    if (!Object.prototype.hasOwnProperty.call(intervals, type)) { intervals[type] = []; unlocatedTypeMs[type] = 0; }
+    if (!intervals[type]) { intervals[type] = []; unlocatedTypeMs[type] = 0; }
     const valid = (Array.isArray(record.sessions) ? record.sessions : [])
       .filter(s => s && Number.isFinite(s.start) && Number.isFinite(s.end) && s.end > s.start);
     if (valid.length) {
@@ -95,8 +117,9 @@ function getTimerRecordsDurationSummary(records, dateStr) {
       if (Number.isFinite(duration) && duration > 0) unlocatedTypeMs[type] += duration;
     }
   }
-  const typeMs = Object.fromEntries(Object.entries(intervals).map(([type, sessions]) =>
-    [type, getTimerIntervalUnionMs(sessions) + unlocatedTypeMs[type]]));
+  const typeMs = splitTypeOverlaps ? allocateTimerTypeMs(intervals, unlocatedTypeMs)
+    : Object.fromEntries(Object.entries(intervals).map(([type, sessions]) =>
+      [type, getTimerIntervalUnionMs(sessions) + unlocatedTypeMs[type]]));
   const unlocatedMs = Object.values(unlocatedTypeMs).reduce((sum, ms) => sum + ms, 0);
   return {
     totalMs: getTimerIntervalUnionMs(Object.values(intervals).flat()) + unlocatedMs,
@@ -104,6 +127,29 @@ function getTimerRecordsDurationSummary(records, dateStr) {
   };
 }
 
+
+function getTimerRecordFocusTotals(records, dateStr) {
+  const focus = [];
+  const other = [];
+  for (const record of records) {
+    const included = typeof record.affectsFocus === 'boolean'
+      ? record.affectsFocus : getTimerActivityAffectsFocus(getTimerActivityType(record));
+    (included ? focus : other).push(record);
+  }
+  return {
+    focusMs: getTimerRecordsDurationSummary(focus, dateStr).totalMs,
+    otherMs: getTimerRecordsDurationSummary(other, dateStr).totalMs
+  };
+}
+
+function getTimerRecordFilterTypes(records) {
+  const ids = new Set(records.map(getTimerActivityType));
+  const types = loadTimerActivityTypes().filter(type => !type.disabled || ids.has(type.id));
+  for (const id of ids) {
+    if (!types.some(type => type.id === id)) types.push({ id, label: getTimerActivityLabel(id) });
+  }
+  return types;
+}
 
 function timerRecordsHaveSameIdentity(a, b) {
   if (!a || !b || a.date !== b.date) return false;
@@ -213,6 +259,9 @@ function saveTimerRecords(records) {
     localStorage.setItem('study_timer_records', JSON.stringify(records));
   }
   if (typeof renderTodayTimerRecords === 'function') renderTodayTimerRecords(records);
+  if (typeof renderCalendar === 'function' && document.getElementById('section-calendar')?.classList.contains('active')) {
+    renderCalendar(records);
+  }
 }
 
 // ═══════════ Global state ═══════════
@@ -669,7 +718,8 @@ function renderTimerHistory(records, options = {}) {
           ).join('');
           sessionDetail = `<div class="timer-history-sessions">${detailItems}</div>`;
         }
-        itemHtml.push(`<div class="timer-history-item${(!rec.affectsFocus) ? ' no-focus' : ''}">
+        const contextMenu = options.todayContextMenu ? ` oncontextmenu="showTodayTimerContextMenu(event, ${rec.id})"` : '';
+        itemHtml.push(`<div class="timer-history-item${(!rec.affectsFocus) ? ' no-focus' : ''}"${contextMenu}>
           <span class="timer-history-name">
             <span class="timer-history-label" title="${escapeAttr(name)}">${escapeHtml(name)}</span>
             <span class="timer-activity-badge${rec.affectsFocus === false ? ' timer-no-focus-badge' : ''}" title="${rec.affectsFocus === false ? '不计入专注时间' : '计入专注时间'}">${escapeHtml(getTimerActivityLabel(getTimerActivityType(rec)))}</span>
@@ -1252,7 +1302,7 @@ function renderTodayManualRecordForm() {
   const open = timerManualFormOpen && timerManualFormSource === 'today';
   if (host) host.innerHTML = open ? renderManualRecordForm() : '';
   if (button) {
-    button.textContent = open ? '取消补记' : '＋ 手动记录';
+    button.textContent = open ? (timerEditingRecordId === null ? '取消补记' : '取消编辑') : '＋ 手动记录';
     button.setAttribute('aria-expanded', String(open));
   }
 }
@@ -1492,14 +1542,17 @@ function saveManualRecord() {
   renderTodayManualRecordForm();
 }
 
-function editTimerRecord(recordId) {
-  timerManualFormSource = 'timer';
+function editTimerRecord(recordId, source = 'timer') {
+  timerManualFormSource = source;
   timerEditingRecordId = recordId;
   timerManualFormOpen = true;
+  manualRecSelectedTodoId = null;
+  manualRecSelectedTaskId = null;
   // 编辑入口必须展开历史区域；否则专注进行时折叠的布局会把表单一并藏起。
-  timerHistoryExpanded = true;
+  if (source === 'timer') timerHistoryExpanded = true;
   renderTimer();
   renderTodayManualRecordForm();
+  if (source === 'today') document.getElementById('manualRecName')?.focus();
 }
 
 function deleteTimerRecord(recordId) {

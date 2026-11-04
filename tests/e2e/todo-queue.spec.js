@@ -3,6 +3,80 @@ const { _electron: electron } = require('playwright');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
+
+test('待办右键批量操作使用勾选集合，父子同时选中时只移动一次', async () => {
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-todo-batch-'));
+  let app;
+  try {
+    app = await electron.launch({args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'], env: {...process.env, MST_E2E: '1', MST_USER_DATA_PATH: profile}});
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => typeof showTodoContextMenu === 'function' && document.querySelector('#nav-today[aria-current="page"]'));
+    await page.evaluate(() => {
+      todos = [501, 502, 503, 504, 505].map(id => ({
+        id, text: '测试待办 ' + id, parentId: id === 502 ? 501 : null, done: false, tags: [],
+      }));
+      expandedTodoIds.add(501);
+      saveData('study_todos_v2', todos);
+      saveTodoQueue([501]);
+      saveFocusData({_date: getTodayStr(), items: [{todoId: 505}, {todoId: 501}]});
+      switchTab('todo');
+      renderTodos();
+    });
+    const row = id => page.locator(`#todoTree li[data-id="${id}"] > .todo-item`);
+    const select = id => row(id).locator('.todo-multi-check').click();
+    const menu = page.locator('#todoContextMenu');
+    const openMenu = id => row(id).locator('.todo-text').click({button: 'right'});
+    const act = label => menu.getByText(label, {exact: true}).click();
+
+    await page.locator('#todoSelectBtn').click();
+    for (const id of [501, 502, 503]) await select(id);
+    await openMenu(504);
+    await expect(menu.getByText('添加子任务')).toBeHidden();
+    await act('批量加入待办队列');
+    expect(await page.evaluate(() => loadTodoQueue())).toEqual([501, 502, 503]);
+
+    await openMenu(501);
+    await expect(menu.locator('#todoCtxSortItems')).toBeHidden();
+    await act('批量添加到今日聚焦');
+    expect(await page.evaluate(() => getTodayFocusItems().items.map(item => item.todoId))).toEqual([505, 501, 502]);
+    await expect(page.getByText('另有 1 项因已达上限未添加', {exact: false})).toBeVisible();
+    await openMenu(501);
+    await act('批量添加到明日聚焦');
+    expect(await page.evaluate(() => getFocusItemsForDate(getFocusDateByOffset(1)).items.map(item => item.todoId))).toEqual([501, 502, 503]);
+
+    await openMenu(501);
+    await act('批量编辑');
+    const status = await page.locator('#batchEditStatus option').nth(2).getAttribute('value');
+    await page.locator('#batchEditStatus').selectOption(status);
+    await page.locator('#editModal .btn-save-modal').click();
+    expect(await page.evaluate(() => todos.map(todo => todo.status ?? null)))
+      .toEqual([status.slice(7), status.slice(7), status.slice(7), null, null]);
+
+    await page.locator('#todoSelectBtn').click();
+    for (const id of [502, 501, 503]) await select(id);
+    await openMenu(504);
+    await act('批量归档');
+    await expect(page.locator('#confirmMsg')).toContainText('选中的 3 个待办');
+    await page.locator('#confirmCancel').click();
+    await expect(row(501)).toBeVisible();
+    await openMenu(504);
+    await act('批量归档');
+    await page.locator('#confirmOk').click();
+    expect(await page.evaluate(() => loadArchive('todos').map(todo => todo.id).sort())).toEqual([501, 502, 503]);
+    await expect(row(504)).toBeVisible();
+
+    await page.locator('#todoSelectBtn').click();
+    for (const id of [504, 505]) await select(id);
+    await openMenu(504);
+    await act('批量删除');
+    await page.locator('#confirmOk').click();
+    expect(await page.evaluate(() => loadTrash('todos').map(todo => todo.id).sort())).toEqual([504, 505]);
+  } finally {
+    if (app) await app.close();
+    await fs.rm(profile, {recursive: true, force: true});
+  }
+});
+
 test('队列点击和键盘勾选同步原待办、子待办及今日聚焦，并持久化完成状态', async () => {
   const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-queue-complete-'));
   let app;

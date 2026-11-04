@@ -1310,6 +1310,11 @@ function buildNoteCtx(fullText, selStart, selEnd, N) {
 }
 let noteFoldMenuTarget = null;
 let noteTableMenuTarget = null;
+function isNoteFoldEditingSurface(container, secondary) {
+  return secondary
+    ? notesSplitMode === 'rich' && container.id === 'notesSplitRichEditor'
+    : noteViewMode === 'rich' && container.id === 'notesRichEditor';
+}
 function bindNoteSelectionAiMenu() {
   // Delegate so the immersive/split editors work even when mounted later.
   document.addEventListener('contextmenu', function (e) {
@@ -1320,7 +1325,8 @@ function bindNoteSelectionAiMenu() {
     const note = secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote();
     if (!note) return;
     const summary = e.target.closest?.('summary');
-    const fold = summary?.parentElement?.matches('details.note-fold') ? summary.parentElement : null;
+    const fold = isNoteFoldEditingSurface(container, secondary) && summary?.parentElement?.matches('details.note-fold')
+      ? summary.parentElement : null;
     const cell = e.target.closest?.('th, td');
     const table = cell?.closest('table');
     let text = '', ctx, offsets;
@@ -1364,6 +1370,9 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
       + '<div class="context-menu-sep" id="noteSelectionSeparator"></div>'
       + '<div class="context-menu-item" id="noteAiExplainAddAnn" onclick="addAnnFromSelection()"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="width:14px;height:14px;vertical-align:middle;margin-right:6px;"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>添加批注</div>';
     menu.insertAdjacentHTML('beforeend', '<div class="context-menu-sep" id="noteTableMenuSeparator"></div><div id="noteTableMenuActions"></div><div class="context-menu-sep" id="noteFoldDeleteSeparator"></div><div class="context-menu-item" id="noteFoldDelete" onclick="deleteNoteFoldFromMenu()" title="删除整个折叠块（含标题和正文），可撤销">删除折叠块</div>');
+    menu.querySelector('#noteFoldDelete').insertAdjacentHTML('beforebegin',
+      '<div id="noteFoldClipboardActions"><div class="context-menu-item" id="noteFoldCopy" onclick="copyNoteFoldFromMenu()">复制折叠块</div>'
+      + '<div class="context-menu-item" id="noteFoldCut" onclick="copyNoteFoldFromMenu(true)">剪切折叠块</div></div>');
     Object.entries(RichNoteEditor.getTableActions()).forEach(([action, label]) => {
       const item = document.createElement('div');
       item.className = 'context-menu-item';
@@ -1395,6 +1404,7 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   menu.querySelector('#noteTableMenuSeparator').style.display = tableTarget && text ? '' : 'none';
   menu.querySelector('#noteSelectionExplain').style.display = text ? '' : 'none';
   menu.querySelector('#noteSelectionAsk').style.display = text ? '' : 'none';
+  menu.querySelector('#noteFoldClipboardActions').style.display = foldTarget ? '' : 'none';
   menu.querySelector('#noteFoldDelete').style.display = foldTarget ? '' : 'none';
   menu.querySelector('#noteFoldUnwrap').style.display = foldTarget ? '' : 'none';
   menu.querySelector('#noteFoldDeleteSeparator').style.display = foldTarget && (text || tableTarget) ? '' : 'none';
@@ -1450,42 +1460,61 @@ function unwrapNoteFoldFromMenu() {
 function deleteNoteFoldFromMenu(unwrap = false) {
   const target = noteFoldMenuTarget;
   closeNoteAiExplainMenu();
-  if (!target || !target.fold.isConnected || !target.container.contains(target.fold)) return;
-  const note = findNoteByLooseId(target.noteId);
+  editNoteFold(target, unwrap);
+}
+function getNoteFoldTargetEditor(target) {
+  if (!target || !isNoteFoldEditingSurface(target.container, target.secondary)
+      || !target.fold.isConnected || !target.container.contains(target.fold)) return null;
   const currentId = target.secondary ? notesSplitNoteId : activeNoteId;
-  if (!note || String(currentId) !== String(note.id) || (note.content || '') !== target.content) return;
-  if (target.container.matches('#notesRichEditor, #notesSplitRichEditor')) {
-    const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
-    if (String(editor?.getCurrentNoteId()) === String(note.id)) {
-      if (unwrap) editor.unwrapFold(target.fold); else editor.deleteFold(target.fold);
+  const note = findNoteByLooseId(target.noteId);
+  if (!note || String(currentId) !== String(note.id) || (note.content || '') !== target.content) return null;
+  const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
+  return String(editor?.getCurrentNoteId()) === String(note.id) ? editor : null;
+}
+async function copyNoteFoldFromMenu(cut = false) {
+  const target = noteFoldMenuTarget;
+  closeNoteAiExplainMenu();
+  const editor = getNoteFoldTargetEditor(target);
+  if (!editor) return;
+  const markdown = editor.getFoldMarkdown(target.fold);
+  const html = StudyMarkdown.render(markdown);
+  try {
+    await navigator.clipboard.write([new ClipboardItem({
+      'text/plain': new Blob([markdown], { type: 'text/plain' }),
+      'text/html': new Blob([html], { type: 'text/html' })
+    })]);
+  } catch {
+    // Electron restricts the async Clipboard API. The native copy command
+    // still supports both formats when invoked from the menu.
+    let copied = false;
+    const onCopy = event => {
+      if (!event.clipboardData) return;
+      event.preventDefault();
+      event.clipboardData.setData('text/plain', markdown);
+      event.clipboardData.setData('text/html', html);
+      copied = true;
+    };
+    document.addEventListener('copy', onCopy, { capture: true, once: true });
+    try { copied = document.execCommand('copy') && copied; }
+    catch { copied = false; }
+    finally { document.removeEventListener('copy', onCopy, true); }
+    if (!copied) {
+      showMiniToast('无法写入剪贴板，请重试', 'error');
+      return;
     }
-    return;
   }
-  if (unwrap) {
-    const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
-    if (!editor || target.fold.dataset.sourceLine === undefined) return;
-    editor.setMarkdown(target.content, note.id);
-    const host = document.getElementById(target.secondary ? 'notesSplitRichEditor' : 'notesRichEditor');
-    const fold = Array.from(host.querySelectorAll('details.note-fold')).find(item => item.dataset.sourceLine === target.fold.dataset.sourceLine);
-    if (!fold || !editor.unwrapFold(fold)) return;
-    if (target.secondary) renderNotesImmersiveSplit(); else switchNoteView('preview');
-    target.container.tabIndex = 0;
-    target.container.focus({ preventScroll: true });
-    return;
+  if (!cut) {
+    showMiniToast('已复制折叠块');
+  } else if (editNoteFold(target)) {
+    showMiniToast('已剪切折叠块');
+  } else {
+    showMiniToast('已复制折叠块，原笔记已变化', 'info');
   }
-  // Reading surfaces carry parser source ranges, including nested and lazy folds.
-  // Remove exactly those Markdown lines rather than searching for a title.
-  const start = Number(target.fold.dataset.sourceLine), end = Number(target.fold.dataset.sourceEnd);
-  const lines = target.content.split('\n');
-  if (!Number.isInteger(start) || !Number.isInteger(end) || start < 0 || end <= start || end > lines.length) return;
-  lines.splice(start, end - start);
-  const markdown = lines.join('\n');
-  if (target.secondary) onNotesSplitRichChange(markdown, note.id, { historyBoundary: true });
-  else onRichNotesChange(markdown, target.content, { historyBoundary: true });
-  if (target.secondary) renderNotesImmersiveSplit();
-  else switchNoteView('preview');
-  target.container.tabIndex = 0;
-  target.container.focus({ preventScroll: true });
+}
+function editNoteFold(target, unwrap = false) {
+  const editor = getNoteFoldTargetEditor(target);
+  if (!editor) return false;
+  return unwrap ? editor.unwrapFold(target.fold) : editor.deleteFold(target.fold);
 }
 function translateNoteSelection() {
   const menu = document.getElementById('noteAiExplainMenu');

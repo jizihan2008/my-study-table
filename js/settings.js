@@ -79,7 +79,7 @@ function renderHelpModal() {
       <div style="font-size:13px;line-height:1.8;color:var(--text);">
         <ul style="margin:0;padding-left:18px;color:var(--text-secondary);">
           <li><b>🎯 长期目标</b>：管理独立于待办的长期目标，支持截止日期、正文备注、计时关联</li>
-          <li><b>今日聚焦</b>：从所有待办中挑选当天重点任务（最多3个），支持展开查看子任务</li>
+          <li><b>今日聚焦</b>：从所有待办中挑选当天重点任务，可设置数量上限，支持展开查看子任务</li>
           <li><b>每日打卡</b>：记录每天的学习状态，连续天数自动统计，附赠名人名言</li>
           <li>打卡后自动生成<b>晨间日报</b>：AI 回顾昨天完成 + 开启今天方向（需 AI key）</li>
           <li><b>笔记复习卡片</b>：基于艾宾浩斯遗忘曲线，自动推送到期笔记，支持一键复习/标记完成</li>
@@ -176,7 +176,7 @@ function renderHelpModal() {
             <p style="margin:0 0 6px 0;">AI 助手被提示为"友好的学习助手，内置于「我的学习桌面」应用"，了解以下系统模块：</p>
             <ol style="margin:0;padding-left:20px;">
               <li><b>📋 待办管理</b>：多层级任务（父子任务），支持截止日期、备注、标签、搜索过滤、批量操作</li>
-              <li><b>🎯 今日聚焦</b>：从待办中选最多3个作为当日重点，支持每日打卡与连续天数统计</li>
+              <li><b>🎯 今日聚焦</b>：从待办中挑选当日重点，支持每日打卡与连续天数统计</li>
               <li><b>📝 笔记管理</b>：多篇笔记、Markdown 编辑预览、自动保存、AI 摘要、文件夹管理</li>
               <li><b>🧠 笔记复习系统</b>：基于艾宾浩斯遗忘曲线的间隔重复复习</li>
               <li><b>🔗 快捷访问</b>：常用网站链接或应用，支持分类管理</li>
@@ -1559,6 +1559,7 @@ function openSettingsModal() {
   document.getElementById('settingsDeveloperMode').checked = s.developerMode;
   document.getElementById('settingsDebug').checked = isDebugMode();
   loadWebSearchSettings();
+  if (typeof loadAiAgentSettings === 'function') loadAiAgentSettings();
   const libraryPdfSizeInput = document.getElementById('settingsLibraryPdfMaxMiB');
   if (libraryPdfSizeInput) libraryPdfSizeInput.value = getAiLibraryPdfMaxMiB();
   loadEveningReportSettings();
@@ -1597,9 +1598,7 @@ function openSettingsModal() {
   if (backupSelect) backupSelect.value = backupInterval;
   updateBackupHints();
   // Load max focus count setting
-  const maxFocusCount = parseInt(localStorage.getItem('study_max_focus_count')) || 3;
-  const focusInput = document.getElementById('settingsMaxFocusCount');
-  if (focusInput) focusInput.value = Math.max(2, Math.min(5, maxFocusCount));
+  renderMaxFocusSetting();
   // Load books KB settings
   loadBooksKbSettings();
 }
@@ -1638,8 +1637,9 @@ function refreshSyncedSettings() {
   loadBooksKbSettings();
   if (_settingsTab === 'notes') loadTodoStatusesToSettings();
   if (_settingsTab === 'memory' && typeof renderMemoryPanel === 'function') renderMemoryPanel();
+  if (typeof loadAiAgentSettings === 'function') loadAiAgentSettings();
+  renderMaxFocusSetting();
   const fields = {
-    settingsMaxFocusCount: ['study_max_focus_count', '3'],
     settingsLibraryPdfMaxMiB: ['study_ai_library_pdf_max_mib', '0'],
     settingsWebSearchEngine: ['study_web_search_engine', 'duckduckgo']
   };

@@ -172,30 +172,25 @@ function updateBatchActionsBar() {
 }
 
 function batchDeleteTodos() {
-  if (todoSelectedIds.size === 0) return;
-  showCustomConfirm(`确定要删除选中的 ${todoSelectedIds.size} 个待办及其所有子任务吗？<br><small>删除后可在回收站中恢复。</small>`).then(confirmed => {
+  const ids = [...todoSelectedIds].filter(id => findTodo(id));
+  if (!ids.length) return;
+  showCustomConfirm(`确定要删除选中的 ${ids.length} 个待办及其所有子任务吗？<br><small>删除后可在回收站中恢复。</small>`).then(confirmed => {
     if (!confirmed) return;
     pushTodoUndo();
-    const allToDelete = new Set();
-    for (const id of todoSelectedIds) {
-      const ids = getAllDescendantIds(id);
-      ids.forEach(did => allToDelete.add(did));
+    const allToDelete = new Set(ids.flatMap(id => getAllDescendantIds(id)));
+    const deletedTodos = todos.filter(t => allToDelete.has(t.id));
+    if (!moveTodosToStorage(ids, false)) {
+      showMiniToast('批量删除保存失败', 'error');
+      return;
     }
     const completedLog = loadTodoCompletedLog();
-    for (const did of allToDelete) {
-      const t = todos.find(t => t.id === did);
-      if (t && t.completedAt) {
+    for (const t of deletedTodos) {
+      if (t.completedAt) {
         completedLog.push({ id: t.id, text: t.text, completedAt: t.completedAt, deletedAt: formatDate(new Date()) });
       }
     }
     saveTodoCompletedLog(completedLog);
-    // Soft delete: move each selected root to trash
-    if (typeof moveToTrash === 'function') {
-      for (const id of todoSelectedIds) {
-        const todo = todos.find(t => t.id === id);
-        if (todo) moveToTrash('todos', todo);
-      }
-    }
+    if (allToDelete.has(activeSubInputId)) activeSubInputId = null;
     todoSelectedIds.clear();
     todoMultiSelectMode = false;
     renderTodos();
@@ -212,7 +207,7 @@ function batchEditTodos() {
   const commonText = selectedTodos.every(t => t.text === selectedTodos[0].text) ? selectedTodos[0].text : null;
   const commonDueDate = selectedTodos.every(t => t.dueDate === selectedTodos[0].dueDate) ? selectedTodos[0].dueDate : null;
   const commonCompletedAt = selectedTodos.every(t => t.completedAt === selectedTodos[0].completedAt) ? selectedTodos[0].completedAt : null;
-  const commonTags = selectedTodos.every(t => JSON.stringify((t.tags || []).sort()) === JSON.stringify((selectedTodos[0].tags || []).sort())) ? (selectedTodos[0].tags || []).join(', ') : null;
+  const commonTags = selectedTodos.every(t => JSON.stringify([...(t.tags || [])].sort()) === JSON.stringify([...(selectedTodos[0].tags || [])].sort())) ? (selectedTodos[0].tags || []).join(', ') : null;
   const commonContent = selectedTodos.every(t => t.content === selectedTodos[0].content) ? selectedTodos[0].content : null;
 
   editModalOpen = true;
@@ -232,6 +227,14 @@ function batchEditTodos() {
       <label>完成日期</label>
       <input type="date" id="batchEditCompletedAt" value="${commonCompletedAt || ''}" placeholder="${commonCompletedAt !== null ? '' : '多个待办完成日期不同，留空则不修改'}">
       <span class="hint">留空 = 不修改，填写 = 统一设为该日期并标记为已完成</span>
+    </div>
+    <div class="modal-field">
+      <label for="batchEditStatus">状态</label>
+      <select id="batchEditStatus">
+        <option value="">不修改</option>
+        <option value="none">清除状态</option>
+        ${buildStatusOptions(null, 'status:')}
+      </select>
     </div>
     <div class="modal-field">
       <label>正文</label>
@@ -254,17 +257,26 @@ function saveBatchEdit() {
   const completedVal = document.getElementById('batchEditCompletedAt').value;
   const contentVal = document.getElementById('batchEditContent').value.trim();
   const tagsVal = document.getElementById('batchEditTags').value.trim();
+  const statusVal = document.getElementById('batchEditStatus').value;
 
-  for (const id of todoSelectedIds) {
-    const t = findTodo(id);
-    if (!t) continue;
+  const previous = todos;
+  pushTodoUndo();
+  todos = todos.map(todo => {
+    if (!todoSelectedIds.has(todo.id)) return todo;
+    const t = { ...todo };
     if (textVal) t.text = textVal;
     if (dueVal) t.dueDate = dueVal;
     if (completedVal) { t.done = true; t.completedAt = completedVal; }
     if (contentVal) t.content = contentVal;
     if (tagsVal) t.tags = tagsVal.split(/[,，]/).map(s => s.trim()).filter(Boolean);
+    if (statusVal) t.status = statusVal === 'none' ? null : statusVal.slice('status:'.length);
+    return t;
+  });
+  if (!saveData('study_todos_v2', todos)) {
+    todos = previous;
+    showMiniToast('批量编辑保存失败', 'error');
+    return;
   }
-  saveData('study_todos_v2', todos);
   closeEditModal();
   todoSelectedIds.clear();
   todoMultiSelectMode = false;
@@ -601,42 +613,37 @@ function deleteTodo(id) {
 }
 
 function archiveTodo(id) {
-  const todo = todos.find(t => t.id === id);
-  if (!todo) return;
-  // 归档时连同所有子任务一起归档，避免子任务残留导致进度条统计错误
-  const descendantIds = getAllDescendantIds(id);
-  const idsToArchive = [id, ...descendantIds];
-  const name = todo.text.slice(0, 30);
-  const subCount = descendantIds.length;
-  const confirmText = subCount > 0
-    ? `确定要归档「${escapeHtml(name)}」及其 ${subCount} 个子任务吗？<br><small>归档后可从归档页面查看和恢复。</small>`
-    : `确定要归档「${escapeHtml(name)}」吗？<br><small>归档后可从归档页面查看和恢复。</small>`;
-  showCustomConfirm(confirmText).then(confirmed => {
+  archiveTodos([id]);
+}
+
+function archiveTodos(ids, batch = false) {
+  const selected = ids.map(id => findTodo(id)).filter(Boolean);
+  if (!selected.length) return;
+  const target = batch ? `选中的 ${selected.length} 个待办` : `「${escapeHtml(selected[0].text.slice(0, 30))}」`;
+  showCustomConfirm(`确定要归档${target}及其所有子任务吗？<br><small>归档后可从归档页面查看和恢复。</small>`).then(confirmed => {
     if (!confirmed) return;
+    const idsToArchive = new Set(ids.flatMap(id => getAllDescendantIds(id)));
+    const items = todos.filter(t => idsToArchive.has(t.id));
     pushTodoUndo();
-    if (typeof moveToArchive === 'function') {
-      // 先取全部要归档的项（父+子），再逐个归档
-      const items = todos.filter(t => idsToArchive.includes(t.id));
-      for (const it of items) {
-        moveToArchive('todos', it);
-      }
-      // 批量归档记录到本地（供 AI 摘要「今日归档」展示，不影响待办完成显示）
-      try {
-        const log = JSON.parse(localStorage.getItem('study_todo_archive_log') || '[]');
-        for (const it of items) {
-          log.push({
-            id: it.id,
-            text: it.text,
-            done: !!it.done,
-            completedAt: it.completedAt || '',
-            archivedAt: new Date().toISOString()
-          });
-        }
-        if (log.length > 500) log.splice(0, log.length - 500);
-        localStorage.setItem('study_todo_archive_log', JSON.stringify(log));
-      } catch (e) { /* 忽略 */ }
+    if (!moveTodosToStorage(ids, true)) {
+      showMiniToast('归档保存失败', 'error');
+      return;
     }
-    expandedTodoIds.delete(id); saveExpandedTodoIds();
+    // 记录归档事项供 AI 摘要使用。
+    try {
+      const log = JSON.parse(localStorage.getItem('study_todo_archive_log') || '[]');
+      const archivedAt = new Date().toISOString();
+      for (const { id, text, done, completedAt } of items) {
+        log.push({ id, text, done: !!done, completedAt: completedAt || '', archivedAt });
+      }
+      localStorage.setItem('study_todo_archive_log', JSON.stringify(log.slice(-500)));
+    } catch (e) { /* 忽略 */ }
+    if (idsToArchive.has(activeSubInputId)) activeSubInputId = null;
+    if (batch) {
+      todoSelectedIds.clear();
+      todoMultiSelectMode = false;
+      updateBatchActionsBar();
+    }
     renderTodos();
   });
 }
@@ -1163,15 +1170,15 @@ function statusBgColor(status) {
   return (found && /^#[0-9a-fA-F]{3,8}$/.test(found.color || '')) ? found.color : '#6b7280';
 }
 
-function buildStatusOptions(current) {
+function buildStatusOptions(current, valuePrefix = '') {
   const options = loadStatusOptions();
   let html = '';
   for (const o of options) {
     const sel = o.name === current ? ' selected' : '';
-    html += `<option value="${escapeAttr(o.name)}"${sel}>● ${escapeHtml(o.name)}</option>`;
+    html += `<option value="${escapeAttr(valuePrefix + o.name)}"${sel}>● ${escapeHtml(o.name)}</option>`;
   }
   if (current && !options.some(o => o.name === current)) {
-    html += `<option value="${escapeAttr(current)}" selected>● ${escapeHtml(current)} (自定义)</option>`;
+    html += `<option value="${escapeAttr(valuePrefix + current)}" selected>● ${escapeHtml(current)} (自定义)</option>`;
   }
   return html;
 }
@@ -1516,6 +1523,12 @@ function formatTimerDisplay(ms) {
 // ═══════════ Todo: Context Menu ═══════════
 var todoCtxTargetId = null;
 
+function getTodoContextIds() {
+  if (todoCtxTargetId == null) return [];
+  if (todoMultiSelectMode && todoSelectedIds.size) return [...todoSelectedIds];
+  return [todoCtxTargetId];
+}
+
 function showTodoContextMenu(x, y, id) {
   var menu = document.getElementById('todoContextMenu');
   if (!menu) return;
@@ -1523,16 +1536,21 @@ function showTodoContextMenu(x, y, id) {
   menu.style.left = x + 'px';
   menu.style.top = y + 'px';
   var needTodo = id != null;
+  const batch = needTodo && todoMultiSelectMode && todoSelectedIds.size > 0;
   var t = needTodo ? findTodo(id) : null;
   var hasKids = t ? getChildren(t.id).length > 0 : false;
   // 空白处右键（id 为 null）→ 隐藏所有依赖选中待办的菜单项（编辑/子任务/聚焦/排序/归档/删除），
   // 只留通用操作（撤销/重做/全部展开折叠/隐藏已完成/选择待办）。
   var needEls = menu.querySelectorAll('.ctx-need-todo');
   for (var i = 0; i < needEls.length; i++) {
-    needEls[i].style.display = needTodo ? '' : 'none';
+    const item = needEls[i];
+    item.style.display = needTodo && !(batch && item.classList.contains('ctx-single-todo')) ? '' : 'none';
+    if (item.dataset.batchLabel) {
+      item.lastChild.textContent = ' ' + (batch ? item.dataset.batchLabel : item.dataset.singleLabel);
+    }
   }
   var sortItems = document.getElementById('todoCtxSortItems');
-  if (sortItems) sortItems.style.display = (needTodo && hasKids) ? '' : 'none';
+  if (sortItems) sortItems.style.display = (needTodo && hasKids && !batch) ? '' : 'none';
   menu.classList.add('visible');
   // Keep menu inside viewport
   var rect = menu.getBoundingClientRect();
@@ -1597,7 +1615,9 @@ if (searchResultsForMenu) {
 function todoCtxEdit() {
   var id = todoCtxTargetId;
   closeTodoContextMenu();
-  if (id != null) openEditTodoModal(id);
+  if (id == null) return;
+  if (todoMultiSelectMode && todoSelectedIds.size) batchEditTodos();
+  else openEditTodoModal(id);
 }
 
 function todoCtxAddSub() {
@@ -1608,25 +1628,36 @@ function todoCtxAddSub() {
 
 // 右键：将待办添加到指定日期的聚焦列表。
 function todoCtxAddFocusForDate(dateStr, dayLabel) {
-  var id = todoCtxTargetId;
+  const ids = getTodoContextIds();
   closeTodoContextMenu();
-  if (id == null) return;
-  var todo = findTodo(id);
-  if (!todo) return;
+  if (!ids.length) return;
   var data = getFocusItemsForDate(dateStr);
   if (!data.items) data.items = [];
   var maxFocus = typeof getMaxFocusCount === 'function' ? getMaxFocusCount() : 3;
-  if (data.items.some(function (i) { return i.todoId === id; })) {
-    if (typeof sendNotification === 'function') sendNotification('添加到聚焦失败', `该待办已是${dayLabel}聚焦任务`);
+  const report = (title, message) => {
+    if (ids.length > 1) showMiniToast(message);
+    else if (typeof sendNotification === 'function') sendNotification(title, message);
+  };
+  const existing = new Set(data.items.map(item => item.todoId));
+  const candidates = ids.map(id => findTodo(id)).filter(todo => todo && !existing.has(todo.id));
+  if (!candidates.length) {
+    report('添加到聚焦失败', `没有可新增的${dayLabel}聚焦任务`);
     return;
   }
   if (data.items.length >= maxFocus) {
-    if (typeof sendNotification === 'function') sendNotification('添加到聚焦失败', `${dayLabel}聚焦最多 ${maxFocus} 个任务，请先在「今天」页面移除一些再添加`);
+    report('添加到聚焦失败', `${dayLabel}聚焦最多 ${maxFocus} 个任务，请先在「今天」页面移除一些再添加`);
     return;
   }
-  data.items.push({ todoId: todo.id, text: todo.text, done: todo.done });
-  saveFocusData(data);
-  if (typeof sendNotification === 'function') sendNotification(`已添加到${dayLabel}聚焦`, `「${todo.text}」（${data.items.length}/${maxFocus}）`);
+  const added = candidates.slice(0, maxFocus - data.items.length);
+  data.items.push(...added.map(todo => ({ todoId: todo.id, text: todo.text, done: todo.done })));
+  if (saveFocusData(data) === false) {
+    showMiniToast('聚焦保存失败', 'error');
+    return;
+  }
+  const summary = ids.length === 1 ? `「${added[0].text}」` : `已添加 ${added.length} 项到${dayLabel}聚焦`;
+  const overflow = candidates.length - added.length;
+  const countText = maxFocus === Infinity ? `共 ${data.items.length} 项` : `${data.items.length}/${maxFocus}`;
+  report(`已添加到${dayLabel}聚焦`, `${summary}（${countText}）${overflow ? `，另有 ${overflow} 项因已达上限未添加` : ''}`);
   // 刷新聚焦列表与待办列表
   if (typeof renderToday === 'function') renderToday();
   if (typeof renderTodos === 'function') renderTodos();
@@ -1648,15 +1679,18 @@ function todoCtxSort(mode) {
 }
 
 function todoCtxArchive() {
-  var id = todoCtxTargetId;
+  const ids = getTodoContextIds();
   closeTodoContextMenu();
-  if (id != null) archiveTodo(id);
+  if (!ids.length) return;
+  archiveTodos(ids, todoMultiSelectMode && todoSelectedIds.size > 0);
 }
 
 function todoCtxDelete() {
   var id = todoCtxTargetId;
   closeTodoContextMenu();
-  if (id != null) deleteTodo(id);
+  if (id == null) return;
+  if (todoMultiSelectMode && todoSelectedIds.size) batchDeleteTodos();
+  else deleteTodo(id);
 }
 
 // Close status dropdown on outside click

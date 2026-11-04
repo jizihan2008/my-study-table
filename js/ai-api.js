@@ -956,6 +956,7 @@ async function confirmAiDestructiveCalls(calls, conv) {
 // Executes tools internally, injects results as system context, re-calls AI.
 // Returns the final assistant message ready for display.
 async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
+  if (typeof interruptStaleAiSubagents === 'function') interruptStaleAiSubagents(conv);
   const settings = apiCfg.conversationSettings || conv;
   apiCfg = { ...apiCfg, conversationSettings: { id: conv.id, _webSearchMode: settings._webSearchMode, _webSearchEnabled: settings._webSearchEnabled } };
   let finalCleanText = '';

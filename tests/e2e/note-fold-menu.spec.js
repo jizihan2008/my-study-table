@@ -32,7 +32,28 @@ async function setup(secondary, mode, open = false, same = false) {
   return secondary ? mode === 'rich' ? '#notesSplitRichEditor' : '#notesSplitPreview' : mode === 'rich' ? '#notesRichEditor' : '#notesPreview';
 }
 
-for (const secondary of [false, true]) for (const mode of ['preview', 'rich']) {
+for (const secondary of [false, true]) {
+  test(`${secondary ? 'split' : 'main'} reading hides all fold actions and keeps selected text actions`, async () => {
+    const host = await setup(secondary, 'preview');
+    const title = page.locator(host + ' summary').first();
+    await title.click({ button: 'right' });
+    await expect(page.locator('#noteAiExplainMenu')).toBeHidden();
+    await title.evaluate(summary => {
+      const range = document.createRange();
+      range.selectNodeContents(summary);
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      summary.dispatchEvent(new MouseEvent('contextmenu', { bubbles: true, cancelable: true }));
+    });
+    await expect(page.locator('#noteSelectionExplain')).toBeVisible();
+    for (const action of ['Copy', 'Cut', 'Unwrap', 'Delete']) {
+      await expect(page.locator('#noteFold' + action)).toBeHidden();
+    }
+  });
+}
+
+for (const secondary of [false, true]) {
+  const mode = 'rich';
   test(`${secondary ? 'split' : 'main'} ${mode} body context menu hides fold actions, including a nested table`, async () => {
     const host = await setup(secondary, mode, true);
     await page.locator(host + ' summary').first().click({ button: 'right' });
@@ -44,6 +65,8 @@ for (const secondary of [false, true]) for (const mode of ['preview', 'rich']) {
     }, host);
     await expect(page.locator('#noteFoldDelete')).toBeHidden();
     await expect(page.locator('#noteFoldUnwrap')).toBeHidden();
+    await expect(page.locator('#noteFoldCopy')).toBeHidden();
+    await expect(page.locator('#noteFoldCut')).toBeHidden();
     await expect(page.locator('#noteTableMenuActions')).toBeVisible();
     await page.locator(host + ' .note-fold-body p').first().click({ button: 'right' });
     await expect(page.locator('#noteFoldDelete')).toBeHidden();
@@ -130,26 +153,71 @@ for (const secondary of [false, true]) {
   });
 }
 
-test('same-note reading deletion updates the editor and persists through undo, redo and reload', async () => {
-  await setup(true, 'preview', false, true);
+test('same-note split editing deletion updates the other editor and persists through undo, redo and reload', async () => {
+  await setup(true, 'rich', false, true);
   await page.evaluate(() => setNotesSplitPrimaryMode('rich'));
-  await page.locator('#notesSplitPreview > details > summary').filter({ hasText: /^待删标题$/ }).click({ button: 'right' });
+  await page.locator('#notesSplitRichEditor > details > summary').filter({ hasText: /^待删标题$/ }).click({ button: 'right' });
   await page.locator('#noteFoldDelete').click();
   await expect(page.locator('#notesRichEditor')).not.toContainText('待删标题');
   await page.evaluate(() => undoNote());
   await expect(page.locator('#notesRichEditor')).toContainText('待删标题');
   await page.evaluate(() => redoNote());
-  await expect(page.locator('#notesSplitPreview')).not.toContainText('待删标题');
+  await expect(page.locator('#notesSplitRichEditor')).not.toContainText('待删标题');
   await expect(page.locator('#notesStatus')).not.toHaveText('保存中…');
   await page.reload();
   await page.waitForFunction(() => typeof deleteNoteFoldFromMenu === 'function' && !document.querySelector('script[data-app-src]'));
   expect(await page.evaluate(() => findNoteByLooseId('fold-main').content)).not.toContain('待删标题');
 });
 
-test('same-note reading unwrap survives source/rich round trip and reload', async () => {
-  await setup(true, 'preview', false, true);
+for (const secondary of [false, true]) {
+  test(`${secondary ? 'split' : 'main'} editor copies and cuts the full closed fold and pastes it as a fold`, async () => {
+    const host = await setup(secondary, 'rich');
+    const title = page.locator(host + ' > details > summary').filter({ hasText: /^待删标题$/ });
+    const current = () => page.evaluate(secondary =>
+      (secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote()).content, secondary);
+    await title.click({ button: 'right' });
+    await page.locator('#noteFoldCopy').click();
+    await expect(page.getByText('已复制折叠块', { exact: true })).toBeVisible();
+    const clipboard = () => app.evaluate(({ clipboard }) => clipboard.readText());
+    await expect.poll(clipboard).toContain('const nested = 1;');
+    expect(await clipboard()).toMatch(/^:::fold 待删标题\r?\n[\s\S]*\r?\n:::$/);
+    expect(await current()).toBe(source);
+    await expect(title.locator('..')).not.toHaveAttribute('open', '');
+
+    await title.click({ button: 'right' });
+    await page.locator('#noteFoldCut').click();
+    await expect(page.getByText('已剪切折叠块', { exact: true })).toBeVisible();
+    await expect.poll(current).not.toContain('待删标题');
+    expect(await clipboard()).toContain('const nested = 1;');
+    expect(await current()).toContain('保留后方正文');
+    expect(await page.evaluate(() => notesUndoStack.length)).toBe(1);
+    await page.keyboard.press('Control+z');
+    expect(await current()).toBe(source);
+    await page.keyboard.press('Control+y');
+
+    if (secondary) await page.evaluate(() => setNotesSplitPrimaryMode('rich'));
+    await page.locator('#notesRichEditor').evaluate(host => {
+      const range = document.createRange();
+      range.selectNodeContents(host.lastElementChild);
+      range.collapse(false);
+      host.focus();
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    });
+    const matchingFolds = page.locator('#notesRichEditor details').filter({ has: page.getByText('待删标题', { exact: true }) });
+    const beforePaste = await matchingFolds.count();
+    await page.keyboard.press('Control+v');
+    await expect(matchingFolds).toHaveCount(beforePaste + 1);
+    const pasted = matchingFolds.last();
+    await expect(pasted.locator('details summary')).toHaveText('内层标题');
+    await expect(pasted.locator('pre')).toHaveText('const nested = 1;');
+  });
+}
+
+test('same-note split editing unwrap survives source/rich round trip and reload', async () => {
+  await setup(true, 'rich', false, true);
   await page.evaluate(() => setNotesSplitPrimaryMode('rich'));
-  await page.locator('#notesSplitPreview > details > summary').filter({ hasText: /^待删标题$/ }).click({ button: 'right' });
+  await page.locator('#notesSplitRichEditor > details > summary').filter({ hasText: /^待删标题$/ }).click({ button: 'right' });
   await page.locator('#noteFoldUnwrap').click();
   await expect(page.locator('#notesRichEditor > p').filter({ hasText: /^待删标题$/ })).toBeVisible();
   const content = await page.evaluate(() => getActiveNote().content);

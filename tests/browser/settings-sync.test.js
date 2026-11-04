@@ -49,7 +49,7 @@ test('settings UI saves and receives account preferences while retaining local s
       return page;
     }
     const a = await page('A'), b = await page('B');
-    await a.locator('#settingsMaxFocusCount').fill('5'); await a.locator('#settingsMaxFocusCount').dispatchEvent('change');
+    await a.locator('#settingsMaxFocusCount').selectOption('unlimited');
     await a.locator('#settingsReviewMode').selectOption('relaxed');
     await a.evaluate(async () => {
       await saveApiKeys([{ id: 'key_shared', name: '同步测试', key: 'sk-only-a', baseUrl: 'https://example.test/v1', model: 'model-a', contextBudget: 64000 }]);
@@ -58,7 +58,7 @@ test('settings UI saves and receives account preferences while retaining local s
       await Sync.uploadAll({ moduleId: 'settings' });
     });
     await b.evaluate(async () => { applyTheme('dark'); await Sync.manualSync({ moduleId: 'settings' }); });
-    assert.equal(await b.locator('#settingsMaxFocusCount').inputValue(), '5');
+    assert.equal(await b.locator('#settingsMaxFocusCount').inputValue(), 'unlimited');
     assert.equal(await b.locator('#settingsReviewMode').inputValue(), 'relaxed');
     assert.equal(await b.evaluate(() => getEffectiveApiConfig().apiKey), '');
     assert.equal(await b.evaluate(() => localStorage.getItem('study_theme')), 'dark');

@@ -195,6 +195,252 @@ async function drainAiSendQueue(convId) {
   }
 }
 
+async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, includeComposer = true) {
+  // 附件在消息里的展示信息（displayUrl 在下面处理附件时补上：可能是 Files API 的小缩略图）
+  const displayAttachments = [];
+  for (const a of currentAttachments) {
+    const original = await retainAiAttachmentFile(a, conv.id);
+    displayAttachments.push({ name: a.name, size: a.size, displayUrl: a.dataUrl || '', promptLength: 0, ...original });
+  }
+
+  // Process attachments: Kimi uses its file API; other models use local PDF conversion or text/image input.
+  let docTexts = '';
+  const isKimi = isKimiModel(apiCfg);
+  const isVision = isVisionModel(apiCfg);
+  // 图片附件：内联 base64 会让请求体膨胀约 1.37 倍（服务端另有 48 MiB 请求体上限），
+  // 预处理失败的超大图在发送前剔除并说明，避免整条消息因 413/400 失败
+  const oversized = pruneOversizedImageAttachments(currentAttachments, apiCfg, includeComposer);
+  const pdfAttachments = currentAttachments.filter(a => isPdfFile(a.file));
+  let pdfIndex = 0;
+  // Collect vision file references (base64 data URLs) for multimodal content
+  const visionFiles = [];
+  for (const [index, a] of currentAttachments.entries()) {
+    const display = displayAttachments[index];
+    const promptStart = docTexts.length;
+    const visionStart = visionFiles.length;
+    if (isAiStopRequested(conv.id)) break;
+    if (isPdfFile(a.file)) {
+      pdfIndex++;
+      setAiPdfSendProgress(conv.id, {
+        name: a.name, index: pdfIndex, count: pdfAttachments.length,
+        mode: isKimi && !(Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0) ? 'upload' : a.pdfMode,
+        stage: 'prepare', done: 0, total: 0
+      });
+    }
+    try {
+      if (oversized.includes(a.name)) {
+        docTexts += `\n\n[附件：${a.name} — 图片内联(base64)体积超出限制，请压缩后重试]`;
+        continue;
+      }
+      // Kimi 未指定范围时保留原生 file-extract；指定范围后也走本地选页，避免把整份 PDF 发出。
+      const hasPdfRange = isPdfFile(a.file) && (Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0);
+      if ((!isKimi || hasPdfRange) && isPdfFile(a.file)) {
+        const pdfRange = { startPage: a.pdfStartPage, endPage: a.pdfEndPage };
+        // 进度/取消只在"页面图片"模式下有意义：逐页渲染是主线程重活（密集教材实测约 0.3–0.6 秒/页）。
+        const pdfRenderOpts = {
+          onPage: info => {
+            if (a && typeof a === 'object') {
+              a._pdfRender = { rendering: true, done: info.done, total: info.total };
+            }
+            setAiPdfSendProgress(conv.id, {
+              name: a.name, index: pdfIndex, count: pdfAttachments.length,
+              mode: 'image', stage: 'prepare', done: info.done, total: info.total
+            });
+          },
+          isAborted: () => isAiStopRequested(conv.id)
+        };
+        if (a.pdfMode === 'image') {
+          if (!isVision) {
+            docTexts += `\n\n[附件：${a.name} — 当前模型不支持图片输入，请改用“提取文字”模式]`;
+            continue;
+          }
+          const rendered = await renderPdfAttachmentPages(a.file, Object.assign({}, pdfRange, pdfRenderOpts));
+          a.pdfInfo = rendered;
+          a._pdfRender = { rendering: false, done: rendered.renderedPages, total: rendered.renderedPages, aborted: !!rendered.aborted };
+          if (rendered.aborted) {
+            // 用户中途取消：半份页面发过去只会让模型看到残缺内容，直接不带这个附件。
+            docTexts += `\n\n[附件：${a.name} — 页面渲染已取消，本次未发送]`;
+            continue;
+          }
+          a.dataUrls = rendered.dataUrls;
+          a.dataUrl = rendered.dataUrls[0] || '';
+          rendered.dataUrls.forEach((dataUrl, index) => visionFiles.push({
+            dataUrl,
+            name: `${a.name}（PDF 第 ${rendered.pageNumbers[index]}/${rendered.pageCount} 页）`,
+            pdfPage: rendered.pageNumbers[index], pageCount: rendered.pageCount,
+            type: 'image_url'
+          }));
+          if (rendered.truncated) {
+            docTexts += `\n\n[PDF：${a.name} — 已选择第 ${rendered.startPage}–${rendered.endPage} 页，受上限限制本次发送 ${rendered.renderedPages} 页]`;
+          }
+          display.displayUrl = a.dataUrl;
+        } else {
+          const extracted = await extractPdfAttachmentText(a.file, pdfRange);
+          a.pdfInfo = extracted;
+          let content = extracted.text;
+          if (!content) {
+            content = '[未检测到可提取的文字层；这可能是扫描版 PDF。请切换到“页面图片”模式并使用支持看图的模型。]';
+          } else if (extracted.truncated) {
+            content += '\n\n[PDF 文字内容过长，已截断]';
+          }
+          docTexts += `\n\n[PDF附件（提取文字）：${a.name}，第 ${extracted.startPage}–${extracted.endPage} 页 / 共 ${extracted.pageCount} 页]\n` + content;
+          display.content = content;
+        }
+      } else if (isKimi) {
+        if (isVisionFile(a.file)) {
+          // Video: must upload to Kimi first, reference via ms://<fileId>
+          if (isVideoFile(a.file)) {
+            if (isDebugMode()) console.log('[DEBUG] Video upload', a.name);
+            const fileId = await uploadVideoToKimi(a.file, apiCfg);
+            visionFiles.push({
+              fileId: fileId,
+              name: a.name,
+              type: 'video_url'
+            });
+          } else if (a.ocrMode) {
+            // OCR mode: upload to Kimi file-extract for text extraction
+            if (isDebugMode()) console.log('[DEBUG] Vision path: OCR upload', a.name);
+            const content = await uploadToKimi(a.file, apiCfg);
+            const maxLen = 80000;
+            const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
+            docTexts += `\n\n[附件(OCR)：${a.name}]\n` + truncated;
+            display.content = truncated;
+          } else {
+            // Image inline mode: read as base64 data URL for multimodal analysis
+            if (isDebugMode()) console.log('[DEBUG] Vision path: reading as base64', a.name);
+            if (a._processPromise) {
+              try { await a._processPromise; } catch (e) { /* 失败时走原文件兜底 */ }
+            }
+            const dataUrls = Array.isArray(a.dataUrls) && a.dataUrls.length
+              ? a.dataUrls
+              : [a.dataUrl || await readFileAsDataURL(a.file)];
+            dataUrls.forEach((dataUrl, index) => visionFiles.push({
+              dataUrl: dataUrl,
+              name: dataUrls.length > 1 ? `${a.name}（第 ${index + 1}/${dataUrls.length} 段）` : a.name,
+              type: 'image_url'
+            }));
+          }
+        } else {
+          if (isDebugMode()) console.log('[DEBUG] Doc path: uploading', a.name);
+          // Document: use file-extract for text/OCR extraction
+          const content = await uploadToKimi(a.file, apiCfg);
+          const maxLen = 80000;
+          const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
+          docTexts += `\n\n[附件：${a.name}]\n` + truncated;
+          display.content = truncated;
+        }
+      } else if (isVision) {
+        // 视觉模型（deepseek-flash / DeepSeek V4.1 Flash 等）：图片 → 文件引用或 base64 内联；其他文件 → 文本读取
+        // 仅按 SHA-256 内容指纹复用历史 file_id；同名文件不代表同一张图。
+        if (isImageFile(a.file)) {
+          if (isDebugMode()) console.log('[DEBUG] Vision path: inline image', a.name, a.imageInfo || '(未预处理)');
+          // 添加附件时就已开始处理（上传或本地转码）：这里直接等它，避免重复解码，也避免"点发送时还没处理完"
+          if (a._processPromise) {
+            try { await a._processPromise; } catch (e) { /* 失败已在预处理里记录，走下面兜底 */ }
+          }
+          const reused = findReusableUploadedImage(a, apiCfg);
+          if (reused) {
+            if (isDebugMode()) console.log('[DEBUG] Vision path: reuse uploaded file', a.name, reused.fileId);
+            visionFiles.push({
+              type: 'file',
+              fileId: reused.fileId,
+              uploadKeyId: reused.uploadKeyId,
+              imageFingerprint: reused.imageFingerprint,
+              name: a.name,
+              dataUrl: reused.thumb || '' // 缩略图沿用原消息里的，仅用于界面回显
+            });
+          } else if (a.uploadFileId) {
+            if (isDebugMode()) console.log('[DEBUG] Vision path: uploaded now', a.name, a.uploadFileId);
+            visionFiles.push({
+              type: 'file',
+              fileId: a.uploadFileId,
+              uploadKeyId: a.uploadKeyId || apiCfg.keyId || '',
+              imageFingerprint: a.imageFingerprint || '',
+              name: a.name,
+              dataUrl: a.dataUrl || ''
+            });
+          } else {
+            let dataUrls = Array.isArray(a.dataUrls) && a.dataUrls.length ? a.dataUrls : null;
+            if (!dataUrls) {
+              // 附件是在切到视觉模型前添加的（那时没预处理）→ 现场补一次，仍失败则退回原文件
+              try {
+                const split = await splitTallImageForApi(a.file);
+                if (split) {
+                  dataUrls = split.dataUrls;
+                  a.imageInfo = split.info;
+                } else {
+                  const processed = await downscaleImageForApi(a.file);
+                  dataUrls = [processed.dataUrl];
+                  a.file = processed.file;
+                  a.imageInfo = processed.info;
+                }
+              } catch (e) {
+                dataUrls = [await readFileAsDataURL(a.file)];
+              }
+            }
+            if (a._preprocessError) {
+              docTexts += `\n\n[附件：${a.name} — 图片本地转换失败（${a._preprocessError}），已按原文件内联发送]`;
+            }
+            a.dataUrls = dataUrls;
+            a.dataUrl = dataUrls[0] || ''; // 首段用于缩略图；完整分段用于模型输入
+            dataUrls.forEach((dataUrl, index) => visionFiles.push({
+              dataUrl: dataUrl,
+              name: dataUrls.length > 1 ? `${a.name}（第 ${index + 1}/${dataUrls.length} 段）` : a.name,
+              type: 'image_url'
+            }));
+          }
+        } else if (isVideoFile(a.file)) {
+          // 视觉模型不支持视频内联，提示跳过
+          docTexts += `\n\n[附件：${a.name} — 当前模型不支持视频分析]`;
+        } else {
+          // 非图片文件按文本读取
+          const content = await new Promise((resolve, reject) => {
+            const reader = new FileReader();
+            reader.onload = e => resolve(e.target.result);
+            reader.onerror = reject;
+            reader.readAsText(a.file);
+          });
+          const maxLen = 8000;
+          const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
+          docTexts += `\n\n[附件：${a.name}]\n` + truncated;
+          display.content = truncated;
+        }
+      } else {
+        // Read .txt files as text content
+        const content = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = e => resolve(e.target.result);
+          reader.onerror = reject;
+          reader.readAsText(a.file);
+        });
+        const maxLen = 8000;
+        const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
+        docTexts += `\n\n[附件：${a.name}]\n` + truncated;
+        display.content = truncated;
+      }
+    } catch (err) {
+      docTexts += `\n\n[附件：${a.name} — 读取失败: ${err.message}]`;
+    } finally {
+      display.promptLength = docTexts.length - promptStart;
+      if (!display.displayUrl) display.displayUrl = a.dataUrl || '';
+      for (const vf of visionFiles.slice(visionStart)) {
+        vf.originalFileId = a.originalFileId || null;
+        vf.sourceName = a.name;
+        vf.attachmentIndex = index;
+      }
+    }
+  }
+
+  if (pdfAttachments.length > 0) {
+    if (isAiStopRequested(conv.id)) setAiPdfSendProgress(conv.id, null);
+    else setAiPdfSendProgress(conv.id, {
+      name: pdfAttachments.map(a => a.name).join('、'), stage: 'request', done: 0, total: 0
+    });
+  }
+
+  return { docTexts, displayAttachments, visionFiles };
+}
+
 // sendAiMessage(externalText, externalAttachments, externalContextInserts, externalDisplayContent)：
 //   - 不传参：从输入框读取（用户手动发送）。若当前正在回复 → 入队等待，回复完成后自动发送。
 //   - 传参：由队列自动发送（drainAiSendQueue 调用），文本/附件来自队列快照。
@@ -271,258 +517,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   setAiStopRequested(conv.id, false);
   updateAiSendButton();
 
-  // 附件在消息里的展示信息（displayUrl 在下面处理附件时补上：可能是 Files API 的小缩略图）
-  const displayAttachments = [];
-  for (const a of currentAttachments) {
-    const original = await retainAiAttachmentFile(a, conv.id);
-    displayAttachments.push({ name: a.name, size: a.size, displayUrl: a.dataUrl || '', ...original });
-  }
-
-  // Process attachments: Kimi uses its file API; other models use local PDF conversion or text/image input.
-  let docTexts = '';
-  const isKimi = isKimiModel(apiCfg);
-  const isVision = isVisionModel(apiCfg);
-  // 图片附件：内联 base64 会让请求体膨胀约 1.37 倍（服务端另有 48 MiB 请求体上限），
-  // 预处理失败的超大图在发送前剔除并说明，避免整条消息因 413/400 失败
-  const oversized = pruneOversizedImageAttachments(currentAttachments, apiCfg);
-  if (oversized.length > 0) {
-    docTexts += `\n\n[以下图片未发送：${oversized.join('、')} —— 内联(base64)体积超出限制，请压缩后重试]`;
-    // 从本次发送的快照中剔除（currentAttachments 是浅拷贝，需按名字过滤）
-    for (let i = currentAttachments.length - 1; i >= 0; i--) {
-      if (currentAttachments[i] && oversized.indexOf(currentAttachments[i].name) >= 0) currentAttachments.splice(i, 1);
-    }
-  }
-  if (isDebugMode()) console.log('[DEBUG sendAiMessage] isKimi:', isKimi, 'isVision:', isVision, 'attachments:', currentAttachments.length);
-  const pdfAttachments = currentAttachments.filter(a => isPdfFile(a.file));
-  let pdfIndex = 0;
-  // Collect vision file references (base64 data URLs) for multimodal content
-  let visionFiles = [];
-  for (const a of currentAttachments) {
-    const visionStart = visionFiles.length;
-    if (isAiStopRequested(conv.id)) break;
-    if (isPdfFile(a.file)) {
-      pdfIndex++;
-      setAiPdfSendProgress(conv.id, {
-        name: a.name, index: pdfIndex, count: pdfAttachments.length,
-        mode: isKimi && !(Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0) ? 'upload' : a.pdfMode,
-        stage: 'prepare', done: 0, total: 0
-      });
-    }
-    try {
-      // Kimi 未指定范围时保留原生 file-extract；指定范围后也走本地选页，避免把整份 PDF 发出。
-      const hasPdfRange = isPdfFile(a.file) && (Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0);
-      if ((!isKimi || hasPdfRange) && isPdfFile(a.file)) {
-        const pdfRange = { startPage: a.pdfStartPage, endPage: a.pdfEndPage };
-        // 进度/取消只在"页面图片"模式下有意义：逐页渲染是主线程重活（密集教材实测约 0.3–0.6 秒/页）。
-        const pdfRenderOpts = {
-          onPage: info => {
-            if (a && typeof a === 'object') {
-              a._pdfRender = { rendering: true, done: info.done, total: info.total };
-            }
-            setAiPdfSendProgress(conv.id, {
-              name: a.name, index: pdfIndex, count: pdfAttachments.length,
-              mode: 'image', stage: 'prepare', done: info.done, total: info.total
-            });
-          },
-          isAborted: () => isAiStopRequested(conv.id)
-        };
-        if (a.pdfMode === 'image') {
-          if (!isVision) {
-            docTexts += `\n\n[附件：${a.name} — 当前模型不支持图片输入，请改用“提取文字”模式]`;
-            continue;
-          }
-          const rendered = await renderPdfAttachmentPages(a.file, Object.assign({}, pdfRange, pdfRenderOpts));
-          a.pdfInfo = rendered;
-          a._pdfRender = { rendering: false, done: rendered.renderedPages, total: rendered.renderedPages, aborted: !!rendered.aborted };
-          if (rendered.aborted) {
-            // 用户中途取消：半份页面发过去只会让模型看到残缺内容，直接不带这个附件。
-            docTexts += `\n\n[附件：${a.name} — 页面渲染已取消，本次未发送]`;
-            continue;
-          }
-          a.dataUrls = rendered.dataUrls;
-          a.dataUrl = rendered.dataUrls[0] || '';
-          rendered.dataUrls.forEach((dataUrl, index) => visionFiles.push({
-            dataUrl,
-            name: `${a.name}（PDF 第 ${rendered.pageNumbers[index]}/${rendered.pageCount} 页）`,
-            pdfPage: rendered.pageNumbers[index], pageCount: rendered.pageCount,
-            type: 'image_url'
-          }));
-          if (rendered.truncated) {
-            docTexts += `\n\n[PDF：${a.name} — 已选择第 ${rendered.startPage}–${rendered.endPage} 页，受上限限制本次发送 ${rendered.renderedPages} 页]`;
-          }
-          const idx = displayAttachments.findIndex(d => d.name === a.name);
-          if (idx >= 0) displayAttachments[idx].displayUrl = a.dataUrl;
-        } else {
-          const extracted = await extractPdfAttachmentText(a.file, pdfRange);
-          a.pdfInfo = extracted;
-          let content = extracted.text;
-          if (!content) {
-            content = '[未检测到可提取的文字层；这可能是扫描版 PDF。请切换到“页面图片”模式并使用支持看图的模型。]';
-          } else if (extracted.truncated) {
-            content += '\n\n[PDF 文字内容过长，已截断]';
-          }
-          docTexts += `\n\n[PDF附件（提取文字）：${a.name}，第 ${extracted.startPage}–${extracted.endPage} 页 / 共 ${extracted.pageCount} 页]\n` + content;
-          const idx = displayAttachments.findIndex(d => d.name === a.name);
-          if (idx >= 0) displayAttachments[idx].content = content;
-        }
-      } else if (isKimi) {
-        if (isVisionFile(a.file)) {
-          // Video: must upload to Kimi first, reference via ms://<fileId>
-          if (isVideoFile(a.file)) {
-            if (isDebugMode()) console.log('[DEBUG] Video upload', a.name);
-            const fileId = await uploadVideoToKimi(a.file, apiCfg);
-            visionFiles.push({
-              fileId: fileId,
-              name: a.name,
-              type: 'video_url'
-            });
-          } else if (a.ocrMode) {
-            // OCR mode: upload to Kimi file-extract for text extraction
-            if (isDebugMode()) console.log('[DEBUG] Vision path: OCR upload', a.name);
-            const content = await uploadToKimi(a.file, apiCfg);
-            const maxLen = 80000;
-            const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
-            docTexts += `\n\n[附件(OCR)：${a.name}]\n` + truncated;
-            const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
-            if (idx >= 0) displayAttachments[idx].content = truncated;
-          } else {
-            // Image inline mode: read as base64 data URL for multimodal analysis
-            if (isDebugMode()) console.log('[DEBUG] Vision path: reading as base64', a.name);
-            if (a._processPromise) {
-              try { await a._processPromise; } catch (e) { /* 失败时走原文件兜底 */ }
-            }
-            const dataUrls = Array.isArray(a.dataUrls) && a.dataUrls.length
-              ? a.dataUrls
-              : [a.dataUrl || await readFileAsDataURL(a.file)];
-            dataUrls.forEach((dataUrl, index) => visionFiles.push({
-              dataUrl: dataUrl,
-              name: dataUrls.length > 1 ? `${a.name}（第 ${index + 1}/${dataUrls.length} 段）` : a.name,
-              type: 'image_url'
-            }));
-          }
-        } else {
-          if (isDebugMode()) console.log('[DEBUG] Doc path: uploading', a.name);
-          // Document: use file-extract for text/OCR extraction
-          const content = await uploadToKimi(a.file, apiCfg);
-          const maxLen = 80000;
-          const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
-          docTexts += `\n\n[附件：${a.name}]\n` + truncated;
-          const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
-          if (idx >= 0) displayAttachments[idx].content = truncated;
-        }
-      } else if (isVision) {
-        // 视觉模型（deepseek-flash / DeepSeek V4.1 Flash 等）：图片 → 文件引用或 base64 内联；其他文件 → 文本读取
-        // 仅按 SHA-256 内容指纹复用历史 file_id；同名文件不代表同一张图。
-        if (isImageFile(a.file)) {
-          if (isDebugMode()) console.log('[DEBUG] Vision path: inline image', a.name, a.imageInfo || '(未预处理)');
-          // 添加附件时就已开始处理（上传或本地转码）：这里直接等它，避免重复解码，也避免"点发送时还没处理完"
-          if (a._processPromise) {
-            try { await a._processPromise; } catch (e) { /* 失败已在预处理里记录，走下面兜底 */ }
-          }
-          const reused = findReusableUploadedImage(a, apiCfg);
-          if (reused) {
-            if (isDebugMode()) console.log('[DEBUG] Vision path: reuse uploaded file', a.name, reused.fileId);
-            visionFiles.push({
-              type: 'file',
-              fileId: reused.fileId,
-              uploadKeyId: reused.uploadKeyId,
-              imageFingerprint: reused.imageFingerprint,
-              name: a.name,
-              dataUrl: reused.thumb || '' // 缩略图沿用原消息里的，仅用于界面回显
-            });
-          } else if (a.uploadFileId) {
-            if (isDebugMode()) console.log('[DEBUG] Vision path: uploaded now', a.name, a.uploadFileId);
-            visionFiles.push({
-              type: 'file',
-              fileId: a.uploadFileId,
-              uploadKeyId: a.uploadKeyId || apiCfg.keyId || '',
-              imageFingerprint: a.imageFingerprint || '',
-              name: a.name,
-              dataUrl: a.dataUrl || ''
-            });
-          } else {
-            let dataUrls = Array.isArray(a.dataUrls) && a.dataUrls.length ? a.dataUrls : null;
-            if (!dataUrls) {
-              // 附件是在切到视觉模型前添加的（那时没预处理）→ 现场补一次，仍失败则退回原文件
-              try {
-                const split = await splitTallImageForApi(a.file);
-                if (split) {
-                  dataUrls = split.dataUrls;
-                  a.imageInfo = split.info;
-                } else {
-                  const processed = await downscaleImageForApi(a.file);
-                  dataUrls = [processed.dataUrl];
-                  a.file = processed.file;
-                  a.imageInfo = processed.info;
-                }
-              } catch (e) {
-                dataUrls = [await readFileAsDataURL(a.file)];
-              }
-            }
-            if (a._preprocessError) {
-              docTexts += `\n\n[附件：${a.name} — 图片本地转换失败（${a._preprocessError}），已按原文件内联发送]`;
-            }
-            a.dataUrls = dataUrls;
-            a.dataUrl = dataUrls[0] || ''; // 首段用于缩略图；完整分段用于模型输入
-            dataUrls.forEach((dataUrl, index) => visionFiles.push({
-              dataUrl: dataUrl,
-              name: dataUrls.length > 1 ? `${a.name}（第 ${index + 1}/${dataUrls.length} 段）` : a.name,
-              type: 'image_url'
-            }));
-          }
-        } else if (isVideoFile(a.file)) {
-          // 视觉模型不支持视频内联，提示跳过
-          docTexts += `\n\n[附件：${a.name} — 当前模型不支持视频分析]`;
-        } else {
-          // 非图片文件按文本读取
-          const content = await new Promise((resolve, reject) => {
-            const reader = new FileReader();
-            reader.onload = e => resolve(e.target.result);
-            reader.onerror = reject;
-            reader.readAsText(a.file);
-          });
-          const maxLen = 8000;
-          const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
-          docTexts += `\n\n[附件：${a.name}]\n` + truncated;
-          const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
-          if (idx >= 0) displayAttachments[idx].content = truncated;
-        }
-      } else {
-        // Read .txt files as text content
-        const content = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = e => resolve(e.target.result);
-          reader.onerror = reject;
-          reader.readAsText(a.file);
-        });
-        const maxLen = 8000;
-        const truncated = content.length > maxLen ? content.slice(0, maxLen) + '\n\n[内容过长，已截断...]' : content;
-        docTexts += `\n\n[附件：${a.name}]\n` + truncated;
-        const idx = displayAttachments.findIndex(d => d.name === a.name && !d.content);
-        if (idx >= 0) displayAttachments[idx].content = truncated;
-      }
-      for (const vf of visionFiles.slice(visionStart)) {
-        vf.originalFileId = a.originalFileId || null;
-        vf.sourceName = a.name;
-      }
-    } catch (err) {
-      docTexts += `\n\n[附件：${a.name} — 读取失败: ${err.message}]`;
-    }
-  }
-
-  if (pdfAttachments.length > 0) {
-    if (isAiStopRequested(conv.id)) setAiPdfSendProgress(conv.id, null);
-    else setAiPdfSendProgress(conv.id, {
-      name: pdfAttachments.map(a => a.name).join('、'), stage: 'request', done: 0, total: 0
-    });
-  }
-
-  // 图片附件的展示图：Files API 路径下 attach.dataUrl 是本地生成的小缩略图（原图只在服务端）
-  for (const d of displayAttachments) {
-    if (d.displayUrl) continue;
-    const attached = currentAttachments.find(a => a.name === d.name && a.dataUrl);
-    if (attached) d.displayUrl = attached.dataUrl;
-  }
+  const { docTexts, displayAttachments, visionFiles } = await prepareAiMessageAttachments(currentAttachments, apiCfg, conv);
 
   // Build user message content
   const userContent = text + docTexts;
@@ -799,14 +794,53 @@ async function regenerateFromUserNode(conv, userNodeId, config) {
   if (typeof drainAiSendQueue === 'function') drainAiSendQueue(conv.id);
 }
 
+// Older messages have attachment text embedded in content without segment lengths.
+function splitAiEditContent(message) {
+  const content = String(message.content || '');
+  const attachments = message.attachments || [];
+  const blocks = attachments.map(() => '');
+  let end = content.length;
+  if (attachments.every(a => Number.isInteger(a.promptLength) && a.promptLength >= 0)) {
+    for (let i = attachments.length - 1; i >= 0; i--) {
+      const start = Math.max(0, end - attachments[i].promptLength);
+      blocks[i] = content.slice(start, end);
+      end = start;
+    }
+  } else {
+    const headers = /\n\n\[(附件(?:\(OCR\))?|PDF附件（提取文字）|PDF)：([^\n]+)\](?=\n|$)|\n\n\[以下图片未发送：[^\n]+\](?=\n|$)/g;
+    let match;
+    while ((match = headers.exec(content)) !== null) {
+      const label = match[2];
+      if (!label) {
+        end = Math.min(end, match.index);
+        continue;
+      }
+      const candidates = attachments.map((a, i) => ({ a, i })).filter(({ a }) =>
+        label === a.name || label.startsWith(a.name + ' — ') ||
+        (match[1] === 'PDF附件（提取文字）' && label.startsWith(a.name + '，第 ')));
+      const bodyStart = match.index + match[0].length;
+      const entry = candidates.find(({ a, i }) =>
+        !blocks[i] && a.content && content.startsWith('\n' + a.content, bodyStart))
+        || candidates.find(({ i }) => !blocks[i]);
+      if (!entry) continue;
+      end = Math.min(end, match.index);
+      const body = entry.a.content && content.startsWith('\n' + entry.a.content, bodyStart)
+        ? '\n' + entry.a.content : '';
+      blocks[entry.i] = match[0] + body;
+      headers.lastIndex = bodyStart + body.length;
+    }
+  }
+  return { text: message.displayContent ?? content.slice(0, end), blocks };
+}
+
 // 编辑消息后发送：在原 user 节点父节点下创建「编辑后新 user 分支」，
 // 再像重新生成一样在其下生成 AI 回复（👤 b' → 🤖 回复B'）。
-async function sendEditedMessage(nodeId, newText) {
+async function sendEditedMessage(nodeId, newText, edit) {
   const conv = getActiveConv();
   if (!conv || isAiLoading(conv.id)) return;
   ensureTree(conv);
   const text = (newText || '').trim();
-  if (!text) return;
+  if (!text && !edit?.kept.length && !edit?.added.length && !edit?.contextInserts.length) return;
 
   // 找到目标 user 节点（编辑入口通常传 user 节点 id）
   let userNodeId = nodeId;
@@ -825,18 +859,60 @@ async function sendEditedMessage(nodeId, newText) {
 
   // 内容没有变化时不创建“看不出区别”的 user 分支。旧行为会显示 1/2，
   // 并把其中一条回复藏在另一版本下，用户会误以为聊天记录丢失。
-  if (text === String(conv.tree[userNodeId].content || '').trim()) {
+  const base = conv.tree[userNodeId];
+  const { text: previousText, blocks } = splitAiEditContent(base);
+  const attachmentsChanged = edit && (edit.added.length > 0 || edit.kept.length !== (base.attachments || []).length);
+  if (!attachmentsChanged && text === previousText.trim()) {
     if (typeof showAiToast === 'function') showAiToast('内容没有变化，未创建新分支');
     return null;
   }
 
-  // 创建编辑后的新 user 分支（与原文并列），并切换过去
-  const newUserId = createBranchFromEdit(conv, userNodeId, text, { time: new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' }) });
+  const apiCfg = getEffectiveApiConfig();
+  const kept = edit?.kept ?? (base.attachments || []).map((_, index) => index);
+  const attachments = kept.map(index => ({ ...base.attachments[index], promptLength: blocks[index].length }));
+  const visionFiles = (base.visionFiles || []).flatMap(file => {
+    const originals = base.attachments || [];
+    const idIndex = file.originalFileId ? originals.findIndex(a => a.originalFileId === file.originalFileId) : -1;
+    const originalIndex = file.attachmentIndex ?? (idIndex >= 0 ? idIndex : originals.findIndex(a =>
+      a.name === (file.sourceName || file.name) ||
+      (!file.sourceName && (file.name || '').startsWith(a.name + '（'))));
+    const index = kept.indexOf(originalIndex);
+    if (index >= 0) return [{ ...file, attachmentIndex: index }];
+    return originalIndex === -1 && !attachmentsChanged ? [file] : [];
+  });
+  const contextInserts = base.contextInserts || [];
+  let content = text + (contextInserts.length ? buildAiContextInsertText(contextInserts) : '')
+    + kept.map(index => blocks[index]).join('');
+  if (edit?.added.length) {
+    setAiStopRequested(conv.id, false);
+    setAiLoading(conv.id, true);
+    updateAiSendButton();
+    try {
+      await Promise.all(edit.added.filter(a => isImageFile(a.file)).map(a => preprocessAiImageAttachment(a, apiCfg)));
+      if (isAiStopRequested(conv.id)) return;
+      const prepared = await prepareAiMessageAttachments(edit.added, apiCfg, conv, false);
+      if (isAiStopRequested(conv.id)) return;
+      content += prepared.docTexts;
+      visionFiles.push(...prepared.visionFiles.map(file => ({
+        ...file, attachmentIndex: file.attachmentIndex + attachments.length
+      })));
+      attachments.push(...prepared.displayAttachments);
+    } finally {
+      setAiPdfSendProgress(conv.id, null);
+      setAiStopRequested(conv.id, false);
+      setAiLoading(conv.id, false);
+      updateAiSendButton();
+    }
+  }
+  const newUserId = createBranchFromEdit(conv, userNodeId, content, {
+    attachments, visionFiles, contextInserts,
+    displayContent: contextInserts.length ? text : undefined
+  });
   if (newUserId === null) return;
   safeSaveAiConvs();
 
   // 在其下重新生成回复（类似重新生成）
-  await regenerateFromUserNode(conv, newUserId);
+  await regenerateFromUserNode(conv, newUserId, apiCfg);
 }
 
 // ═══════════ AI Toolbar (Key select + Toggles + Quick actions) ═══════════

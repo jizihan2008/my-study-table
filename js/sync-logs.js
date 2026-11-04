@@ -497,6 +497,7 @@
           systemPrompt: conv.systemPrompt || '',
           createdAt: conv.createdAt || 0,
           autoTitled: !!conv.autoTitled,
+          ...(Array.isArray(conv.agentRuns) ? { agentRuns: conv.agentRuns.map(r => ({ ...r, status: ['running','queued'].includes(r.status) ? 'interrupted' : r.status })) } : {}),
           ...(Array.isArray(conv.aiCompletions) && conv.aiCompletions.length ? { aiCompletions: conv.aiCompletions.slice(-20) } : {}),
           daily: !!conv._dailyReport   // 日报会话标记：拉取侧据此合并而非新建
         },
@@ -1347,6 +1348,7 @@
           messages: Array.isArray(built.items) ? built.items : []
         };
         // 树状分支字段仅在远端有值时覆盖，避免旧明文数据（无 tree）清空本地分支树
+        if (Array.isArray(built.meta?.agentRuns)) patch.agentRuns = built.meta.agentRuns.map(r => ({ ...r, status: ['running','queued'].includes(r.status) ? 'interrupted' : r.status }));
         if (built.tree) patch.tree = built.tree;
         if (built.activePath) patch.activePath = built.activePath;
         let found = false;
@@ -2191,7 +2193,7 @@
     if (kind === 'ai_conv' && Array.isArray(value)) {
       return value.filter(c => c && c.id != null).map(conv => ({
         kind, itemId: String(conv.id),
-        meta: { id: conv.id, title: conv.title || '', systemPrompt: conv.systemPrompt || '', createdAt: conv.createdAt || 0, autoTitled: !!conv.autoTitled },
+        meta: { id: conv.id, title: conv.title || '', systemPrompt: conv.systemPrompt || '', createdAt: conv.createdAt || 0, autoTitled: !!conv.autoTitled, ...(Array.isArray(conv.agentRuns) ? {agentRuns:conv.agentRuns} : {}) },
         tree: conv.tree || null, activePath: conv.activePath || null,
         items: Array.isArray(conv.messages) ? conv.messages : []
       }));

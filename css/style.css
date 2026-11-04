@@ -3629,14 +3629,27 @@ body.ai-message-immersive-open { overflow: hidden; }
 }
 .ai-msg-edit-input:focus { border-color: var(--primary); }
 .ai-msg-edit-actions {
-  display: flex; gap: 6px; margin-top: 8px;
+  display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px;
 }
+.ai-message-edit-files {
+  display: flex; flex-wrap: wrap; gap: 4px;
+}
+.ai-message-edit-files:not(:empty) { margin: 6px 0; }
+.ai-message-edit-file {
+  display: inline-flex; align-items: center; gap: 4px;
+  max-width: 100%; min-width: 0;
+  font-size: 12px;
+}
+.ai-message-edit-file > span {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.ai-message-edit-file > button { flex-shrink: 0; padding: 2px 6px; }
 /* 树状对话：分支树浮窗（模仿复习浮窗，可拖拽，右下角） */
 .ai-tree-float {
   pointer-events: auto;
   position: fixed;
   bottom: 24px; right: 24px;
-  width: 460px; height: auto; max-height: 70vh;
+  width: 460px; max-width: calc(100vw - 48px); height: auto; max-height: 70vh;
   background: var(--card); border: 1px solid var(--border);
   border-radius: 16px; box-shadow: 0 20px 60px rgba(0,0,0,0.2);
   display: flex; flex-direction: column;
@@ -3702,6 +3715,7 @@ body.ai-message-immersive-open { overflow: hidden; }
 /* 树浮窗：编辑消息 */
 .ai-tree-edit-ico {
   margin-left: auto; flex-shrink: 0;
+  pointer-events: auto;
   border: none; background: transparent; color: var(--text-secondary);
   padding: 2px 5px; border-radius: 6px; cursor: pointer;
   opacity: 0; transition: var(--transition);
@@ -3728,7 +3742,7 @@ body.ai-message-immersive-open { overflow: hidden; }
   box-sizing: border-box;
 }
 .ai-tree-edit-input:focus { border-color: var(--primary); }
-.ai-tree-edit-actions { display: flex; gap: 6px; }
+.ai-tree-edit-actions { display: flex; flex-wrap: wrap; gap: 6px; }
 .ai-tree-edit-btn {
   border: 1px solid var(--border);
   background: var(--card);
@@ -6989,17 +7003,40 @@ i[data-lucide] {
 .stats-chart-title { font-size: 12px; font-weight: 600; color: var(--text-secondary); margin-bottom: 6px; flex-shrink: 0; }
 .stats-chart-body { flex: 1; min-height: 140px; display: flex; align-items: center; }
 .stats-chart-body svg { display: block; width: 100%; height: auto; }
+.stats-focus-chart { flex-direction: column; align-items: stretch; }
+.stats-focus-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; list-style: none; margin: 6px 0 0; padding: 0; color: var(--text-secondary); font-size: 11px; }
+.stats-focus-legend li { overflow-wrap: anywhere; min-width: 0; }
+.stats-focus-legend li span { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-inline-end: 5px; }
+.stats-focus-day:focus-visible > rect:first-child,
+.stats-focus-day[aria-pressed="true"] > rect:first-child { stroke: var(--text); stroke-width: 1; }
 .stats-chart-node, .stats-ai-bar-col, .stats-ai-breakdown-row { cursor: default; }
 .stats-chart-node:hover .stats-chart-dot { r: 6; stroke-width: 2.5; }
 .stats-chart-node:hover .stats-chart-bar { opacity: 1; filter: brightness(1.25); }
-.stats-heat-cell:hover { opacity: 1; stroke: var(--text); stroke-width: 1.5; }
+.stats-chart-node.stats-focus-day { cursor: pointer; }
+.stats-heatmap { flex-direction: column; justify-content: center; gap: 6px; }
+.stats-heatmap-grid { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 4px; width: min(100%, 235px); text-align: center; font-size: 11px; color: var(--text-secondary); }
+.stats-heat-cell { min-width: 0; min-height: 26px; padding: 0; border: 1px solid transparent; border-radius: 4px; font: inherit; color: var(--text); cursor: pointer; background: color-mix(in srgb, var(--primary) var(--stats-heat-intensity), var(--card)); }
+.stats-heat-cell:hover, .stats-heat-cell[aria-pressed="true"] { border-color: var(--text); }
+.stats-heat-cell:focus-visible { outline: 2px solid var(--text); outline-offset: 1px; }
+.stats-details-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.stats-detail-note { color: var(--text-secondary); font-size: 11px; margin: 4px 0; }
+.stats-comparison-scroll { overflow-x: auto; }
+.stats-comparison { width: 100%; border-collapse: collapse; text-align: right; font-size: 12px; }
+.stats-comparison th, .stats-comparison td { border-bottom: 1px solid var(--border); padding: 6px; white-space: nowrap; }
+.stats-comparison th:first-child { text-align: left; white-space: normal; overflow-wrap: anywhere; min-width: 55px; }
+.stats-day-header { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.stats-day-header select { background: var(--card); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px; }
+.stats-day-records { list-style: none; max-height: 220px; overflow-y: auto; }
+.stats-day-records li { display: flex; justify-content: space-between; gap: 8px; padding: 5px 0; border-bottom: 1px solid var(--border); font-size: 12px; overflow-wrap: anywhere; }
+.stats-day-records small { color: var(--text-secondary); }
+.stats-day-periods { display: block; margin-top: 2px; }
 .stats-doughnut-progress:hover { filter: brightness(1.2) drop-shadow(0 0 4px currentColor); }
 .stats-ai-bar-col:hover .stats-ai-bar { opacity: 1; filter: brightness(1.25); transform: scaleX(1.25); }
 .stats-ai-breakdown-row:hover .stats-ai-breakdown-track span { filter: brightness(1.25); }
-.stats-node-tooltip { position: fixed; z-index: 10000; pointer-events: none; max-width: 280px; padding: 6px 9px; border-radius: 6px; background: var(--text); color: var(--card); font-size: 12px; line-height: 1.4; box-shadow: var(--shadow); white-space: nowrap; }
+.stats-node-tooltip { position: fixed; z-index: 10000; pointer-events: none; max-width: min(280px, calc(100vw - 16px)); padding: 6px 9px; border-radius: 6px; background: var(--text); color: var(--card); font-size: 12px; line-height: 1.4; box-shadow: var(--shadow); white-space: pre-line; overflow-wrap: anywhere; }
 .stats-node-tooltip[hidden] { display: none; }
 @media (max-width: 1200px) { .stats-charts-row { grid-template-columns: repeat(2, 1fr); } }
-@media (max-width: 700px) { .stats-charts-row { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .stats-charts-row, .stats-details-row { grid-template-columns: minmax(0, 1fr); } }
 @media (max-width: 480px) {
   #section-stats { padding: 14px 12px; }
   .stats-chart-card { padding: 10px 8px 8px; }
@@ -12785,3 +12822,7 @@ html.env-pwa .electron-only { display: none; }
   overflow-wrap: anywhere;
 }
 .today-focus-item .today-todo-due.overdue { color: var(--danger); }
+.ai-subagents { margin: 12px 0; padding: 12px; border: 1px solid var(--border-color, #8885); border-radius: 12px; font-size: 13px; min-width: 0; }
+.ai-subagents details { margin-top: 8px; }
+.ai-subagents summary { cursor: pointer; overflow-wrap: anywhere; }
+.ai-subagents pre { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow: auto; font: inherit; }

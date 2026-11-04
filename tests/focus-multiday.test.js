@@ -28,6 +28,27 @@ function focusContext(initial) {
   return { context, values, todos };
 }
 
+test('unlimited focus accepts more than five tasks and can return to a numeric limit', async () => {
+  const { context, values, todos } = focusContext();
+  for (let id = 3; id <= 7; id++) todos.push({ id, text: String(id), done: false });
+  context.renderFocusList = () => {};
+  context.renderTodoPickerList = () => {};
+  context.setSyncedSetting = (key, value) => values.set(key, value);
+  context.saveMaxFocusSetting('5');
+  for (let id = 1; id <= 6; id++) context.togglePickTodo(id);
+  assert.equal(context.getTodayFocusItems().items.length, 5);
+
+  context.showCustomPrompt = async () => '无上限';
+  await context.editMaxFocusCount();
+  assert.equal(values.get('study_max_focus_count'), 'unlimited');
+  context.togglePickTodo(6);
+  assert.equal(context.getTodayFocusItems().items.length, 6);
+
+  context.saveMaxFocusSetting('5');
+  context.togglePickTodo(7);
+  assert.equal(context.getTodayFocusItems().items.length, 6);
+});
+
 test('legacy focus keeps its dated list and edits to another day preserve it', () => {
   const { context, values } = focusContext();
   const yesterday = context.getFocusDateByOffset(-1);
@@ -159,7 +180,7 @@ test('todo context menu can add a task directly to tomorrow focus', () => {
   const notices = [];
   const tomorrow = '2026-09-23';
   const context = vm.createContext({
-    todoCtxTargetId: 2,
+    getTodoContextIds: () => [2],
     closeTodoContextMenu: () => {},
     findTodo: id => ({ id, text: '乙', done: false }),
     getFocusItemsForDate: date => ({ _date: date, items: [] }),

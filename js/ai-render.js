@@ -872,7 +872,7 @@ function renderAiMessages() {
       }
       // Strip file content from display text (keep only user's typed text)
       if (typeof cleanContent === 'string') {
-        cleanContent = cleanContent.replace(/\n\n\[(?:附件(?:\(OCR\))?：|PDF附件（提取文字）：)[^\]]+\]\n[\s\S]*$/, '');
+        cleanContent = splitAiEditContent(m).text;
       }
     }
 
@@ -984,14 +984,16 @@ function renderAiMessages() {
     // show a friendly placeholder instead of an empty bubble.
     const isAssistant = item.type === 'assistant';
     // 编辑模式：user 消息正在内联编辑时，气泡内容替换为 textarea + 操作按钮
-    const isEditingMsg = item.type === 'user' && _aiMsgEditingUserId === item.nodeId;
+    const isEditingMsg = item.type === 'user' && isEditingAiMessage('message', conv.id, item.nodeId);
     let contentHtml;
     let isToolPlaceholder = false;
     if (isEditingMsg) {
-      const rawText = typeof m.content === 'string' ? m.content : '';
+      attachHtml = '';
       contentHtml = `
-        <textarea id="aiMsgEditInput-${item.nodeId}" class="ai-msg-edit-input" rows="3" onkeydown="onAiMsgEditKeydown(event, ${item.nodeId})">${escapeHtml(rawText)}</textarea>
+        <textarea id="aiMsgEditInput-${item.nodeId}" class="ai-msg-edit-input" rows="3" oninput="_aiMessageEdit.text = this.value" onkeydown="onAiMsgEditKeydown(event, ${item.nodeId})">${escapeHtml(_aiMessageEdit.text)}</textarea>
+        ${renderAiMessageEditAttachments()}
         <div class="ai-msg-edit-actions">
+          <button type="button" class="ai-tree-edit-btn" onclick="event.stopPropagation(); this.parentElement.previousElementSibling.click()">添加文件</button>
           <button class="ai-tree-edit-btn primary" onclick="event.stopPropagation(); confirmEditAiMsg(${item.nodeId})">发送</button>
           <button class="ai-tree-edit-btn" onclick="event.stopPropagation(); cancelEditAiMsg()">取消</button>
         </div>
@@ -1077,6 +1079,7 @@ function renderAiMessages() {
       ${renderItem(item)}
     </div>`;
   }).join('');
+  if (typeof renderAiSubagentPanel === 'function') container.insertAdjacentHTML('beforeend', renderAiSubagentPanel(conv));
   // Show typing indicator only when loading and there are no pending intermediate messages
   // (i.e., during the first API call before any tool results come back)
   if (!streamingDraft && isAiLoading(conv.id) && conv.messages.length > 0) {
@@ -1107,35 +1110,94 @@ function renderAiMessages() {
 
 // ═══════════ 树形导航浮窗（模仿复习浮窗，body 级可拖拽） ═══════════
 let _aiTreePanelOpen = false;
-// 编辑消息状态：记录正在内联编辑的 user 节点 id
-let _aiTreeEditingUserId = null;
-// 主消息流编辑状态：记录正在内联编辑的 user 节点 id
-let _aiMsgEditingUserId = null;
+let _aiMessageEdit = null;
 
-// ── 主消息流：编辑用户消息（编辑后发送 = 创建编辑分支并重新生成）──
-function startEditAiMsg(nodeId) {
-  _aiMsgEditingUserId = nodeId;
+function isEditingAiMessage(surface, convId, nodeId) {
+  return _aiMessageEdit?.surface === surface && _aiMessageEdit.convId === convId && _aiMessageEdit.nodeId === nodeId;
+}
+
+function renderAiMessageEditor(surface) {
   renderAiMessages();
+  if (surface === 'tree') renderAiTreePanel();
+}
+
+function startAiMessageEdit(surface, nodeId) {
+  const conv = getActiveConv();
+  const message = conv?.tree?.[nodeId];
+  if (!isAiUserQuestion(message) || isAiLoading(conv.id)) return;
+  const previousSurface = _aiMessageEdit?.surface;
+  _aiMessageEdit = {
+    surface, convId: conv.id, nodeId, text: splitAiEditContent(message).text,
+    originals: message.attachments || [], kept: (message.attachments || []).map((_, index) => index),
+    added: [], contextInserts: message.contextInserts || []
+  };
+  renderAiMessageEditor(surface === 'tree' || previousSurface === 'tree' ? 'tree' : surface);
+}
+
+function renderAiMessageEditAttachments() {
+  return `
+    <div class="ai-message-edit-files">
+      ${[
+        ..._aiMessageEdit.kept.map((index, position) => ({ name: _aiMessageEdit.originals[index].name, position, added: false })),
+        ..._aiMessageEdit.added.map((file, position) => ({ name: file.name, position, added: true }))
+      ].map(({ name, position, added }) => `
+        <span class="ai-message-edit-file">
+          <span title="${escapeAttr(name)}">${escapeHtml(name)}</span>
+          <button type="button" class="ai-tree-edit-btn" aria-label="移除 ${escapeAttr(name)}" onclick="event.stopPropagation(); removeAiMessageEditFile(${position}, ${added})">×</button>
+        </span>
+      `).join('')}
+    </div>
+    <input type="file" multiple hidden onchange="addAiMessageEditFiles(this)">
+  `;
+}
+
+function addAiMessageEditFiles(input) {
+  const edit = _aiMessageEdit;
+  if (!edit || edit.convId !== getActiveConvId()) return;
+  addAiAttachmentFiles(input.files, edit.added);
+  input.value = '';
+  renderAiMessageEditor(edit.surface);
+}
+
+function removeAiMessageEditFile(position, added) {
+  const edit = _aiMessageEdit;
+  if (!edit || edit.convId !== getActiveConvId()) return;
+  (added ? edit.added : edit.kept).splice(position, 1);
+  renderAiMessageEditor(edit.surface);
+}
+
+function cancelAiMessageEdit(surface) {
+  if (_aiMessageEdit?.surface !== surface) return;
+  _aiMessageEdit = null;
+  renderAiMessageEditor(surface);
+}
+
+async function confirmAiMessageEdit(surface, nodeId) {
+  const convId = getActiveConvId();
+  if (!isEditingAiMessage(surface, convId, nodeId) || isAiLoading(convId)) return;
+  const edit = _aiMessageEdit;
+  if (!edit.text.trim() && !edit.kept.length && !edit.added.length && !edit.contextInserts.length) {
+    if (typeof showAiToast === 'function') showAiToast('请输入消息或添加文件');
+    return;
+  }
+  cancelAiMessageEdit(surface);
+  await sendEditedMessage(nodeId, edit.text, edit);
+}
+
+function startEditAiMsg(nodeId) {
+  startAiMessageEdit('message', nodeId);
 }
 
 function cancelEditAiMsg() {
-  _aiMsgEditingUserId = null;
-  renderAiMessages();
+  cancelAiMessageEdit('message');
 }
 
-async function confirmEditAiMsg(nodeId) {
-  const input = document.getElementById('aiMsgEditInput-' + nodeId);
-  if (!input) return;
-  const text = input.value;
-  _aiMsgEditingUserId = null;
-  renderAiMessages();
-  if (text && text.trim()) {
-    await sendEditedMessage(nodeId, text);
-  }
+function confirmEditAiMsg(nodeId) {
+  return confirmAiMessageEdit('message', nodeId);
 }
 
 function onAiMsgEditKeydown(event, nodeId) {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     confirmEditAiMsg(nodeId);
   } else if (event.key === 'Escape') {
@@ -1144,33 +1206,21 @@ function onAiMsgEditKeydown(event, nodeId) {
   }
 }
 
-// 开始编辑某条 user 消息（在树浮窗中）
 function startEditAiTreeMsg(nodeId) {
-  _aiTreeEditingUserId = nodeId;
-  renderAiTreePanel();
+  startAiMessageEdit('tree', nodeId);
 }
 
-// 取消编辑
 function cancelEditAiTreeMsg() {
-  _aiTreeEditingUserId = null;
-  renderAiTreePanel();
+  cancelAiMessageEdit('tree');
 }
 
-// 确认编辑：读取输入框内容 → 创建编辑分支并发送（类似重新生成）
-async function confirmEditAiTreeMsg(nodeId) {
-  const input = document.getElementById('aiTreeEditInput-' + nodeId);
-  if (!input) return;
-  const text = input.value;
-  _aiTreeEditingUserId = null;
-  renderAiTreePanel();
-  if (text && text.trim()) {
-    await sendEditedMessage(nodeId, text);
-  }
+function confirmEditAiTreeMsg(nodeId) {
+  return confirmAiMessageEdit('tree', nodeId);
 }
 
 // 树浮窗内编辑输入框的键盘事件（Enter 发送，Esc 取消）
 function onAiTreeEditKeydown(event, nodeId) {
-  if (event.key === 'Enter' && !event.shiftKey) {
+  if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) {
     event.preventDefault();
     confirmEditAiTreeMsg(nodeId);
   } else if (event.key === 'Escape') {
@@ -1259,17 +1309,18 @@ function renderAiTreePanel() {
   // 渲染一个 user 节点的 👤 行（支持编辑模式：编辑中显示输入框 + 发送/取消）
   const renderUserLine = (userId, depth, groupActive) => {
     const user = tree[userId];
-    const editing = _aiTreeEditingUserId === userId;
+    const editing = isEditingAiMessage('tree', conv.id, userId);
     const label = editing
       ? ''
       : (groupActive ? '<span class="ai-tree-dot"></span>' : '');
     // 编辑模式：输入框 + 操作按钮
     if (editing) {
-      const rawText = typeof user.content === 'string' ? user.content : '';
       return `
-        <div class="ai-tree-edit" style="padding-left:${depth * 16}px;">
-          <textarea id="aiTreeEditInput-${userId}" class="ai-tree-edit-input" rows="2" onkeydown="onAiTreeEditKeydown(event, ${userId})">${escapeHtml(rawText)}</textarea>
+        <div class="ai-tree-edit" style="padding-left:${depth * 16}px;" onclick="event.stopPropagation()">
+          <textarea id="aiTreeEditInput-${userId}" class="ai-tree-edit-input" rows="2" oninput="_aiMessageEdit.text = this.value" onkeydown="onAiTreeEditKeydown(event, ${userId})">${escapeHtml(_aiMessageEdit.text)}</textarea>
+          ${renderAiMessageEditAttachments()}
           <div class="ai-tree-edit-actions">
+            <button type="button" class="ai-tree-edit-btn" onclick="event.stopPropagation(); this.parentElement.previousElementSibling.click()">添加文件</button>
             <button class="ai-tree-edit-btn primary" onclick="event.stopPropagation(); confirmEditAiTreeMsg(${userId})">发送</button>
             <button class="ai-tree-edit-btn" onclick="event.stopPropagation(); cancelEditAiTreeMsg()">取消</button>
           </div>
