@@ -11,6 +11,7 @@ let calendarCtxEventDate = null; // 右键菜单当前指向的日期（用于�
 const CALENDAR_WEEKDAYS = ['日', '一', '二', '三', '四', '五', '六'];
 const CALENDAR_STORAGE_KEY = 'study_calendar_events';
 const LEGACY_CALENDAR_STORAGE_KEY = 'calendar_events';
+const CALENDAR_CATEGORY_STORAGE_KEY = 'study_calendar_categories';
 
 // ── Calendar Events Data Layer ──
 const CAL_EVENT_COLORS = [
@@ -35,17 +36,173 @@ function loadCalendarEvents() {
 }
 
 function saveCalendarEvents(events) {
-  if (typeof saveData === 'function') saveData(CALENDAR_STORAGE_KEY, events);
-  else localStorage.setItem(CALENDAR_STORAGE_KEY, JSON.stringify(events));
+  if (typeof saveData === 'function') return saveData(CALENDAR_STORAGE_KEY, events) !== false;
+  localStorage.setItem(CALENDAR_STORAGE_KEY, JSON.stringify(events));
+  return true;
 }
 
 function getCalColor(key) {
   return CAL_EVENT_COLORS.find(c => c.key === key) || CAL_EVENT_COLORS[4]; // default blue
 }
 
-function addCalendarEvent(date, title, time, color, note, times, auto, location = '') {
+function normalizeCalendarCategory(value) {
+  return typeof value === 'string' ? Array.from(value.trim().normalize('NFC')).slice(0, 40).join('') : '';
+}
+
+function getCalendarEventCategories(events) {
+  return Array.isArray(events) ? events.map(ev => normalizeCalendarCategory(ev?.category)).filter(Boolean) : [];
+}
+
+function getSavedCalendarCategories() {
+  return typeof loadData === 'function' ? loadData(CALENDAR_CATEGORY_STORAGE_KEY).map(normalizeCalendarCategory).filter(Boolean) : [];
+}
+
+function getCalendarCategories(events = loadCalendarEvents()) {
+  return [...new Set([...getSavedCalendarCategories(), ...getCalendarEventCategories(events)])]
+    .sort((a, b) => a.localeCompare(b, 'zh-CN'));
+}
+
+function renderCalendarCategoryOptions(events = loadCalendarEvents(), selected) {
+  const select = document.getElementById('calEventCategory');
+  if (!select) return;
+  const value = selected ?? select.value;
+  select.replaceChildren(new Option('未分类', ''), ...getCalendarCategories(events).map(name => new Option(name, name)));
+  select.value = value;
+  if (select.selectedIndex < 0) select.value = '';
+}
+
+function renderCalendarCategoryManager() {
+  const list = document.getElementById('calCategoryList');
   const events = loadCalendarEvents();
+  const inUse = new Set(getCalendarEventCategories(events));
+  const categories = getCalendarCategories(events);
+  list.replaceChildren();
+  if (!categories.length) list.textContent = '还没有分类。';
+  for (const category of categories) {
+    const row = document.createElement('div');
+    row.className = 'cal-category-row';
+    const label = document.createElement('span');
+    label.textContent = category;
+    row.append(label);
+    if (inUse.has(category)) {
+      const usage = document.createElement('span');
+      usage.className = 'hint';
+      usage.textContent = '有事件使用';
+      row.append(usage);
+    } else {
+      const remove = document.createElement('button');
+      remove.type = 'button';
+      remove.className = 'today-timer-link';
+      remove.textContent = '移除';
+      remove.setAttribute('aria-label', '移除分类 ' + category);
+      remove.onclick = () => removeCalendarCategory(category);
+      row.append(remove);
+    }
+    list.append(row);
+  }
+}
+
+function openCalendarCategoryManager() {
+  const modal = document.getElementById('calCategoryManager');
+  renderCalendarCategoryManager();
+  document.getElementById('calCategoryStatus').textContent = '';
+  const input = document.getElementById('calNewCategory');
+  input.value = '';
+  modal.classList.add('open');
+  input.focus();
+}
+
+function closeCalendarCategoryManager() {
+  document.getElementById('calCategoryManager').classList.remove('open');
+  renderCalendarCategoryOptions();
+  document.getElementById('calManageCategories').focus();
+}
+
+function saveCalendarCategories(categories, message) {
+  const status = document.getElementById('calCategoryStatus');
+  if (!saveData(CALENDAR_CATEGORY_STORAGE_KEY, categories)) {
+    status.textContent = '分类保存失败，请重试。';
+    return false;
+  }
+  renderCalendarCategoryManager();
+  renderCalendarCategoryOptions();
+  status.textContent = message;
+  return true;
+}
+
+function addCalendarCategory(event) {
+  event.preventDefault();
+  const input = document.getElementById('calNewCategory');
+  const status = document.getElementById('calCategoryStatus');
+  const category = normalizeCalendarCategory(input.value);
+  if (!category || getCalendarCategories().includes(category)) {
+    status.textContent = category ? '已有同名分类。' : '请输入分类名称。';
+    return;
+  }
+  if (saveCalendarCategories([...getSavedCalendarCategories(), category], '已添加分类。')) input.value = '';
+}
+
+function removeCalendarCategory(category) {
+  if (getCalendarEventCategories(loadCalendarEvents()).includes(category)) {
+    renderCalendarCategoryManager();
+    document.getElementById('calCategoryStatus').textContent = '此分类已有事件使用。';
+    return;
+  }
+  saveCalendarCategories(getSavedCalendarCategories().filter(name => name !== category), '已从分类选项中移除。');
+}
+
+// Subscription tokens are bound to category names. Avoid orphaning a live
+// subscription or assigning unrelated events to a name it already serves.
+async function checkCalendarCategorySubscriptions(names) {
+  const boundAccount = localStorage.getItem('study_sync_account_id_v1');
+  const client = typeof getSupabaseClient === 'function' ? getSupabaseClient() : null;
+  if (client?.provider === 'cloudbase') return '';
+  if (!client) return boundAccount ? '无法连接日历同步账号以核对分类订阅。' : '';
+  const session = await friendsGetSession();
+  const userId = session?.user?.id;
+  if (!userId) return boundAccount || window.Sync?.enabled ? '请先登录日历同步账号，以检查分类订阅。' : '';
+  if (boundAccount && boundAccount !== userId) return '请登录当前日历数据对应的同步账号。';
+  try {
+    const { data, error } = await client.from('calendar_category_subscriptions').select('category')
+      .eq('user_id', userId).in('category', names).abortSignal(AbortSignal.timeout(8000));
+    if (error?.code === 'PGRST205') return '';
+    if (!error) return data?.length ? '分类「' + data[0].category + '」有苹果日历订阅，请先在日历订阅设置中停用。' : '';
+  } catch (_) { /* Leave the category intact when its subscription cannot be checked. */ }
+  return '无法核对分类订阅状态，请检查网络连接后重试。';
+}
+
+// The AI tool transaction snapshots both the category list and the events.
+function changeCalendarCategory(operation, name, newName) {
+  const events = loadCalendarEvents();
+  const names = getCalendarCategories(events);
+  const target = operation === 'create' ? name : newName;
+  if (operation !== 'create' && !names.includes(name)) return { ok: false, error: '未找到分类「' + name + '」。' };
+  if (target && names.includes(target)) return { ok: false, error: '已有同名分类「' + target + '」。' };
+
+  const matches = event => normalizeCalendarCategory(event.category) === name;
+  const usedCount = operation === 'create' ? 0 : events.filter(matches).length;
+  if (operation === 'delete' && usedCount) {
+    return { ok: false, error: '分类仍有 ' + usedCount + ' 个事件使用，请先改换或清空这些事件的分类。' };
+  }
+
+  const categories = getSavedCalendarCategories().filter(value => value !== name);
+  if (target) categories.push(target);
+  if (usedCount && !saveCalendarEvents(events.map(event => matches(event) ? { ...event, category: newName } : event))) {
+    return { ok: false, error: '无法保存事件分类。' };
+  }
+  if (!saveData(CALENDAR_CATEGORY_STORAGE_KEY, categories)) return { ok: false, error: '无法保存日历分类。' };
+  if (document.getElementById('calCategoryManager')?.classList.contains('open')) renderCalendarCategoryManager();
+  const selected = document.getElementById('calEventCategory')?.value;
+  renderCalendarCategoryOptions(undefined, operation === 'rename' && selected === name ? newName : selected);
+  if (usedCount && document.getElementById('calendarGrid')) renderCalendar();
+  return { ok: true, name: target || name, updatedEvents: usedCount };
+}
+
+function addCalendarEvent(date, title, time, color, note, times, auto, location = '', category = '') {
+  const events = loadCalendarEvents();
+  const normalizedCategory = normalizeCalendarCategory(category);
   const now = Date.now();
+  const id = typeof genId === 'function' ? genId() : now;
   const startTime = normalizeCalTime((times && times.start) || time);
   const repeat = (times && times.repeat === 'weekly') ? 'weekly' : 'none';
   const weekdays = repeat === 'weekly'
@@ -56,7 +213,7 @@ function addCalendarEvent(date, title, time, color, note, times, auto, location 
   const allDay = !!(times && times.allDay);
   const endDate = normalizeCalDate(times && times.endDate) || date;
   events.push({
-    id: typeof genId === 'function' ? genId() : now,
+    id,
     date,
     title: title.trim(),
     time: allDay ? '' : startTime,
@@ -67,6 +224,7 @@ function addCalendarEvent(date, title, time, color, note, times, auto, location 
     color: color || 'blue',
     note: note || '',
     location: String(location || '').trim(),
+    ...(normalizedCategory ? { category: normalizedCategory } : {}),
     repeat,
     weekdays,
     skippedDates: [],
@@ -75,8 +233,7 @@ function addCalendarEvent(date, title, time, color, note, times, auto, location 
     autoActivityType: getCalendarTimerActivityType(auto),
     createdAt: now
   });
-  saveCalendarEvents(events);
-  return now;
+  return saveCalendarEvents(events) ? id : null;
 }
 
 function updateCalendarEvent(id, updates) {
@@ -88,6 +245,11 @@ function updateCalendarEvent(id, updates) {
   if (updates.color !== undefined) ev.color = updates.color;
   if (updates.note !== undefined) ev.note = updates.note;
   if (updates.location !== undefined) ev.location = String(updates.location || '').trim();
+  if (updates.category !== undefined) {
+    const category = normalizeCalendarCategory(updates.category);
+    if (category) ev.category = category;
+    else delete ev.category;
+  }
   if (updates.allDay !== undefined) {
     ev.allDay = !!updates.allDay;
     if (ev.allDay) { ev.time = ''; ev.startTime = ''; ev.endTime = ''; ev.autoRecord = false; }
@@ -150,8 +312,7 @@ function updateCalendarEvent(id, updates) {
   // 关掉自动计入后清掉记账水位，重新开启时按当前时段重新判定
   if (ev.allDay) ev.autoRecord = false;
   if (ev.autoRecord !== true) ev.lastAutoRecordEnd = 0;
-  saveCalendarEvents(events);
-  return true;
+  return saveCalendarEvents(events);
 }
 
 function deleteCalendarEvent(id) {
@@ -296,6 +457,38 @@ function getCalendarEventsOnDate(dateStr, events) {
     if (bt) return 1;
     return (a.createdAt || 0) - (b.createdAt || 0);
   });
+}
+
+// Return one entry per occurrence that overlaps the inclusive range.
+function getCalendarEventOccurrences(events, from, to) {
+  const occurrences = [];
+  const firstDay = parseCalDate(from);
+  const lastDay = parseCalDate(to);
+  if (!firstDay || !lastDay || firstDay > lastDay) return occurrences;
+  for (const event of events) {
+    if (!isCalEventRecurring(event)) {
+      const endDate = event.endDate || event.date;
+      if (event.date <= to && endDate >= from) occurrences.push({ event, date: event.date, endDate });
+      continue;
+    }
+    const anchor = parseCalDate(event.date);
+    if (!anchor) continue;
+    const duration = getCalEventDurationDays(event);
+    const earliest = new Date(firstDay);
+    earliest.setDate(earliest.getDate() - duration);
+    anchor.setDate(anchor.getDate() - anchor.getDay());
+    const start = earliest < anchor ? anchor : earliest;
+    const skipped = new Set(Array.isArray(event.skippedDates) ? event.skippedDates : []);
+    for (const weekday of getCalEventWeekdays(event)) {
+      const day = new Date(start);
+      day.setDate(day.getDate() + (weekday - day.getDay() + 7) % 7);
+      for (; day <= lastDay; day.setDate(day.getDate() + 7)) {
+        const date = _formatCalAutoDate(day.getTime());
+        if (!skipped.has(date)) occurrences.push({ event, date, endDate: duration ? calDateOffset(date, duration) : date });
+      }
+    }
+  }
+  return occurrences;
 }
 
 // 「每周一、周三、周五」这样的重复说明；非重复事件返回空串
@@ -717,6 +910,7 @@ function renderCalendarTodoList(timerRecords = loadTimerRecords()) {
     for (const ev of dateEvents) {
       const c = getCalColor(ev.color);
       const timeLabel = formatCalEventTimeRange(ev, '—');
+      const category = normalizeCalendarCategory(ev.category);
       const recurring = isCalEventRecurring(ev);
       const autoTitle = ev.autoRecord === true
         ? ' · 自动计入：' + getTimerActivityLabel(getCalendarTimerActivityType(ev)) + ((ev.autoActivityType ? !getTimerActivityAffectsFocus(ev.autoActivityType) : ev.autoTimer === false) ? '（不计入专注时间）' : '')
@@ -725,7 +919,7 @@ function renderCalendarTodoList(timerRecords = loadTimerRecords()) {
       html += `<div class="cal-event-item" style="border-left-color:${c.dot}" title="${escapeHtml((ev.note || '') + autoTitle + repeatTitle)}"
           oncontextmenu="showCalEventContextMenu(event, ${ev.id}, '${calendarSelectedDate}')">
         <span class="cal-event-bar" style="background:${c.dot}"></span>
-        <span class="cal-event-title">${timeLabel ? `<span class="cal-event-time">${escapeHtml(timeLabel)}</span>` : ''}${escapeHtml(ev.title)}${recurring ? `<span class="cal-event-repeat" title="${escapeHtml(calEventRepeatLabel(ev) + '重复')}">🔁</span>` : ''}${ev.autoRecord === true ? '<span class="cal-event-auto" title="结束后自动计入当天计时记录">⏱</span>' : ''}</span>
+        <span class="cal-event-title">${timeLabel ? `<span class="cal-event-time">${escapeHtml(timeLabel)}</span>` : ''}${category ? `<span class="cal-event-time">[${escapeHtml(category)}]</span>` : ''}${escapeHtml(ev.title)}${recurring ? `<span class="cal-event-repeat" title="${escapeHtml(calEventRepeatLabel(ev) + '重复')}">🔁</span>` : ''}${ev.autoRecord === true ? '<span class="cal-event-auto" title="结束后自动计入当天计时记录">⏱</span>' : ''}</span>
         <button class="cal-event-btn" onclick="event.stopPropagation();openCalEventModal('${calendarSelectedDate}', ${ev.id})" title="编辑">✎</button>        <button class="cal-event-btn cal-event-del" onclick="event.stopPropagation();requestDeleteCalendarEvent(${ev.id}, '${calendarSelectedDate}')" title="${recurring ? '选择删除范围' : '删除'}">✕</button>
       </div>`;
     }
@@ -905,6 +1099,9 @@ function openCalEventModal(dateStr, eventId) {
   const autoTimerInput = document.getElementById('calEventAutoTimer');
   const noteInput = document.getElementById('calEventNote');
   const locationInput = document.getElementById('calEventLocation');
+  const events = loadCalendarEvents();
+  const ev = eventId ? events.find(item => item.id === eventId) : null;
+  renderCalendarCategoryOptions(events, normalizeCalendarCategory(ev?.category));
   const dateLabel = document.getElementById('calEventDateLabel');
   const startDateInput = document.getElementById('calEventStartDate');
   const endDateInput = document.getElementById('calEventEndDate');
@@ -920,8 +1117,6 @@ function openCalEventModal(dateStr, eventId) {
     // Edit existing event
     modalTitle.textContent = '编辑事件';
     deleteBtn.style.display = 'inline-flex';
-    const events = loadCalendarEvents();
-    const ev = events.find(e => e.id === eventId);
     if (ev) {
       titleInput.value = ev.title;
       startDateInput.value = ev.date;
@@ -1138,6 +1333,7 @@ function confirmCalDeleteChoice(scope) {
 
 function submitCalEvent() {
   const location = document.getElementById('calEventLocation').value.trim();
+  const category = normalizeCalendarCategory(document.getElementById('calEventCategory')?.value);
   const titleInput = document.getElementById('calEventTitle');
   const startInput = document.getElementById('calEventStartTime');
   const endInput = document.getElementById('calEventEndTime');
@@ -1182,11 +1378,11 @@ function submitCalEvent() {
 
   if (calendarEditingEventId) {
     updateCalendarEvent(calendarEditingEventId, {
-      title, location, startTime, endTime, endDate, allDay, color, note: noteInput.value.trim(), repeat, weekdays, date: anchorDate, ...auto
+      title, location, category, startTime, endTime, endDate, allDay, color, note: noteInput.value.trim(), repeat, weekdays, date: anchorDate, ...auto
     });
   } else {
     addCalendarEvent(anchorDate, title, startTime, color, noteInput.value.trim(),
-      { start: startTime, end: endTime, endDate, allDay, repeat, weekdays }, auto, location);
+      { start: startTime, end: endTime, endDate, allDay, repeat, weekdays }, auto, location, category);
   }
 
   // 新增/修改后立刻安排自动巡检，无需等待设置页开关

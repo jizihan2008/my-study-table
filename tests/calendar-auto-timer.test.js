@@ -326,12 +326,27 @@ test('addCalendarEvent 保存时间段与自动计入开关', () => {
     { start: '09:00', end: '10:00' }, { autoRecord: true, autoTimer: false });
   assert.equal(typeof id, 'number');
   const ev = getEvents()[0];
+  assert.equal(id, ev.id);
   assert.equal(ev.title, '英语听力');
   assert.equal(ev.startTime, '09:00');
   assert.equal(ev.endTime, '10:00');
   assert.equal(ev.autoRecord, true);
   assert.equal(ev.autoTimer, false);
   assert.equal(ev.color, 'green');
+});
+
+test('range lookup includes overlapping multi-day occurrences once and excludes skipped starts', () => {
+  const { ctx } = createContext();
+  const events = [
+    { id: 1, date: '2026-03-02', endDate: '2026-03-03', repeat: 'weekly', weekdays: [1], skippedDates: ['2026-03-16'] },
+    { id: 2, date: '2026-03-09', endDate: '2026-03-12' }
+  ];
+  const occurrences = ctx.getCalendarEventOccurrences(events, '2026-03-10', '2026-03-24');
+  assert.deepEqual(Array.from(occurrences, ({ event, date, endDate }) => [event.id, date, endDate]), [
+    [1, '2026-03-09', '2026-03-10'],
+    [1, '2026-03-23', '2026-03-24'],
+    [2, '2026-03-09', '2026-03-12']
+  ]);
 });
 
 test('addCalendarEvent 兼容旧调用签名（单时间点、无自动计入）', () => {

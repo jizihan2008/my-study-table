@@ -802,26 +802,38 @@ test('calendar opens on today and a weekly event can drop a single day', async (
 });
 
 test('calendar event tools expose the schedule to the conversation AI', async () => {
+  await page.waitForFunction(() => typeof addCalendarEvent === 'function' && typeof executeToolCallStructured === 'function');
   const result = await page.evaluate(async () => {
     const call = async (action, params) => {
       const res = await executeToolCallStructured(action, params, {});
-      return { ok: res.ok, text: res.text, risk: getAiToolMetadata(action, params).risk };
+      return { ok: res.ok, text: res.text, data: res.data, risk: getAiToolMetadata(action, params).risk };
     };
     localStorage.setItem('study_calendar_events', '[]');
+    localStorage.setItem('study_calendar_categories', JSON.stringify(['课程', '考试']));
     localStorage.setItem('study_timer_records', '[]');
 
+    const categories = await call('list_calendar_categories', {});
+    const categoryToolExposed = selectAiToolsForConversation({ _toolGroups: ['calendar'] }, false, false).has('list_calendar_categories');
     const created = await call('create_calendar_event', {
       title: 'E2E AI 体育课', date: '2026-03-09', startTime: '09:00', endTime: '10:00',
-      weekdays: [1, 3, 5], color: 'green', note: '带泳帽'
+      weekdays: [1, 3, 5], color: 'green', note: '带泳帽', location: '游泳馆', category: '课程'
     });
-    const eventId = (JSON.parse(localStorage.getItem('study_calendar_events'))[0] || {}).id;
+    const storedId = (JSON.parse(localStorage.getItem('study_calendar_events'))[0] || {}).id;
+    const eventId = created.data?.id;
 
     const listedAll = await call('list_calendar_events', {});
     const listedDay = await call('list_calendar_events', { date: '2026-03-11' });
     const listedMiss = await call('list_calendar_events', { date: '2026-03-10' });
-    const updated = await call('update_calendar_event', { id: eventId, endTime: '10:30', autoRecord: true });
+    const ranged = await call('list_calendar_events', { from: '2026-03-11', to: '2026-03-16', category: '课程', search: '游泳馆', pageSize: 2 });
+    const filteredOut = await call('list_calendar_events', { date: '2026-03-11', category: '课程', search: '不同地点' });
+    const badCategory = await call('update_calendar_event', { id: eventId, category: '不存在', location: '不该写入' });
+    const updated = await call('update_calendar_event', { id: eventId, endTime: '10:30', autoRecord: true, category: '考试', location: '新场馆' });
+    const reclassified = await call('list_calendar_events', { date: '2026-03-11', category: '考试', search: '新场馆' });
+    const cleared = await call('update_calendar_event', { id: eventId, category: '', location: '' });
+    const uncategorized = loadCalendarEvents().find(event => event.id === eventId);
     const deletedDay = await call('delete_calendar_event', { id: eventId, date: '2026-03-11' });
     const listedSkipped = await call('list_calendar_events', { date: '2026-03-11' });
+    const rangeSkipped = await call('list_calendar_events', { from: '2026-03-11', to: '2026-03-16', category: '' });
     const restoredDay = await call('restore_calendar_event_date', { id: eventId, date: '2026-03-11' });
     const listedRestored = await call('list_calendar_events', { date: '2026-03-11' });
     const deletedAll = await call('delete_calendar_event', { id: eventId });
@@ -832,23 +844,40 @@ test('calendar event tools expose the schedule to the conversation AI', async ()
 
     const stored = JSON.parse(localStorage.getItem('study_calendar_events') || '[]');
     return {
-      created, listedAll, listedDay, listedMiss, updated, deletedDay, listedSkipped,
+      categories, categoryToolExposed, created, storedId, listedAll, listedDay, listedMiss, ranged, filteredOut, badCategory,
+      updated, reclassified, cleared, uncategorized, deletedDay, listedSkipped, rangeSkipped,
       restoredDay, listedRestored, deletedAll, invalidWeekday, invalidDate, missingEvent,
       stored
     };
   });
 
   expect(result.created.ok).toBe(true);
+  expect(result.created.data.id).toBe(result.storedId);
+  expect(result.categories.risk).toBe('read');
+  expect(result.categoryToolExposed).toBe(true);
+  expect(result.categories.data.categories).toEqual(expect.arrayContaining(['课程', '考试']));
   expect(result.created.text).toContain('每周一、三、五');
   expect(result.listedAll.text).toContain('[ID:');
   expect(result.listedAll.text).toContain('E2E AI 体育课');
   expect(result.listedDay.text).toContain('每周一、三、五');   // 2026-03-11 是周三
   expect(result.listedMiss.text).toContain('没有安排');
+  expect(result.ranged.text).toContain('共 3 个，第 1/2 页');
+  expect(result.ranged.text).toContain('2026-03-11 09:00-10:00');
+  expect(result.ranged.text).toContain('2026-03-13 09:00-10:00');
+  expect(result.ranged.text).toContain('分类：课程，地点：游泳馆');
+  expect(result.filteredOut.text).toContain('没有安排');
+  expect(result.badCategory.ok).toBe(false);
   expect(result.updated.text).toContain('结束时间');
+  expect(result.reclassified.text).toContain('分类：考试，地点：新场馆');
+  expect(result.cleared.ok).toBe(true);
+  expect(result.uncategorized.category).toBeUndefined();
+  expect(result.uncategorized.location).toBe('');
 
   expect(result.deletedDay.ok).toBe(true);
   expect(result.deletedDay.text).toContain('这一天的场次');
   expect(result.listedSkipped.text).toContain('没有安排');
+  expect(result.rangeSkipped.text).toContain('共 2 个');
+  expect(result.rangeSkipped.text).not.toContain('2026-03-11 09:00');
   expect(result.restoredDay.ok).toBe(true);
   expect(result.listedRestored.text).toContain('E2E AI 体育课');
 
@@ -862,4 +891,57 @@ test('calendar event tools expose the schedule to the conversation AI', async ()
   expect(result.invalidDate.text).toContain('不是有效日期');
   expect(result.missingEvent.ok).toBe(false);
   expect(result.missingEvent.text).toContain('未找到');
+});
+
+test('AI can manage calendar categories without deleting events or orphaning active subscriptions', async () => {
+  await page.waitForFunction(() => typeof changeCalendarCategory === 'function' && typeof executeToolCallStructured === 'function');
+  const outcome = await page.evaluate(async () => {
+    const getClient = getSupabaseClient;
+    const getSession = friendsGetSession;
+    getSupabaseClient = () => null;
+    const call = (action, params, policy = 'allow') => executeToolCallStructured(action, params, { conv: { _deletePolicy: policy } });
+    try {
+      localStorage.setItem('study_calendar_events', '[]');
+      localStorage.setItem('study_calendar_categories', '[]');
+      const created = await call('create_calendar_category', { name: '课程' });
+      const duplicate = await call('create_calendar_category', { name: ' 课程 ' });
+      const event = await call('create_calendar_event', { title: '体育课', date: '2026-11-09', category: '课程' });
+      const blockedUsed = await call('delete_calendar_category', { name: '课程' });
+      const renamed = await call('rename_calendar_category', { name: '课程', newName: '运动' });
+      const afterRename = loadCalendarEvents()[0];
+      const cleared = await call('update_calendar_event', { id: event.data.id, category: '' });
+      const blockedPolicy = await call('delete_calendar_category', { name: '运动' }, 'block');
+      const categoriesAfterBlock = getCalendarCategories();
+      friendsGetSession = async () => ({ user: { id: 'owner' } });
+      getSupabaseClient = () => ({
+        provider: 'supabase',
+        from: () => ({ select: () => ({ eq: () => ({
+          in: (_, names) => ({ abortSignal: async () => ({ data: names.includes('运动') ? [{ category: '运动' }] : [], error: null }) })
+        }) }) })
+      });
+      const blockedSubscription = await call('delete_calendar_category', { name: '运动' });
+      const blockedRename = await call('rename_calendar_category', { name: '运动', newName: '锻炼' });
+      getSupabaseClient = () => null;
+      const removed = await call('delete_calendar_category', { name: '运动' });
+      return { created, duplicate, id: event.data.id, blockedUsed, renamed, afterRename, cleared, blockedPolicy, categoriesAfterBlock,
+        blockedSubscription, blockedRename, removed, categories: getCalendarCategories(), events: loadCalendarEvents() };
+    } finally {
+      getSupabaseClient = getClient;
+      friendsGetSession = getSession;
+    }
+  });
+  expect(outcome.created.ok).toBe(true);
+  expect(outcome.duplicate.ok).toBe(false);
+  expect(outcome.blockedUsed.text).toContain('1 个事件使用');
+  expect(outcome.renamed.data.updatedEvents).toBe(1);
+  expect(outcome.afterRename).toMatchObject({ id: outcome.id, title: '体育课', category: '运动' });
+  expect(outcome.cleared.ok).toBe(true);
+  expect(outcome.blockedPolicy.text).toContain('完全拦截删除');
+  expect(outcome.categoriesAfterBlock).toEqual(['运动']);
+  expect(outcome.blockedSubscription.text).toContain('有苹果日历订阅');
+  expect(outcome.blockedRename.text).toContain('有苹果日历订阅');
+  expect(outcome.removed.ok).toBe(true);
+  expect(outcome.categories).toEqual([]);
+  expect(outcome.events).toHaveLength(1);
+  expect(outcome.events[0].id).toBe(outcome.id);
 });

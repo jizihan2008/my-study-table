@@ -5586,9 +5586,17 @@ body.ai-message-immersive-open { overflow: hidden; }
 /* ═══════════ Calendar View ═══════════ */
 .calendar-nav {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 8px;
 }
+#section-calendar > .card > .section-header { flex-wrap: wrap; gap: 8px; }
+#calSubscriptionModal .modal { height: auto; max-height: 90dvh; }
+#calSubscriptionModal .modal-body { flex: 0 1 auto; min-height: 0; }
+#calSubscriptionModal .cal-event-time-field { flex: 0 0 auto; }
+.cal-category-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 6px 0; }
+.cal-category-row > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+.cal-category-row > :last-child { flex-shrink: 0; }
 .calendar-title {
   font-size: 15px;
   font-weight: 600;

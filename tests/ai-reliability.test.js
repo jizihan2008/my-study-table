@@ -25,7 +25,7 @@ function harness() {
     clearAiStreamingDraft() {}, setAiStreamingDraft() {}, safeSaveAiConvs() {}, sendAiNotification() {},
     renderAiMessages() {}, renderTodos() {}, renderLinks() {}, renderNotes() {}, renderToday() {},
     isDebugMode: () => false, buildDeepThinkParams: () => ({}), getMaxFocusCount: () => 3,
-    automations: [], saveData() { return true; }, startAutomationTimer() {},
+    automations: [], saveData() { return true; }, startAutomationTimer() {}, closeAiConvTabContextMenu() {},
     setTimeout, clearTimeout
   };
   vm.createContext(ctx);
@@ -1120,7 +1120,8 @@ test('tool validation rejects unknown fields, invalid dates and quest dependency
   assert.equal(ctx.validateAiToolCall('quest_create', { lineId: 10, title: 'new', deps: [999] }).ok, false);
 });
 
-test('delete policy (block / confirm / allow) decides whether destructive tools can run', async () => {
+for (const [action, params] of [['delete_todo', { id: 1 }], ['delete_calendar_category', { name: '课程' }]]) {
+test('delete policy (block / confirm / allow) applies to ' + action, async () => {
   const okResult = { ok: true, status: 'success', text: '✅ deleted', durationMs: 0 };
   async function runWithPolicy(policy, confirmAnswer) {
     const ctx = harness();
@@ -1129,7 +1130,7 @@ test('delete policy (block / confirm / allow) decides whether destructive tools 
     let calls = 0;
     let executions = 0;
     let asked = 0;
-    ctx.callAiApi = async () => ++calls === 1 ? result([{ action: 'delete_todo', params: { id: 1 } }]) : result();
+    ctx.callAiApi = async () => ++calls === 1 ? result([{ action, params }]) : result();
     ctx.executeToolCallStructured = async () => { executions++; return okResult; };
     ctx.sendNotification = (title, body, tag, target) => {
       asked++;
@@ -1163,12 +1164,13 @@ test('delete policy (block / confirm / allow) decides whether destructive tools 
 
   const bannerCtx = harness();
   const pending = bannerCtx.confirmAiDestructiveCalls(
-    [{ tc: { action: 'delete_todo', params: { id: 9 } }, index: 0 }],
+    [{ tc: { action, params }, index: 0 }],
     { id: 'banner-conv', title: '测试对话' }
   );
   const bannerHtml = bannerCtx.getAiDeleteConfirmationHtml('banner-conv');
   assert.match(bannerHtml, /AI 请求删除权限/);
-  assert.match(bannerHtml, /delete_todo/);
+  assert.ok(bannerHtml.includes(action));
+  if (params.name) assert.ok(bannerHtml.includes(params.name));
   bannerCtx.resolveAiDeleteConfirmation('banner-conv', false);
   assert.equal((await pending).ok, false);
 
@@ -1178,6 +1180,7 @@ test('delete policy (block / confirm / allow) decides whether destructive tools 
   assert.equal(allowed.asked, 0);
   assert.equal(allowed.output.outcomes[0].status, 'success');
 });
+}
 
 test('native function tools use strict schemas and native calls preserve call IDs', () => {
   const ctx = harness();

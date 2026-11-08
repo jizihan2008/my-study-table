@@ -200,7 +200,8 @@ My Study Table 是一款面向学习者的多功能桌面管理工具，集成�
 - **仅删除这一天** — 右键重复事件可只删掉当前这一天的场次，其它日期保留；被删的那天在详情里显示可一键「恢复」
 - **事件圆点** — 日历格子显示彩色事件圆点（最多 4 个 + N），开启自动计入的事件带 ⏱ 标记
 - **编辑/删除** — 点击事件可编辑；右键可编辑 / 仅删除这一天 / 删除整个事件（删除事件不会删除已生成的计时记录）
-- **AI 可读写** — 对话 AI 可通过 list_calendar_events / create_calendar_event / update_calendar_event / delete_calendar_event / restore_calendar_event_date 查询和增删改日程（「对话设置 → 给 AI 的接口组 → 日历日程」）
+- **AI 可读写** — 在「对话设置 → 给 AI 的接口组 → 日历日程」启用。AI 可读取已有分类，按日期范围、分类或地点查日程，也可在新建和编辑时设置分类与地点。范围查询按实际场次展开每周重复事件。
+- **苹果日历只读订阅** — 「日历 → 订阅到苹果日历」生成私密链接，支持日程的全天、跨天、每周重复与跳过场次；支持重置和停用。需管理员先部署订阅服务，见 [部署与使用说明](CALENDAR-SUBSCRIPTION.md)。
 
 ### 日期详情
 - **默认选中今天** — 打开日历自动选中并展开今天（本次会话内保留你的切换）
@@ -322,7 +323,7 @@ AI 可通过 `<tool_call>` 标签直接操作应用数据：
 **自动化**: schedule_automation、list_automations、delete_automation  
 **记忆**: list_memories、get_memory_detail  
 **复习与习惯**: get_review_status、get_habits_status  
-**日历日程**: list_calendar_events、create_calendar_event、update_calendar_event、delete_calendar_event、restore_calendar_event_date
+**日历日程**: list_calendar_categories、create_calendar_category、rename_calendar_category、delete_calendar_category、list_calendar_events、create_calendar_event、update_calendar_event、delete_calendar_event、restore_calendar_event_date。重命名会同时更新关联事件。删除只允许未使用的分类，并受对话的删除策略约束。有苹果日历订阅的分类需先停用订阅。
 **搜索**: web_search（支持 5 种引擎）
 
 > 工具按「接口组」下发给 AI，可在 AI 页的「接口组」胶囊或对话设置里逐组开关；删除类操作另有 block / confirm / allow 三档删除策略。

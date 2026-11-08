@@ -6,18 +6,19 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v297';
+const VERSION = 'mst-v304';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
 const PRECACHE_URLS = [
+  "./js/calendar-subscription.js?v=20261108-category-r1",
   "./",
   "./index.html",
   "./reset-site-data.html",
   "./manifest.webmanifest?v=20260926-icon-v3",
   "./icons/icon-192-v3.png",
   "./icons/apple-touch-icon-v3.png",
-  "./css/style.css?v=20261104-stats-period-review",
+  "./css/style.css?v=20261108-category-manager-r1",
   "./css/workspace.css?v=20261102-note-controls-align",
   "./css/appearance.css?v=20261102-ipad-top-edge-r1",
   "./lib/katex/katex.min.css",
@@ -56,12 +57,12 @@ const PRECACHE_URLS = [
   "./js/ai-attach.js?v=20261102-ai-trash-r1",
   "./js/ai-render.js?v=20261103-agents-r1",
   "./js/web-access.js?v=20261016-web-r1",
-  "./js/ai-tools.js?v=20261104-focus-unlimited-r1",
+  "./js/ai-tools.js?v=20261108-ai-calendar-categories-r1",
   "./js/ai-search.js?v=20261017-ai-notify-r1",
   "./js/ai-client.js?v=20260914-r3",
   "./js/ai-stream.js?v=20261012-protocol-r2",
   "./js/ai-agents.js?v=20261103-agent-settings-r2",
-  "./js/ai-api.js?v=20261103-agents-r1",
+  "./js/ai-api.js?v=20261108-ai-calendar-categories-r1",
   "./js/ai-send.js?v=20261019-ipad-send-r1",
   "./js/ai-float.js?v=20261028-ai-float-r3",
   "./js/skills.js?v=20261010-r1",
@@ -74,7 +75,7 @@ const PRECACHE_URLS = [
   "./js/habit-status-text.js?v=20260920-r1",
   "./js/todo-queue.js?v=20261104-todo-batch-r1",
   "./js/storage-usage.js?v=20261014-idb-r1",
-  "./js/settings.js?v=20261104-focus-unlimited-r1",
+  "./js/settings.js?v=20261108-category-manager-r1",
   "./js/utils.js?v=20261020-fold-menu-r1",
   "./lib/qq-chat-media.js?v=20261017-images-r1",
   "./js/qq-chats.js?v=20261017-images-r1",
@@ -87,7 +88,7 @@ const PRECACHE_URLS = [
   "./js/books-annot.js?v=20260914-r5",
   "./js/keywords.js?v=20260818-r1",
   "./js/books-study.js?v=20260821-r2",
-  "./js/calendar.js?v=20261103-calendar-timer-r1",
+  "./js/calendar.js?v=20261108-ai-calendar-categories-r1",
   "./js/taskline.js?v=20261012-focus",
   "./js/timer.js?v=20261104-stats-period-review",
   "./js/habits.js?v=20261019-habit-debug-r1",
@@ -111,7 +112,7 @@ const PRECACHE_URLS = [
   "./js/sync-diff.js?v=20261008-r1",
   "./js/sync-collections.js?v=20261014-idb-r1",
   "./js/sync-dom.js?v=20260930-r1",
-  "./js/sync.js?v=20261029-sync-refresh-r1",
+  "./js/sync.js?v=20261108-category-manager-r1",
   "./js/sync-logs.js?v=20261103-agents-r1",
   "./js/bootstrap.js?v=20261014-idb-r1",
   "./js/desktop-pet.js?v=20261005-r1",

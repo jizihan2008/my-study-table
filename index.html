@@ -21,7 +21,7 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261104-stats-period-review">
+<link rel="stylesheet" href="css/style.css?v=20261108-category-manager-r1">
 <link rel="stylesheet" href="css/workspace.css?v=20261102-note-controls-align">
 <link rel="stylesheet" href="css/appearance.css?v=20261102-ipad-top-edge-r1">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
@@ -590,6 +590,8 @@
           <span class="calendar-title" id="calendarTitle">2026年 7月</span>
           <button class="calendar-nav-btn" onclick="calendarNextMonth()" title="下月">›</button>
           <button class="calendar-today-btn" onclick="calendarGoToday()" title="回到今天">今天</button>
+          <button type="button" id="calManageCategories" class="calendar-today-btn" onclick="openCalendarCategoryManager()">管理分类</button>
+          <button class="calendar-today-btn" onclick="CalendarSubscription.open()">订阅到苹果日历</button>
         </div>
       </div>
       <div class="card-scroll">
@@ -788,6 +790,32 @@
   </div>
 </div>
 
+<div class="modal-overlay" id="calSubscriptionModal" onclick="CalendarSubscription.close()">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="calSubscriptionTitle" onclick="event.stopPropagation()" style="max-width:520px;">
+    <div class="modal-header">
+      <span class="modal-title" id="calSubscriptionTitle">订阅 MST 日程</span>
+      <button class="modal-close" aria-label="关闭订阅设置" onclick="CalendarSubscription.close()">×</button>
+    </div>
+    <div class="modal-body">
+      <p class="hint">在苹果日历查看 MST 日程，修改请回到 MST。包含日程标题、时间、地点和备注；不包含待办截止、计时记录等日历角标。</p>
+      <p class="hint">每周重复日程提供过去一年至未来两年的场次，范围随刷新滚动。苹果端按自身频率刷新。</p>
+      <label class="cal-event-time-field"><span>订阅范围</span><select id="calSubscriptionScope" class="cal-event-input" onchange="CalendarSubscription.selectScope()" disabled><option value="">全部日程</option></select></label>
+      <label class="cal-event-time-field"><span>日程时区</span><input id="calSubscriptionTimezone" class="cal-event-input" value="Asia/Shanghai" placeholder="Asia/Shanghai"></label>
+      <details style="margin-top:12px;"><summary>订阅服务设置</summary>
+        <label class="cal-event-time-field"><span>订阅服务地址（由管理员提供）</span><input id="calSubscriptionEndpoint" class="cal-event-input" type="url" placeholder="https://…/functions/v1/calendar-feed"></label>
+      </details>
+      <p id="calSubscriptionStatus" class="hint" role="status" aria-live="polite" style="margin:12px 0;"></p>
+      <label class="cal-event-time-field"><span>私密订阅链接（持有者可查看日程，请勿转发）</span><input id="calSubscriptionLink" class="cal-event-input" readonly autocomplete="off" spellcheck="false" onclick="this.select()"></label>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button id="calSubscriptionCreate" class="btn-save-settings" style="width:auto;margin:0;" onclick="CalendarSubscription.create()">生成订阅链接</button>
+        <button id="calSubscriptionCopy" class="btn-save-settings" style="width:auto;margin:0;" onclick="CalendarSubscription.copy()" disabled>复制链接</button>
+        <button id="calSubscriptionRevoke" class="calendar-today-btn" onclick="CalendarSubscription.revoke()" disabled>停用订阅</button>
+      </div>
+      <p class="hint" style="margin-top:12px;">iPhone：日历 → 日历 → 添加日历 → 添加订阅日历，粘贴链接。账户可选 iCloud。</p>
+    </div>
+  </div>
+</div>
+
 <!-- Calendar Event Modal -->
 <div class="modal-overlay" id="calEventModal" onclick="closeCalEventModal()">
   <div class="modal" onclick="event.stopPropagation()" style="max-width:440px;">
@@ -861,11 +889,29 @@
         <div id="calEventColorPicker"></div>
       </div>
       <input type="text" id="calEventLocation" class="cal-event-input" aria-label="地点（可选）" placeholder="地点（可选，如教室、会议室或线上链接）" maxlength="200" onkeydown="if(event.key==='Enter')submitCalEvent()">
+      <label class="cal-event-time-field"><span>分类</span><select id="calEventCategory" class="cal-event-input"><option value="">未分类</option></select></label>
       <textarea id="calEventNote" class="cal-event-input" placeholder="备注（可选）" rows="2" maxlength="300"></textarea>
       <div class="cal-event-actions">
         <button class="cal-event-save-btn" onclick="submitCalEvent()">保存</button>
         <button class="cal-event-delete-btn" id="calEventDeleteBtn" onclick="deleteCalEventFromModal()" style="display:none;">删除事件</button>
       </div>
+    </div>
+  </div>
+</div>
+
+<div class="modal-overlay" id="calCategoryManager" onclick="closeCalendarCategoryManager()" onkeydown="if(event.key==='Escape'&&!event.isComposing){event.stopPropagation();closeCalendarCategoryManager()}">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="calCategoryTitle" onclick="event.stopPropagation()" style="max-width:420px;height:auto;">
+    <div class="modal-header">
+      <span class="modal-title" id="calCategoryTitle">管理日历分类</span>
+      <button type="button" class="modal-close" aria-label="关闭分类管理" onclick="closeCalendarCategoryManager()">×</button>
+    </div>
+    <div class="modal-body">
+      <div id="calCategoryList" aria-label="已有分类"></div>
+      <form class="cal-event-time-row" onsubmit="addCalendarCategory(event)">
+        <label class="cal-event-time-field"><span>新分类名称</span><input id="calNewCategory" class="cal-event-input" maxlength="40" placeholder="例如：课程、考试"></label>
+        <button type="submit" class="today-timer-link">添加分类</button>
+      </form>
+      <div id="calCategoryStatus" class="hint" role="status"></div>
     </div>
   </div>
 </div>
@@ -1898,12 +1944,12 @@
 <script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261102-ai-trash-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261104-focus-unlimited-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261108-ai-calendar-categories-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-client.js?v=20260914-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
 <script type="application/x-study-script" data-app-src="js/ai-agents.js?v=20261103-agent-settings-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261103-agents-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261108-ai-calendar-categories-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261019-ipad-send-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261028-ai-float-r3"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
@@ -1916,7 +1962,7 @@
 <script type="application/x-study-script" data-app-src="js/habit-status-text.js?v=20260920-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261104-todo-batch-r1"></script>
 <script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261014-idb-r1"></script>
-<script type="application/x-study-script" data-app-src="js/settings.js?v=20261104-focus-unlimited-r1"></script>
+<script type="application/x-study-script" data-app-src="js/settings.js?v=20261108-category-manager-r1"></script>
 <script type="application/x-study-script" data-app-src="js/utils.js?v=20261020-fold-menu-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
 <script type="application/x-study-script" data-app-src="lib/qq-chat-media.js?v=20261017-images-r1"></script>
@@ -1936,7 +1982,8 @@
 <script type="application/x-study-script" data-app-src="js/books-annot.js?v=20260914-r5"></script>
 <script type="application/x-study-script" data-app-src="js/keywords.js?v=20260818-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
-<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261103-calendar-timer-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261108-ai-calendar-categories-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar-subscription.js?v=20261108-category-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
 <script type="application/x-study-script" data-app-src="js/timer.js?v=20261104-stats-period-review"></script>
 <script type="application/x-study-script" data-app-src="js/habits.js?v=20261019-habit-debug-r1"></script>
@@ -1963,7 +2010,7 @@
 <script type="application/x-study-script" data-app-src="js/sync-diff.js?v=20261008-r1"></script>
 <script type="application/x-study-script" data-app-src="js/sync-collections.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/sync-dom.js?v=20260930-r1"></script>
-<script type="application/x-study-script" data-app-src="js/sync.js?v=20261029-sync-refresh-r1"></script>
+<script type="application/x-study-script" data-app-src="js/sync.js?v=20261108-category-manager-r1"></script>
 <!-- 日志类大数据独立同步通道（gzip 压缩 + 分片 + 配额，依赖 sync.js 的 Sync.enabled） -->
 <script type="application/x-study-script" data-app-src="js/sync-logs.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bootstrap.js?v=20261014-idb-r1"></script>

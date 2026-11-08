@@ -930,7 +930,8 @@ function resolveAiDeleteConfirmation(convId, allowed) {
 async function confirmAiDestructiveCalls(calls, conv) {
   const lines = calls.map(({ tc }) => {
     const params = tc.params || {};
-    const target = params.id ?? params.todoId ?? params.noteId ?? params.skillId ?? params.linkId ?? params.ids ?? '';
+    const target = tc.action === 'delete_calendar_category' ? params.name
+      : params.id ?? params.todoId ?? params.noteId ?? params.skillId ?? params.linkId ?? params.ids ?? '';
     const label = Array.isArray(target) ? target.join('、') : String(target ?? '');
     return `• ${tc.action}${label ? '（目标 ' + label + '）' : ''}`;
   });

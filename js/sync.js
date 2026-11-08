@@ -47,6 +47,7 @@
     'study_books_v1',          // 教材书架
     'study_books_meta',        // 教材元数据
     'study_calendar_events',   // 日历事件
+    'study_calendar_categories', // 自定义日历分类
     'study_checkin',           // 打卡记录
     'study_stats',             // 学习统计
     'study_todo_queue',        // 待办队列
@@ -76,7 +77,7 @@
     { id: 'links', label: '快捷链接', keys: ['study_links_v3', 'study_quick_access', 'study_links_archive'] },
     { id: 'habits', label: '习惯与打卡', keys: ['study_habits_v2', 'study_habits', 'study_habits_v1', 'study_checkin', 'study_habits_archive'] },
     { id: 'books', label: '教材', keys: ['study_books_v1', 'study_books_meta', 'study_bk_quiz_state_v1'] },
-    { id: 'calendar', label: '日历', keys: ['study_calendar_events'] },
+    { id: 'calendar', label: '日历', keys: ['study_calendar_events', 'study_calendar_categories'] },
     { id: 'timer', label: '计时记录', keys: ['study_timer_records', 'study_timer_activity_types', 'study_timer_live_state'] },
     { id: 'taskline', label: '任务线与目标', keys: ['study_taskline_v1', 'study_longterm_goals', 'study_today_focus'] },
     { id: 'stats', label: '学习统计', keys: ['study_stats'] },
@@ -139,6 +140,7 @@
     'study_books_v1': '教材书架',
     'study_books_meta': '教材元数据',
     'study_calendar_events': '日历事件',
+    'study_calendar_categories': '日历分类',
     'study_checkin': '打卡记录',
     'study_stats': '学习统计',
     'study_today_focus': '今日聚焦',

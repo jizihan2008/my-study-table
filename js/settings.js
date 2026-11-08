@@ -790,6 +790,7 @@ const SYNC_CONFLICT_CATEGORIES = {
   study_books_meta: { id: 'books', label: '教材' },
   study_bk_quiz_state_v1: { id: 'books', label: '教材' },
   study_calendar_events: { id: 'calendar', label: '日历事件' },
+  study_calendar_categories: { id: 'calendar', label: '日历分类' },
   study_links_v3: { id: 'links', label: '快捷链接' },
   study_quick_access: { id: 'links', label: '快捷链接' },
   study_taskline_v1: { id: 'planning', label: '学习规划' },
@@ -3422,7 +3423,7 @@ const MIGRATION_KEYS = [
   // 教材
   'study_books_v1', 'study_books_meta', 'study_bk_explain_logs_v1', 'study_bk_quiz_state_v1',
   // 日历 / 统计 / 目标
-  'study_calendar_events', 'study_stats', 'study_longterm_goals', 'study_quick_access',
+  'study_calendar_events', 'study_calendar_categories', 'study_stats', 'study_longterm_goals', 'study_quick_access',
   'study_translation_history_v1', 'study_translation_cet4_progress_v1', 'study_translation_cet6_progress_v1',
   // 打卡 / 今日 / 链接 / AI
   'study_checkin', 'study_today_focus', 'study_todo_queue', 'study_links_v3', 'study_ai_convs', 'study_ai_memory', 'study_ai_skills_v1',
