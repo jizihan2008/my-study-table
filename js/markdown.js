@@ -433,6 +433,9 @@
     installCollapsibleBlocks(md);
     installImportant(md);
 
+    md.renderer.rules.text = (tokens, index) => md.utils.escapeHtml(tokens[index].content)
+      .replace(/\t+/g, tabs => '<span class="note-inline-tab">' + tabs + '</span>');
+
     function mapSourceLines(tokens, offset = 0) {
       tokens.forEach(token => {
         if (token.meta?.bodyTokens) mapSourceLines(token.meta.bodyTokens, offset);

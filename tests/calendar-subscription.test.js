@@ -182,3 +182,57 @@ test('category tokens isolate event membership and can be revoked independently 
   const health = await handler(new Request('https://feed.example?health=categories'));
   assert.equal((await health.json()).categories, true);
 });
+
+test('todo deadline tokens serve only that owner’s active deadlines as stable all-day events', async () => {
+  const { createFeedHandler, hashToken } = await api;
+  const token = 'due-' + 'a'.repeat(64);
+  const hash = await hashToken(token);
+  const key = 'study_todos_v2';
+  const todoPrefix = 'mst:item:v1:' + key + ':';
+  const task = (id, text, dueDate, done = false) => ({ id, text, dueDate, done, content: 'Private details' });
+  const legacy = [task('a', 'Old name', '2026-11-05'), task('b', 'Deleted task', '2026-11-07'),
+    task('c', 'Completed yesterday', '2026-11-07', true), task('d', 'Completed today', '2026-11-08', true),
+    task('e', 'No deadline', ''), task('f', 'Invalid deadline', '2026-02-30')];
+  const changed = task('a', 'Renamed overdue task', '2026-11-06');
+  const items = [
+    { key: todoPrefix + 'a', value: { item: changed } },
+    { key: todoPrefix + 'b', value: { deleted: true } }
+  ];
+  let active = true;
+  const handler = createFeedHandler({ url: 'https://db.example', serviceKey: 'server-only',
+    now: () => Date.parse('2026-11-07T16:15:00Z'),
+    fetcher: async address => {
+      const url = new URL(address);
+      const params = url.searchParams;
+      if (params.get('limit') === '0') return Response.json([]);
+      if (url.pathname.endsWith('/calendar_todo_due_subscriptions')) {
+        return Response.json(active && params.get('token_hash') === 'eq.' + hash ? [{ user_id: 'owner', timezone: 'Asia/Shanghai' }] : []);
+      }
+      assert.equal(url.pathname, '/rest/v1/user_data');
+      assert.equal(params.get('user_id'), 'eq.owner');
+      if (params.get('key') === 'eq.' + key) return Response.json([{ key, value: legacy }]);
+      assert.ok(params.get('and')?.includes('study\\_todos\\_v2'));
+      return Response.json(params.has('key') ? [] : items);
+    }
+  });
+  const read = () => handler(new Request('https://feed.example?token=' + token));
+  const response = await read();
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get('content-type'), 'text/calendar; charset=utf-8');
+  const body = await response.text();
+  assert.match(body, /X-WR-CALNAME:MST · 待办截止日期/);
+  assert.match(body, /UID:todo-due-a@mst/);
+  assert.match(body, /SUMMARY:Renamed overdue task\r\nDTSTART;VALUE=DATE:20261106\r\nDTEND;VALUE=DATE:20261107/);
+  assert.match(body, /SUMMARY:Completed today/);
+  assert.doesNotMatch(body, /Old name|Deleted task|Completed yesterday|No deadline|Invalid deadline|Private details/);
+  changed.dueDate = '2026-11-10';
+  const moved = await (await read()).text();
+  assert.match(moved, /UID:todo-due-a@mst/);
+  assert.match(moved, /SUMMARY:Renamed overdue task\r\nDTSTART;VALUE=DATE:20261110/);
+  changed.dueDate = '';
+  assert.doesNotMatch(await (await read()).text(), /UID:todo-due-a@mst/);
+  active = false;
+  assert.equal((await read()).status, 404);
+  const health = await handler(new Request('https://feed.example?health=todo-due'));
+  assert.equal((await health.json()).todoDue, true);
+});

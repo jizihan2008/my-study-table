@@ -21,8 +21,8 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261108-category-manager-r1">
-<link rel="stylesheet" href="css/workspace.css?v=20261102-note-controls-align">
+<link rel="stylesheet" href="css/style.css?v=20261108-ai-mobile-toolbar-r1">
+<link rel="stylesheet" href="css/workspace.css?v=20261108-note-tab-r1">
 <link rel="stylesheet" href="css/appearance.css?v=20261102-ipad-top-edge-r1">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -262,7 +262,7 @@
           </div>
           <div class="notes-document-workspace">
             <div class="notes-split-pane-bar notes-split-primary-bar" id="notesSplitPrimaryBar">
-              <select id="notesSplitPrimarySelect" onchange="selectNotesPrimaryPane(this.value)" aria-label="左栏笔记"></select>
+              <button type="button" class="notes-split-picker-trigger" id="notesSplitPrimaryPicker" aria-haspopup="dialog" onclick="openNotesSplitPicker(this, false)"><span></span></button>
               <div class="notes-split-mode" role="group" aria-label="左栏模式">
                 <button type="button" id="notesSplitPrimaryRead" onclick="setNotesSplitPrimaryMode('preview')">阅读</button>
                 <button type="button" id="notesSplitPrimaryEdit" onclick="setNotesSplitPrimaryMode('rich')">编辑</button>
@@ -296,7 +296,7 @@
           </div>
           <section class="notes-split-pane" id="notesSplitPane" aria-label="右栏笔记">
             <header class="notes-split-pane-bar">
-              <select id="notesSplitSecondarySelect" onchange="selectNotesSplitNote(this.value)" aria-label="右栏笔记"></select>
+              <button type="button" class="notes-split-picker-trigger" id="notesSplitSecondaryPicker" aria-haspopup="dialog" onclick="openNotesSplitPicker(this, true)"><span></span></button>
               <div class="notes-split-mode" role="group" aria-label="右栏模式">
                 <button type="button" id="notesSplitSecondaryRead" onclick="setNotesSplitSecondaryMode('preview')">阅读</button>
                 <button type="button" id="notesSplitSecondaryEdit" onclick="setNotesSplitSecondaryMode('rich')">编辑</button>
@@ -797,7 +797,7 @@
       <button class="modal-close" aria-label="关闭订阅设置" onclick="CalendarSubscription.close()">×</button>
     </div>
     <div class="modal-body">
-      <p class="hint">在苹果日历查看 MST 日程，修改请回到 MST。包含日程标题、时间、地点和备注；不包含待办截止、计时记录等日历角标。</p>
+      <p class="hint">日程订阅包含标题、时间、地点和备注。待办截止日期可单独订阅为全天条目，只包含待办标题和截止日期。修改请回到 MST。</p>
       <p class="hint">每周重复日程提供过去一年至未来两年的场次，范围随刷新滚动。苹果端按自身频率刷新。</p>
       <label class="cal-event-time-field"><span>订阅范围</span><select id="calSubscriptionScope" class="cal-event-input" onchange="CalendarSubscription.selectScope()" disabled><option value="">全部日程</option></select></label>
       <label class="cal-event-time-field"><span>日程时区</span><input id="calSubscriptionTimezone" class="cal-event-input" value="Asia/Shanghai" placeholder="Asia/Shanghai"></label>
@@ -1914,10 +1914,10 @@
 <script src="lib/markdown/purify.min.js"></script>
 <script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/markdown.js?v=20261030-fold-actions-r1"></script>
+<script src="js/markdown.js?v=20261108-note-tab-r1"></script>
 <script src="js/note-reading-renderer.js?v=20261015-fold-toc-r1"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261104-fold-clipboard-r1"></script>
+<script src="js/note-rich-editor.js?v=20261108-inline-code-r1"></script>
 <script src="js/platform.js?v=20261014-idb-r1"></script>
 <script src="js/secrets.js?v=20261016-web-r1"></script>
 <script src="js/data-store.js?v=20261014-idb-r1"></script>
@@ -1931,7 +1931,7 @@
 <script type="application/x-study-script" data-app-src="js/core.js?v=20261028-ai-float-r1"></script>
 <script type="application/x-study-script" data-app-src="js/trash.js?v=20261104-todo-batch-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todos.js?v=20261104-focus-unlimited-r1"></script>
-<script type="application/x-study-script" data-app-src="js/notes.js?v=20261104-fold-edit-menu-r1"></script>
+<script type="application/x-study-script" data-app-src="js/notes.js?v=20261108-split-note-picker-r1"></script>
 <script type="application/x-study-script" data-app-src="lib/file-library-order.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
@@ -1941,8 +1941,8 @@
 <script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261102-ai-trash-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261102-ai-trash-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261103-agents-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261109-ai-chat-recovery-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261109-ai-chat-recovery-r1"></script>
 <script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261108-ai-calendar-categories-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
@@ -1950,8 +1950,8 @@
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
 <script type="application/x-study-script" data-app-src="js/ai-agents.js?v=20261103-agent-settings-r2"></script>
 <script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261108-ai-calendar-categories-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261019-ipad-send-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261028-ai-float-r3"></script>
+<script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261109-ai-chat-recovery-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261108-ai-mobile-toolbar-r1"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
 <script type="application/x-study-script" data-app-src="js/prompts.js?v=20261029-sync-refresh-r1"></script>
 <script type="application/x-study-script" data-app-src="js/music.js"></script>
@@ -1983,7 +1983,7 @@
 <script type="application/x-study-script" data-app-src="js/keywords.js?v=20260818-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
 <script type="application/x-study-script" data-app-src="js/calendar.js?v=20261108-ai-calendar-categories-r1"></script>
-<script type="application/x-study-script" data-app-src="js/calendar-subscription.js?v=20261108-category-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar-subscription.js?v=20261109-todo-due-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
 <script type="application/x-study-script" data-app-src="js/timer.js?v=20261104-stats-period-review"></script>
 <script type="application/x-study-script" data-app-src="js/habits.js?v=20261019-habit-debug-r1"></script>
@@ -2072,6 +2072,18 @@
 </div>
 
 <!-- AI 笔记出题 -->
+<dialog class="notes-split-picker" id="notesSplitPicker" aria-labelledby="notesSplitPickerTitle">
+  <header class="modal-header">
+    <h2 class="modal-title" id="notesSplitPickerTitle">选择笔记</h2>
+    <form method="dialog">
+      <button type="submit" class="modal-close" aria-label="关闭">×</button>
+    </form>
+  </header>
+  <div class="notes-split-picker-body">
+    <input type="search" id="notesSplitPickerSearch" aria-label="搜索笔记" placeholder="搜索笔记或文件夹" autocomplete="off" autofocus>
+    <div class="notes-split-picker-results" id="notesSplitPickerResults"></div>
+  </div>
+</dialog>
 <div class="modal-overlay note-quiz-overlay" id="noteQuizModal" onclick="closeNoteQuiz(event)">
   <div class="modal note-quiz-modal" role="dialog" aria-modal="true" aria-labelledby="noteQuizTitle" onclick="event.stopPropagation()">
     <div class="modal-header">

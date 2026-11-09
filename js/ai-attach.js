@@ -418,12 +418,22 @@ async function uploadImageToDeepSeek(file, apiCfg = getEffectiveApiConfig()) {
   formData.append('purpose', 'user_data'); // 必填，且仅支持 user_data
   // 刻意不传 expires_after：文件永久有效，才能长期复用 file_id
 
-  const resp = await fetch(baseUrl + '/files', {
+  const requestOptions = {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + apiCfg.apiKey },
     body: formData
-  });
-  const data = await resp.json().catch(() => ({}));
+  };
+  const resp = typeof AIClient !== 'undefined'
+    ? await AIClient.fetchWithPolicy(baseUrl + '/files', requestOptions, {
+        timeoutMs: apiCfg.timeoutMs, retries: 0, keepAlive: true
+      })
+    : await fetch(baseUrl + '/files', requestOptions);
+  let data;
+  try {
+    data = await resp.json().catch(() => ({}));
+  } finally {
+    resp._aiRequestControl?.release();
+  }
   if (!resp.ok) {
     throw new Error((data && data.error && data.error.message) || `图片上传失败 (HTTP ${resp.status})`);
   }
@@ -1385,7 +1395,7 @@ function readFileAsDataURL(file) {
       }
       resolve(result);
     };
-    reader.onerror = reject;
+    reader.onerror = reader.onabort = () => reject(reader.error || new Error('图片读取已取消'));
     reader.readAsDataURL(file);
   });
 }
@@ -1452,7 +1462,7 @@ function readFileAsArrayBuffer(file) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => resolve(e.target.result);
-    reader.onerror = reject;
+    reader.onerror = reader.onabort = () => reject(reader.error || new Error('文件读取已取消'));
     reader.readAsArrayBuffer(file);
   });
 }
@@ -1461,7 +1471,7 @@ function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = e => resolve(e.target.result);
-    reader.onerror = reject;
+    reader.onerror = reader.onabort = () => reject(reader.error || new Error('图片读取已取消'));
     reader.readAsDataURL(blob);
   });
 }

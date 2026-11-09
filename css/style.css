@@ -3274,12 +3274,12 @@ body {
 .ai-float .ai-toolbar-row, .ai-float .ai-toolbar-toggles { flex-wrap: wrap; }
 .ai-float .ai-toolbar-toggles { min-width: 0; max-width: 100%; flex-shrink: 1; }
 .ai-float .ai-toolbar-key-select { max-width: 100%; }
-.ai-float-toolbar-toggle { display: none; }
+.ai-toolbar-collapse-toggle { display: none; align-items: center; justify-content: center; flex-shrink: 0; padding: 4px 8px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-secondary); background: transparent; font-size: 12px; cursor: pointer; }
 .ai-float .ai-toolbar-row { gap: 6px; padding: 6px 10px; }
 .ai-float .ai-toolbar-key-select { flex: 0 1 auto; min-width: 0; width: auto; max-width: min(160px, 100%); padding: 4px 6px; height: 28px; font-size: 11px; }
 .ai-float .ai-toolbar-quick { order: 1; flex: 1 1 90px; min-width: 0; width: 90px; max-width: 160px; margin-left: 0; padding: 4px; height: 28px; font-size: 11px; }
-.ai-float .ai-float-toolbar-toggle { display: inline-flex; order: 2; flex-shrink: 0; align-items: center; justify-content: center; min-height: 28px; padding: 4px 6px; border: 1px solid var(--border); border-radius: 6px; color: var(--text-secondary); background: transparent; font-size: 11px; cursor: pointer; }
-.ai-float .ai-float-toolbar-toggle:hover { color: var(--text); background: var(--hover-bg); }
+.ai-float .ai-toolbar-collapse-toggle { display: inline-flex; order: 2; min-height: 28px; padding: 4px 6px; font-size: 11px; }
+.ai-toolbar-collapse-toggle:hover { color: var(--text); background: var(--hover-bg); }
 .ai-float .ai-toolbar-toggles { order: 3; flex: 1 0 100%; gap: 5px; }
 .ai-float .ai-pill-toggle { min-height: 28px; padding: 4px 7px; gap: 4px; font-size: 11px; }
 .ai-float .ai-pill-toggle .lucide-icon { width: 15px !important; height: 15px !important; }
@@ -10665,6 +10665,10 @@ i[data-lucide] {
 /* ── ≤800px：移动端布局 ── */
 @media (max-width: 800px) {
   body { overflow-y: auto; -webkit-tap-highlight-color: transparent; }
+
+  #section-ai .ai-toolbar-collapse-toggle { display: inline-flex; min-height: 36px; margin-left: auto; }
+  #section-ai .ai-toolbar-toggles { flex: 1 1 100%; min-width: 0; }
+  #section-ai[data-toolbar-collapsed="true"] :is(.ai-toolbar-toggles, .ai-toolbar-quick) { display: none; }
 
   /* 抽屉化侧栏 */
   .sidebar { width: 260px; z-index: 180; }

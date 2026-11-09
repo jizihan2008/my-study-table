@@ -2,20 +2,27 @@
 let aiFloatReturnFocus = null;
 let aiFloatHome = null;
 let aiFloatCleanup = null;
-let aiFloatToolbarCollapsed = false;
-try { aiFloatToolbarCollapsed = localStorage.getItem('study_ai_float_toolbar_collapsed') === 'true'; } catch {}
+const aiToolbarCollapsed = new Map();
 
-function toggleAiFloatToolbar() {
-  const panel = document.getElementById('aiFloat');
-  if (!panel) return;
-  aiFloatToolbarCollapsed = !aiFloatToolbarCollapsed;
-  panel.dataset.toolbarCollapsed = String(aiFloatToolbarCollapsed);
-  const button = panel.querySelector('.ai-float-toolbar-toggle');
-  if (button) {
-    button.setAttribute('aria-expanded', String(!aiFloatToolbarCollapsed));
-    button.textContent = aiFloatToolbarCollapsed ? '展开工具' : '收起工具';
+function syncAiToolbarCollapse(layout, toggle = false) {
+  const button = layout.querySelector('.ai-toolbar-collapse-toggle');
+  const surface = layout.closest('#aiFloat, #section-ai');
+  if (!button || !surface) return;
+  const key = surface.id === 'aiFloat' ? 'study_ai_float_toolbar_collapsed' : 'study_ai_page_toolbar_collapsed';
+  if (!aiToolbarCollapsed.has(key)) {
+    let collapsed = false;
+    try { collapsed = localStorage.getItem(key) === 'true'; } catch {}
+    aiToolbarCollapsed.set(key, collapsed);
   }
-  try { localStorage.setItem('study_ai_float_toolbar_collapsed', String(aiFloatToolbarCollapsed)); } catch {}
+  let collapsed = aiToolbarCollapsed.get(key);
+  if (toggle) {
+    collapsed = !collapsed;
+    aiToolbarCollapsed.set(key, collapsed);
+    try { localStorage.setItem(key, String(collapsed)); } catch {}
+  }
+  surface.dataset.toolbarCollapsed = String(collapsed);
+  button.setAttribute('aria-expanded', String(!collapsed));
+  button.textContent = collapsed ? '展开工具' : '收起工具';
 }
 
 function initAiFloatGeometry(panel) {
@@ -93,7 +100,6 @@ function showAiFloat() {
   const panel = document.createElement('section');
   panel.id = 'aiFloat';
   panel.className = 'ai-float';
-  panel.dataset.toolbarCollapsed = String(aiFloatToolbarCollapsed);
   panel.setAttribute('role', 'dialog');
   panel.setAttribute('aria-label', 'AI 对话浮窗');
   panel.tabIndex = -1;
@@ -123,7 +129,10 @@ function closeAiFloat(restoreFocus = true) {
   aiFloatCleanup = null;
   saveAiDraft();
   const layout = document.getElementById('aiChatLayout');
-  if (layout && aiFloatHome) aiFloatHome.replaceWith(layout);
+  if (layout && aiFloatHome) {
+    aiFloatHome.replaceWith(layout);
+    syncAiToolbarCollapse(layout);
+  }
   panel.remove();
   aiFloatHome = null;
   if (restoreFocus && aiFloatReturnFocus?.isConnected) aiFloatReturnFocus.focus({ preventScroll: true });

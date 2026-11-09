@@ -105,7 +105,7 @@ test('AI float shares the chat, draft and streaming surface across shortcuts and
     await expect(page.locator('#aiFloat')).toHaveCount(0);
     await expect(page.locator('#section-ai #aiInput')).toHaveValue('保留的草稿');
     await expect(page.locator('#section-ai #aiToolbarToggles')).toBeVisible();
-    await expect(page.locator('#section-ai .ai-float-toolbar-toggle')).toBeHidden();
+    await expect(page.locator('#section-ai .ai-toolbar-collapse-toggle')).toBeHidden();
     expect(await page.evaluate(() => document.getElementById('aiChatLayout') === window.__chatSurface)).toBe(true);
     await page.getByRole('button', { name: 'AI 浮窗 Ctrl+Shift+A' }).click();
     await page.evaluate(() => switchTab('ai'));
@@ -119,6 +119,14 @@ test('AI float shares the chat, draft and streaming surface across shortcuts and
     expect(bounds.x + bounds.width).toBeLessThanOrEqual(390);
     await page.keyboard.press('Escape');
     await expect(page.locator('#aiFloat')).toHaveCount(0);
+    const pageToolbar = page.locator('#section-ai #aiToolbar');
+    const pageToggle = pageToolbar.locator('.ai-toolbar-collapse-toggle');
+    await expect(pageToggle).toHaveText('收起工具');
+    await pageToggle.click();
+    await expect(pageToggle).toHaveAttribute('aria-expanded', 'false');
+    await expect(pageToolbar.locator('#aiToolbarToggles')).toBeHidden();
+    await expect(pageToolbar.locator('#aiToolbarQuick')).toBeHidden();
+    await expect(pageToolbar.locator('#aiToolbarKeySelect')).toBeVisible();
     await page.evaluate(() => {
       clearAiStreamingDraft(getActiveConv().id, false);
       setAiLoading(getActiveConv().id, false);
@@ -151,6 +159,13 @@ test('AI float shares the chat, draft and streaming surface across shortcuts and
     await expect(page.locator('#aiToolbarToggles')).toBeHidden();
     await page.getByRole('button', { name: '展开工具', exact: true }).click();
     await expect(page.locator('#aiToolbarTreeBtn')).toBeVisible();
+    await page.getByRole('button', { name: '展开到 AI 页面', exact: true }).click();
+    await expect(pageToggle).toHaveText('展开工具');
+    await expect(pageToolbar.locator('#aiToolbarToggles')).toBeHidden();
+    await pageToggle.click();
+    await expect(pageToggle).toHaveAttribute('aria-expanded', 'true');
+    await expect(pageToolbar.locator('#aiToolbarTreeBtn')).toBeVisible();
+    await expect(pageToolbar.locator('#aiToolbarQuick')).toBeVisible();
   } finally {
     if (app) await app.close();
     await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

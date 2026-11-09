@@ -172,7 +172,11 @@
     if (!node) return '';
     // HTML source line breaks collapse to spaces on the editing surface. Only
     // explicit <br> elements below represent an authored inline line break.
-    if (node.nodeType === Node.TEXT_NODE) return escapeInline((node.textContent || '').replace(/[\t\r\n\f]+/g, ' '));
+    // A literal leading tab in Markdown starts a code block. Encode tabs in
+    // inline text so even a paragraph containing only a tab survives a reload.
+    if (node.nodeType === Node.TEXT_NODE) {
+      return escapeInline((node.textContent || '').replace(/[\r\n\f]+/g, ' ')).replace(/\t/g, '&#9;');
+    }
     if (node.nodeType !== Node.ELEMENT_NODE) return '';
     const tag = node.tagName.toLowerCase();
     const children = () => Array.from(node.childNodes).map(inline).join('');
@@ -208,9 +212,12 @@
     if (tag === 'em' || tag === 'i') return emphasis('*', 'em, i');
     if (tag === 'del' || tag === 's' || tag === 'strike') return emphasis('~~', 'del, s, strike');
     if (tag === 'code') {
-      const value = node.textContent || '';
-      const ticks = value.includes('`') ? '``' : '`';
-      return ticks + value + ticks;
+      const value = (node.textContent || '').replace(/\u200b/g, '');
+      if (!value) return '';
+      const longestRun = (value.match(/`+/g) || []).reduce((longest, run) => Math.max(longest, run.length), 0);
+      const ticks = '`'.repeat(longestRun + 1);
+      const pad = /^`|`$/.test(value) || (value.startsWith(' ') && value.endsWith(' ') && /[^ ]/.test(value)) ? ' ' : '';
+      return ticks + pad + value + pad + ticks;
     }
     if (tag === 'a') {
       const href = node.getAttribute('href') || '';
@@ -710,9 +717,29 @@
     } else if (type === 'quote') document.execCommand('formatBlock', false, 'blockquote');
     else if (type === 'codeblock') document.execCommand('formatBlock', false, 'pre');
     else if (type === 'code') {
-      const text = savedRange ? savedRange.toString() : '';
-      if (savedRange) restoreRange(savedRange);
-      insertHtml('<code>' + (text || '代码').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</code>');
+      const range = savedRange || (selection?.rangeCount ? selection.getRangeAt(0) : document.createRange());
+      if (!host.contains(range.commonAncestorContainer)) {
+        range.selectNodeContents(host);
+        range.collapse(false);
+      }
+      const start = range.startContainer;
+      const element = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
+      if (element.closest('pre, code')?.contains(range.endContainer)) return;
+      const text = range.toString().replace(/\r\n?|\n/g, ' ');
+      const placeholder = '代码';
+      const code = document.createElement('code');
+      // Keep a caret boundary after the selected placeholder. Chromium treats
+      // replacing the entire contents of <code> as replacing the element.
+      code.textContent = text || placeholder + '\u200b';
+      const fragment = document.createDocumentFragment();
+      fragment.appendChild(code);
+      insertInlineContent(range, fragment);
+      if (!text) {
+        range.setStart(code.firstChild, 0);
+        range.setEnd(code.firstChild, placeholder.length);
+        restoreRange(range);
+      }
+      notifyChange({ historyBoundary: true });
       return;
     } else if (type === 'important-inline' || type === 'important-block') {
       const isBlock = type === 'important-block';
@@ -1050,7 +1077,7 @@
     if (!composing) keepEmptyFoldTitle(summary);
   }
 
-  function insertTitleContent(range, fragment) {
+  function insertInlineContent(range, fragment) {
     const last = fragment.lastChild;
     if (!last) return;
     range.deleteContents();
@@ -1058,6 +1085,36 @@
     range.setStartAfter(last);
     range.collapse(true);
     restoreRange(range);
+  }
+
+  function handleTab(event) {
+    if (event.defaultPrevented || event.isComposing || event.keyCode === 229
+      || event.ctrlKey || event.metaKey || event.altKey || event.target !== host) return;
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    if (!range || !host.contains(range.commonAncestorContainer)) return;
+    const start = range.startContainer;
+    const element = start.nodeType === Node.ELEMENT_NODE ? start : start.parentElement;
+    const code = element.closest('pre, code');
+    if (!code && element.closest('li')) {
+      event.preventDefault();
+      document.execCommand(event.shiftKey ? 'outdent' : 'indent', false, null);
+      notifyChange();
+      return;
+    }
+    if (event.shiftKey) return;
+    event.preventDefault();
+    const fragment = document.createDocumentFragment();
+    const tab = document.createTextNode('\t');
+    if (code?.contains(range.endContainer)) fragment.appendChild(tab);
+    else {
+      const span = document.createElement('span');
+      span.className = 'note-inline-tab';
+      span.appendChild(tab);
+      fragment.appendChild(span);
+    }
+    insertInlineContent(range, fragment);
+    notifyChange();
   }
 
   function enterFoldBodyFromTitle() {
@@ -1189,12 +1246,12 @@
         }
         const fragment = document.createDocumentFragment();
         while (container.firstChild) fragment.appendChild(container.firstChild);
-        insertTitleContent(titleRange, fragment);
+        insertInlineContent(titleRange, fragment);
       } else document.execCommand('insertHTML', false, container.innerHTML);
     } else if (titleRange) {
       const fragment = document.createDocumentFragment();
       fragment.appendChild(document.createTextNode((clipboard?.getData('text/plain') || '').replace(/[\r\n]+/g, ' ')));
-      insertTitleContent(titleRange, fragment);
+      insertInlineContent(titleRange, fragment);
     } else document.execCommand('insertText', false, clipboard?.getData('text/plain') || '');
     notifyChange();
   }
@@ -1700,14 +1757,7 @@
           return;
         }
       }
-      if (event.key === 'Tab') {
-        const item = window.getSelection()?.anchorNode?.parentElement?.closest('li');
-        if (item) {
-          event.preventDefault();
-          document.execCommand(event.shiftKey ? 'outdent' : 'indent', false, null);
-          notifyChange();
-        }
-      }
+      if (event.key === 'Tab') handleTab(event);
     });
   }
 

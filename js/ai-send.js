@@ -515,54 +515,57 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   }
   setAiLoading(conv.id, true);
   setAiStopRequested(conv.id, false);
-  updateAiSendButton();
-
-  const { docTexts, displayAttachments, visionFiles } = await prepareAiMessageAttachments(currentAttachments, apiCfg, conv);
-
-  // Build user message content
-  const userContent = text + docTexts;
-
-  if (isDebugMode()) console.log('[DEBUG sendAiMessage] docTexts:', docTexts.slice(0,200), 'visionFiles:', JSON.stringify(visionFiles));
-
   const now = new Date();
   const timeStr = `${now.getFullYear()}-${String(now.getMonth()+1).padStart(2,'0')}-${String(now.getDate()).padStart(2,'0')} ${String(now.getHours()).padStart(2,'0')}:${String(now.getMinutes()).padStart(2,'0')}`;
-  const userMsg = { role: 'user', content: userContent, time: timeStr };
-  if (contextInserts.length > 0) {
-    userMsg.contextInserts = contextInserts;
-    userMsg.displayContent = displayContent;
-  }
-  if (displayAttachments.length > 0) {
-    userMsg.attachments = displayAttachments;
-  }
-  // Store vision file refs for multimodal API calls (ms://<file-id>)
-  if (visionFiles.length > 0) {
-    userMsg.visionFiles = visionFiles;
-  }
-  // 记录待生成标记（刷新/重启后据此自动恢复被中断的 AI 回复）
-  const _pendingUserNodeId = appendMessage(conv, userMsg);
-  safeSaveAiConvs();
-  if (_pendingUserNodeId) {
-    setAiPendingRequest(conv.id, _pendingUserNodeId, apiCfg.keyId);
-  }
-
-  // AI Auto-title — regenerate after every exchange
-  const shouldAutoTitle = !conv._dailyReport && conv.messages.filter(isAiUserQuestion).length >= 1;
-
-  if (conv.title.startsWith('新对话 ') && conv.messages.filter(isAiUserQuestion).length === 1) {
-    conv.title = text ? (text.length > 20 ? text.slice(0, 20) + '…' : text) : '附件对话';
-    safeSaveAiConvs();
-    if (getActiveConvId() === conv.id) renderAiChat();
-  }
-  // 发送后滚动交由 renderAiMessages 智能处理：用户接近底部才滚到底，否则保持浏览位置
-  renderAiMessages();
-  updateAiSendButton();
-
-  // Debug
-  const deepThinkParams = buildDeepThinkParams(apiCfg);
-  console.log('[API] model:', apiCfg.model, 'deepThink:', apiCfg.deepThink, 'deepThinkParams:', JSON.stringify(deepThinkParams));
-
-  let aiReplyText = null; // 最终回复文本（供调用方回填等使用）
+  let aiReplyText = null;
+  let shouldAutoTitle = false;
+  let userMessageAdded = false;
   try {
+    updateAiSendButton();
+
+    const { docTexts, displayAttachments, visionFiles } = await prepareAiMessageAttachments(currentAttachments, apiCfg, conv);
+
+    // Build user message content
+    const userContent = text + docTexts;
+
+    if (isDebugMode()) console.log('[DEBUG sendAiMessage] docTexts:', docTexts.slice(0,200), 'visionFiles:', visionFiles.length);
+
+    const userMsg = { role: 'user', content: userContent, time: timeStr };
+    if (contextInserts.length > 0) {
+      userMsg.contextInserts = contextInserts;
+      userMsg.displayContent = displayContent;
+    }
+    if (displayAttachments.length > 0) {
+      userMsg.attachments = displayAttachments;
+    }
+    // Store vision file refs for multimodal API calls (ms://<file-id>)
+    if (visionFiles.length > 0) {
+      userMsg.visionFiles = visionFiles;
+    }
+    // 记录待生成标记（刷新/重启后据此自动恢复被中断的 AI 回复）
+    const _pendingUserNodeId = appendMessage(conv, userMsg);
+    userMessageAdded = true;
+    safeSaveAiConvs();
+    if (_pendingUserNodeId) {
+      setAiPendingRequest(conv.id, _pendingUserNodeId, apiCfg.keyId);
+    }
+
+    // AI Auto-title — regenerate after every exchange
+    shouldAutoTitle = !conv._dailyReport && conv.messages.filter(isAiUserQuestion).length >= 1;
+
+    if (conv.title.startsWith('新对话 ') && conv.messages.filter(isAiUserQuestion).length === 1) {
+      conv.title = text ? (text.length > 20 ? text.slice(0, 20) + '…' : text) : '附件对话';
+      safeSaveAiConvs();
+      if (getActiveConvId() === conv.id) renderAiChat();
+    }
+    // 发送后滚动交由 renderAiMessages 智能处理：用户接近底部才滚到底，否则保持浏览位置
+    renderAiMessages();
+    updateAiSendButton();
+
+    // Debug
+    const deepThinkParams = buildDeepThinkParams(apiCfg);
+    console.log('[API] model:', apiCfg.model, 'deepThink:', apiCfg.deepThink, 'deepThinkParams:', JSON.stringify(deepThinkParams));
+
     const streamingKeyName = (apiCfg.name || apiCfg.model || 'AI');
     const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
       if (snapshot.reset) {
@@ -631,23 +634,35 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
       }
     }
   } catch (err) {
-    clearAiStreamingDraft(conv.id, false);
     const errorMsg = formatAiRequestError(err);
-    const errMsg = { role: 'assistant', content: errorMsg, time: timeStr, keyName: (apiCfg.name || apiCfg.model || 'AI') };
-    appendMessage(conv, errMsg);
-    safeSaveAiConvs();
-    sendAiNotification(conv, errorMsg, (apiCfg.name || apiCfg.model || 'AI'));
+    if (userMessageAdded) {
+      appendMessage(conv, { role: 'assistant', content: errorMsg, time: timeStr, keyName: (apiCfg.name || apiCfg.model || 'AI') });
+      safeSaveAiConvs();
+      sendAiNotification(conv, errorMsg, (apiCfg.name || apiCfg.model || 'AI'));
+    } else {
+      const composer = document.getElementById('aiInput');
+      if (getActiveConvId() === conv.id && composer && !composer.value && !aiAttachments.length
+          && !(typeof aiContextInserts !== 'undefined' && aiContextInserts.length)) {
+        composer.value = displayContent;
+        aiAttachments = currentAttachments;
+        if (typeof aiContextInserts !== 'undefined') {
+          aiContextInserts = contextInserts;
+          renderAiContextPreview();
+        }
+        saveAiDraft();
+        renderAttachPreview();
+      }
+      if (typeof showAiToast === 'function') showAiToast('消息发送失败：' + (err?.message || err));
+    }
+  } finally {
+    setAiLoading(conv.id, false);
+    setAiStopRequested(conv.id, false);
+    clearAiStreamingDraft(conv.id, false);
+    clearAiPendingRequest(conv.id);
+    updateAiSendButton();
+    setAiPdfSendProgress(conv.id, null);
+    renderAiMessages();
   }
-
-  // Always reset loading state for this conversation
-  setAiPdfSendProgress(conv.id, null);
-  setAiLoading(conv.id, false);
-  setAiStopRequested(conv.id, false);
-  clearAiStreamingDraft(conv.id, false);
-  // 已生成/已停止/已失败：清除待生成标记（避免下次启动误判为"被中断"）
-  clearAiPendingRequest(conv.id);
-  renderAiMessages();
-  updateAiSendButton();
 
   // 队列系统：回复完成后自动发送下一条排队消息
   if (typeof drainAiSendQueue === 'function') drainAiSendQueue(conv.id);

@@ -15,12 +15,16 @@ test('calendar subscription creates private links, resets and revokes, and repor
     await page.locator('#section-today').waitFor({ state: 'visible' });
     await page.evaluate(() => {
       switchTab('calendar');
-      window.__calMock = { record: null, categories: new Map(), health: true, failSync: false, schemaFailure: false, writes: 0, userId: 'owner' };
+      window.__calMock = { record: null, todo: null, categories: new Map(), health: true, failSync: false, schemaFailure: false, writes: 0, userId: 'owner' };
       const mock = window.__calMock;
       const client = { from: table => table === 'calendar_category_subscriptions' ? {
         select: () => ({ eq: async () => ({ data: [...mock.categories.values()], error: null }) }),
         upsert: async value => { mock.categories.set(value.category, value); return { error: null }; },
         delete: () => ({ eq: () => ({ eq: async (_, category) => { mock.categories.delete(category); return { error: null }; } }) })
+      } : table === 'calendar_todo_due_subscriptions' ? {
+        select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: mock.todo, error: null }) }) }),
+        upsert: async value => { mock.todo = value; return { error: null }; },
+        delete: () => ({ eq: async () => { mock.todo = null; return { error: null }; } })
       } : ({
         select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: mock.record, error: mock.schemaFailure ? { message: 'missing relation' } : null }) }) }),
         upsert: async value => { mock.record = value; mock.writes++; return { error: null }; },
@@ -31,10 +35,13 @@ test('calendar subscription creates private links, resets and revokes, and repor
       getFriendsConfig = () => ({ url: 'https://db.example', provider: 'supabase' });
       saveFriendsConfig = () => {};
       showCustomConfirm = async () => true;
-      window.Sync = { enabled: true, autoSync: true, manualSync: async () => ({ lastError: mock.failSync ? 'offline' : '', pendingConflictCount: 0 }) };
+      window.Sync = { enabled: true, autoSync: true, manualSync: async options => {
+        mock.lastSyncedModule = options.moduleId;
+        return { lastError: mock.failSync ? 'offline' : '', pendingConflictCount: 0 };
+      } };
       const originalFetch = window.fetch;
       window.fetch = (address, init) => String(address).startsWith('https://db.example/functions/v1/calendar-feed')
-        ? Promise.resolve(new Response(mock.health ? JSON.stringify({ service: 'mst-calendar-feed', version: 1, categories: true }) : 'missing', { status: mock.health ? 200 : 404 }))
+        ? Promise.resolve(new Response(mock.health ? JSON.stringify({ service: 'mst-calendar-feed', version: 1, categories: true, todoDue: true }) : 'missing', { status: mock.health ? 200 : 404 }))
         : originalFetch(address, init);
     });
     await page.getByRole('button', { name: '订阅到苹果日历' }).click();
@@ -104,21 +111,30 @@ test('calendar subscription creates private links, resets and revokes, and repor
     await page.getByRole('button', { name: '订阅到苹果日历' }).click();
     const scope = page.locator('#calSubscriptionScope');
     const link = page.locator('#calSubscriptionLink');
-    await scope.selectOption('课程');
+    await scope.selectOption('cat:课程');
     await page.locator('#calSubscriptionCreate').click();
     await expect(link).toHaveValue(/token=cat-[0-9a-f]{64}$/);
     const course = await link.inputValue();
-    await scope.selectOption('考试');
+    await scope.selectOption('cat:考试');
     await expect(link).toHaveValue('');
     await page.locator('#calSubscriptionCreate').click();
     await expect(link).toHaveValue(/token=cat-[0-9a-f]{64}$/);
     expect(await link.inputValue()).not.toBe(course);
     await page.locator('#calSubscriptionRevoke').click();
     await expect(link).toHaveValue('');
-    await scope.selectOption('课程');
+    await scope.selectOption('cat:课程');
     await expect(link).toHaveValue(course);
     expect(await page.evaluate(() => [...window.__calMock.categories.keys()])).toEqual(['课程']);
     expect(await page.evaluate(() => !!window.__calMock.record)).toBe(true);
+    await scope.selectOption({ label: '待办截止日期' });
+    await page.locator('#calSubscriptionCreate').click();
+    await expect(link).toHaveValue(/token=due-[0-9a-f]{64}$/);
+    expect(await page.evaluate(() => window.__calMock.lastSyncedModule)).toBe('todos');
+    await page.locator('#calSubscriptionRevoke').click();
+    await expect(link).toHaveValue('');
+    expect(await page.evaluate(() => window.__calMock.todo)).toBe(null);
+    await scope.selectOption('cat:课程');
+    await expect(link).toHaveValue(course);
   } finally {
     if (app) await app.close();
     await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

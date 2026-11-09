@@ -6,20 +6,20 @@
  * ═══════════════════════════════════════════════════════════════ */
 'use strict';
 
-const VERSION = 'mst-v304';
+const VERSION = 'mst-v311';
 const CACHE_STATIC = VERSION + '-static';
 
 // 需预缓存的静态资源（相对应用根）。更新资源时请在此追加版本化文件名。
 const PRECACHE_URLS = [
-  "./js/calendar-subscription.js?v=20261108-category-r1",
+  "./js/calendar-subscription.js?v=20261109-todo-due-r1",
   "./",
   "./index.html",
   "./reset-site-data.html",
   "./manifest.webmanifest?v=20260926-icon-v3",
   "./icons/icon-192-v3.png",
   "./icons/apple-touch-icon-v3.png",
-  "./css/style.css?v=20261108-category-manager-r1",
-  "./css/workspace.css?v=20261102-note-controls-align",
+  "./css/style.css?v=20261108-ai-mobile-toolbar-r1",
+  "./css/workspace.css?v=20261108-note-tab-r1",
   "./css/appearance.css?v=20261102-ipad-top-edge-r1",
   "./lib/katex/katex.min.css",
   "./lib/markdown/highlight-github-dark-dimmed.min.css",
@@ -29,10 +29,10 @@ const PRECACHE_URLS = [
   "./lib/markdown/purify.min.js",
   "./lib/markdown/highlight.min.js",
   "./lib/katex/katex.min.js",
-  "./js/markdown.js?v=20261030-fold-actions-r1",
+  "./js/markdown.js?v=20261108-note-tab-r1",
   "./js/note-reading-renderer.js?v=20261015-fold-toc-r1",
   "./js/note-view-position.js?v=20261004-r1",
-  "./js/note-rich-editor.js?v=20261104-fold-clipboard-r1",
+  "./js/note-rich-editor.js?v=20261108-inline-code-r1",
   "./js/platform.js?v=20261014-idb-r1",
   "./js/secrets.js?v=20261016-web-r1",
   "./js/data-store.js?v=20261014-idb-r1",
@@ -45,7 +45,7 @@ const PRECACHE_URLS = [
   "./js/core.js?v=20261028-ai-float-r1",
   "./js/trash.js?v=20261104-todo-batch-r1",
   "./js/todos.js?v=20261104-focus-unlimited-r1",
-  "./js/notes.js?v=20261104-fold-edit-menu-r1",
+  "./js/notes.js?v=20261108-split-note-picker-r1",
   "./lib/file-library-order.js?v=20261004-r1",
   "./js/file-library.js?v=20261004-r1",
   "./js/links.js?v=20260813-r1",
@@ -54,8 +54,8 @@ const PRECACHE_URLS = [
   "./js/ai-utils.js?v=20261103-agents-r1",
   "./js/ai-tree.js?v=20261012-visual-fold-r1",
   "./js/ai-conv.js?v=20261102-ai-trash-r1",
-  "./js/ai-attach.js?v=20261102-ai-trash-r1",
-  "./js/ai-render.js?v=20261103-agents-r1",
+  "./js/ai-attach.js?v=20261109-ai-chat-recovery-r1",
+  "./js/ai-render.js?v=20261109-ai-chat-recovery-r1",
   "./js/web-access.js?v=20261016-web-r1",
   "./js/ai-tools.js?v=20261108-ai-calendar-categories-r1",
   "./js/ai-search.js?v=20261017-ai-notify-r1",
@@ -63,8 +63,8 @@ const PRECACHE_URLS = [
   "./js/ai-stream.js?v=20261012-protocol-r2",
   "./js/ai-agents.js?v=20261103-agent-settings-r2",
   "./js/ai-api.js?v=20261108-ai-calendar-categories-r1",
-  "./js/ai-send.js?v=20261019-ipad-send-r1",
-  "./js/ai-float.js?v=20261028-ai-float-r3",
+  "./js/ai-send.js?v=20261109-ai-chat-recovery-r1",
+  "./js/ai-float.js?v=20261108-ai-mobile-toolbar-r1",
   "./js/skills.js?v=20261010-r1",
   "./js/prompts.js?v=20261029-sync-refresh-r1",
   "./js/music.js",

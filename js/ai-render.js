@@ -224,6 +224,7 @@ function renderAiChat(options) {
     && !!layout.querySelector('#aiMessages')
     && !!layout.querySelector('#aiInput');
   if (canReuseExisting) {
+    if (typeof syncAiToolbarCollapse === 'function') syncAiToolbarCollapse(layout);
     updateAiSendButton();
     if (typeof updateAiQueueIndicator === 'function') updateAiQueueIndicator();
     updateSidebarAiBadge();
@@ -276,6 +277,7 @@ function renderAiChat(options) {
 
   const hasSystemPrompt = conv.systemPrompt && conv.systemPrompt.trim().length > 0;
   const activeKeyName = getActiveKeyDisplayName();
+  const tabsScrollLeft = layout.querySelector('#aiConvTabsWrap')?.scrollLeft ?? 0;
 
   layout.innerHTML = `
     <div class="ai-conv-tabs-wrap" id="aiConvTabsWrap">
@@ -294,7 +296,7 @@ function renderAiChat(options) {
     <div class="ai-toolbar" id="aiToolbar">
       <div class="ai-toolbar-row">
         <select class="ai-toolbar-key-select" id="aiToolbarKeySelect" onchange="onAiToolbarKeyChange()"></select>
-        <button type="button" class="ai-float-toolbar-toggle" onclick="toggleAiFloatToolbar()" aria-controls="aiToolbarToggles aiToolbarQuick" aria-expanded="${typeof aiFloatToolbarCollapsed === 'undefined' || !aiFloatToolbarCollapsed}">${typeof aiFloatToolbarCollapsed !== 'undefined' && aiFloatToolbarCollapsed ? '展开工具' : '收起工具'}</button>
+        <button type="button" class="ai-toolbar-collapse-toggle" onclick="syncAiToolbarCollapse(this.closest('#aiChatLayout'), true)" aria-controls="aiToolbarToggles aiToolbarQuick" aria-expanded="true">收起工具</button>
         <div class="ai-toolbar-toggles" id="aiToolbarToggles">
           <button type="button" class="ai-pill-toggle" id="aiToolbarDeepThinkBtn" onclick="toggleAiDeepThink()" title="深度思考（部分模型支持）">
             <i data-lucide="atom" class="lucide-icon" style="width:16px;height:16px;"></i>
@@ -359,9 +361,11 @@ function renderAiChat(options) {
       </button>
     </div>
   `;
+  const tabsWrap = layout.querySelector('#aiConvTabsWrap');
+  if (tabsWrap) tabsWrap.scrollLeft = tabsScrollLeft;
   layout.dataset.aiConvId = String(conv.id);
   layout.dataset.aiHasApiKey = hasApiKey ? '1' : '0';
-  renderAiMessages();
+  if (typeof syncAiToolbarCollapse === 'function') syncAiToolbarCollapse(layout);
   renderAttachPreview(); // Restore attachment preview after DOM rebuild
   if (typeof renderAiContextPreview === 'function') renderAiContextPreview();
   updateAiFileInput(); // Update file input based on current model
@@ -412,7 +416,11 @@ function renderAiChat(options) {
   updateSidebarAiBadge();
   // Initialize toolbar state
   initAiToolbar();
-  createAiLucideIcons(layout);
+  try {
+    renderAiMessages();
+  } finally {
+    createAiLucideIcons(layout);
+  }
   // Restore tree float open state after DOM rebuild
   if (_aiTreePanelOpen) {
     const overlay = document.getElementById('aiTreeFloatOverlay');
@@ -421,7 +429,6 @@ function renderAiChat(options) {
     }
   }
   // Enable horizontal scroll on tabs via mouse wheel
-  const tabsWrap = document.querySelector('.ai-conv-tabs-wrap');
   if (tabsWrap && !tabsWrap._wheelAttached) {
     tabsWrap._wheelAttached = true;
     tabsWrap.addEventListener('wheel', function(e) {
@@ -766,10 +773,11 @@ function renderAiMessages() {
       if (!exchangeStart) exchangeStart = item;
       exchangeEnd = item;
       exchangeMessages.push(item);
-      for (const outcome of item.msg._toolInfo?.outcomes || []) {
-        if (!outcome.ok || !['success', 'duplicate'].includes(outcome.status)) continue;
-        for (const note of outcome.affectedNotes || []) {
-          if (Number.isSafeInteger(Number(note.id)) && Number(note.id) > 0) exchangeNotes.set(Number(note.id), note);
+      const outcomes = item.msg._toolInfo?.outcomes;
+      for (const outcome of Array.isArray(outcomes) ? outcomes : []) {
+        if (!outcome?.ok || !['success', 'duplicate'].includes(outcome.status)) continue;
+        for (const note of Array.isArray(outcome.affectedNotes) ? outcome.affectedNotes : []) {
+          if (Number.isSafeInteger(Number(note?.id)) && Number(note.id) > 0) exchangeNotes.set(Number(note.id), note);
         }
       }
     }
@@ -1035,6 +1043,9 @@ function renderAiMessages() {
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="12" height="12"><path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/></svg>
           编辑
         </button>`;
+        if (item === renderItems[renderItems.length - 1]) {
+          userControls += `<button type="button" class="ai-msg-edit-btn" onclick="regenerateAiMessage(${item.nodeId})">重试回复</button>`;
+        }
       }
       if (item.branchCount > 1 && !loading) {
         userControls += `<button class="ai-msg-cand-nav" onclick="switchUserVersion(${item.nodeId}, -1)" title="编辑产生的其他版本">
@@ -1065,18 +1076,29 @@ function renderAiMessages() {
       </div>
     ` + exchangeFooter;
   };
+  const renderMessage = item => {
+    try {
+      return renderItem(item);
+    } catch (error) {
+      console.warn('[AI] 消息显示失败', conv.id, item.nodeId, error);
+      const text = item.msg.displayContent ?? item.msg.content;
+      return `<div class="ai-chat-msg ${item.type}">
+        <div class="ai-chat-bubble" style="white-space:pre-wrap">${typeof text === 'string' ? escapeHtml(text) : ''}<div>此消息的格式或附件无法完整显示。</div></div>
+      </div>`;
+    }
+  };
   container.innerHTML = (hiddenCount
     ? `<button type="button" class="ai-history-more" onclick="showEarlierAiMessages()">加载更早消息（还有 ${hiddenCount} 条）</button>`
     : '') + visibleItems.map(item => {
-    if (!item.foldedMessages?.length) return renderItem(item);
+    if (!item.foldedMessages?.length) return renderMessage(item);
     const expanded = _aiExpandedReplyChains.has(item.chainKey);
     const count = item.foldedMessages.length;
     return `<div class="ai-reply-chain">
       <button type="button" class="ai-reply-chain-toggle" data-chain-key="${escapeHtml(item.chainKey)}" aria-expanded="${expanded}" onclick="toggleAiReplyChain(this)">
         <span aria-hidden="true">${expanded ? '▾' : '▸'}</span> ${expanded ? '收起 ' + count + ' 条消息' : '已折叠 ' + count + ' 条消息 · 展开查看'}
       </button>
-      ${expanded ? `<div class="ai-reply-chain-history">${item.foldedMessages.map(renderItem).join('')}</div>` : ''}
-      ${renderItem(item)}
+      ${expanded ? `<div class="ai-reply-chain-history">${item.foldedMessages.map(renderMessage).join('')}</div>` : ''}
+      ${renderMessage(item)}
     </div>`;
   }).join('');
   if (typeof renderAiSubagentPanel === 'function') container.insertAdjacentHTML('beforeend', renderAiSubagentPanel(conv));

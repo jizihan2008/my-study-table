@@ -491,16 +491,55 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
 }
 /* .notes-split-pane-bar 本身是 flex；未开启分屏时需用更高优先级隐藏左栏选择/模式条。 */
 #section-notes:not(.notes-immersive) .notes-split-primary-bar { display: none; }
-#section-notes:not(.notes-split) #notesSplitPrimarySelect { display: none; }
+#section-notes:not(.notes-split) #notesSplitPrimaryPicker { display: none; }
 #section-notes.notes-immersive:not(.notes-split) .notes-split-primary-bar {
   min-height: 34px; padding: 1px 6px;
 }
-.notes-split-pane-bar select {
-  min-width: 0; max-width: 260px; height: 30px; padding: 0 28px 0 9px;
-  border: 1px solid var(--border); border-radius: 7px; outline: none;
+.notes-split-picker-trigger {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-width: 0; max-width: 260px; height: 30px; padding: 0 9px;
+  border: 1px solid var(--border); border-radius: 7px; cursor: pointer;
   background: var(--input-bg); color: var(--text); font: inherit; font-size: 11px;
 }
-.notes-split-pane-bar select:focus { border-color: var(--primary); }
+.notes-split-picker-trigger span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.notes-split-picker-trigger::after,
+.notes-split-picker-results summary::before {
+  content: ''; flex: 0 0 6px; width: 6px; height: 6px;
+  border-right: 1.5px solid var(--text-secondary);
+  border-bottom: 1.5px solid var(--text-secondary);
+  transform: translateY(-1px) rotate(45deg);
+}
+.notes-split-picker-trigger:hover { border-color: var(--primary); }
+.notes-split-picker {
+  width: min(440px, calc(100% - 32px)); height: min(460px, calc(100dvh - 32px));
+  margin: auto; padding: 0; overflow: hidden; border: 1px solid var(--border); border-radius: 16px;
+  background: var(--card); color: var(--text); box-shadow: var(--shadow-lg);
+}
+.notes-split-picker[open], .notes-split-picker-body { display: flex; flex-direction: column; }
+.notes-split-picker::backdrop { background: rgb(0 0 0 / 38%); }
+.notes-split-picker-body { flex: 1; min-height: 0; gap: 12px; padding: 14px 16px; }
+.notes-split-picker-body input {
+  padding: 8px 10px; border: 1px solid var(--border); border-radius: 7px;
+  background: var(--input-bg); color: var(--text); font: inherit;
+}
+.notes-split-picker-results { flex: 1; overflow: auto; font-size: 13px; }
+.notes-split-picker-results details > :not(summary) { margin-left: 12px; }
+.notes-split-picker-results :is(summary, button) {
+  padding: 7px 8px; border-radius: 6px; cursor: pointer; overflow-wrap: anywhere;
+}
+.notes-split-picker-results summary { display: flex; align-items: center; gap: 8px; list-style: none; }
+.notes-split-picker-results summary::-webkit-details-marker { display: none; }
+.notes-split-picker-results details:not([open]) > summary::before { transform: rotate(-45deg); }
+.notes-split-picker-results button {
+  display: block; width: max-content; max-width: 100%; border: 0;
+  background: transparent; color: var(--text); font: inherit; text-align: left;
+}
+.notes-split-picker-results details > button { max-width: calc(100% - 12px); }
+.notes-split-picker-results :is(summary, button):hover { background: var(--hover-bg); }
+.notes-split-picker-results button[aria-current] { color: var(--primary); font-weight: 600; }
+.notes-split-picker-results p { padding: 8px; color: var(--text-secondary); }
+.note-inline-tab { white-space: pre; tab-size: 4; }
+:is(.notes-rich-editor, .notes-editor-preview) :not(pre) > code { white-space: pre-wrap; tab-size: 4; }
 .notes-split-mode { display: inline-flex; flex-shrink: 0; gap: 2px; padding: 2px; border-radius: 7px; background: var(--input-bg); }
 .notes-split-mode button {
   height: 26px; padding: 0 9px; border: 0; border-radius: 5px; cursor: pointer;
@@ -552,7 +591,8 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
   #section-notes.notes-immersive.notes-split .notes-split-pane { flex-basis: 50%; width: 100%; }
   #section-notes.notes-immersive.notes-split .notes-split-primary-bar { left: 50%; max-width: calc(100% - 120px); }
   .notes-split-pane-bar { min-height: 40px; padding: 5px 8px; }
-  .notes-split-pane-bar select { max-width: 48vw; }
+  .notes-split-picker-trigger { max-width: 48vw; }
+  #section-notes.notes-immersive.notes-split .notes-split-pane > .notes-split-pane-bar { padding-right: 8px; }
   .notes-split-preview, .notes-split-rich-editor, .notes-split-textarea { padding: 20px 16px 56px; }
 }
 /* Revealing the toolbar puts the floating controls on the row below it. */

@@ -896,8 +896,8 @@ test('immersive split opens two independent notes for reading and editing', asyn
   const pane = page.locator('#notesSplitPane');
   await expect(section).toHaveClass(/notes-split/);
   await expect(pane).toBeVisible();
-  await expect(page.locator('#notesSplitPrimarySelect')).toHaveValue(String(ids.leftId));
-  await expect(page.locator('#notesSplitSecondarySelect')).toHaveValue(String(ids.rightId));
+  await expect(page.locator('#notesSplitPrimaryPicker')).toHaveText(/分屏左侧笔记/);
+  await expect(page.locator('#notesSplitSecondaryPicker')).toHaveText(/分屏右侧笔记/);
   await expect(page.locator('#notesRichEditor')).toContainText('左侧内容');
   await expect(page.locator('#notesSplitPreview')).toContainText('右侧内容');
 
@@ -938,9 +938,9 @@ test('immersive split opens two independent notes for reading and editing', asyn
   await page.locator('#notesImmersiveSplit').click();
   await expect(section).not.toHaveClass(/notes-split/);
   await expect(section).toHaveClass(/notes-immersive/);
-  await expect(page.locator('#notesSplitPrimaryBar')).not.toBeVisible();
+  await expect(page.locator('#notesSplitPrimaryPicker')).not.toBeVisible();
   await expect(page.locator('#notesSplitPane')).not.toBeVisible();
-  await expect(page.locator('#notesSplitSecondarySelect')).not.toBeVisible();
+  await expect(page.locator('#notesSplitSecondaryPicker')).not.toBeVisible();
   await expect(page.locator('#notesSplitSecondaryRead')).not.toBeVisible();
   await expect(page.locator('#notesSplitSecondaryEdit')).not.toBeVisible();
   await expect(page.locator('#notesSplitRichEditor')).not.toBeVisible();

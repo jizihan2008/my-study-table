@@ -2267,16 +2267,21 @@ function openNoteLinkDialog(sourceId) {
   });
 }
 
-function getNoteParentPath(note) {
-  const parts = [], seen = new Set();
+function getNoteParentFolders(note, findFolder) {
+  const folders = [], seen = new Set();
   for (let id = note.parentId; id && !seen.has(String(id));) {
     seen.add(String(id));
-    const folder = notes.find(item => item.type === 'folder' && String(item.id) === String(id));
+    const folder = findFolder(String(id));
     if (!folder) break;
-    parts.unshift(folder.title || '未命名文件夹');
+    folders.unshift(folder);
     id = folder.parentId;
   }
-  return parts.join(' / ');
+  return folders;
+}
+
+function getNoteParentPath(note) {
+  return getNoteParentFolders(note, id => notes.find(item => item.type === 'folder' && String(item.id) === id))
+    .map(folder => folder.title || '未命名文件夹').join(' / ');
 }
 
 function followNoteLink(href, secondary = false) {
@@ -2685,8 +2690,69 @@ function ensureNotesSplitNote(){
   return note;
 }
 
-function notesSplitOptions(items,selectedId){
-  return items.map(note=>`<option value="${escapeHtml(String(note.id))}"${String(note.id)===String(selectedId)?' selected':''}>${escapeHtml(note.title||'未命名笔记')}</option>`).join('');
+function renderNotesSplitPickerResults(results, value, selectedId) {
+  const query = normalizeNoteSearch(value);
+  const folders = new Map(notes.filter(item => item.type === 'folder').map(folder => [String(folder.id), folder]));
+  const tree = new Map();
+  const folderTitle = folder => folder.title || '未命名文件夹';
+  for (const note of getNoteItems()) {
+    const parents = getNoteParentFolders(note, id => folders.get(id));
+    const title = note.title || '未命名笔记';
+    if (query && !normalizeNoteSearch([...parents.map(folderTitle), title].join(' / ')).includes(query)
+      && !noteSearchText(note).includes(query)) continue;
+    let branch = tree;
+    for (const folder of parents) {
+      if (!branch.has(folder)) branch.set(folder, new Map());
+      branch = branch.get(folder);
+    }
+    branch.set(note, null);
+  }
+
+  function renderBranch(branch) {
+    return sortNoteItems([...branch.keys()]).map(item => {
+      if (item.type === 'folder') {
+        return `<details open><summary>${escapeHtml(folderTitle(item))}</summary>${renderBranch(branch.get(item))}</details>`;
+      }
+      const id = String(item.id);
+      const current = id === String(selectedId) ? ' aria-current="true"' : '';
+      return `<button type="button" data-note-id="${escapeAttr(id)}"${current}>${escapeHtml(item.title || '未命名笔记')}</button>`;
+    }).join('');
+  }
+
+  results.innerHTML = tree.size ? renderBranch(tree) : '<p role="status">没有匹配的笔记</p>';
+  results.scrollTop = 0;
+}
+
+function openNotesSplitPicker(trigger, secondary) {
+  const picker = document.getElementById('notesSplitPicker');
+  if (!notesImmersive || !notesImmersiveSplit || picker.open) return;
+  const search = document.getElementById('notesSplitPickerSearch');
+  const results = document.getElementById('notesSplitPickerResults');
+  document.getElementById('notesSplitPickerTitle').textContent = secondary ? '选择右栏笔记' : '选择左栏笔记';
+  search.value = '';
+  search.oninput = () => renderNotesSplitPickerResults(results, search.value, secondary ? notesSplitNoteId : activeNoteId);
+  results.onclick = event => {
+    const button = event.target.closest('button[data-note-id]');
+    if (!button) return;
+    picker.close();
+    if (secondary) selectNotesSplitNote(button.dataset.noteId);
+    else selectNotesPrimaryPane(button.dataset.noteId);
+    trigger.focus({ preventScroll: true });
+  };
+  picker.onkeydown = event => {
+    // Leave native dialog dismissal in charge of Escape instead of exiting immersive mode.
+    if (event.key === 'Escape') event.stopPropagation();
+  };
+  search.oninput();
+  picker.showModal();
+}
+
+function updateNotesSplitPickerTrigger(id, note, label) {
+  const button = document.getElementById(id);
+  const title = note?.title || '未命名笔记';
+  button.firstElementChild.textContent = title;
+  button.title = title;
+  button.setAttribute('aria-label', label + '，当前笔记：' + title);
 }
 
 // 只刷新另一侧；输入中的 DOM、光标和撤销上下文保持原位。
@@ -2742,11 +2808,8 @@ function renderNotesImmersiveSplit(){
     section.classList.remove('notes-split');
     return;
   }
-  const allNotes=notes.filter(item=>item.type==='note');
-  const primarySelect=document.getElementById('notesSplitPrimarySelect');
-  const secondarySelect=document.getElementById('notesSplitSecondarySelect');
-  if(primarySelect)primarySelect.innerHTML=notesSplitOptions(allNotes,activeNoteId);
-  if(secondarySelect)secondarySelect.innerHTML=notesSplitOptions(allNotes,secondary.id);
+  updateNotesSplitPickerTrigger('notesSplitPrimaryPicker', getActiveNote(), '选择左栏笔记');
+  updateNotesSplitPickerTrigger('notesSplitSecondaryPicker', secondary, '选择右栏笔记');
 
   const primaryReading=noteViewMode==='preview';
   document.getElementById('notesSplitPrimaryRead')?.classList.toggle('active',primaryReading);

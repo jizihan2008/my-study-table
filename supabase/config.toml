@@ -1,0 +1,3 @@
+[functions.calendar-feed]
+# Apple Calendar cannot send an MST login JWT. The handler validates a private token.
+verify_jwt = false
