@@ -99,14 +99,14 @@
 .ap-footer svg { width:13px; height:13px; }
 
 /* The expensive backdrop filter belongs to surfaces, never each row or input. */
-[data-glass="true"] :is(.sidebar, .section > .card, .today-dashboard .today-schedule-card, .today-dashboard .today-timer-card, .today-dashboard .today-goals-card, .today-dashboard .today-checkin-card, .today-dashboard .today-focus-card, .today-dashboard .today-review-card, .today-welcome, .modal, .mobile-more-panel, .mobile-tabbar, .context-menu, .timer-float, .appearance-preview-card, .ai-float) {
+[data-glass="true"] :is(.sidebar, .section > .card, .today-dashboard .today-schedule-card, .today-dashboard .today-timer-card, .today-dashboard .today-goals-card, .today-dashboard .today-checkin-card, .today-dashboard .today-focus-card, .today-dashboard .today-review-card, .today-welcome, .modal, .mobile-tabbar, .context-menu, .timer-float, .appearance-preview-card, .ai-float) {
   background:var(--glass-surface);
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
   border-color:var(--glass-border);
   box-shadow:var(--glass-shadow), inset 0 1px 0 rgba(255,255,255,.2);
 }
-[data-glass="true"] :is(.modal, .context-menu, .mobile-more-panel) { background:var(--glass-modal); }
+[data-glass="true"] :is(.modal, .context-menu) { background:var(--glass-modal); }
 [data-glass="true"] #section-today > .card { background:transparent; backdrop-filter:none; -webkit-backdrop-filter:none; box-shadow:none; border:none; }
 [data-glass="true"] :is(.today-welcome, .today-dashboard [class$="-card"], .appearance-preview-card, .modal) { position:relative; }
 [data-material="liquid"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .modal, .appearance-preview-card, .ai-float) { --glass-pointer-active:0; }
@@ -125,16 +125,16 @@
 [data-glass="true"] .today-welcome { color:var(--text); }
 [data-glass="true"] .today-welcome :is(h2,p,.today-date) { color:var(--text); }
 [data-glass="true"] .today-welcome p { opacity:.8; }
-[data-glass-renderer="fallback"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .modal, .mobile-tabbar, .mobile-more-panel, .context-menu, .appearance-preview-card, .ai-float) {
+[data-glass-renderer="fallback"] :is(.sidebar, .section > .card, .today-dashboard [class$="-card"], .today-welcome, .modal, .mobile-tabbar, .context-menu, .appearance-preview-card, .ai-float) {
   background:var(--ap-panel); backdrop-filter:none; -webkit-backdrop-filter:none;
 }
 /* Every nested card and large feature panel follows the same linear surface
    alpha. Nested surfaces keep the cheaper frosted layer; the outer containers
    below carry liquid refraction once, so SVG filters are not multiplied. */
-[data-glass="true"] :is([class$="-card"], [class*="-card "], .today-shortcuts button, .notes-sidebar, .notes-document-workspace, .ai-chat-messages, .prompt-studio, .prompt-library, .prompt-editor-header, .prompt-builder, .prompt-preview-panel, .ap-section) {
+[data-glass="true"] :is([class$="-card"], [class*="-card "], .notes-sidebar, .notes-document-workspace, .ai-chat-messages, .prompt-studio, .prompt-library, .prompt-editor-header, .prompt-builder, .prompt-preview-panel, .ap-section) {
   background:var(--glass-surface) !important;
 }
-[data-glass="true"]:not([data-glass-renderer="fallback"]) :is([class$="-card"], [class*="-card "], .today-shortcuts button, .notes-sidebar, .notes-document-workspace, .ai-chat-messages, .prompt-studio, .prompt-library, .prompt-editor-header, .prompt-builder, .prompt-preview-panel, .ap-section) {
+[data-glass="true"]:not([data-glass-renderer="fallback"]) :is([class$="-card"], [class*="-card "], .notes-sidebar, .notes-document-workspace, .ai-chat-messages, .prompt-studio, .prompt-library, .prompt-editor-header, .prompt-builder, .prompt-preview-panel, .ap-section) {
   -webkit-backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
   backdrop-filter:blur(var(--glass-render-blur,18px)) saturate(var(--glass-saturation,125%));
 }
@@ -189,7 +189,7 @@ html[data-mobile-webkit="true"] :is(body, .app) {
   height:100dvh;
   min-height:100dvh;
 }
-html[data-mobile-webkit="true"] :is(.app, #timerFloat, #mobileMorePanel) {
+html[data-mobile-webkit="true"] :is(.app, #timerFloat) {
   zoom:normal !important;
 }
 /* Safe rendering mode deliberately trades decorative motion for reliable
@@ -201,7 +201,7 @@ html[data-mobile-webkit="true"] *::after {
   transition:none !important;
 }
 /* One foreground color is derived from accent luminance for custom colors. */
-:is(.welcome-focus-btn, #btnTodoToggle, #habitAddBtn, .btn-add, .btn-new-note, .today-checkin-btn:not(.done), .today-goals-add-btn) { color:var(--on-primary,#fff); }
+:is(#btnTodoToggle, #habitAddBtn, .btn-add, .btn-new-note, .today-checkin-btn:not(.done), .today-goals-add-btn) { color:var(--on-primary,#fff); }
 .btn-new-note svg { color:inherit !important; }
 @media (max-width:800px) {
   #settingsModal .modal:has(#settingsPanelAppearance.active) { width:100%; }

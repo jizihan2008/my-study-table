@@ -268,17 +268,19 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
         <span class="focus-text${(focusItem || todo).done ? ' completed' : ''}" title="${escapeAttr(displayPath.full)}">
           ${displayPath.parents.length ? `<span class="focus-parent-path">${displayPath.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>')}</span>` : ''}
           <span class="focus-title">${escapeHtml(todo.text)}</span>
-          ${buildTodoQuickStatusHTML(todo)}
           ${buildTodayTodoDueHTML(todo, done)}
         </span>
-        <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录" aria-label="跳转到待办目录">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
-        </button>
-        ${isDirectFocus ? `<button class="focus-timer-start" onclick="event.stopPropagation(); startFocusTimer(${todoId})" title="以此任务开始计时" aria-label="以此任务开始计时"><i data-lucide="play" class="lucide-icon"></i></button>` : ''}
-        ${isDirectFocus ? `<button class="focus-note-edit" onclick="event.stopPropagation(); editTodayFocusNote(${todoId})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}">
-          <i data-lucide="message-square-plus" class="lucide-icon"></i>
-        </button>` : ''}
-        ${isDirectFocus ? `<button class="focus-delete" onclick="event.stopPropagation(); deleteTodayFocusById(${todoId})" title="移除">✕</button>` : ''}
+        <div class="today-task-actions">
+          ${buildTodoQuickStatusHTML(todo)}
+          <button class="focus-nav" onclick="event.stopPropagation(); goToTodoFromFocus(${todoId})" title="跳转到待办目录" aria-label="跳转到待办目录">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg>
+          </button>
+          ${isDirectFocus ? `<button class="focus-timer-start" onclick="event.stopPropagation(); startFocusTimer(${todoId})" title="以此任务开始计时" aria-label="以此任务开始计时"><i data-lucide="play" class="lucide-icon"></i></button>` : ''}
+          ${isDirectFocus ? `<button class="focus-note-edit" onclick="event.stopPropagation(); editTodayFocusNote(${todoId})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}">
+            <i data-lucide="message-square-plus" class="lucide-icon"></i>
+          </button>` : ''}
+          ${isDirectFocus ? `<button class="focus-delete" onclick="event.stopPropagation(); deleteTodayFocusById(${todoId})" title="移除">✕</button>` : ''}
+        </div>
         </div>
       ${isEditingNote ? `<div class="today-focus-note-row editing">
         <input class="today-focus-note-input" id="todayFocusNoteInput-${todoId}" type="text" maxlength="160"

@@ -694,20 +694,11 @@ function runCalendarAutoRecords(now) {
 }
 
 let calendarTimerTypeFilter = 'all';
-let calendarTimerRecordsExpanded = false;
 
 function setCalendarTimerTypeFilter(type) {
   calendarTimerTypeFilter = type;
   const records = loadTimerRecords().filter(record => record.date === calendarSelectedDate);
   renderCalendarTimerRecords(records);
-}
-
-function toggleCalendarTimerRecordsExpanded() {
-  calendarTimerRecordsExpanded = !calendarTimerRecordsExpanded;
-  document.getElementById('calendarTimerRecords').classList.toggle('expanded', calendarTimerRecordsExpanded);
-  const button = document.getElementById('calendarTimerExpand');
-  button.textContent = calendarTimerRecordsExpanded ? '收起' : '展开全部';
-  button.setAttribute('aria-expanded', String(calendarTimerRecordsExpanded));
 }
 
 function renderCalendarTimerRecords(records) {
@@ -1034,10 +1025,8 @@ function renderCalendarTodoList(timerRecords = loadTimerRecords()) {
             <option value="all">全部</option>${options}
           </select>
         </label>
-        <button type="button" id="calendarTimerExpand" class="today-timer-link" onclick="toggleCalendarTimerRecordsExpanded()"
-          aria-expanded="${calendarTimerRecordsExpanded}" aria-controls="calendarTimerRecords">${calendarTimerRecordsExpanded ? '收起' : '展开全部'}</button>
       </div>
-      <div id="calendarTimerRecords" class="today-timer-records${calendarTimerRecordsExpanded ? ' expanded' : ''}"></div>
+      <div id="calendarTimerRecords" class="today-timer-records expanded"></div>
     </div>`;
   }
 

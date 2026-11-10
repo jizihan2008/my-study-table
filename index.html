@@ -21,9 +21,9 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261108-ai-mobile-toolbar-r1">
-<link rel="stylesheet" href="css/workspace.css?v=20261108-note-tab-r1">
-<link rel="stylesheet" href="css/appearance.css?v=20261102-ipad-top-edge-r1">
+<link rel="stylesheet" href="css/style.css?v=20261110-today-cleanup-r1">
+<link rel="stylesheet" href="css/workspace.css?v=20261110-today-banner-r1">
+<link rel="stylesheet" href="css/appearance.css?v=20261110-today-banner-r1">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
 <script src="lib/lucide/lucide.min.js"></script>
@@ -37,10 +37,10 @@
 <div class="app-bg-video-overlay"></div>
 
 <!-- Sidebar Hover Trigger -->
-<button class="sidebar-hover-trigger" id="sidebarHoverTrigger" type="button" aria-label="打开导航侧边栏" aria-controls="sidebar" aria-expanded="false" title="打开导航侧边栏" onmouseenter="openSidebar()" onmouseleave="scheduleCloseSidebar()" onclick="event.stopPropagation();openSidebar()"></button>
+<button class="sidebar-hover-trigger" id="sidebarHoverTrigger" type="button" aria-label="打开导航侧边栏" aria-controls="sidebar" aria-expanded="false" title="打开导航侧边栏" onmouseenter="if (isDesktopSidebarMode()) openSidebar()" onmouseleave="scheduleCloseSidebar()" onclick="event.stopPropagation();openSidebar()"></button>
 
 <!-- Sidebar -->
-<div class="sidebar" id="sidebar" aria-hidden="true" onmouseenter="openSidebar()" onmouseleave="scheduleCloseSidebar()">
+<div class="sidebar" id="sidebar" aria-hidden="true" onmouseenter="if (isDesktopSidebarMode()) openSidebar()" onmouseleave="scheduleCloseSidebar()">
   <div class="sidebar-logo">
     <div class="brand-mark"><i data-lucide="book-open" aria-hidden="true"></i></div>
     <div><h2>Study Table</h2><p>留一点时间，给成长。</p></div>
@@ -69,14 +69,10 @@
 </div>
 
 <!-- 移动端：抽屉遮罩 -->
-<div class="mobile-drawer-overlay" id="mobileDrawerOverlay" onclick="closeMobileDrawer()"></div>
+<div class="mobile-drawer-overlay" id="mobileDrawerOverlay" onclick="closeSidebar()"></div>
 
 <!-- 移动端：底部导航栏（由 renderMobileTabbar() 动态渲染，随「编辑界面栏」配置变化） -->
-<nav class="mobile-tabbar" id="mobileTabbar"></nav>
-
-<!-- 移动端：更多抽屉 -->
-<div class="mobile-drawer-overlay" id="mobileMoreOverlay" onclick="closeMobileMore()"></div>
-<nav class="mobile-more-panel" id="mobileMorePanel"></nav>
+<nav class="mobile-tabbar" id="mobileTabbar" aria-label="底部导航"></nav>
 
 <div class="app">
   <!-- ── Todo Section ── -->
@@ -389,14 +385,8 @@
             <span class="today-date" id="todayWelcomeDate"></span>
             <h2>让今天，向前一小步。</h2>
             <p>选一件重要的小事，开始属于你的专注时光。</p>
-            <button class="welcome-focus-btn" onclick="switchTab('timer')"><i data-lucide="play" aria-hidden="true"></i>开始专注<i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
           </div>
           <div class="study-illustration" aria-hidden="true"><div class="study-orbit"></div><div class="study-sun"></div><div class="study-book study-book-back"></div><div class="study-book study-book-front"><i data-lucide="sprout"></i><span>ONE STEP<br>AT A TIME</span></div><div class="study-pencil"></div><div class="study-spark">✦</div></div>
-        </div>
-        <div class="today-shortcuts" aria-label="学习快捷入口">
-          <button onclick="switchTab('todo')"><span class="shortcut-icon"><i data-lucide="check-square" aria-hidden="true"></i></span><span><strong>整理待办</strong><small>把想法变成下一步</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
-          <button onclick="switchTab('notes')"><span class="shortcut-icon"><i data-lucide="notebook-pen" aria-hidden="true"></i></span><span><strong>打开笔记</strong><small>留住每一次灵感</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
-          <button onclick="switchTab('calendar')"><span class="shortcut-icon"><i data-lucide="calendar-days" aria-hidden="true"></i></span><span><strong>查看日程</strong><small>为重要的事留出时间</small></span><i data-lucide="arrow-up-right" aria-hidden="true"></i></button>
         </div>
 
         <div class="today-main-grid">
@@ -1926,9 +1916,9 @@
 <script type="application/x-study-script" data-app-src="js/diagnostics.js?v=20260825-r1"></script>
 <script type="application/x-study-script" data-app-src="js/env.js?v=20260911-r2"></script>
 <script type="application/x-study-script" data-app-src="js/theme-model.js?v=20260914-r5"></script>
-<script type="application/x-study-script" data-app-src="js/liquid-glass.js?v=20261028-ai-float-r2"></script>
+<script type="application/x-study-script" data-app-src="js/liquid-glass.js?v=20261110-today-banner-r1"></script>
 <script type="application/x-study-script" data-app-src="js/nav-shortcuts.js?v=20260920-r1"></script>
-<script type="application/x-study-script" data-app-src="js/core.js?v=20261028-ai-float-r1"></script>
+<script type="application/x-study-script" data-app-src="js/core.js?v=20261110-mobile-sidebar"></script>
 <script type="application/x-study-script" data-app-src="js/trash.js?v=20261104-todo-batch-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todos.js?v=20261104-focus-unlimited-r1"></script>
 <script type="application/x-study-script" data-app-src="js/notes.js?v=20261108-split-note-picker-r1"></script>
@@ -1936,31 +1926,32 @@
 <script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
 <script type="application/x-study-script" data-app-src="js/timer-types.js?v=20261013-custom-types-r1"></script>
-<script type="application/x-study-script" data-app-src="js/today.js?v=20261104-focus-unlimited-r1"></script>
+<script type="application/x-study-script" data-app-src="js/today.js?v=20261110-today-banner-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-next-steps.js?v=20261109-ai-next-steps"></script>
 <script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261102-ai-trash-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261109-ai-chat-recovery-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261109-ai-chat-recovery-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261109-ai-next-steps"></script>
 <script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261108-ai-calendar-categories-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261109-ai-next-steps"></script>
 <script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-client.js?v=20260914-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
 <script type="application/x-study-script" data-app-src="js/ai-agents.js?v=20261103-agent-settings-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261108-ai-calendar-categories-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261109-ai-chat-recovery-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261109-ai-next-steps"></script>
+<script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261109-ai-next-steps"></script>
 <script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261108-ai-mobile-toolbar-r1"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
 <script type="application/x-study-script" data-app-src="js/prompts.js?v=20261029-sync-refresh-r1"></script>
 <script type="application/x-study-script" data-app-src="js/music.js"></script>
 <script type="application/x-study-script" data-app-src="js/memory.js?v=20261014-complete-summary-r1"></script>
 <script type="application/x-study-script" data-app-src="js/bg-media-idb.js?v=20260906-r2"></script>
-<script type="application/x-study-script" data-app-src="js/appearance.js?v=20260929-r1"></script>
+<script type="application/x-study-script" data-app-src="js/appearance.js?v=20261110-mobile-sidebar"></script>
 <script type="application/x-study-script" data-app-src="js/backup-idb.js?v=20260812-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habit-status-text.js?v=20260920-r1"></script>
-<script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261104-todo-batch-r1"></script>
+<script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261110-today-task-actions"></script>
 <script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261014-idb-r1"></script>
 <script type="application/x-study-script" data-app-src="js/settings.js?v=20261108-category-manager-r1"></script>
 <script type="application/x-study-script" data-app-src="js/utils.js?v=20261020-fold-menu-r1"></script>
@@ -1982,7 +1973,7 @@
 <script type="application/x-study-script" data-app-src="js/books-annot.js?v=20260914-r5"></script>
 <script type="application/x-study-script" data-app-src="js/keywords.js?v=20260818-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
-<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261108-ai-calendar-categories-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261110-timer-records-expanded"></script>
 <script type="application/x-study-script" data-app-src="js/calendar-subscription.js?v=20261109-todo-due-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
 <script type="application/x-study-script" data-app-src="js/timer.js?v=20261104-stats-period-review"></script>

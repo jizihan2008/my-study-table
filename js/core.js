@@ -236,6 +236,10 @@ function openSidebar() {
   sidebarOpen = true;
   document.getElementById('sidebar').classList.add('open');
   syncSidebarAccessibility(true);
+  if (!isDesktopSidebarMode()) {
+    document.getElementById('mobileDrawerOverlay').classList.add('open');
+    document.body.classList.add('mobile-drawer-open');
+  }
 }
 
 // 立即关闭侧边栏（点击外部 / 左滑手势调用，无 hover 延迟）
@@ -274,6 +278,9 @@ function initSidebarHover() {
   sidebar.addEventListener('focusout', (event) => {
     if (!sidebar.contains(event.relatedTarget)) scheduleCloseSidebar();
   });
+  sidebar.querySelector('.sidebar-footer').addEventListener('click', (event) => {
+    if (!isDesktopSidebarMode() && event.target.closest('button')) closeSidebar();
+  });
   trigger.addEventListener('focusout', () => scheduleCloseSidebar());
 
   // 侧边栏只是临时抽屉，应用失去焦点时也自动收起。
@@ -296,7 +303,6 @@ function initSidebarHover() {
 
 // ═══════════ 触屏左缘右滑 → 打开侧边栏 ═══════════
 // 从屏幕最左缘（40px 内）开始向右滑（水平位移 > 70px 且水平明显大于垂直）即打开。
-// 兼容两种布局：>800px 用 openSidebar，≤800px 用 openMobileDrawer。
 let _edgeSwipe = null; // { startX, startY }
 function initSidebarEdgeSwipe() {
   const canTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints > 0);
@@ -308,8 +314,10 @@ function initSidebarEdgeSwipe() {
 
   document.addEventListener('touchstart', (e) => {
     // 侧边栏已开、类全屏（iOS PDF 全屏）、或触点在输入类元素上时不监听
-    if (sidebarOpen || document.body.classList.contains('mobile-drawer-open')
-        || document.documentElement.classList.contains('mst-fake-fullscreen')) { _edgeSwipe = null; return; }
+    if (sidebarOpen || document.body.classList.contains('notes-immersive')
+        || document.documentElement.classList.contains('mst-fake-fullscreen')
+        || e.target.closest('.modal-overlay, input, textarea, select, [contenteditable="true"]')
+        || e.touches.length !== 1) { _edgeSwipe = null; return; }
     const t = e.touches && e.touches[0];
     if (!t) return;
     if (t.clientX <= edgeZone) {
@@ -328,8 +336,7 @@ function initSidebarEdgeSwipe() {
     // 左滑（dx<0）忽略；水平位移达标且明显大于垂直位移 → 判定为呼出手势
     if (dx >= minDist && dx > dy * slope) {
       _edgeSwipe.fired = true;
-      if (isDesktopSidebarMode()) openSidebar();
-      else openMobileDrawer();
+      openSidebar();
     }
   }, { passive: true });
 
@@ -350,8 +357,7 @@ function initSidebarDismiss() {
     if (sidebar.contains(target)) return;   // 侧边栏内部仍可正常操作
     const edgeTrigger = document.getElementById('sidebarHoverTrigger');
     if (edgeTrigger && edgeTrigger.contains(target)) return;
-    if (isDesktopSidebarMode()) closeSidebar();
-    else closeMobileDrawer();
+    closeSidebar();
   };
 
   // ① 点击外部关闭（两种布局通用）
@@ -400,8 +406,7 @@ function initSidebarDismiss() {
     // 左滑（dx<0）且水平位移达标、明显大于垂直位移 → 关闭
     if (dx <= -minDist && -dx > dy * slope) {
       _sidebarSwipe.fired = true;
-      if (isDesktopSidebarMode()) closeSidebar();
-      else closeMobileDrawer();
+      closeSidebar();
     }
   }, { passive: true });
 
@@ -510,7 +515,7 @@ function switchTab(tab) {
   // 同步移动端底部导航激活态
   updateMobileTabbar(tab);
   // 桌面导航后保持侧栏展开，由移出或点击外部收起；移动端仍关闭抽屉。
-  if (!isDesktopSidebarMode()) closeMobileDrawer();
+  if (!isDesktopSidebarMode()) closeSidebar();
 }
 
 // ═══════════ 触屏长按 → 右键菜单（长按 500ms 触发 contextmenu）═══════════
@@ -563,98 +568,36 @@ function isMobileHiddenNav(id) {
   return ['inbox', 'codegen', 'extensions'].indexOf(id) !== -1;
 }
 
-// 移动端底部导航固定模块 id（不含「更多」，more 始终在最右）
-function getMobileBottomTabs() {
-  const cfg = loadNavConfig();
-  const display = getNavDisplayItems();
-  // 过滤：排除已隐藏、移动端不可见（PWA 收件箱/AI编程/扩展）、不在导航里的
-  const base = cfg.bottomTabs.filter(id =>
-    display.some(n => n.id === id) &&
-    !cfg.hidden.includes(id) &&
-    !isMobileHiddenNav(id)
-  );
-  // 确保至少 1 个（避免全部隐藏导致底部只剩「更多」），不足时用「今天」兜底
-  if (base.length === 0) base.push('today');
-  // 最多 4 个模块 Tab（加「更多」共 5 个，避免过挤）
-  return base.slice(0, 4);
-}
+const MAX_MOBILE_BOTTOM_TABS = 5;
 
 // 动态渲染移动端底部导航栏（由「编辑界面栏」的底部导航配置驱动）
 function renderMobileTabbar(activeTab) {
   const bar = document.getElementById('mobileTabbar');
   if (!bar) return;
-  const ids = getMobileBottomTabs();
+  const cfg = loadNavConfig();
   const display = getNavDisplayItems();
-  const mkTab = (id) => {
+  const ids = cfg.bottomTabs;
+  if (!ids.length) {
+    const visible = getVisibleNavIds(cfg).filter(id => !isMobileHiddenNav(id));
+    ids.push(visible.includes('today') ? 'today' : (visible[0] || 'today'));
+  }
+  bar.innerHTML = ids.map(id => {
     const info = display.find(n => n.id === id);
-    if (!info) return '';
-    return `<button class="mobile-tab ${activeTab === id ? 'active' : ''}" data-tab="${id}" onclick="switchTab('${id}')">
+    return `<button class="mobile-tab" type="button" data-tab="${id}" onclick="switchTab('${id}')">
       <i data-lucide="${info.icon}" class="lucide-icon"></i><span>${info.label}</span>
     </button>`;
-  };
-  bar.innerHTML = ids.map(mkTab).join('') + `
-    <button class="mobile-tab ${ids.indexOf(activeTab) === -1 ? 'active' : ''}" data-tab="more" onclick="openMobileMore()">
-      <i data-lucide="layout-grid" class="lucide-icon"></i><span>更多</span>
-    </button>`;
+  }).join('');
+  updateMobileTabbar(activeTab);
   if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
 }
 
 function updateMobileTabbar(tab) {
-  const bar = document.getElementById('mobileTabbar');
-  if (!bar) return;
-  const ids = getMobileBottomTabs();
-  const tabs = bar.querySelectorAll('.mobile-tab');
-  tabs.forEach(t => {
-    const key = t.dataset.tab;
-    const isActive = (key === tab) || (key === 'more' && ids.indexOf(tab) === -1);
-    t.classList.toggle('active', !!isActive);
-    if (isActive) t.setAttribute('aria-current', 'page');
-    else t.removeAttribute('aria-current');
+  document.querySelectorAll('#mobileTabbar .mobile-tab').forEach(button => {
+    const isActive = button.dataset.tab === tab;
+    button.classList.toggle('active', isActive);
+    if (isActive) button.setAttribute('aria-current', 'page');
+    else button.removeAttribute('aria-current');
   });
-}
-
-function openMobileDrawer() {
-  openSidebar();
-  if (isDesktopSidebarMode()) return;
-  const ov = document.getElementById('mobileDrawerOverlay');
-  if (ov) ov.classList.add('open');
-  document.body.classList.add('mobile-drawer-open');
-}
-function closeMobileDrawer() {
-  closeSidebar();
-}
-
-function openMobileMore() {
-  const panel = document.getElementById('mobileMorePanel');
-  const ov = document.getElementById('mobileMoreOverlay');
-  if (!panel) return;
-  const cfg = loadNavConfig();
-  const all = getNavDisplayItems();
-  const order = cfg.order.concat(all.filter(n => !cfg.order.includes(n.id)).map(n => n.id));
-  panel.innerHTML = order.filter(id => !cfg.hidden.includes(id) && !isMobileHiddenNav(id)).map(id => {
-    const info = all.find(n => n.id === id);
-    if (!info) return '';
-    return `<button class="mobile-more-item" onclick="switchTab('${id}');closeMobileMore();">
-      <i data-lucide="${info.icon}" class="lucide-icon"></i><span>${info.label}</span>${info.badge ? `<span class="nav-badge">${info.badge}</span>` : ''}
-    </button>`;
-  }).join('') +
-    `<div class="mobile-more-sep"></div>` +
-    `<button class="mobile-more-item" onclick="closeMobileMore();openSettingsModal();"><i data-lucide="settings" class="lucide-icon"></i><span>设置</span></button>` +
-    `<button class="mobile-more-item" onclick="closeMobileMore();toggleTheme();"><i data-lucide="sun-moon" class="lucide-icon"></i><span>切换深浅色</span></button>` +
-    `<button class="mobile-more-item" onclick="closeMobileMore();openHelpModal();"><i data-lucide="help-circle" class="lucide-icon"></i><span>帮助</span></button>` +
-    `<button class="mobile-more-item" onclick="closeMobileMore();openNavSettings();"><i data-lucide="sliders-horizontal" class="lucide-icon"></i><span>编辑界面栏</span></button>` +
-    `<button class="mobile-more-item" onclick="closeMobileMore();openChangelogModal();"><i data-lucide="list" class="lucide-icon"></i><span>更新日志</span></button>`;
-  if (ov) ov.classList.add('open');
-  panel.classList.add('open');
-  document.body.classList.add('mobile-drawer-open');
-  if (typeof lucide !== 'undefined') setTimeout(function() { lucide.createIcons(); }, 0);
-}
-function closeMobileMore() {
-  const panel = document.getElementById('mobileMorePanel');
-  const ov = document.getElementById('mobileMoreOverlay');
-  if (panel) panel.classList.remove('open');
-  if (ov) ov.classList.remove('open');
-  document.body.classList.remove('mobile-drawer-open');
 }
 
 // ═══════════ Navigation Management ═══════════
@@ -727,10 +670,11 @@ function loadNavConfig() {
   const newIds = allIds.filter(id => !cfg.order.includes(id));
   cfg.order = [...cfg.order.filter(id => allIds.includes(id)), ...newIds];
   if (!Array.isArray(cfg.hidden)) cfg.hidden = [];
-  // 底部导航固定模块（移动端），默认 today/todo/notes/calendar + 「更多」固定在最右
+  // 底部导航只固定手机端可见的模块。
   if (!Array.isArray(cfg.bottomTabs)) cfg.bottomTabs = ['today', 'todo', 'notes', 'calendar'];
-  // 过滤掉已隐藏或移动端不显示、或不在导航里的底部 Tab
-  cfg.bottomTabs = cfg.bottomTabs.filter(id => id !== 'more' && allIds.includes(id));
+  cfg.bottomTabs = [...new Set(cfg.bottomTabs)].filter(id =>
+    id !== 'more' && allIds.includes(id) && !cfg.hidden.includes(id) && !isMobileHiddenNav(id)
+  ).slice(0, MAX_MOBILE_BOTTOM_TABS);
   // 自定义快捷键（Ctrl+按键）：未自定义时按可见顺序自动分配 Ctrl+1~9
   if (!cfg.shortcuts || typeof cfg.shortcuts !== 'object') cfg.shortcuts = {};
   if (typeof cfg.shortcutsCustom !== 'boolean') cfg.shortcutsCustom = false;
@@ -844,8 +788,8 @@ function openNavSettings() {
       <span class="hint" id="navShortcutHint">点击按键框后按下想用的键（字母 / 数字 / F1~F12 / 符号）；Backspace 清除，Esc 取消。</span>
       <button type="button" class="nav-shortcut-reset" onclick="resetNavShortcuts()">↺ 恢复默认（Ctrl+1~9）</button>
     </div>
-    <div class="nav-bottom-title">📱 底部导航栏（手机端固定，最多 4 个）</div>
-    <div class="hint" style="margin-bottom:8px;">下方已固定模块可<b>拖拽排序</b>或点击 ✕ 移除；勾选下方模块可添加到手机底部（「更多」始终在最右，其余从「更多」抽屉进入）。</div>
+    <div class="nav-bottom-title">📱 底部导航栏（手机端固定，最多 ${MAX_MOBILE_BOTTOM_TABS} 个）</div>
+    <div class="hint" style="margin-bottom:8px;">勾选模块即可固定到手机底栏，已固定模块可<b>拖拽排序</b>或点击 ✕ 移除。从屏幕左缘向右滑动可打开侧边栏。</div>
     <div id="navBottomTabs" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;"></div>
     <button class="btn-save-modal" onclick="saveNavSettings()" style="margin-top:10px;">💾 保存</button>
   `;
@@ -922,15 +866,19 @@ function toggleNavItemVisibility(tabId) {
   const cfg = loadNavConfig();
   const idx = cfg.hidden.indexOf(tabId);
   if (idx >= 0) cfg.hidden.splice(idx, 1);
-  else cfg.hidden.push(tabId);
+  else {
+    cfg.hidden.push(tabId);
+    cfg.bottomTabs = cfg.bottomTabs.filter(id => id !== tabId);
+  }
   saveNavConfig(cfg);
   // Re-render the sort list so shortcut numbers update for visible-only items
   renderNavSortList(cfg);
+  renderNavBottomTabs();
   // 立即刷新侧边栏，让显示/隐藏即时生效
   renderSidebarNav();
 }
 
-// 底部导航栏编辑区：已固定模块可拖拽排序，可选模块点击添加（最多 4 个，「更多」始终在最右）
+// 底部导航栏编辑区：已固定模块可拖拽排序，可选模块点击添加。
 function renderNavBottomTabs() {
   const wrap = document.getElementById('navBottomTabs');
   if (!wrap) return;
@@ -939,8 +887,7 @@ function renderNavBottomTabs() {
   const byId = {};
   display.forEach(function(n) { byId[n.id] = n; });
   // 已固定的底部模块（保持 bottomTabs 顺序）
-  const fixed = cfg.bottomTabs.filter(function(id) { return byId[id] && !cfg.hidden.includes(id); });
-  // 可选的底部模块：未隐藏、非移动端隐藏、非 more、且未固定
+  const fixed = cfg.bottomTabs;
   const options = display.filter(function(n) {
     return n.id !== 'more' && !cfg.hidden.includes(n.id) && !isMobileHiddenNav(n.id) && fixed.indexOf(n.id) === -1;
   });
@@ -958,7 +905,7 @@ function renderNavBottomTabs() {
             <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="14" height="14"><path d="M18 6 6 18"/><path d="m6 6 12 12"/></svg>
           </button>
         </div>`;
-      }).join('') : '<div class="hint" style="font-size:12px;">尚未固定任何模块（手机底部将只显示「更多」）</div>'}
+      }).join('') : '<div class="hint" style="font-size:12px;">尚未固定任何模块，底栏会显示一个默认入口。</div>'}
     </div>
     <div class="nav-bottom-addlist" style="display:flex;flex-wrap:wrap;gap:8px;">
       ${options.length ? options.map(function(n) {
@@ -1020,9 +967,9 @@ function initNavBottomSort(onChange) {
 
 function addNavBottomTab(tabId) {
   const cfg = loadNavConfig();
-  if (cfg.bottomTabs.length >= 4) {
-    if (typeof showToast === 'function') showToast('底部导航最多固定 4 个模块');
-    else alert('底部导航最多固定 4 个模块');
+  if (!cfg.order.includes(tabId) || cfg.hidden.includes(tabId) || isMobileHiddenNav(tabId) || cfg.bottomTabs.includes(tabId)) return;
+  if (cfg.bottomTabs.length >= MAX_MOBILE_BOTTOM_TABS) {
+    showMiniToast(`底部导航最多固定 ${MAX_MOBILE_BOTTOM_TABS} 个模块`);
     renderNavBottomTabs();
     return;
   }

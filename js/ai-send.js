@@ -443,8 +443,8 @@ async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, inc
 
 // sendAiMessage(externalText, externalAttachments, externalContextInserts, externalDisplayContent)：
 //   - 不传参：从输入框读取（用户手动发送）。若当前正在回复 → 入队等待，回复完成后自动发送。
-//   - 传参：由队列自动发送（drainAiSendQueue 调用），文本/附件来自队列快照。
-async function sendAiMessage(externalText, externalAttachments, externalContextInserts, externalDisplayContent) {
+//   - 传参：发送队列快照或卡片中选定的步骤。
+async function sendAiMessage(externalText, externalAttachments, externalContextInserts, externalDisplayContent, { preserveComposer = false } = {}) {
   const convId = getActiveConvId();
   const fromQueue = externalText !== undefined;
   const input = document.getElementById('aiInput');
@@ -523,7 +523,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
   try {
     updateAiSendButton();
 
-    const { docTexts, displayAttachments, visionFiles } = await prepareAiMessageAttachments(currentAttachments, apiCfg, conv);
+    const { docTexts, displayAttachments, visionFiles } = await prepareAiMessageAttachments(currentAttachments, apiCfg, conv, !preserveComposer);
 
     // Build user message content
     const userContent = text + docTexts;
@@ -567,7 +567,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
     console.log('[API] model:', apiCfg.model, 'deepThink:', apiCfg.deepThink, 'deepThinkParams:', JSON.stringify(deepThinkParams));
 
     const streamingKeyName = (apiCfg.name || apiCfg.model || 'AI');
-    const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
+    const loopRes = await runToolCallLoop({ ...apiCfg, nextSteps: true }, conv, null, snapshot => {
       if (snapshot.reset) {
         clearAiStreamingDraft(conv.id);
         return;
@@ -602,8 +602,9 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
 
     // Build the final assistant message
     const keyName = (apiCfg.name || apiCfg.model || 'AI');
-    const finalAssistantMsg = { role: 'assistant', content: finalCleanText, time: timeStr, keyName };
+    const finalAssistantMsg = { role: 'assistant', content: finalCleanText || '（未收到回复）', time: timeStr, keyName };
     if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
+    if (loopRes.nextSteps) finalAssistantMsg._nextSteps = loopRes.nextSteps;
     appendMessage(conv, finalAssistantMsg);
     if (!loopRes.stopped && !loopRes.streamError && !loopRes.incompleteReason && loopRes.finishReason !== 'length' && loopRes.finishReason !== 'content_filter'
         && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, finalCleanText, keyName);
@@ -641,7 +642,7 @@ async function sendAiMessage(externalText, externalAttachments, externalContextI
       sendAiNotification(conv, errorMsg, (apiCfg.name || apiCfg.model || 'AI'));
     } else {
       const composer = document.getElementById('aiInput');
-      if (getActiveConvId() === conv.id && composer && !composer.value && !aiAttachments.length
+      if (!preserveComposer && getActiveConvId() === conv.id && composer && !composer.value && !aiAttachments.length
           && !(typeof aiContextInserts !== 'undefined' && aiContextInserts.length)) {
         composer.value = displayContent;
         aiAttachments = currentAttachments;
@@ -753,7 +754,7 @@ async function regenerateFromUserNode(conv, userNodeId, config) {
 
   try {
     const streamingKeyName = (apiCfg.name || apiCfg.model || 'AI');
-    const loopRes = await runToolCallLoop(apiCfg, conv, null, snapshot => {
+    const loopRes = await runToolCallLoop({ ...apiCfg, nextSteps: true }, conv, null, snapshot => {
       if (snapshot.reset) clearAiStreamingDraft(conv.id);
       else setAiStreamingDraft(conv.id, { content: snapshot.content, reasoning: snapshot.reasoning, keyName: streamingKeyName });
     });
@@ -781,6 +782,7 @@ async function regenerateFromUserNode(conv, userNodeId, config) {
     const timeStr = new Date().toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
     const finalAssistantMsg = { role: 'assistant', content: finalCleanText || '（未收到回复）', time: timeStr, keyName };
     if (finalReasoning) finalAssistantMsg.reasoning = finalReasoning;
+    if (loopRes.nextSteps) finalAssistantMsg._nextSteps = loopRes.nextSteps;
     appendMessage(conv, finalAssistantMsg);
     if (!loopRes.stopped && !loopRes.streamError && !loopRes.incompleteReason && loopRes.finishReason !== 'length' && loopRes.finishReason !== 'content_filter'
         && typeof recordAiTaskCompletion === 'function') recordAiTaskCompletion(conv, finalCleanText, keyName);

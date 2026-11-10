@@ -3832,6 +3832,7 @@ function stripHallucinatedToolTranscript(text) {
 
 // Extract all <tool_call> blocks from AI reply, returns { cleanText, toolCalls[] }
 function extractToolCalls(text) {
+  if (typeof stripAiNextStepsFooter === 'function') text = stripAiNextStepsFooter(text);
   text = stripHallucinatedToolTranscript(text);
   const dsml = parseDsmlToolCalls(text);
   if (dsml && dsml.valid) {

@@ -31,7 +31,7 @@ function harness() {
   vm.createContext(ctx);
   vm.runInContext(source('settings-sync'), ctx);
   ctx.setSyncedSetting = ctx.window.setSyncedSetting;
-  for (const file of ['ai-tree', 'ai-attach', 'skills', 'ai-tools', 'ai-api', 'ai-send', 'ai-render']) {
+  for (const file of ['ai-tree', 'ai-next-steps', 'ai-attach', 'skills', 'ai-tools', 'ai-api', 'ai-send', 'ai-render']) {
     // aiAttachments 在应用里由 js/settings.js 以 let 声明（全局词法绑定），测试里显式补上，
     // 否则对 ctx.aiAttachments 的赋值只会写到宿主对象上，源码里的 push/读改写都看不到
     vm.runInContext(file === 'ai-attach' ? 'let aiAttachments = [];\n' + source(file) : source(file), ctx);
@@ -952,10 +952,13 @@ test('legacy tool history keeps only the leading calls before a fake transcript'
 
 test('streaming display preserves normal text around calls but removes a fake result tail', () => {
   const renderCtx = {
+    window: { addEventListener() {} },
+    closeAiConvTabContextMenu() {},
     document: { addEventListener() {} },
     setTimeout, clearTimeout, console
   };
   vm.createContext(renderCtx);
+  vm.runInContext(source('ai-next-steps'), renderCtx);
   vm.runInContext(source('ai-render'), renderCtx);
   const raw = '正在查看。\n<tool_call>{"action":"list_todos","params":{}}</tool_call>\nuser【工具执行结果】\n巨大的伪结果';
   assert.equal(renderCtx.sanitizeAiStreamingText(raw), '正在查看。');

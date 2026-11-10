@@ -2530,7 +2530,7 @@ body {
 
 /* ── Today: Check-in ── */
 .today-section-title { font-size: 16px; font-weight: 600; color: var(--text); }
-.today-main-grid { grid-column: 1 / -1; width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; margin-top: 14px; align-items: start; }
+.today-main-grid { grid-column: 1 / -1; width: 100%; display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; align-items: start; }
 .today-left-column, .today-right-column { display: flex; flex-direction: column; gap: 14px; min-width: 0; }
 .today-left-column .today-checkin-card { order: 1; }
 .today-left-column .today-goals-card { order: 2; }
@@ -2737,6 +2737,7 @@ body {
   transition: var(--transition);
 }
 .today-focus-main { display: flex; align-items: center; gap: 10px; width: 100%; min-width: 0; }
+.today-task-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
 .today-focus-item:hover { border-color: var(--primary); }
 .today-focus-item .focus-check {
   width: 24px; height: 24px; padding: 0; border-radius: 50%;
@@ -2771,10 +2772,6 @@ body {
   background: var(--card); color: var(--pill-color); font: inherit; font-size: 12px; cursor: pointer;
 }
 .todo-quick-status:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
-.today-focus-item .focus-text:has(.todo-quick-status) {
-  display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; column-gap: 6px;
-}
-.today-focus-item .focus-text:has(.todo-quick-status) .focus-parent-path { grid-column: 1 / -1; }
 .today-focus-note-row {
   width: calc(100% - 30px); margin: 0 0 0 30px; padding: 4px 10px;
   border: 0; background: transparent; color: var(--text-secondary); border-radius: 7px;
@@ -3411,6 +3408,39 @@ body {
 }
 .ai-chat-msg.user .ai-chat-bubble { background: var(--primary); color: #fff; border-bottom-right-radius: 4px; }
 .ai-chat-msg.assistant .ai-chat-bubble { background: var(--card); color: var(--text); border: 1px solid var(--border); border-bottom-left-radius: 4px; }
+.ai-next-steps {
+  margin-top: 6px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--card);
+  color: var(--text);
+  font-size: 13px;
+  overflow-wrap: anywhere;
+}
+.ai-next-steps-title { font-weight: 600; margin-bottom: 4px; }
+.ai-next-steps-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  padding: 7px 0;
+  cursor: pointer;
+}
+.ai-next-steps-option input { flex: 0 0 auto; margin: 3px 0 0; accent-color: var(--primary); }
+.ai-next-steps-option small { margin-inline-start: 8px; color: var(--text-secondary); }
+.ai-next-steps-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 6px; }
+.ai-next-steps-actions button {
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--text);
+  background: var(--input-bg);
+  font: inherit;
+  cursor: pointer;
+}
+.ai-next-steps-actions .ai-next-steps-run { border-color: var(--primary); color: var(--primary); }
+.ai-next-steps-actions button:disabled { opacity: 0.5; cursor: default; }
 .ai-chat-bubble pre { background: var(--input-bg); padding: 8px 12px; border-radius: 6px; overflow-x: auto; font-size: 13px; margin: 6px 0; }
 
 /* ── AI Tool Call Notification ── */
@@ -10619,7 +10649,7 @@ i[data-lucide] {
 
 /* 抽屉遮罩 */
 .mobile-drawer-overlay {
-  display: none; position: fixed; inset: 0; z-index: 150;
+  display: none; position: fixed; inset: 0; z-index: 170;
   background: rgba(0,0,0,0.45); opacity: 0; pointer-events: none;
   transition: opacity 0.25s ease;
 }
@@ -10634,33 +10664,16 @@ i[data-lucide] {
   backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px);
 }
 .mobile-tab {
-  flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center;
+  flex: 1; min-width: 0; display: flex; flex-direction: column; align-items: center; justify-content: center;
   gap: 3px; border: none; background: transparent; color: var(--text-secondary);
   font-size: 11px; font-weight: 500; cursor: pointer; min-height: 44px;
   transition: color 0.15s ease, transform 0.1s ease; font-family: inherit;
 }
+.mobile-tab span { max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mobile-tab .lucide-icon { width: 22px; height: 22px; }
 .mobile-tab:active { transform: scale(0.94); }
 .mobile-tab.active { color: var(--primary); }
 .mobile-tab.active .lucide-icon { filter: drop-shadow(0 1px 4px rgba(79,110,247,0.4)); }
-
-/* 更多面板 */
-.mobile-more-panel {
-  display: none; position: fixed; right: 0; top: 0; bottom: 0; z-index: 170;
-  width: min(280px, 82vw); background: var(--card);
-  box-shadow: -6px 0 24px rgba(0,0,0,0.15); padding: 20px 12px 32px;
-  overflow-y: auto; transform: translateX(100%); transition: transform 0.25s cubic-bezier(0.4,0,0.2,1);
-}
-.mobile-more-panel.open { display: block; transform: translateX(0); }
-.mobile-more-item {
-  display: flex; align-items: center; gap: 10px; width: 100%;
-  padding: 13px 14px; border: none; background: transparent;
-  border-radius: 10px; font-size: 14px; font-weight: 500; color: var(--text);
-  cursor: pointer; font-family: inherit; transition: var(--transition); min-height: 44px;
-}
-.mobile-more-item .lucide-icon { width: 18px; height: 18px; color: var(--text-secondary); }
-.mobile-more-item:hover { background: var(--hover-bg); }
-.mobile-more-sep { height: 1px; background: var(--border); margin: 8px 4px; }
 
 /* ── ≤800px：移动端布局 ── */
 @media (max-width: 800px) {
@@ -10671,8 +10684,11 @@ i[data-lucide] {
   #section-ai[data-toolbar-collapsed="true"] :is(.ai-toolbar-toggles, .ai-toolbar-quick) { display: none; }
 
   /* 抽屉化侧栏 */
-  .sidebar { width: 260px; z-index: 180; }
-  .sidebar-hover-trigger { display: none !important; }
+  .sidebar { width: min(260px, 85vw); z-index: 180; }
+  html:not(.env-electron) .sidebar-hover-trigger {
+    top: 50%; bottom: auto; height: 56px; transform: translateY(-50%); touch-action: pan-y;
+  }
+  html:not(.env-electron) .sidebar-nav { touch-action: pan-y; }
   .mobile-hamburger { display: flex; }
   .mobile-drawer-overlay { display: block; }
 
@@ -10696,16 +10712,13 @@ i[data-lucide] {
   #section-books .card {
     border-radius: 0 !important;
   }
-  /* 手机端隐藏顶部标题栏（My Study Table / 副标题），让内容撑满屏幕；
-     移动端用底部导航 + 「更多」抽屉导航，无需左侧侧边栏与汉堡按钮。 */
+  /* 手机端隐藏顶部标题栏，使用底部导航与左侧抽屉。 */
   .header {
     height: 0; padding: 0; text-align: left;
   }
   .header h1, .header p { display: none; }
   .header-actions { display: none; }
   .header .mobile-hamburger { display: none; }
-  /* 手机端隐藏左侧侧边栏及其悬浮触发条 */
-  .sidebar, .sidebar-hover-trigger { display: none; }
 
   /* 单列卡片 */
   .card { padding: 14px; border-radius: 14px; }
@@ -10856,9 +10869,6 @@ i[data-lucide] {
 
   /* 关闭抽屉时回到正常滚动 */
   body.mobile-drawer-open { overflow: hidden; }
-
-  /* 更多抽屉的遮罩 */
-  #mobileMoreOverlay.mobile-drawer-overlay { display: block; }
 
   /* ── 教材模块：手机端三级页面导航（书架→目录→章节内容）── */
   #booksApp.bk-layout {
@@ -12663,7 +12673,21 @@ html.env-pwa .electron-only { display: none; }
 .todo-queue-empty { padding:18px 14px; text-align:center; color:var(--text-secondary); font-size:13px; }
 #todayTodoQueueToggle[hidden] { display:none; }
 .today-queue-card.is-collapsed .today-review-toggle .lucide-icon { transform:rotate(180deg); }
-@media(max-width:1100px) { .todo-queue-item .today-focus-main { flex-wrap:wrap; } .todo-queue-item .focus-text { min-width:100px; } .todo-queue-actions { margin-left:auto; } }
+@media (max-width: 1100px) {
+  .todo-queue-item .today-focus-main { flex-wrap: wrap; }
+  .todo-queue-item .focus-text { min-width: 100px; }
+  .todo-queue-item .today-task-actions { margin-left: auto; }
+}
+@media (max-width: 800px) {
+  .today-focus-main { flex-wrap: wrap; row-gap: 6px; }
+  .todo-queue-item .focus-text { min-width: 0; }
+  .today-task-actions {
+    flex: 0 0 100%; flex-wrap: wrap; justify-content: flex-end; gap: 4px;
+  }
+  .today-task-actions .todo-quick-status { max-width: 64px; }
+  .today-focus-item .today-task-actions button { padding-inline: 5px; }
+  .todo-queue-actions { gap: 4px; }
+}
 
 .prompt-report-field { border-top: 1px solid var(--border); padding: 9px 0; }
 .prompt-report-field:first-child { border-top: 0; }

@@ -134,7 +134,7 @@ function sanitizeAiToolRoundText(value) {
 }
 
 function sanitizeAiStreamingText(value) {
-  return sanitizeAiToolRoundText(value)
+  return sanitizeAiToolRoundText(typeof stripAiNextStepsFooter === 'function' ? stripAiNextStepsFooter(value) : value)
     .replace(/(?:\\?<|&lt;)[a-z_\\\s]*$/i, '')
     .replace(/\n{3,}/g, '\n\n');
 }
@@ -693,6 +693,7 @@ function renderAiMessages() {
   const pathNodes = isTreeConv(conv) ? activePathNodes(conv) : [];
   // 无树结构兜底：直接用 messages（正常情况下不应发生）
   const seq = pathNodes.length > 0 ? pathNodes : (conv.messages || []);
+  const nextStepsMessage = getAiNextStepsMessage(seq);
   for (let idx = 0; idx < seq.length; idx++) {
     const n = seq[idx];
     if (!n || !n.role || n.role === 'root') continue;
@@ -755,7 +756,7 @@ function renderAiMessages() {
     // Keep an in-progress chain visible. Earlier completed exchanges can still
     // collapse while a later question is generating its answer.
     if (exchangeMessages.length > 1 && !(latest && (isAiLoading(conv.id) || streamingDraft))) {
-      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1);
+      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1).filter(item => item.msg !== nextStepsMessage);
       exchangeEnd.chainKey = encodeURIComponent(JSON.stringify([String(conv.id), exchangeUser.nodeId ?? exchangeUser.idx,
         exchangeStart.nodeId ?? exchangeStart.idx, exchangeEnd.nodeId ?? exchangeEnd.idx]));
       exchangeEnd.foldedMessages.forEach(item => { item.foldedIntoChain = true; });
@@ -1071,6 +1072,7 @@ function renderAiMessages() {
         <div class="ai-chat-msg-body">
           ${keyNameHtml}
           <div class="ai-chat-bubble">${kimiSearchBadge}${attachHtml}${reasoningHtml}${contentHtml}${contextHtml}${timeLabel}</div>
+          ${m === nextStepsMessage ? renderAiNextStepsCard(conv, m) : ''}
           ${bottomHtml}
         </div>
       </div>

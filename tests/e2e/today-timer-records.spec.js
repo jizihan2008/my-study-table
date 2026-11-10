@@ -146,14 +146,14 @@ test('today timer expands and filters; both reports include types and totals', a
     await page.evaluate(() => switchTab('calendar'));
     const calendarList = page.locator('#calendarTimerRecords');
     const calendarTotals = page.locator('#calendarTodoList .today-timer-total strong');
+    await expect(page.locator('#calendarTimerExpand')).toHaveCount(0);
+    await expect(calendarList).toHaveCSS('max-height', 'none');
     await expect(calendarTotals).toHaveText(['3:00:00', '3:01:00']);
     await expect(calendarList.locator('.timer-history-date-total')).toHaveText('共 4:01:00');
     await expect(calendarList).toContainText('旧记录');
     await page.locator('#calendarTimerTypeFilter').selectOption('reading');
     await expect(calendarList.locator('.timer-history-item')).toHaveCount(2);
     await expect(calendarTotals).toHaveText(['3:00:00', '3:01:00']);
-    await page.locator('#calendarTimerExpand').click();
-    await expect(calendarList).toHaveClass(/expanded/);
     await page.evaluate(() => {
       const records = loadTimerRecords();
       Object.assign(records.find(record => record.id === 101), {
@@ -164,6 +164,7 @@ test('today timer expands and filters; both reports include types and totals', a
     const eventRecord = calendarList.locator('.timer-history-item').filter({ hasText: '日历事件阅读' });
     await expect(eventRecord.locator('.timer-activity-badge')).toHaveText('阅读');
     await expect(eventRecord.locator('.timer-auto-badge')).toBeVisible();
+    await expect(calendarList).toHaveCSS('max-height', 'none');
     await page.evaluate(() => switchTab('today'));
     await page.evaluate(() => saveTimerRecords(loadTimerRecords().filter(record => record.activityType !== 'reading')));
     await expect(focusTotal).toHaveText('2:00:00');

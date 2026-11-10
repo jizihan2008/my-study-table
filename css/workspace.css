@@ -172,10 +172,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .today-date::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: var(--primary); }
 .today-welcome h2 { color: var(--workspace-hero-text); font-size: clamp(23px, 2.25vw, 33px); font-weight: 650; letter-spacing: -1px; margin: 12px 0 9px; }
 .today-welcome p { font-size: 12px; color: var(--workspace-hero-muted); }
-.welcome-focus-btn { display: flex; align-items: center; gap: 9px; color: #fff; background: var(--primary); border: none; border-radius: 9px; padding: 11px 15px; font-size: 12px; font-weight: 550; cursor: pointer; margin-top: 23px; transition: var(--transition); }
-.welcome-focus-btn:hover { background: var(--primary-hover); transform: translateY(-1px); }
-.welcome-focus-btn svg { width: 14px; height: 14px; }
-.welcome-focus-btn svg:last-child { margin-left: 12px; }
 .study-illustration { width: 250px; height: 190px; position: relative; flex-shrink: 0; margin: 0 10px; }
 .study-orbit { position: absolute; width: 235px; height: 160px; border: 1px solid color-mix(in srgb, var(--primary) 15%, transparent); border-radius: 50%; transform: rotate(-24deg); top: 20px; }
 .study-sun { position: absolute; width: 67px; height: 67px; border-radius: 50%; background: #f3dca6; right: 4px; top: 2px; }
@@ -186,16 +182,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .study-book-front span { font-size: 9px; display: block; font-weight: 650; letter-spacing: 1.5px; line-height: 1.6; }
 .study-pencil { position: absolute; bottom: 2px; left: 53px; width: 146px; height: 7px; border-radius: 2px; background: #bd9366; transform: rotate(-7deg); border-right: 12px solid #e8cdb0; }
 .study-spark { position: absolute; left: 22px; top: 17px; font-size: 24px; color: #8f9fc8; }
-.today-shortcuts { grid-column: 1 / -1; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
-.today-shortcuts button { min-width: 0; display: flex; align-items: center; gap: 12px; padding: 18px; border: 1px solid var(--border); background: var(--card); border-radius: 13px; text-align: left; color: var(--text); cursor: pointer; transition: var(--transition); }
-.today-shortcuts button:hover { border-color: color-mix(in srgb, var(--primary) 38%, var(--border)); transform: translateY(-2px); box-shadow: var(--shadow); }
-.shortcut-icon { display: grid; place-items: center; width: 37px; height: 39px; flex-shrink: 0; background: var(--accent-soft); border-radius: 10px; color: var(--primary); }
-.shortcut-icon svg { width: 18px; height: 18px; stroke-width: 1.6; }
-.today-shortcuts button:nth-child(2) .shortcut-icon { background: color-mix(in srgb, #b48451 10%, var(--card)); color: #b48451; }
-.today-shortcuts button:nth-child(3) .shortcut-icon { background: color-mix(in srgb, #53947c 10%, var(--card)); color: #53947c; }
-.today-shortcuts strong { display: block; font-size: 12px; font-weight: 600; }
-.today-shortcuts small { display: block; font-size: 10px; color: var(--text-secondary); margin-top: 5px; }
-.today-shortcuts button > svg { margin-left: auto; width: 14px; height: 14px; color: var(--text-secondary); flex-shrink: 0; }
 .today-dashboard > :is(.today-timer-card, .today-goals-card, .today-checkin-card, .today-focus-card, .today-review-card) { min-width: 0; margin: 0; padding: 22px; background: var(--card); border: 1px solid var(--border); border-radius: 15px; box-shadow: var(--shadow); }
 .today-section-title { font-size: 13px; font-weight: 650; }
 .today-section-title svg { margin-right: 5px; }
@@ -316,15 +302,9 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
   .today-welcome h2 { font-size: 25px; }
   .today-welcome p { font-size: 11px; max-width: 245px; line-height: 1.8; }
   .study-illustration { display: none; }
-  .today-shortcuts { gap: 8px; }
-  .today-shortcuts button { padding: 14px 8px; flex-direction: column; gap: 9px; text-align: center; border-radius: 12px; }
-  .today-shortcuts button > svg, .today-shortcuts small { display: none; }
-  .today-shortcuts strong { font-size: 11px; }
-  .shortcut-icon { width: 34px; height: 34px; }
   .today-dashboard > :is(.today-timer-card, .today-goals-card, .today-checkin-card, .today-focus-card, .today-review-card) { padding: 18px; border-radius: 14px !important; }
   .today-checkin-day { min-height: 53px; }
   .mobile-tabbar { border-top: 1px solid var(--border); background: var(--card); box-shadow: 0 -4px 18px rgba(31,42,68,.035); padding-bottom: env(safe-area-inset-bottom, 0px); }
-  .mobile-more-panel { border-radius: 18px 18px 0 0 !important; }
   .modal { border-radius: 17px !important; max-height: 90dvh; }
   .modal-header { padding: 16px; }
   .modal-body { padding: 16px; }
@@ -341,7 +321,6 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 @media (max-width: 800px) {
   .header { height: auto; }
   .header .mobile-hamburger { display: flex; }
-  .sidebar { display: flex; }
 }
 
 /* Final reading and compact-layout refinements. */
@@ -376,7 +355,7 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 /* Window-contained immersive note editor. This fills the app window without
    requesting native/browser fullscreen. */
 body.notes-immersive { overflow: hidden; }
-body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mobile-drawer-overlay, .mobile-more-panel) {
+body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mobile-drawer-overlay) {
   visibility: hidden !important; pointer-events: none !important;
 }
 #section-notes.notes-immersive {

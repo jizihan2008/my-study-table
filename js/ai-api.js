@@ -979,12 +979,13 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
   let repeatCount = 0;
   let malformedProtocolCount = 0;
 
-  let apiMessages = buildApiMessages(conv, null, apiCfg);
+  const nextStepsContext = apiCfg.nextSteps ? [buildAiNextStepsPrompt(conv.messages)] : null;
+  let apiMessages = buildApiMessages(conv, nextStepsContext, apiCfg);
 
   for (let loop = 0; ; loop++) {
     if (loop > 0) {
       // Rebuild messages with the latest conversation state (including tool results)
-      apiMessages = buildApiMessages(conv, null, apiCfg);
+      apiMessages = buildApiMessages(conv, nextStepsContext, apiCfg);
     }
     // Check if user requested stop (per-conversation)
     const convId = conv.id;
@@ -1021,6 +1022,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
       throw error;
     }
     const { cleanText, toolCalls, reasoning, rawReply, finishReason } = apiResult;
+    const protocolText = apiCfg.nextSteps ? stripAiNextStepsFooter(rawReply) : rawReply;
     finalFinishReason = finishReason || '';
 
     // Check stop again after API call (in case it took a long time)
@@ -1034,9 +1036,9 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     }
 
     if (toolCalls.length === 0) {
-      const protocolIssue = supportsNativeLocalTools(apiCfg) && extractToolCalls(rawReply || '').toolCalls.length
+      const protocolIssue = supportsNativeLocalTools(apiCfg) && extractToolCalls(protocolText || '').toolCalls.length
         ? { message:'当前接口只执行原生 function tools，正文中的工具指令未执行' }
-        : (typeof detectMalformedToolProtocol === 'function' ? detectMalformedToolProtocol(rawReply) : null);
+        : (typeof detectMalformedToolProtocol === 'function' ? detectMalformedToolProtocol(protocolText) : null);
       if (protocolIssue) {
         malformedProtocolCount++;
         if (typeof onStreamDelta === 'function') onStreamDelta({ reset: true, loop });
@@ -1048,7 +1050,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
 
         // Use the ordinary assistant -> tool result -> next AI round chain.
         // The renderer marker hides raw DSML while preserving it for the model.
-        const assistantMsg = { role: 'assistant', content: rawReply || '', _malformedToolProtocol: true };
+        const assistantMsg = { role: 'assistant', content: protocolText || '', _malformedToolProtocol: true };
         if (reasoning) assistantMsg.reasoning = reasoning;
         appendMessage(conv, assistantMsg);
         appendMessage(conv, {
@@ -1243,8 +1245,8 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     // Include the reasoning specific to this call, so each assistant message
     // has its own reasoning attached (not just the first one)
     const persistedToolReply = typeof stripHallucinatedToolTranscript === 'function'
-      ? stripHallucinatedToolTranscript(rawReply)
-      : rawReply;
+      ? stripHallucinatedToolTranscript(protocolText)
+      : protocolText;
     const assistantMsg = { role: 'assistant', content: persistedToolReply, _toolRoundCleanText: cleanText };
     if (reasoning) assistantMsg.reasoning = reasoning;
     const nativeBatch = toolCalls.every(tc => tc.native);
@@ -1335,10 +1337,19 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
     try { renderToday(); } catch (e) { console.warn('[AI] renderToday 失败:', e); }
   }
 
+  let nextSteps = null;
+  if (apiCfg.nextSteps) {
+    if (!stopped && !streamError && !incompleteReason && finalFinishReason !== 'length' && finalFinishReason !== 'content_filter') {
+      nextSteps = readAiNextStepsUpdate(finalRawReply, conv.messages);
+    }
+    finalCleanText = stripAiNextStepsFooter(finalCleanText);
+    finalRawReply = stripAiNextStepsFooter(finalRawReply);
+  }
   return {
     finalCleanText,
     finalRawReply,
     finalReasoning,
+    nextSteps,
     allToolResults,
     finishReason: finalFinishReason,
     stopped,

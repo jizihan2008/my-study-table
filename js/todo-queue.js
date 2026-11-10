@@ -293,15 +293,17 @@ function renderTodoQueue() {
       <span class="focus-text${todo.done ? ' completed' : ''}" title="${escapeAttr(path.full)}">
         ${path.parents.length ? '<span class="focus-parent-path">' + path.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>') + '</span>' : ''}
         <span class="focus-title">${escapeHtml(todo.text)}</span>
-        ${buildTodoQuickStatusHTML(todo)}
         ${buildTodayTodoDueHTML(todo)}
       </span>
-      <button class="focus-nav" onclick="goToTodoFromFocus(${id})" title="跳转到待办目录" aria-label="跳转到待办目录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></button>
-      <button class="focus-note-edit" onclick="event.stopPropagation(); editQueueTodoNote(${id})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>
-      <div class="todo-queue-actions">
-        <button class="focus-nav" title="添加到今日聚焦" onclick="addQueueToFocus(0, ${id})" ${todo.done ? 'disabled' : ''}>今日</button>
-        <button class="focus-nav" title="添加到明日聚焦" onclick="addQueueToFocus(1, ${id})" ${todo.done ? 'disabled' : ''}>明日</button>
-        <button class="focus-delete" onclick="removeTodoFromQueue(${id})" title="移出队列" aria-label="移出队列">✕</button>
+      <div class="today-task-actions">
+        ${buildTodoQuickStatusHTML(todo)}
+        <button class="focus-nav" onclick="goToTodoFromFocus(${id})" title="跳转到待办目录" aria-label="跳转到待办目录"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M22 19a2 2 0 01-2 2H4a2 2 0 01-2-2V5a2 2 0 012-2h5l2 3h9a2 2 0 012 2z"/></svg></button>
+        <button class="focus-note-edit" onclick="event.stopPropagation(); editQueueTodoNote(${id})" title="${note ? '编辑一句话' : '添加一句话'}" aria-label="${note ? '编辑一句话' : '添加一句话'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>
+        <div class="todo-queue-actions">
+          <button class="focus-nav" title="添加到今日聚焦" onclick="addQueueToFocus(0, ${id})" ${todo.done ? 'disabled' : ''}>今日</button>
+          <button class="focus-nav" title="添加到明日聚焦" onclick="addQueueToFocus(1, ${id})" ${todo.done ? 'disabled' : ''}>明日</button>
+          <button class="focus-delete" onclick="removeTodoFromQueue(${id})" title="移出队列" aria-label="移出队列">✕</button>
+        </div>
       </div></div>
       ${editing ? `<div class="today-focus-note-row editing" draggable="false" ondragstart="event.stopPropagation(); event.preventDefault()">
         <input class="today-focus-note-input" id="queueTodoNoteInput-${id}" type="text" maxlength="160" value="${escapeAttr(note)}" placeholder="写一句话提醒自己…" onkeydown="handleQueueTodoNoteKeydown(event, ${id})" onblur="saveQueueTodoNote(${id}, this.value)">

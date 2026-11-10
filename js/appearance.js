@@ -196,12 +196,12 @@ function applyUiZoom(el){
   // 也可能在滚动或局部重绘时留下大片旧纹理。移动 WebKit 固定使用原生 100%。
   if(document.documentElement.dataset.mobileWebkit==='true'){
     if(el?.style){el.style.removeProperty('zoom');return;}
-    for(const selector of ['.app','#timerFloat','#mobileMorePanel'])document.querySelector(selector)?.style.removeProperty('zoom');
+    for(const selector of ['.app','#timerFloat'])document.querySelector(selector)?.style.removeProperty('zoom');
     return;
   }
   const zoom=String(getUiZoom());
   if(el?.style){el.style.zoom=zoom;return;}
-  for(const selector of ['.app','#timerFloat','#mobileMorePanel']){const node=document.querySelector(selector);if(node)node.style.zoom=zoom;}
+  for(const selector of ['.app','#timerFloat']){const node=document.querySelector(selector);if(node)node.style.zoom=zoom;}
 }
 
 
