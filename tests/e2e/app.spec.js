@@ -921,10 +921,17 @@ test('AI can manage calendar categories without deleting events or orphaning act
       });
       const blockedSubscription = await call('delete_calendar_category', { name: '运动' });
       const blockedRename = await call('rename_calendar_category', { name: '运动', newName: '锻炼' });
+      getSupabaseClient = () => ({
+        provider: 'supabase',
+        from: table => ({ select: () => ({ eq: () => table === 'calendar_custom_subscriptions' ? {
+          eq: () => ({ overlaps: () => ({ abortSignal: async () => ({ data: [{ name: '运动与待办', categories: ['运动'] }], error: null }) }) })
+        } : { in: () => ({ abortSignal: async () => ({ data: [], error: null }) }) } }) })
+      });
+      const blockedCustomRename = await call('rename_calendar_category', { name: '运动', newName: '锻炼' });
       getSupabaseClient = () => null;
       const removed = await call('delete_calendar_category', { name: '运动' });
       return { created, duplicate, id: event.data.id, blockedUsed, renamed, afterRename, cleared, blockedPolicy, categoriesAfterBlock,
-        blockedSubscription, blockedRename, removed, categories: getCalendarCategories(), events: loadCalendarEvents() };
+        blockedSubscription, blockedRename, blockedCustomRename, removed, categories: getCalendarCategories(), events: loadCalendarEvents() };
     } finally {
       getSupabaseClient = getClient;
       friendsGetSession = getSession;
@@ -940,6 +947,7 @@ test('AI can manage calendar categories without deleting events or orphaning act
   expect(outcome.categoriesAfterBlock).toEqual(['运动']);
   expect(outcome.blockedSubscription.text).toContain('有苹果日历订阅');
   expect(outcome.blockedRename.text).toContain('有苹果日历订阅');
+  expect(outcome.blockedCustomRename.text).toContain('自定义订阅「运动与待办」');
   expect(outcome.removed.ok).toBe(true);
   expect(outcome.categories).toEqual([]);
   expect(outcome.events).toHaveLength(1);

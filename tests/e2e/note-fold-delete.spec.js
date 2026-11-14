@@ -115,6 +115,71 @@ for (const secondary of [false, true]) {
   }
 }
 
+const closedFold = '<details class="note-fold"><summary>标题</summary><div class="note-fold-body"><p>隐藏正文</p></div></details>';
+
+for (const scenario of [
+  { name: 'between the fold and a paragraph', html: closedFold + '\n<p>后文</p>', position: 'afterFold', key: 'Backspace' },
+  { name: 'before the fold', html: '<p>前文</p>\n' + closedFold, position: 'beforeFold', key: 'Delete' },
+  { name: 'after a quote ending with a fold', html: '<blockquote>' + closedFold + '</blockquote>\n<p>后文</p>', position: 'nextTextStart', key: 'Backspace' },
+  { name: 'before a quote starting with a fold', html: '<p>前文</p>\n<blockquote>' + closedFold + '</blockquote>', position: 'previousTextEnd', key: 'Delete' },
+  { name: 'from the title into the next paragraph', html: closedFold + '<p>后文</p>', position: 'fromTitle', key: 'Backspace' },
+  { name: 'to replace text from the title into the next paragraph', html: closedFold + '<p>后文</p>', position: 'fromTitle', key: 'x' },
+  { name: 'to paste over text from the title into the next paragraph', html: closedFold + '<p>后文</p>', position: 'fromTitle', key: 'paste' },
+  { name: 'from the title to the fold end', html: closedFold + '<p>后文</p>', position: 'titleToAfterFold', key: 'Control+x' },
+  { name: 'from a paragraph into the title', html: '<p>前文</p>' + closedFold, position: 'intoTitle', key: 'Delete' },
+  { name: 'to replace a whole fold', html: '<p>前文</p>' + closedFold + '<p>后文</p>', position: 'wholeFold', key: 'x' },
+  { name: 'to cut a whole fold', html: '<p>前文</p>' + closedFold + '<p>后文</p>', position: 'wholeFold', key: 'Control+x' },
+  { name: 'across a whole fold', html: '<p>前文</p>' + closedFold + '<p>后文</p>', position: 'wholeFold', key: 'Backspace' }
+]) {
+  test(`closed fold boundary: ${scenario.key} ${scenario.name}`, async ({ page }) => {
+    await setup(page, false);
+    const host = page.locator('#notesRichEditor');
+    await host.evaluate((host, scenario) => {
+      host.innerHTML = scenario.html;
+      const fold = host.querySelector('details');
+      const title = fold.querySelector('summary').firstChild;
+      const range = document.createRange();
+      switch (scenario.position) {
+        case 'afterFold': range.setStartAfter(fold); break;
+        case 'beforeFold': range.setStartBefore(fold); break;
+        case 'nextTextStart': range.setStart(host.lastElementChild.firstChild, 0); break;
+        case 'previousTextEnd': range.setStart(host.firstElementChild.firstChild, 2); break;
+        case 'fromTitle':
+          range.setStart(title, 1);
+          range.setEnd(host.lastElementChild.firstChild, 1);
+          break;
+        case 'titleToAfterFold':
+          range.setStart(title, 1);
+          range.setEndAfter(fold);
+          break;
+        case 'intoTitle':
+          range.setStart(host.firstElementChild.firstChild, 1);
+          range.setEnd(title, 1);
+          break;
+        case 'wholeFold': range.selectNode(fold); break;
+      }
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+    }, scenario);
+    if (scenario.key === 'paste') {
+      await host.evaluate(host => {
+        const clipboardData = new DataTransfer();
+        clipboardData.setData('text/plain', '替换');
+        window.NoteImageClipboard = { getFiles: () => [] };
+        host.dispatchEvent(new ClipboardEvent('paste', { clipboardData, bubbles: true, cancelable: true }));
+      });
+    } else await page.keyboard.press(scenario.key);
+    if (scenario.position === 'wholeFold' && scenario.key === 'Backspace') {
+      await expect(host.locator('details')).toHaveCount(0);
+      await expect(host.locator('p')).toHaveText(['前文', '后文']);
+      expect(await page.evaluate(() => changes)).toEqual(['前文\n\n后文']);
+    } else {
+      expect(await host.evaluate(host => host.innerHTML)).toBe(scenario.html);
+      expect(await page.evaluate(() => changes)).toEqual([]);
+    }
+  });
+}
+
 for (const secondary of [false, true]) {
   for (const input of ['keyboard', 'beforeinput']) {
     for (const inTitle of [false, true]) {
@@ -182,3 +247,42 @@ test('word Backspace at the quote boundary is protected through beforeinput', as
   expect(await page.locator('details').evaluateAll(folds => folds.map(fold => fold.outerHTML))).toEqual(before);
   await expect(page.locator('blockquote')).toHaveText('引用正文');
 });
+
+for (const secondary of [false, true]) {
+  for (const input of ['keyboard', 'beforeinput']) {
+    test(`${secondary ? 'split' : 'primary'} removes a divider after a closed fold via ${input}`, async ({ page }) => {
+      await setup(page, secondary);
+      const markdown = ':::fold 标题\n**隐藏正文**\n\n- 保留列表\n:::\n\n---'
+        + (input === 'keyboard' ? '\n\n后续正文' : '');
+      await page.evaluate(markdown => editor.setMarkdown(markdown, 'test'), markdown);
+      const fold = page.locator('details');
+      const rule = page.locator('hr');
+      const before = await fold.evaluate(node => node.outerHTML);
+      if (input === 'keyboard') {
+        await rule.click();
+        await page.keyboard.press('Backspace');
+      } else {
+        await rule.evaluate(rule => {
+          const host = rule.parentElement;
+          host.focus();
+          const range = document.createRange();
+          range.setStartBefore(rule);
+          range.collapse(true);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          host.dispatchEvent(new InputEvent('beforeinput', {
+            inputType: 'deleteContentBackward', bubbles: true, cancelable: true
+          }));
+        });
+      }
+      await expect(rule).toHaveCount(0);
+      expect(await fold.evaluate(node => node.outerHTML)).toBe(before);
+      const saved = markdown.replace(/\n\n---/, '');
+      expect(await page.evaluate(() => changes)).toEqual([saved]);
+      await page.evaluate(saved => editor.setMarkdown(saved, 'test'), saved);
+      await fold.locator('summary').click({ position: { x: 2, y: 8 } });
+      await expect(fold.locator('strong')).toBeVisible();
+      await expect(fold.locator('li')).toHaveText('保留列表');
+    });
+  }
+}

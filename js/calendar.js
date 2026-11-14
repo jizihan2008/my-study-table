@@ -165,8 +165,13 @@ async function checkCalendarCategorySubscriptions(names) {
   try {
     const { data, error } = await client.from('calendar_category_subscriptions').select('category')
       .eq('user_id', userId).in('category', names).abortSignal(AbortSignal.timeout(8000));
-    if (error?.code === 'PGRST205') return '';
-    if (!error) return data?.length ? '分类「' + data[0].category + '」有苹果日历订阅，请先在日历订阅设置中停用。' : '';
+    if (error && error.code !== 'PGRST205') return '无法核对分类订阅状态，请检查网络连接后重试。';
+    if (data?.length) return '分类「' + data[0].category + '」有苹果日历订阅，请先在日历订阅设置中停用。';
+    const custom = await client.from('calendar_custom_subscriptions').select('name,categories')
+      .eq('user_id', userId).eq('include_events', false).overlaps('categories', names).abortSignal(AbortSignal.timeout(8000));
+    if (custom.error?.code === 'PGRST205') return '';
+    if (!custom.error) return custom.data?.length
+      ? '自定义订阅「' + custom.data[0].name + '」正在使用此分类，请先在订阅设置中停用。' : '';
   } catch (_) { /* Leave the category intact when its subscription cannot be checked. */ }
   return '无法核对分类订阅状态，请检查网络连接后重试。';
 }
@@ -593,11 +598,11 @@ function getCalEventDueOccurrences(ev, now) {
   // 回看 7 天（含今天）：多星期几的重复事件会在这里逐天命中
   for (let back = 6; back >= 0; back--) {
     const dayStr = _formatCalAutoDate(ref - back * 24 * 60 * 60 * 1000);
-    if (isCalEventOnDate(ev, dayStr)) take(dayStr);
+    if (isCalEventSeriesDate(ev, dayStr)) take(dayStr);
   }
   // 兜底：今天命中但被上面的回看遍历漏掉时（夏令时/跨月边界）再补一次
   const todayStr = _formatCalAutoDate(ref);
-  if (isCalEventOnDate(ev, todayStr) && !due.some(item => item.dateStr === todayStr)) take(todayStr);
+  if (isCalEventSeriesDate(ev, todayStr) && !due.some(item => item.dateStr === todayStr)) take(todayStr);
   return due;
 }
 
@@ -609,8 +614,8 @@ function shouldAutoRecordCalEvent(ev, now) {
 // 是否已经存在这一场的计时记录（按来源事件 + 结束时间判定，天然幂等）
 function hasTimerRecordForOccurrence(records, eventId, endTs) {
   if (!Array.isArray(records)) return false;
-  return records.some(r => r && r.sourceEventId === eventId && r.sessions &&
-    r.sessions.some(s => s && s.end === endTs));
+  return records.some(r => r && r.sourceEventId === eventId &&
+    (r.sourceEventEnd == null ? r.sessions?.some(s => s?.end === endTs) : r.sourceEventEnd === endTs));
 }
 
 // 是否有待补写的自动记账事件（供设置页决定是否启动自动巡检）
@@ -625,6 +630,37 @@ function hasPendingCalendarAutoRecords(now) {
 function _formatCalAutoDate(ts) {
   const d = new Date(ts);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0') + '-' + String(d.getDate()).padStart(2, '0');
+}
+
+function buildCalendarTimerRecord(ev, { dateStr, range }) {
+  return {
+    id: genTimerRecordId(),
+    name: String(ev.title || '').slice(0, 80),
+    targetId: null,
+    targetType: null,
+    date: _formatCalAutoDate(range.endTs),
+    totalMs: range.endTs - range.startTs,
+    sessions: [{ start: range.startTs, end: range.endTs }],
+    activityType: getCalendarTimerActivityType(ev),
+    affectsFocus: ev.autoActivityType ? getTimerActivityAffectsFocus(ev.autoActivityType) : ev.autoTimer !== false,
+    manual: false,
+    auto: true,
+    sourceEventId: ev.id,
+    sourceEventDate: dateStr,
+    sourceEventEnd: range.endTs
+  };
+}
+
+function getCalEventEarlyRecordOccurrence(ev, displayDate, records, now = Date.now()) {
+  if (ev?.autoRecord !== true || ev.allDay || !displayDate) return null;
+  const occurrences = getCalendarEventOccurrences([ev], displayDate, displayDate);
+  // 跨日事件按场次开始日解析时段。有重叠时，日程卡片对应最近开始的场次。
+  const dateStr = occurrences.map(item => item.date).sort().pop();
+  if (!dateStr) return null;
+  const range = resolveCalEventRange(ev, dateStr);
+  if (!range?.hasEnd || range.endTs - range.startTs < 60000 || range.endTs <= now ||
+    range.endTs <= (ev.lastAutoRecordEnd || 0) || hasTimerRecordForOccurrence(records, ev.id, range.endTs)) return null;
+  return { dateStr, range };
 }
 
 // 事件时段结束后自动补一条计时记录：计入当天累计与日历角标；
@@ -650,21 +686,7 @@ function runCalendarAutoRecords(now) {
       // 已经记过（跨刷新幂等）/ 不足 1 分钟：只推进水位，不重复写入
       if (totalMs < 60000) continue;
       if (hasTimerRecordForOccurrence(records, ev.id, item.range.endTs)) continue;
-      records.push({
-        id: genTimerRecordId(),
-        name: String(ev.title || '').slice(0, 80),
-        targetId: null,
-        targetType: null,
-        date: _formatCalAutoDate(item.range.endTs),
-        totalMs,
-        sessions: [{ start: item.range.startTs, end: item.range.endTs }],
-        activityType: getCalendarTimerActivityType(ev),
-        affectsFocus: ev.autoActivityType ? getTimerActivityAffectsFocus(ev.autoActivityType) : ev.autoTimer !== false,
-        manual: false,
-        auto: true,
-        sourceEventId: ev.id,
-        sourceEventDate: item.dateStr
-      });
+      records.push(buildCalendarTimerRecord(ev, item));
       created.push({
         title: String(ev.title || ''),
         dateStr: _formatCalAutoDate(item.range.endTs),
@@ -676,7 +698,7 @@ function runCalendarAutoRecords(now) {
   }
   if (!touched) return 0;
 
-  if (created.length > 0) saveTimerRecords(records);
+  if (created.length > 0 && saveTimerRecords(records) === false) return 0;
   try { saveCalendarEvents(events); } catch (e) { console.warn('[Calendar] 自动记账水位保存失败:', e); }
   if (created.length === 0) return 0;
   if (typeof renderTimer === 'function') { try { renderTimer(); } catch (e) {} }
@@ -705,7 +727,7 @@ function renderCalendarTimerRecords(records) {
   const list = document.getElementById('calendarTimerRecords');
   if (!list) return;
   const items = records.filter(record => calendarTimerTypeFilter === 'all' || getTimerActivityType(record) === calendarTimerTypeFilter);
-  list.innerHTML = renderTimerHistory(items, { readOnly: true })
+  list.innerHTML = renderTimerHistory(items, { readOnly: true, contextMenuSource: 'calendar' })
     || `<div class="today-goals-empty">${calendarTimerTypeFilter === 'all' ? '这一天还没有计时记录。' : '这一天还没有此类型的计时记录。'}</div>`;
 }
 
@@ -884,6 +906,7 @@ function selectCalendarDay(dateStr) {
 }
 
 function renderCalendarTodoList(timerRecords = loadTimerRecords()) {
+  if (typeof closeTimerRecordContextMenu === 'function') closeTimerRecordContextMenu();
   const container = document.getElementById('calendarTodoList');
   if (!calendarSelectedDate) {
     container.innerHTML = '<div class="calendar-todo-hint">点击日期查看该日的待办事项与事件</div>';
@@ -1382,7 +1405,7 @@ function submitCalEvent() {
   closeCalEventModal();
 }
 
-// ── Calendar Event Context Menu（右键：编辑 / 仅删除这一天 / 删除整个事件）──
+// ── Calendar Event Context Menu ──
 function showCalEventContextMenu(e, eventId, dateStr) {
   if (e && typeof e.preventDefault === 'function') e.preventDefault();
   if (e && typeof e.stopPropagation === 'function') e.stopPropagation();
@@ -1393,6 +1416,10 @@ function showCalEventContextMenu(e, eventId, dateStr) {
   const evs = loadCalendarEvents();
   const ev = evs.find(item => item.id === eventId);
   const recurring = isCalEventRecurring(ev);
+  const earlyRecordItem = document.getElementById('calCtxRecordEarly');
+  if (earlyRecordItem) {
+    earlyRecordItem.hidden = ev?.autoRecord !== true || !getCalEventEarlyRecordOccurrence(ev, dateStr, loadTimerRecords());
+  }
   const oneItem = document.getElementById('calCtxDeleteOne');
   // 只有「每周重复」的事件才可能出现"只删这一天"
   if (oneItem) oneItem.style.display = recurring ? '' : 'none';
@@ -1425,12 +1452,32 @@ function calCtxEdit() {
   if (id !== null) openCalEventModal(dateStr, id);
 }
 
+function calCtxRecordEarly() {
+  const id = calendarCtxEventId;
+  const displayDate = calendarCtxEventDate;
+  closeCalEventContextMenu();
+  if (id === null) return;
+  const ev = loadCalendarEvents().find(item => item.id === id);
+  const records = loadTimerRecords();
+  const occurrence = getCalEventEarlyRecordOccurrence(ev, displayDate, records);
+  if (!occurrence) return;
+
+  // 只保存这一场的计时记录。自动巡检到期时按来源查重，再推进水位。
+  records.push(buildCalendarTimerRecord(ev, occurrence));
+  if (saveTimerRecords(records) === false) {
+    showMiniToast('计时记录保存失败', 'error');
+    return;
+  }
+  if (typeof renderTimer === 'function') renderTimer();
+  showMiniToast('已提前计入计时记录');
+}
+
 function calCtxDeleteOneDay() {
   const id = calendarCtxEventId;
   const dateStr = calendarCtxEventDate;
   closeCalEventContextMenu();
   if (id === null || !dateStr) return;
-  skipCalendarEventDate(id, dateStr);
+  if (skipCalendarEventDate(id, dateStr) && typeof renderTodaySchedule === 'function') renderTodaySchedule();
 }
 
 function calCtxDeleteSeries() {
@@ -1439,9 +1486,16 @@ function calCtxDeleteSeries() {
   if (id === null) return;
   deleteCalendarEvent(id);
   renderCalendar();
+  if (typeof renderTodaySchedule === 'function') renderTodaySchedule();
 }
 
 document.addEventListener('click', function(e) {
   if (e.target.closest('#calEventContextMenu')) return;
   closeCalEventContextMenu();
+});
+
+document.addEventListener('contextmenu', closeCalEventContextMenu, true);
+
+document.addEventListener('keydown', function(e) {
+  if (e.key === 'Escape') closeCalEventContextMenu();
 });

@@ -574,6 +574,7 @@ function toggleAiMessageImmersiveToc(force) {
 function closeAiMessageImmersive() {
   const overlay = document.getElementById('aiMessageImmersive');
   if (!overlay) return;
+  overlay.closest('#aiFloat')?.querySelector('#aiChatLayout')?.removeAttribute('inert');
   overlay.remove();
   if (_aiMessageImmersiveJumpTimer) clearTimeout(_aiMessageImmersiveJumpTimer);
   if (_aiMessageImmersiveScrollFrame && window.cancelAnimationFrame) window.cancelAnimationFrame(_aiMessageImmersiveScrollFrame);
@@ -583,7 +584,7 @@ function closeAiMessageImmersive() {
   document.body.classList.remove('ai-message-immersive-open');
   const opener = _aiMessageImmersiveOpener;
   _aiMessageImmersiveOpener = null;
-  if (opener && opener.isConnected) opener.focus();
+  if (opener && opener.isConnected) opener.focus({ preventScroll: true });
 }
 
 function openAiMessageImmersive(trigger) {
@@ -630,23 +631,47 @@ function openAiMessageImmersive(trigger) {
       <aside class="ai-message-immersive-toc" id="aiMessageImmersiveToc"><div class="ai-message-immersive-toc-title">本条回复</div><nav id="aiMessageImmersiveTocList"></nav></aside>
     </div>`;
   overlay.querySelector('.ai-message-immersive-content').appendChild(article);
-  document.body.appendChild(overlay);
-  document.body.classList.add('ai-message-immersive-open');
+  const float = row.closest('#aiFloat');
+  if (float) {
+    // The reader fills this floating surface while the underlying page and
+    // the float's drag, resize and close controls stay available.
+    overlay.setAttribute('aria-modal', 'false');
+    float.querySelector('#aiChatLayout')?.setAttribute('inert', '');
+    float.appendChild(overlay);
+  } else {
+    document.body.appendChild(overlay);
+    document.body.classList.add('ai-message-immersive-open');
+  }
   updateAiMessageImmersiveZoom(_aiMessageImmersiveZoom);
   buildAiMessageImmersiveToc();
+  if (float) toggleAiMessageImmersiveToc(false);
   if (typeof lucide !== 'undefined') setTimeout(() => { try { lucide.createIcons(); } catch (e) {} }, 0);
   overlay.querySelector('[aria-label="退出沉浸查看"]')?.focus();
 }
 
 document.addEventListener('keydown', function(event) {
-  if (!document.getElementById('aiMessageImmersive')) return;
+  const overlay = document.getElementById('aiMessageImmersive');
+  if (!overlay || event.isComposing) return;
+  const float = overlay.closest('#aiFloat');
+  if (float && !float.contains(event.target)) return;
   if ((event.ctrlKey || event.metaKey) && !event.altKey) {
-    if (event.key === '0') { event.preventDefault(); updateAiMessageImmersiveZoom(100); return; }
-    if (event.key === '+' || event.key === '=' || event.key === 'Add') { event.preventDefault(); changeAiMessageImmersiveZoom(10); return; }
-    if (event.key === '-' || event.key === 'Subtract') { event.preventDefault(); changeAiMessageImmersiveZoom(-10); return; }
+    let zoom = null;
+    if (event.key === '0') zoom = 100;
+    if (event.key === '+' || event.key === '=' || event.key === 'Add') zoom = _aiMessageImmersiveZoom + 10;
+    if (event.key === '-' || event.key === 'Subtract') zoom = _aiMessageImmersiveZoom - 10;
+    if (zoom !== null) {
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      updateAiMessageImmersiveZoom(zoom);
+      return;
+    }
   }
-  if (event.key === 'Escape') { event.preventDefault(); closeAiMessageImmersive(); }
-});
+  if (event.key === 'Escape') {
+    event.preventDefault();
+    event.stopImmediatePropagation();
+    closeAiMessageImmersive();
+  }
+}, true);
 
 function jumpToAiAffectedNote(noteId) {
   const note = typeof notes !== 'undefined' && notes.find(n => Number(n.id) === Number(noteId) && n.type === 'note');
@@ -756,7 +781,8 @@ function renderAiMessages() {
     // Keep an in-progress chain visible. Earlier completed exchanges can still
     // collapse while a later question is generating its answer.
     if (exchangeMessages.length > 1 && !(latest && (isAiLoading(conv.id) || streamingDraft))) {
-      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1).filter(item => item.msg !== nextStepsMessage);
+      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1).filter(item => item.msg !== nextStepsMessage
+        && !item.msg.visionFiles?.some(image => image.screenshot?.fileId));
       exchangeEnd.chainKey = encodeURIComponent(JSON.stringify([String(conv.id), exchangeUser.nodeId ?? exchangeUser.idx,
         exchangeStart.nodeId ?? exchangeStart.idx, exchangeEnd.nodeId ?? exchangeEnd.idx]));
       exchangeEnd.foldedMessages.forEach(item => { item.foldedIntoChain = true; });
@@ -770,7 +796,7 @@ function renderAiMessages() {
       exchangeEnd = null;
       exchangeNotes = new Map();
       exchangeMessages = [];
-    } else if (exchangeUser) {
+    } else if (exchangeUser && !item.msg._toolInfo?.manualScreenshot) {
       if (!exchangeStart) exchangeStart = item;
       exchangeEnd = item;
       exchangeMessages.push(item);
@@ -866,11 +892,12 @@ function renderAiMessages() {
         const thumb = (typeof a.displayUrl === 'string' && /^data:image\//i.test(a.displayUrl))
           ? a.displayUrl
           : (looksImage ? imgUrls[imgCursor] : '');
+        const screenshot = typeof isAiScreenshotFile === 'function' && isAiScreenshotFile(a) ? `<button type="button" class="msg-attachment-reinsert" data-node-id="${escapeAttr(String(item.nodeId))}" data-attachment-index="${attachmentIndex}" data-page="${Number(a.pdfStartPage) || 1}" onclick="openAiScreenshotFromMessage(this)">截图</button>` : '';
         if (looksImage && thumb) {
           imgCursor++;
-          return `<span class="msg-attachment-item"><span class="msg-attachment-img" title="${escapeAttr(a.name)}"><img src="${thumb}" alt="${escapeAttr(a.name)}" onclick="openAiAttachmentImage(this)"></span>${reinsert}</span>`;
+          return `<span class="msg-attachment-item"><span class="msg-attachment-img" title="${escapeAttr(a.name)}"><img src="${thumb}" alt="${escapeAttr(a.name)}" onclick="openAiAttachmentImage(this)"></span>${screenshot}${reinsert}</span>`;
         }
-        return `<span class="msg-attachment">${/\.pdf$/i.test(a.name) ? '📕' : '📝'} ${escapeHtml(a.name)}${reinsert}</span>`;
+        return `<span class="msg-attachment">${/\.pdf$/i.test(a.name) ? '📕' : '📝'} ${escapeHtml(a.name)}${screenshot}${reinsert}</span>`;
       }).join('') + '</div>';
       // Build collapsible file content sections
       for (const a of m.attachments) {
@@ -885,6 +912,9 @@ function renderAiMessages() {
       }
     }
 
+    const screenshots = m.visionFiles?.some(image => image.screenshot?.fileId) ? renderAiScreenshotCards(m) : '';
+    if (screenshots) return `<div class="ai-chat-msg assistant"><div class="ai-chat-avatar">✂</div><div class="ai-chat-bubble">${screenshots}</div></div>` + exchangeFooter;
+
     // For system messages with tool call info, render as friendly notification
     if (m._toolInfo) {
       const friendlyLabels = {
@@ -893,6 +923,11 @@ function renderAiMessages() {
         'list_library_files': '📁 文件库列表',
         'read_library_file': '📄 文件内容读取',
         'read_library_pdf_page': '📕 PDF 页面读取',
+        'list_screenshot_attachments': '对话截图来源',
+        'preview_screenshot_source': '截图来源预览',
+        'find_pdf_screenshot_region': 'PDF 跨页查找',
+        'crop_screenshot': '截取图片',
+        'insert_screenshot_in_note': '插入教材截图到笔记',
         'list_todos': '📋 待办事项列表',
         'get_todo_detail': '📋 待办详情',
         'get_today_status': '📅 今日状态',
@@ -1103,6 +1138,7 @@ function renderAiMessages() {
       ${renderMessage(item)}
     </div>`;
   }).join('');
+  if (container.querySelector?.('.ai-screenshot-card')) loadAiScreenshotCards(container, conv);
   if (typeof renderAiSubagentPanel === 'function') container.insertAdjacentHTML('beforeend', renderAiSubagentPanel(conv));
   // Show typing indicator only when loading and there are no pending intermediate messages
   // (i.e., during the first API call before any tool results come back)

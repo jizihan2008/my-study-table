@@ -125,6 +125,7 @@ function showAiFloat() {
 function closeAiFloat(restoreFocus = true) {
   const panel = document.getElementById('aiFloat');
   if (!panel) return;
+  if (panel.querySelector('#aiMessageImmersive')) closeAiMessageImmersive();
   aiFloatCleanup?.();
   aiFloatCleanup = null;
   saveAiDraft();
@@ -141,6 +142,7 @@ function closeAiFloat(restoreFocus = true) {
 
 function expandAiFloat() {
   closeAiFloat(false);
+  if (document.getElementById('section-notes')?.classList.contains('notes-immersive')) setNotesImmersive(false);
   switchTab('ai');
   document.getElementById('aiInput')?.focus();
 }
@@ -158,6 +160,8 @@ document.addEventListener('keydown', event => {
   } else if (event.key === 'Escape' && document.getElementById('aiFloat')
       && document.getElementById('aiFloat').contains(document.activeElement)
       && !document.querySelector('.modal-overlay.open, .overlay.open')) {
+    // Let the reply reader consume Esc before closing its containing float.
+    if (document.getElementById('aiFloat').querySelector('#aiMessageImmersive')) return;
     event.preventDefault();
     event.stopImmediatePropagation();
     closeAiFloat();

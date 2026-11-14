@@ -438,6 +438,14 @@ body.notes-immersive > :is(.sidebar, .sidebar-hover-trigger, .mobile-tabbar, .mo
 #section-notes.notes-immersive .notes-immersive-zoom-value { min-width: 43px; font-variant-numeric: tabular-nums; }
 #section-notes.notes-immersive .notes-editor-preview,
 #section-notes.notes-immersive .notes-rich-editor { font-size: var(--notes-immersive-content-size, 15px); }
+#section-notes.notes-immersive :is(.notes-rich-editor, .notes-editor-preview, .notes-split-preview) img {
+  zoom: var(--notes-immersive-image-zoom, 1);
+  max-width: calc(100% * var(--notes-immersive-image-zoom, 1));
+}
+#section-notes.notes-immersive :is(.notes-rich-editor, .notes-editor-preview, .notes-split-preview) img[data-note-width] {
+  zoom: 1;
+  width: calc(var(--note-image-width, 100%) * var(--notes-immersive-image-zoom, 1)) !important;
+}
 #section-notes.notes-immersive .notes-editor-textarea { font-size: var(--notes-immersive-source-size, 14px); }
 #section-notes.notes-immersive .notes-editor-textarea,
 #section-notes.notes-immersive .notes-rich-editor { padding: 24px clamp(20px, 4vw, 64px); }

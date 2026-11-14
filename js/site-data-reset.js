@@ -8,6 +8,7 @@
     'study-file-library',
     'study-ai-attachments',
     'mst-backup',
+    'mst-note-history',
     'mst-bgmedia',
     'mst-booktext',
     'mst-pdf',

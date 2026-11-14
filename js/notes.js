@@ -411,10 +411,18 @@ function updateLastEditedDisplay(note) {
   else el.textContent = d.toLocaleDateString('zh-CN') + ' ' + d.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
 }
 
-function pushNotesUndo(noteId, content, title) {
-  notesUndoStack.push({ noteId, content, title, timestamp: Date.now() });
+function pushNotesHistorySnapshot(stack, noteId, content, title, action) {
+  const snapshot = { noteId, content, title, timestamp: Date.now() };
+  if (action) snapshot.action = action;
+  stack.push(snapshot);
+  return window.NoteHistory?.record(snapshot);
+}
+
+function pushNotesUndo(noteId, content, title, action) {
+  const saved = pushNotesHistorySnapshot(notesUndoStack, noteId, content, title, action);
   if (notesUndoStack.length > 50) notesUndoStack.shift();
   updateUndoRedoButtons();
+  return saved;
 }
 
 function updateUndoRedoButtons() {
@@ -498,7 +506,7 @@ function undoNote() {
   if (!note) { updateUndoRedoButtons(); return; }
   const beforeChange = { content: note.content || '', title: note.title || '' };
   if(isNotesSplitHistoryTarget(note)){
-    notesRedoStack.push({noteId:note.id,content:note.content,title:note.title,timestamp:Date.now()});
+    pushNotesHistorySnapshot(notesRedoStack, note.id, note.content, note.title);
     restoreSplitNoteHistory(note,snapshot,beforeChange,'已撤销');
     return;
   }
@@ -506,7 +514,7 @@ function undoNote() {
   if(String(note.id)!==String(activeNoteId))selectNote(note.id);
   const titleOnly = beforeChange.content === (snapshot.content || '');
   locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
-  notesRedoStack.push({ noteId: note.id, content: note.content, title: note.title, timestamp: Date.now() });
+  pushNotesHistorySnapshot(notesRedoStack, note.id, note.content, note.title);
   note.content = snapshot.content;
   note.title = snapshot.title;
   note.updatedAt = new Date().toISOString();
@@ -535,7 +543,7 @@ function redoNote() {
   if (!note) { updateUndoRedoButtons(); return; }
   const beforeChange = { content: note.content || '', title: note.title || '' };
   if(isNotesSplitHistoryTarget(note)){
-    notesUndoStack.push({noteId:note.id,content:note.content,title:note.title,timestamp:Date.now()});
+    pushNotesHistorySnapshot(notesUndoStack, note.id, note.content, note.title);
     restoreSplitNoteHistory(note,snapshot,beforeChange,'已恢复');
     return;
   }
@@ -543,7 +551,7 @@ function redoNote() {
   if(String(note.id)!==String(activeNoteId))selectNote(note.id);
   const titleOnly = beforeChange.content === (snapshot.content || '');
   locateNotesHistoryChange(beforeChange, snapshot, titleOnly);
-  notesUndoStack.push({ noteId: note.id, content: note.content, title: note.title, timestamp: Date.now() });
+  pushNotesHistorySnapshot(notesUndoStack, note.id, note.content, note.title);
   note.content = snapshot.content;
   note.title = snapshot.title;
   note.updatedAt = new Date().toISOString();
@@ -2288,7 +2296,7 @@ function followNoteLink(href, secondary = false) {
   const params = new URLSearchParams(href.slice(1));
   const note = findNoteByLooseId(params.get('note'));
   if (!note) { showMiniToast('目标笔记不存在，可能已被删除', 'error'); return; }
-  // Keep navigation in the clicked pane whenever the split layout permits it.
+  let reference = null;
   if (params.has('offset')) {
     const source = String(note.content || '');
     const start = Number(params.get('offset'));
@@ -2300,15 +2308,15 @@ function followNoteLink(href, secondary = false) {
     if (params.has('revision') && getNoteReferenceRevision(note) !== params.get('revision')) {
       showMiniToast('笔记已修改，此引用位置可能失效，请让 AI 重新读取笔记', 'error'); return;
     }
-    selectNotesPrimaryPane(note.id);
-    switchNoteView('edit');
-    requestAnimationFrame(() => {
-      if (String(activeNoteId) !== String(note.id) || noteViewMode !== 'edit') return;
-      locateNotesHistoryChange({ content: source.slice(0, start) }, { content: source }, false);
-      document.getElementById('notesTextarea')?.setSelectionRange(start, end);
-    });
-    return;
+    // Reuse the reading viewport's source mapping, including deferred fold
+    // bodies and virtual blocks, instead of opening the Markdown editor.
+    let index = start;
+    while (index < source.length && /\s/.test(source[index])) index++;
+    if (index === source.length) index = Math.max(0, source.trimEnd().length - 1);
+    reference = { index, line: source.slice(0, index).split('\n').length - 1,
+      quote: source.slice(index, index + 32).split('\n')[0], offset: 12 };
   }
+  // Keep navigation in the clicked pane whenever the split layout permits it.
   secondary = secondary && notesImmersive && notesImmersiveSplit;
   if (secondary) {
     notesSplitMode = 'preview';
@@ -2323,6 +2331,12 @@ function followNoteLink(href, secondary = false) {
   requestAnimationFrame(() => {
     // A second click or note switch can supersede this navigation.
     if (String(secondary ? notesSplitNoteId : activeNoteId) !== String(note.id)) return;
+    if ((secondary ? notesSplitMode : noteViewMode) !== 'preview') return;
+    if (reference) {
+      NoteViewPosition.restore(container, note.content || '', note.id, reference);
+      container.focus({ preventScroll: true });
+      return;
+    }
     const reading = typeof NoteReadingRenderer !== 'undefined' ? NoteReadingRenderer.get(container) : null;
     let heading = headingId && reading?.ensureHeading(headingId);
     if (headingId && !reading) {
@@ -2926,6 +2940,7 @@ function applyNotesImmersiveZoom(){
   if(!section)return;
   section.style.setProperty('--notes-immersive-content-size',(15*notesImmersiveZoom/100)+'px');
   section.style.setProperty('--notes-immersive-source-size',(14*notesImmersiveZoom/100)+'px');
+  section.style.setProperty('--notes-immersive-image-zoom',String(notesImmersiveZoom/100));
   if(label){
     label.textContent=notesImmersiveZoom+'%';
     label.title=notesImmersiveZoom===100?'当前为默认大小':'点击恢复 100%';
@@ -2946,6 +2961,10 @@ function setNotesImmersive(force){
   const section=document.getElementById('section-notes');
   if(!section)return;
   const enabled=typeof force==='boolean'?force:!notesImmersive;
+  const note=getActiveNote();
+  const viewId={edit:'notesTextarea',rich:'notesRichEditor',preview:'notesPreview'}[noteViewMode];
+  const view=viewId?document.getElementById(viewId):null;
+  const position=note&&typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(view,note.content||'',note.id):null;
   notesImmersive=enabled;
   if(enabled){
     notesGoMain();
@@ -2961,10 +2980,10 @@ function setNotesImmersive(force){
     button.classList.toggle('active',enabled);
     button.setAttribute('aria-pressed',enabled?'true':'false');
   }
-  if(enabled&&noteViewMode==='rich')setTimeout(()=>document.getElementById('notesRichEditor')?.focus(),0);
-  else if(enabled&&noteViewMode==='edit')setTimeout(()=>document.getElementById('notesTextarea')?.focus(),0);
   renderNotesImmersiveSplit();
   if(enabled)updateNotesImmersiveControls(window.innerHeight/2);
+  // Restore against the new layout without focusing the editor or moving its caret.
+  if(position)NoteViewPosition.restore(view,note.content||'',note.id,position);
 }
 
 function toggleNotesImmersive(force){setNotesImmersive(force)}

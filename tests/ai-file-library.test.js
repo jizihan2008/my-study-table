@@ -192,3 +192,53 @@ test('desktop library adapter resolves IDs through existing IPC and omits binary
   assert.equal(await (await window.aiFileLibrary.read('file_desktop')).text(), 'abc');
   assert.equal(await window.aiFileLibrary.read('file_missing'), null);
 });
+
+
+test('PDF listing recommends text, image or mixed reading, caches detection and releases resources', async () => {
+  const { ctx, rows, reads } = harness();
+  let text = '这是可供提取的正文内容，用于确认文字层足够完整并推荐文字读取。';
+  let mixed = false;
+  let released = 0;
+  ctx.openPdfAttachment = async () => ({
+    pdf: { numPages: 4, getPage: async number => ({
+      getTextContent: async () => ({ items: [{ str: mixed && number === 4 ? '' : text }] })
+    }) },
+    destroy: async () => { released++; }
+  });
+  const listPdf = async () => (await ctx.executeToolCallStructured('list_library_files', { search: '教材' })).data.items[0].pdfReading;
+  const first = await listPdf();
+  assert.equal(first.mode, 'text');
+  assert.equal(first.recommendedTool, 'read_library_file');
+  const before = reads();
+  await listPdf();
+  assert.equal(reads(), before);
+  assert.equal(released, 1);
+  mixed = true;
+  rows[2].createdAt = 1;
+  const second = await listPdf();
+  assert.equal(second.mode, 'mixed');
+  assert.equal(second.recommendedTool, 'read_library_pdf_page');
+  assert.deepEqual([...second.imagePages], [4]);
+  text = '';
+  rows[2].createdAt = 2;
+  assert.equal((await listPdf()).mode, 'image');
+  assert.equal(released, 3);
+});
+
+test('PDF listing isolates detection failures and respects size limits without caching failures', async () => {
+  const { ctx, rows, reads } = harness();
+  ctx.openPdfAttachment = async () => { throw new Error('PDF damaged'); };
+  const result = await ctx.executeToolCallStructured('list_library_files', {});
+  assert.equal(result.ok, true);
+  const pdf = result.data.items.find(item => item.id === 'file_pdf');
+  assert.equal(pdf.pdfReading.mode, 'unknown');
+  assert.match(pdf.pdfReading.reason, /PDF damaged/);
+  assert.equal(result.data.items.find(item => item.id === 'file_text').pdfReading, undefined);
+  const before = reads();
+  await ctx.executeToolCallStructured('list_library_files', { search: '教材' });
+  assert.equal(reads(), before + 1);
+  rows[2].size = 65 * 1024 * 1024;
+  const large = await ctx.executeToolCallStructured('list_library_files', { search: '教材' });
+  assert.equal(large.data.items[0].pdfReading.mode, 'unknown');
+  assert.equal(reads(), before + 1);
+});

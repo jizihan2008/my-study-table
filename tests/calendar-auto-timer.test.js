@@ -261,6 +261,25 @@ test('跨天时段按结束时刻归属日期', () => {
   assert.equal(getRecords()[0].totalMs, 90 * 60 * 1000);
 });
 
+test('从跨日重复事件的延续日期提前计入时，使用该场开始日期且到期只记一次', () => {
+  const ev = eventAt('2026-03-05', '23:00', '00:30', {
+    endDate: '2026-03-06',
+    repeat: 'weekly',
+    weekdays: [4]
+  });
+  const { ctx, getRecords } = createContext({ events: [ev] });
+  const now = new Date(2026, 2, 6, 0, 0).getTime();
+  const occurrence = ctx.getCalEventEarlyRecordOccurrence(ev, '2026-03-06', [], now);
+  assert.equal(occurrence.dateStr, '2026-03-05');
+  const record = ctx.buildCalendarTimerRecord(ev, occurrence);
+  assert.equal(record.date, '2026-03-06');
+  assert.equal(record.totalMs, 90 * 60000);
+  ctx.saveTimerRecords([record]);
+
+  assert.equal(ctx.runCalendarAutoRecords(new Date(2026, 2, 7, 1, 0).getTime()), 0);
+  assert.equal(getRecords().length, 1);
+});
+
 test('不足一分钟的时段不记账但仍标记为已处理', () => {
   // 界面不会产生不足 1 分钟的时段，但数据层要能兜住：在 vm 内覆盖时段解析，喂一个 30 秒区间
   const endTs = new Date(2026, 2, 5, 9, 0, 30, 0).getTime();

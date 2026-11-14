@@ -224,7 +224,8 @@ test('todo deadline tokens serve only that owner’s active deadlines as stable 
   assert.match(body, /UID:todo-due-a@mst/);
   assert.match(body, /SUMMARY:Renamed overdue task\r\nDTSTART;VALUE=DATE:20261106\r\nDTEND;VALUE=DATE:20261107/);
   assert.match(body, /SUMMARY:Completed today/);
-  assert.doesNotMatch(body, /Old name|Deleted task|Completed yesterday|No deadline|Invalid deadline|Private details/);
+  assert.doesNotMatch(body, /Old name|Deleted task|Completed yesterday|No deadline|Invalid deadline/);
+  assert.match(body, /DESCRIPTION:路径：Renamed overdue task\\n\\n正文：\\nPrivate details/);
   changed.dueDate = '2026-11-10';
   const moved = await (await read()).text();
   assert.match(moved, /UID:todo-due-a@mst/);
@@ -235,4 +236,119 @@ test('todo deadline tokens serve only that owner’s active deadlines as stable 
   assert.equal((await read()).status, 404);
   const health = await handler(new Request('https://feed.example?health=todo-due'));
   assert.equal((await health.json()).todoDue, true);
+});
+
+test('deadline feeds include complete ancestor paths and full body in standalone and custom subscriptions', async () => {
+  const { createFeedHandler, hashToken } = await api;
+  const dueToken = 'due-' + 'e'.repeat(64);
+  const mixToken = 'mix-' + 'f'.repeat(64);
+  const hashes = new Map([[await hashToken(dueToken), false], [await hashToken(mixToken), true]]);
+  const key = 'study_todos_v2';
+  const content = '# 练习说明\n分号;逗号,反斜线\\\n' + '完整正文😀\n'.repeat(1500) + '正文末尾';
+  const root = { id: 1, text: '课程', content: '父级正文不属于子任务正文' };
+  const parent = { id: 2, text: '数学', parentId: '1', done: true };
+  const child = { id: 3, text: '完成练习', parentId: 2, dueDate: '2026-11-09', content };
+  const orphan = { id: 4, text: '孤立任务', parentId: 999, dueDate: '2026-11-09' };
+  const cycle = { id: 5, text: '循环任务', parentId: 5, dueDate: '2026-11-09' };
+  const updated = '2026-11-08T00:00:00Z';
+  const subscription = { user_id: 'owner', timezone: 'Asia/Shanghai', name: '完整待办',
+    include_events: false, categories: [], include_todo_due: true };
+  let parentUpdated = updated;
+  const handler = createFeedHandler({ url: 'https://db.example', serviceKey: 'server-only', now: () => now,
+    fetcher: async address => {
+      const url = new URL(address);
+      const params = url.searchParams;
+      if (url.pathname.endsWith('_subscriptions')) {
+        const isCustom = url.pathname.endsWith('/calendar_custom_subscriptions');
+        const hash = params.get('token_hash')?.slice(3);
+        return Response.json(hashes.has(hash) && hashes.get(hash) === isCustom ? [subscription] : []);
+      }
+      assert.equal(params.get('user_id'), 'eq.owner');
+      if (params.get('key') === 'eq.' + key) return Response.json([{ key, value: [root, parent, child, orphan, cycle], updated_at: updated }]);
+      if (params.has('key')) return Response.json([]);
+      return Response.json([{ key: 'mst:item:v1:study_todos_v2:2', value: { item: parent }, updated_at: parentUpdated }]);
+    }
+  });
+  const read = async token => unfold(await (await handler(new Request('https://feed.example?token=' + token))).text());
+  const due = await read(dueToken);
+  assert.match(due, /SUMMARY:完成练习\r\n/);
+  assert.doesNotMatch(due, /SUMMARY:课程/);
+  const escaped = content.replace(/\\/g, '\\\\').replace(/\n/g, '\\n').replace(/;/g, '\\;').replace(/,/g, '\\,');
+  assert.ok(due.includes('DESCRIPTION:路径：课程 › 数学 › 完成练习\\n\\n正文：\\n' + escaped + '\r\n'));
+  assert.doesNotMatch(due, /父级正文不属于子任务正文/);
+  assert.match(due, /SUMMARY:孤立任务/);
+  assert.match(due, /SUMMARY:循环任务/);
+  assert.match(await read(mixToken), /SUMMARY:完成练习\r\n/);
+  assert.ok((await read(mixToken)).includes(escaped));
+  parent.text = '高等数学';
+  parentUpdated = '2026-11-09T10:00:00Z';
+  const renamed = await read(dueToken);
+  const entry = renamed.split('BEGIN:VEVENT').find(value => value.includes('UID:todo-due-3@mst'));
+  assert.match(entry, /SUMMARY:完成练习\r\n/);
+  assert.match(entry, /DESCRIPTION:路径：课程 › 高等数学 › 完成练习/);
+  assert.match(entry, /LAST-MODIFIED:20261109T100000Z/);
+});
+
+test('custom subscriptions combine selected categories and deadlines, deduplicate events, and fail closed on config changes', async () => {
+  const { createFeedHandler, hashToken } = await api;
+  const token = 'mix-' + 'd'.repeat(64);
+  const tokenHash = await hashToken(token);
+  let active = true;
+  let lookupCount = 0;
+  let changeDuringRead = false;
+  const configuration = { user_id: 'owner', timezone: 'Asia/Shanghai', name: '课程与截止日期',
+    include_events: false, categories: ['课程'], include_todo_due: true };
+  const events = [row('a', { date: '2026-11-08', title: 'Course', category: '课程' }),
+    row('b', { date: '2026-11-08', title: 'Exam', category: '考试' }), row('c', { date: '2026-11-08', title: 'Personal' })];
+  const todos = [{ key: 'mst:item:v1:study_todos_v2:a',
+    value: { item: { id: 'a', text: 'Deadline', dueDate: '2026-11-09' } } }];
+  const handler = createFeedHandler({ url: 'https://db.example', serviceKey: 'server-only', now: () => now,
+    fetcher: async address => {
+      const url = new URL(address);
+      const params = url.searchParams;
+      if (params.get('limit') === '0') return Response.json([]);
+      if (url.pathname.endsWith('/calendar_custom_subscriptions')) {
+        lookupCount++;
+        if (changeDuringRead && lookupCount === 2) configuration.categories = ['考试'];
+        return Response.json(active && params.get('token_hash') === 'eq.' + tokenHash ? [configuration] : []);
+      }
+      assert.equal(url.pathname, '/rest/v1/user_data');
+      assert.equal(params.get('user_id'), 'eq.owner');
+      if (params.get('key')?.startsWith('eq.') || params.get('key')?.startsWith('gt.')) return Response.json([]);
+      return Response.json(params.get('and').includes('study\\_todos') ? todos : events);
+    }
+  });
+  const read = async () => {
+    lookupCount = 0;
+    return handler(new Request('https://feed.example?token=' + token + '&include_events=true'));
+  };
+  const selected = await (await read()).text();
+  assert.match(selected, /X-WR-CALNAME:MST · 课程与截止日期/);
+  assert.match(selected, /SUMMARY:Course/);
+  assert.match(selected, /SUMMARY:Deadline/);
+  assert.doesNotMatch(selected, /SUMMARY:Exam|SUMMARY:Personal/);
+  configuration.categories = ['课程', '考试', '课程'];
+  configuration.include_events = true;
+  const all = await (await read()).text();
+  assert.equal(all.match(/SUMMARY:Course/g).length, 1);
+  assert.match(all, /SUMMARY:Exam/);
+  assert.match(all, /SUMMARY:Personal/);
+  configuration.include_events = false;
+  configuration.include_todo_due = false;
+  configuration.categories = [''];
+  const unclassified = await (await read()).text();
+  assert.match(unclassified, /SUMMARY:Personal/);
+  assert.doesNotMatch(unclassified, /SUMMARY:Course|SUMMARY:Exam|SUMMARY:Deadline/);
+  configuration.categories = [];
+  assert.equal((await read()).status, 503);
+  configuration.categories = ['课程'];
+  changeDuringRead = true;
+  const raced = await read();
+  assert.equal(raced.status, 503);
+  assert.doesNotMatch(await raced.text(), /Course|Exam/);
+  changeDuringRead = false;
+  active = false;
+  assert.equal((await read()).status, 404);
+  const health = await handler(new Request('https://feed.example?health=custom'));
+  assert.equal((await health.json()).custom, true);
 });

@@ -1,7 +1,7 @@
 (function createStorageUsage(global) {
   'use strict';
   const knownDatabases = ['my-study-table-data', 'my-study-table-extensions', 'study-file-library',
-    'study-ai-attachments', 'mst-backup', 'mst-bgmedia', 'mst-booktext', 'mst-pdf', 'mst-qqchats', 'mst-sync', 'mst-sync-logs'];
+    'study-ai-attachments', 'mst-backup', 'mst-bgmedia', 'mst-booktext', 'mst-pdf', 'mst-qqchats', 'mst-sync', 'mst-sync-logs', 'mst-note-history'];
   function bytes(value, seen = new Set()) {
     if (value == null) return 0;
     if (typeof value === 'string') return new Blob([value]).size;

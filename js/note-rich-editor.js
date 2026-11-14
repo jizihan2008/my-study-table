@@ -41,6 +41,7 @@
   let foldTouchToggle = null;
   let foldTouchClick = null;
   let closeMathEditor = null;
+  let closeImageEditor = null;
   let pendingFoldTitle = null;
   let composingFoldTitle = null;
   const tableActions = { 'row-before': '上方插入行', 'row-after': '下方插入行',
@@ -149,6 +150,7 @@
   function setMarkdown(markdown, noteId) {
     renderRevision++;
     closeMathEditor?.(false);
+    closeImageEditor?.();
     pendingFoldTitle = null;
     composingFoldTitle = null;
     if (!host) init();
@@ -229,6 +231,11 @@
     }
     if (tag === 'img') {
       const src = node.getAttribute('src') || '';
+      if (src && (node.dataset.noteWidth || node.dataset.noteAlign)) {
+        const width = Math.max(5, Math.min(100, Number(node.dataset.noteWidth) || 100));
+        const align = ['left', 'center', 'right'].includes(node.dataset.noteAlign) ? node.dataset.noteAlign : 'center';
+        return '![' + escapeInline(node.getAttribute('alt') || '') + '](' + src + ' "mst-image:' + width + ':' + align + '")';
+      }
       return src ? '![' + (node.getAttribute('alt') || '') + '](' + src + ')' : '';
     }
     if (tag === 'sup' && node.classList.contains('footnote-ref')) {
@@ -510,6 +517,134 @@
     if (typeof root.captureNoteFoldStates === 'function') root.captureNoteFoldStates(host, currentNoteId, false);
     if (typeof options.onChange === 'function') options.onChange(markdown, previous, currentNoteId, change);
     else if (typeof root.onRichNotesChange === 'function') root.onRichNotesChange(markdown, previous, change);
+  }
+
+  function editImage(image) {
+    closeImageEditor?.();
+    const revision = renderRevision;
+    const noteId = currentNoteId;
+    const source = image.getAttribute('src');
+    const dialog = document.createElement('dialog');
+    dialog.className = 'note-image-dialog';
+    dialog.setAttribute('aria-label', '编辑图片');
+    dialog.innerHTML = `<form method="dialog" class="note-image-form">
+      <div class="modal-header"><span class="modal-title">编辑图片</span><button type="button" class="modal-close" aria-label="关闭图片编辑器">✕</button></div>
+      <div class="note-image-editor-body">
+      <label>裁剪预览</label>
+      <div class="note-image-preview"><div class="note-image-stage"><img alt="裁剪预览" draggable="false"><div class="note-image-selection"></div></div></div>
+      <p class="hint">拖动框选裁剪范围，或输入边界百分比。Ctrl+Enter 保存，Esc 取消。</p>
+      <div class="note-image-bounds">
+        <label>左边界 %<input name="left" type="number" min="0" max="99" value="0" step="0.1"></label>
+        <label>上边界 %<input name="top" type="number" min="0" max="99" value="0" step="0.1"></label>
+        <label>右边界 %<input name="right" type="number" min="1" max="100" value="100" step="0.1"></label>
+        <label>下边界 %<input name="bottom" type="number" min="1" max="100" value="100" step="0.1"></label>
+      </div>
+      <label>显示宽度<div class="note-image-width"><input name="width" type="range" min="5" max="100" step="1"><output></output></div></label>
+      <label>对齐方式<select name="align"><option value="left">左对齐</option><option value="center">居中</option><option value="right">右对齐</option></select></label>
+      <p class="note-image-error" role="status"></p>
+      </div>
+      <div class="note-image-buttons"><button type="button" data-reset>重置裁剪</button><button type="button" data-cancel>取消</button><button type="submit" class="note-image-save">保存图片</button></div>
+    </form>`;
+    document.body.appendChild(dialog);
+    const form = dialog.querySelector('form');
+    const stage = dialog.querySelector('.note-image-stage');
+    const preview = stage.querySelector('img');
+    const selection = stage.querySelector('.note-image-selection');
+    const error = dialog.querySelector('.note-image-error');
+    const width = form.elements.width;
+    const align = form.elements.align;
+    const bounds = ['left', 'top', 'right', 'bottom'];
+    width.value = image.dataset.noteWidth || '100';
+    align.value = image.dataset.noteAlign || 'center';
+    preview.src = source;
+    const close = () => { dialog.close(); dialog.remove(); if (closeImageEditor === close) closeImageEditor = null; };
+    closeImageEditor = close;
+    dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+    dialog.querySelector('[data-cancel]').onclick = close;
+    dialog.querySelector('.modal-close').onclick = close;
+    dialog.addEventListener('keydown', event => {
+      event.stopPropagation();
+      if (event.isComposing) return;
+      if (event.key === 'Escape') { event.preventDefault(); close(); }
+      else if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
+        event.preventDefault();
+        if (!form.querySelector('[type="submit"]').disabled) form.requestSubmit();
+      }
+    });
+    function update() {
+      const [left, top, right, bottom] = bounds.map(key => form.elements[key].valueAsNumber);
+      selection.style.left = left + '%'; selection.style.top = top + '%';
+      selection.style.width = Math.max(0, right - left) + '%'; selection.style.height = Math.max(0, bottom - top) + '%';
+      dialog.querySelector('output').textContent = width.value + '%';
+    }
+    form.addEventListener('input', update);
+    dialog.querySelector('[data-reset]').onclick = () => {
+      bounds.forEach((key, index) => { form.elements[key].value = index < 2 ? 0 : 100; });
+      update();
+    };
+    let start = null;
+    const point = event => {
+      const rect = stage.getBoundingClientRect();
+      return { x: Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100)),
+        y: Math.max(0, Math.min(100, (event.clientY - rect.top) / rect.height * 100)) };
+    };
+    stage.onpointerdown = event => {
+      if (event.button !== 0) return;
+      event.preventDefault();
+      start = point(event);
+      stage.setPointerCapture(event.pointerId);
+    };
+    stage.onpointermove = event => {
+      if (!start) return;
+      const end = point(event);
+      [Math.min(start.x, end.x), Math.min(start.y, end.y), Math.max(start.x, end.x), Math.max(start.y, end.y)]
+        .forEach((value, index) => { form.elements[bounds[index]].value = value.toFixed(1); });
+      update();
+    };
+    stage.onpointerup = stage.onpointercancel = () => { start = null; };
+    form.onsubmit = async event => {
+      event.preventDefault();
+      error.textContent = '';
+      const values = bounds.map(key => form.elements[key].valueAsNumber / 100);
+      const [left, top, right, bottom] = values;
+      if (!values.every(value => Number.isFinite(value) && value >= 0 && value <= 1) || left >= right || top >= bottom) {
+        error.textContent = '请选择有效的裁剪范围'; return;
+      }
+      const save = form.querySelector('[type="submit"]');
+      save.disabled = true;
+      try {
+        let nextSource = source;
+        if (left !== 0 || top !== 0 || right !== 1 || bottom !== 1) {
+          // Load separately so cross-origin images can opt into canvas access.
+          const original = new Image();
+          if (/^https?:/i.test(source)) original.crossOrigin = 'anonymous';
+          original.src = source;
+          await original.decode();
+          const canvas = document.createElement('canvas');
+          canvas.width = Math.max(1, Math.round((right - left) * original.naturalWidth));
+          canvas.height = Math.max(1, Math.round((bottom - top) * original.naturalHeight));
+          try {
+            canvas.getContext('2d').drawImage(original, left * original.naturalWidth, top * original.naturalHeight,
+              (right - left) * original.naturalWidth, (bottom - top) * original.naturalHeight, 0, 0, canvas.width, canvas.height);
+            nextSource = canvas.toDataURL('image/png');
+          } finally { canvas.width = canvas.height = 1; }
+        }
+        if (!dialog.isConnected || revision !== renderRevision || noteId !== currentNoteId || !host.contains(image)
+          || image.getAttribute('src') !== source) throw new Error('笔记或图片已变化，请重新打开图片编辑');
+        image.src = nextSource;
+        image.dataset.noteWidth = width.value;
+        image.dataset.noteAlign = align.value;
+        image.style.setProperty('--note-image-width', width.value + '%');
+        Object.assign(image.style, { display: 'block', width: width.value + '%', height: 'auto',
+          marginLeft: align.value === 'left' ? '0' : 'auto', marginRight: align.value === 'right' ? '0' : 'auto' });
+        notifyChange({ historyBoundary: true });
+        close();
+      } catch (failure) {
+        error.textContent = '图片编辑失败，请确认图片可读取。' + failure.message;
+      } finally { save.disabled = false; }
+    };
+    update();
+    dialog.showModal();
   }
 
   function editMath(math, insertionRange = null) {
@@ -1137,6 +1272,9 @@
 
   function handlePaste(event) {
     event.preventDefault();
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    if (range && (selectionCrossesClosedFold(range) || selectedClosedFold(range))) return;
     const clipboard = event.clipboardData;
     const images = root.NoteImageClipboard.getFiles(clipboard);
     if (images.length) {
@@ -1210,8 +1348,6 @@
       });
       normalizeRenderedDom(container);
       const fold = container.firstElementChild;
-      const selection = window.getSelection();
-      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
       if (!titleRange && fold?.matches('details.note-fold') && container.childElementCount === 1
           && container.textContent.trim() === fold.textContent.trim() && range && host.contains(range.commonAncestorContainer)) {
         // Chromium can discard a closed fold's hidden body when insertHTML
@@ -1457,11 +1593,73 @@
     return true;
   }
 
+  function skipWhitespaceSiblings(node, direction) {
+    while (node?.nodeType === Node.TEXT_NODE && !node.textContent.trim()) {
+      node = node[direction];
+    }
+    return node;
+  }
+
+  function removeDividerAfterClosedFold() {
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || !selection.isCollapsed) return false;
+    const { anchorNode, anchorOffset } = selection;
+    if (!host.contains(anchorNode)) return false;
+    const boundary = anchorNode.nodeType === Node.ELEMENT_NODE
+      ? anchorNode.childNodes[anchorOffset] : anchorNode;
+    const rule = skipWhitespaceSiblings(boundary, 'nextSibling');
+    if (!rule?.matches?.('hr:not(.footnotes-sep)')) return false;
+    const fold = skipWhitespaceSiblings(rule.previousSibling, 'previousSibling');
+    if (!fold?.matches?.('details.note-fold:not([open])')) return false;
+    const summary = fold.querySelector(':scope > summary');
+    if (!summary) return false;
+
+    // Clicking the divider can place the caret immediately before it. Native
+    // Backspace there can delete both the rule and the fold's hidden body.
+    rule.remove();
+    const range = document.createRange();
+    range.selectNodeContents(summary);
+    range.collapse(false);
+    restoreRange(range);
+    notifyChange({ historyBoundary: true });
+    return true;
+  }
+
+  function closedFoldAtEdge(node, backward) {
+    const sibling = backward ? 'previousSibling' : 'nextSibling';
+    const child = backward ? 'lastChild' : 'firstChild';
+    for (let edge = skipWhitespaceSiblings(node, sibling); edge?.nodeType === Node.ELEMENT_NODE;
+      edge = skipWhitespaceSiblings(edge[child], sibling)) {
+      if (edge.matches('details.note-fold:not([open])')) return edge;
+      if (edge.matches('[contenteditable="false"]')) break;
+    }
+    return null;
+  }
+
+  function moveCaretToFoldTitle(fold, backward) {
+    const summary = fold.querySelector(':scope > summary');
+    if (!summary) return;
+    const range = document.createRange();
+    range.selectNodeContents(summary);
+    range.collapse(!backward);
+    restoreRange(range);
+  }
+
   function protectClosedFoldBoundary(backward) {
     const element = caretElement();
     if (!element) return false;
     const selection = window.getSelection();
     const caret = selection.getRangeAt(0);
+    const direction = backward ? 'previousSibling' : 'nextSibling';
+    const { startContainer, startOffset } = caret;
+    if (startContainer.nodeType === Node.ELEMENT_NODE) {
+      const adjacentChild = startContainer.childNodes[startOffset - (backward ? 1 : 0)];
+      const fold = closedFoldAtEdge(adjacentChild, backward);
+      if (fold) {
+        moveCaretToFoldTitle(fold, backward);
+        return true;
+      }
+    }
     // Walk out through inline wrappers and nested blocks only while the caret
     // is at their boundary. A quote/list wrapper must not hide an adjacent fold.
     for (let node = element; node && node !== host; node = node.parentElement) {
@@ -1477,26 +1675,52 @@
       if (!backward && node.matches('summary') && node.parentElement.matches('details.note-fold')
         && !node.parentElement.open) return true;
 
-      let adjacent = backward ? node.previousSibling : node.nextSibling;
-      while (adjacent?.nodeType === Node.TEXT_NODE && !adjacent.textContent.trim()) {
-        adjacent = backward ? adjacent.previousSibling : adjacent.nextSibling;
-      }
+      const adjacent = skipWhitespaceSiblings(node[direction], direction);
       if (!adjacent) continue;
-      if (adjacent.nodeType !== Node.ELEMENT_NODE || !adjacent.matches('details.note-fold') || adjacent.open) return false;
-      const summary = Array.from(adjacent.children).find(child => child.matches('summary'));
-      if (!summary) return true;
-      const range = document.createRange();
-      range.selectNodeContents(summary);
-      range.collapse(!backward);
-      restoreRange(range);
+      const fold = closedFoldAtEdge(adjacent, backward);
+      if (!fold) return false;
+      moveCaretToFoldTitle(fold, backward);
       return true;
     }
     return false;
   }
 
   function handleBoundaryDeletion(backward) {
-    return removeEmptyLineBesideFold(backward)
+    return (backward && removeDividerAfterClosedFold())
+      || removeEmptyLineBesideFold(backward)
       || protectClosedFoldBoundary(backward) || removeSingleEmptyQuote();
+  }
+
+  function selectionCrossesClosedFold(range) {
+    if (range.collapsed || !host.contains(range.commonAncestorContainer)) return false;
+    const containingFold = node => {
+      const element = node.nodeType === Node.ELEMENT_NODE ? node : node.parentElement;
+      return element.closest('details.note-fold:not([open])');
+    };
+    // A selection around the entire fold may delete it. A partial selection
+    // from a visible title into another block must not consume the hidden body.
+    return containingFold(range.startContainer) !== containingFold(range.endContainer);
+  }
+
+  function selectedClosedFold(range) {
+    const { startContainer, endContainer, startOffset, endOffset } = range;
+    if (startContainer !== endContainer || endOffset !== startOffset + 1) return null;
+    const fold = startContainer.childNodes[startOffset];
+    return fold?.matches?.('details.note-fold:not([open])') && host.contains(fold) ? fold : null;
+  }
+
+  function protectClosedFoldSelection(event) {
+    if (!event.cancelable || event.isComposing || !/^(delete|insert)/.test(event.inputType)) return false;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount || selection.isCollapsed) return false;
+    const range = selection.getRangeAt(0);
+    const fold = selectedClosedFold(range);
+    if (!fold && !selectionCrossesClosedFold(range)) return false;
+    event.preventDefault();
+    // Native cut and drag can transfer only the visible summary. Delete the
+    // whole fold only for a direct deletion, after bypassing the native merge.
+    if (fold && /^delete.*(?:Backward|Forward)$/.test(event.inputType)) deleteFold(fold);
+    return true;
   }
 
   function unwrapFold(fold) {
@@ -1597,6 +1821,13 @@
       if (event.target.matches('input[type="checkbox"]')) notifyChange();
     });
     host.addEventListener('paste', handlePaste);
+    host.addEventListener('click', event => {
+      const image = event.target.closest('img');
+      if (!image || !host.contains(image)) return;
+      event.preventDefault();
+      event.stopPropagation();
+      editImage(image);
+    });
     host.addEventListener('dblclick', event => {
       const math = event.target.closest('.katex');
       if (!math) return;
@@ -1608,7 +1839,7 @@
     root.updateNotesHeadingState?.(heading ? Number(heading.tagName.slice(1)) : 0);
     host.addEventListener('beforeinput', event => {
       pendingFoldTitle = captureFoldTitle();
-      if (protectFoldTitleDeletion(event)) { pendingFoldTitle = null; return; }
+      if (protectClosedFoldSelection(event) || protectFoldTitleDeletion(event)) { pendingFoldTitle = null; return; }
       if (!event.isComposing && event.inputType === 'insertParagraph' && enterFoldBodyFromTitle()) {
         event.preventDefault();
         return;

@@ -77,21 +77,40 @@ function todoDueRecords(records, timezone, now) {
     .formatToParts(new Date(now));
   const { year, month, day } = Object.fromEntries(parts.map(part => [part.type, part.value]));
   const today = [year, month, day].join('-');
+  // Parents without deadlines still contribute to the full display path.
+  const byId = new Map(records.map(record => [String(record.item.id), record]));
+  function describe(record) {
+    const names = [];
+    const visited = new Set();
+    let current = record;
+    let updated = record.updated;
+    while (current && !visited.has(String(current.item.id))) {
+      visited.add(String(current.item.id));
+      names.unshift(String(current.item.text || '未命名待办'));
+      if ((Date.parse(current.updated) || 0) > (Date.parse(updated) || 0)) updated = current.updated;
+      const parentId = current.item.parentId;
+      current = parentId == null ? null : byId.get(String(parentId));
+    }
+    const path = names.join(' › ');
+    const content = typeof record.item.content === 'string' ? record.item.content : '';
+    return {
+      item: { id: 'todo-due-' + record.item.id, date: record.item.dueDate, title: record.item.text || '未命名待办', allDay: true,
+        note: '路径：' + path + (content ? '\n\n正文：\n' + content : '') },
+      updated
+    };
+  }
   return records
     .filter(({ item }) => date(item.dueDate) !== null && (!item.done || item.dueDate >= today))
-    .map(({ item, updated }) => ({
-      item: { id: 'todo-due-' + item.id, date: item.dueDate, title: item.text || '未命名待办', allDay: true },
-      updated
-    }));
+    .map(describe);
 }
 
-export function serializeCalendar(records, { timezone = 'Asia/Shanghai', now = Date.now(), category = '', todoDue = false } = {}) {
+export function serializeCalendar(records, { timezone = 'Asia/Shanghai', now = Date.now(), category = '', todoDue = false, calendarName = '' } = {}) {
   const formatter = new Intl.DateTimeFormat('en-CA', { timeZone: timezone, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23' });
   const today = Date.parse(dayText(now) + 'T00:00:00Z');
   const from = today - 365 * DAY, until = today + 730 * DAY;
   const lines = ['BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//My Study Table//Calendar Subscription//ZH',
-    'CALSCALE:GREGORIAN', 'X-WR-CALNAME:' + (todoDue ? 'MST · 待办截止日期' : category ? 'MST · ' + text(category) : 'MST 日程'),
+    'CALSCALE:GREGORIAN', 'X-WR-CALNAME:' + (calendarName ? text(calendarName) : todoDue ? 'MST · 待办截止日期' : category ? 'MST · ' + text(category) : 'MST 日程'),
     'REFRESH-INTERVAL;VALUE=DURATION:PT1H', 'X-PUBLISHED-TTL:PT1H'];
   let count = 0;
   for (const { item: ev, updated } of records) {
@@ -150,6 +169,21 @@ export function createFeedHandler({ url, serviceKey, fetcher = fetch, now = () =
     if (!Array.isArray(rows)) throw new Error('Invalid database result');
     return rows;
   }
+  async function readRecords(key, userId) {
+    const prefix = itemPrefix(key);
+    const rows = await query('user_data', { select: 'key,value,updated_at', user_id: 'eq.' + userId, key: 'eq.' + key });
+    let cursor = '';
+    for (;;) {
+      const page = await query('user_data', { select: 'key,value,updated_at', user_id: 'eq.' + userId,
+        and: `(key.like.${prefix.replace(/_/g, '\\_')}*)`, ...(cursor ? { key: 'gt.' + cursor } : {}), order: 'key.asc', limit: '500' });
+      if (!page.length) break;
+      const next = page[page.length - 1].key;
+      if (next <= cursor || rows.length + page.length > 50000) throw new Error('Calendar too large');
+      rows.push(...page);
+      cursor = next;
+    }
+    return calendarRecords(rows, key);
+  }
   return async request => {
     if (request.method === 'OPTIONS') return reply(null, 204);
     if (!['GET', 'HEAD'].includes(request.method)) return reply('Method not allowed', 405, { Allow: 'GET, HEAD, OPTIONS' });
@@ -157,46 +191,59 @@ export function createFeedHandler({ url, serviceKey, fetcher = fetch, now = () =
     const params = new URL(request.url).searchParams;
     try {
       const health = params.get('health');
-      if (health === '1' || health === 'categories' || health === 'todo-due') {
+      if (health === '1' || health === 'categories' || health === 'todo-due' || health === 'custom') {
         // Check the migration as well as the function deployment, without disclosing users.
         await query('calendar_subscriptions', { select: 'user_id', limit: '0' });
         if (health === 'categories') await query('calendar_category_subscriptions', { select: 'category', limit: '0' });
         if (health === 'todo-due') await query('calendar_todo_due_subscriptions', { select: 'user_id', limit: '0' });
+        if (health === 'custom') await query('calendar_custom_subscriptions', { select: 'id', limit: '0' });
         return reply(JSON.stringify({ service: 'mst-calendar-feed', version: 1,
-          ...(health === 'categories' ? { categories: true } : health === 'todo-due' ? { todoDue: true } : {}) }), 200,
+          ...(health === 'categories' ? { categories: true } : health === 'todo-due' ? { todoDue: true } : health === 'custom' ? { custom: true } : {}) }), 200,
           { 'Content-Type': 'application/json' });
       }
       const token = params.get('token') || '';
       const scoped = token.startsWith('cat-');
       const todoDue = token.startsWith('due-');
-      if (!validToken(scoped || todoDue ? token.slice(4) : token)) return reply('Calendar not found', 404);
-      const table = todoDue ? 'calendar_todo_due_subscriptions' : scoped ? 'calendar_category_subscriptions' : 'calendar_subscriptions';
-      const key = todoDue ? TODO_KEY : CALENDAR_KEY;
-      const prefix = itemPrefix(key);
+      const custom = token.startsWith('mix-');
+      if (!validToken(scoped || todoDue || custom ? token.slice(4) : token)) return reply('Calendar not found', 404);
+      const table = custom ? 'calendar_custom_subscriptions'
+        : todoDue ? 'calendar_todo_due_subscriptions' : scoped ? 'calendar_category_subscriptions' : 'calendar_subscriptions';
       const tokenHash = 'eq.' + await hashToken(token);
-      const lookup = { select: scoped ? 'user_id,timezone,category' : 'user_id,timezone', token_hash: tokenHash, limit: '1' };
+      const lookup = { select: custom ? 'user_id,timezone,name,include_events,categories,include_todo_due'
+        : scoped ? 'user_id,timezone,category' : 'user_id,timezone', token_hash: tokenHash, limit: '1' };
       const subscriptions = await query(table, lookup);
       const subscription = subscriptions[0];
       if (!subscription || (scoped && !subscription.category)) return reply('Calendar not found', 404);
-      const rows = await query('user_data', { select: 'key,value,updated_at', user_id: 'eq.' + subscription.user_id, key: 'eq.' + key });
-      // Keyset pagination respects even a server row cap below the requested page size.
-      let cursor = '';
-      for (;;) {
-        const page = await query('user_data', { select: 'key,value,updated_at', user_id: 'eq.' + subscription.user_id,
-          and: `(key.like.${prefix.replace(/_/g, '\\_')}*)`, ...(cursor ? { key: 'gt.' + cursor } : {}), order: 'key.asc', limit: '500' });
-        if (!page.length) break;
-        const next = page[page.length - 1].key;
-        if (next <= cursor || rows.length + page.length > 50000) throw new Error('Calendar too large');
-        rows.push(...page); cursor = next;
+      const timestamp = now();
+      let matching;
+      if (custom) {
+        const { include_events: includeEvents, include_todo_due: includeTodoDue, categories, name } = subscription;
+        if (typeof includeEvents !== 'boolean' || typeof includeTodoDue !== 'boolean'
+          || !Array.isArray(categories) || categories.length > 100
+          || categories.some(category => typeof category !== 'string' || Array.from(category).length > 40)
+          || typeof name !== 'string' || !name.trim() || Array.from(name).length > 80
+          || !(includeEvents || categories.length || includeTodoDue)) throw new Error('Invalid subscription sources');
+        matching = [];
+        if (includeEvents || categories.length) {
+          const records = await readRecords(CALENDAR_KEY, subscription.user_id);
+          const selected = new Set(categories);
+          matching.push(...records.filter(({ item }) => includeEvents || selected.has(item.category || ''))
+            .map(record => ({ ...record, item: { ...record.item, id: 'event-' + record.item.id } })));
+        }
+        if (includeTodoDue) {
+          matching.push(...todoDueRecords(await readRecords(TODO_KEY, subscription.user_id), subscription.timezone, timestamp));
+        }
+      } else {
+        const records = await readRecords(todoDue ? TODO_KEY : CALENDAR_KEY, subscription.user_id);
+        matching = todoDue ? todoDueRecords(records, subscription.timezone, timestamp)
+          : scoped ? records.filter(({ item }) => item.category === subscription.category) : records;
       }
       // Recheck after reading so a concurrent reset/revoke cannot serve an old token.
       const [active] = await query(table, lookup);
       if (!active || active.user_id !== subscription.user_id || active.category !== subscription.category) return reply('Calendar not found', 404);
-      const records = calendarRecords(rows, key);
-      const timestamp = now();
-      const matching = todoDue ? todoDueRecords(records, subscription.timezone, timestamp)
-        : scoped ? records.filter(({ item }) => item.category === subscription.category) : records;
-      const body = serializeCalendar(matching, { timezone: subscription.timezone, now: timestamp, category: subscription.category, todoDue });
+      if (JSON.stringify(active) !== JSON.stringify(subscription)) return reply('Calendar temporarily unavailable', 503);
+      const body = serializeCalendar(matching, { timezone: subscription.timezone, now: timestamp, category: subscription.category, todoDue,
+        calendarName: custom ? 'MST · ' + subscription.name : '' });
       return reply(request.method === 'HEAD' ? null : body, 200, { 'Content-Type': 'text/calendar; charset=utf-8',
         'Content-Disposition': 'inline; filename="mst-calendar.ics"' });
     } catch {

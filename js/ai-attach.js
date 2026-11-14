@@ -775,7 +775,7 @@ function getAiConversationVisualResources(conv) {
   const resources = [];
   (conv?.messages || []).forEach((message, messageIndex) => {
     (message.visionFiles || []).forEach((vf, imageIndex) => {
-      if (!vf || vf.conversationImageId || !['image_url', 'file'].includes(vf.type)) return;
+      if (!vf || vf.conversationImageId || vf.screenshotPreview || !['image_url', 'file'].includes(vf.type)) return;
       const name = String(vf.name || '图片');
       const pdfMatch = name.match(/（PDF 第 (\d+)\/(\d+) 页）$/);
       const sourceName = vf.sourceName || (pdfMatch ? name.slice(0, pdfMatch.index) : name);
@@ -1064,6 +1064,7 @@ function renderAttachPreview() {
       ${modeToggle}
       ${pdfRender}
       ${pdfRange}
+      ${typeof isAiScreenshotFile === 'function' && isAiScreenshotFile(a.file) ? `<button type="button" class="preview-mode-btn" onclick="openAiScreenshotFromDraft(${i})">截图</button>` : ''}
       <button class="preview-remove" onclick="removeAttachment(${i})">✕</button>
     </span>`;
   }).join('');
@@ -1087,7 +1088,12 @@ async function openPdfAttachment(file) {
   const pdfjsLib = await getPdfJsForAttachment();
   const buffer = await readFileAsArrayBuffer(file);
   const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer) });
-  return { pdfjsLib, pdf: await loadingTask.promise };
+  try {
+    return { pdfjsLib, pdf: await loadingTask.promise, destroy: () => loadingTask.destroy() };
+  } catch (error) {
+    await loadingTask.destroy().catch(() => {});
+    throw error;
+  }
 }
 
 function resolvePdfAttachmentRange(pageCount, opts = {}) {
@@ -1789,7 +1795,8 @@ function openAiAttachmentMenu() {
   overlay.innerHTML = `<div class="modal ai-text-attachment-dialog" role="dialog" aria-modal="true" aria-labelledby="aiTextAttachmentTitle">
     <div class="modal-header"><div class="modal-title" id="aiTextAttachmentTitle">添加附件</div><button type="button" class="modal-close" aria-label="关闭">✕</button></div>
     <div class="modal-body">
-      <div class="ai-text-attachment-choices"><button type="button" data-action="upload" class="btn-secondary">上传文件</button><button type="button" data-action="text" class="btn-secondary">粘贴文字为 TXT</button></div>
+      <div class="ai-text-attachment-choices"><button type="button" data-action="upload" class="btn-secondary">上传文件</button><button type="button" data-action="screenshot" class="btn-secondary">从文件截图</button>
+        <input type="file" data-screenshot-file accept=".pdf,.png,.jpg,.jpeg,.gif,.webp,.bmp" hidden><button type="button" data-action="text" class="btn-secondary">粘贴文字为 TXT</button></div>
       <div data-text-form hidden>
         <label class="modal-field"><span>文字内容</span><textarea id="aiTextAttachmentContent" placeholder="在这里长按粘贴，也可以编辑文字" rows="7"></textarea></label>
         <label class="modal-field"><span>文件名</span><input id="aiTextAttachmentName" type="text" autocomplete="off" spellcheck="false"></label>
@@ -1810,6 +1817,14 @@ function openAiAttachmentMenu() {
     }
   });
   overlay.querySelector('[data-action="upload"]').onclick = () => { close(); if (isAiPasteInputCurrent(input)) document.getElementById('aiFileInput').click(); };
+  const screenshotFile = overlay.querySelector('[data-screenshot-file]');
+  overlay.querySelector('[data-action="screenshot"]').onclick = () => screenshotFile.click();
+  screenshotFile.onchange = () => {
+    const file = screenshotFile.files[0];
+    if (!file) return;
+    close();
+    void openAiScreenshotEditorForFile(file);
+  };
   overlay.querySelector('[data-action="text"]').onclick = () => {
     overlay.querySelector('.ai-text-attachment-choices').hidden = true;
     overlay.querySelector('[data-text-form]').hidden = false;

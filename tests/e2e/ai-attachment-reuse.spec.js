@@ -129,19 +129,21 @@ test('text originals remain readable after sending, reload and context compressi
   expect(result.notice).toContain(result.fileId);
 });
 
-test('conversation attachment group appears in settings and controls all four tool entries', async ({ page }) => {
+test('conversation attachment group appears in settings and controls text, image and screenshot tools', async ({ page }) => {
   await page.goto(baseUrl + '/index.html');
   await setup(page);
   await page.evaluate(() => createNewConv());
   await page.evaluate(() => openAiToolSettingsModal());
   const group = page.locator('#aiToolSettingsGroups .ai-tool-group-item').filter({ hasText: '对话附件' });
   await expect(group).toBeVisible();
-  await expect(group.locator('.ai-tool-group-count')).toHaveText('4');
+  await expect(group.locator('.ai-tool-group-count')).toHaveText('8');
   const checkbox = group.locator('input');
   await checkbox.check();
   const available = () => page.evaluate(() => [...selectAiToolsForConversation(getActiveConv(), false, false, getEffectiveApiConfig())]
-    .filter(name => /^(list|read)_conversation_(files?|images?)$/.test(name)).sort());
-  expect(await available()).toEqual(['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image']);
+    .filter(name => /^(list|read)_conversation_(files?|images?)$/.test(name) || AI_SCREENSHOT_TOOLS.includes(name)).sort());
+  expect(await available()).toEqual(['crop_screenshot', 'find_pdf_screenshot_region', 'list_conversation_files',
+    'list_conversation_images', 'list_screenshot_attachments', 'preview_screenshot_source',
+    'read_conversation_file', 'read_conversation_image']);
   await checkbox.uncheck();
   expect(await available()).toEqual([]);
   await page.reload();

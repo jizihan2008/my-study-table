@@ -1389,7 +1389,7 @@ function toggleTodayTimerRecordsExpanded() {
 function renderTodayTimerRecords(records) {
   const list = document.getElementById('todayTimerRecords');
   if (!list || typeof loadTimerRecords !== 'function' || typeof renderTimerHistory !== 'function') return;
-  closeTodayTimerContextMenu();
+  closeTimerRecordContextMenu();
   const today = getTodayStr();
   const todayRecords = (records || loadTimerRecords()).filter(record => record.date === today);
   const { focusMs, otherMs } = getTimerRecordFocusTotals(todayRecords, today);
@@ -1411,30 +1411,9 @@ function renderTodayTimerRecords(records) {
     expand.setAttribute('aria-expanded', String(todayTimerRecordsExpanded));
   }
   const items = todayRecords.filter(record => todayTimerTypeFilter === 'all' || getTimerActivityType(record) === todayTimerTypeFilter);
-  list.innerHTML = renderTimerHistory(items, { readOnly: true, todayContextMenu: true })
+  list.innerHTML = renderTimerHistory(items, { readOnly: true, contextMenuSource: 'today' })
     || `<div class="today-goals-empty">${todayTimerTypeFilter === 'all' ? '今天还没有计时记录，完成计时或手动补记后会显示在这里。' : '今天还没有此类型的计时记录。'}</div>`;
 }
-
-function showTodayTimerContextMenu(event, recordId) {
-  event.preventDefault();
-  const menu = document.getElementById('todayTimerContextMenu');
-  menu.firstElementChild.onclick = () => editTimerRecord(recordId, 'today');
-  menu.classList.add('visible');
-  menu.style.left = Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth - 6)) + 'px';
-  menu.style.top = Math.max(0, Math.min(event.clientY, innerHeight - menu.offsetHeight - 6)) + 'px';
-}
-
-function closeTodayTimerContextMenu() {
-  document.getElementById('todayTimerContextMenu')?.classList.remove('visible');
-}
-
-document.addEventListener('click', closeTodayTimerContextMenu);
-document.addEventListener('contextmenu', event => {
-  if (!event.target.closest('#todayTimerRecords .timer-history-item')) closeTodayTimerContextMenu();
-});
-document.addEventListener('keydown', event => {
-  if (event.key === 'Escape') closeTodayTimerContextMenu();
-});
 
 let todayScheduleCollapsed = false;
 
@@ -1479,7 +1458,8 @@ function renderTodaySchedule() {
         const color = typeof getCalColor === 'function' ? getCalColor(ev.color) : { dot: '#4f6ef7' };
         const time = typeof formatCalEventTimeRange === 'function' ? formatCalEventTimeRange(ev) : (ev.time || '');
         const repeat = typeof calEventRepeatLabel === 'function' ? calEventRepeatLabel(ev) : '';
-        return `<button type="button" class="today-schedule-event" onclick="openTodayScheduleEvent('${day.dateStr}', ${JSON.stringify(ev.id)})">
+        return `<button type="button" class="today-schedule-event" onclick="openTodayScheduleEvent('${day.dateStr}', ${JSON.stringify(ev.id)})"
+          oncontextmenu="showCalEventContextMenu(event, ${JSON.stringify(ev.id)}, '${day.dateStr}')">
           <span class="today-schedule-dot" style="background:${color.dot}"></span>
           <span class="today-schedule-time">${time || '全天'}</span>
           <span class="today-schedule-details"><span class="today-schedule-name">${escapeHtml(ev.title || '未命名日程')}</span>${ev.location ? `<span class="today-schedule-location">地点：${escapeHtml(ev.location)}</span>` : ''}</span>

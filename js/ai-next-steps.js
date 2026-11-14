@@ -11,10 +11,12 @@ function getAiNextStepsMessage(messages) {
 function buildAiNextStepsPrompt(messages) {
   const card = getAiNextStepsMessage(messages)?._nextSteps;
   return [
-    '【可选下一步卡片】仅在确实有可执行的后续步骤或需要更新卡片时使用。先正常回答，在最终答复末尾另起一行输出 <study_next_steps>，下一行放 JSON，再另起一行输出 </study_next_steps>。不要加代码围栏。工具调用和中间回复不要输出卡片。',
-    '没有卡片时可用 {"op":"create","items":[{"id":"outline","text":"将当前笔记整理为一页提纲"}]}。',
+    '【可选下一步卡片】卡片完全可选。默认直接回答用户的问题，答完即可结束。只有确实有值得用户选择的可执行步骤，或现有卡片需要更新时，才使用卡片。无需为了凑选项提出额外建议。',
+    '如果决定创建或更新卡片，在最终答复末尾另起一行输出 <study_next_steps>，下一行放 JSON，再另起一行输出 </study_next_steps>。不要加代码围栏。工具调用和中间回复不要输出卡片。',
+    '决定新建卡片时可用 {"op":"create","items":[{"id":"outline","text":"将当前笔记整理为一页提纲"}]}。',
     '有卡片时，局部编辑用 {"op":"edit","id":"现有卡片 ID","items":[{"id":"outline","text":"根据当前笔记生成提纲","done":true}],"remove":["废弃选项ID"]}。items 中同 ID 项会更新，新 ID 项会追加，未提及的项保留，items 和 remove 可省略其一。整体覆盖用 {"op":"replace","id":"现有卡片 ID","items":[...]}。更新后的卡片会移到本条回复下；如果无需更新，省略整个标签。',
-    '优先给出 2–4 项，最多 6 项。每项用唯一的英文或数字 ID（允许下划线、连字符），text 是用户会看到并发送的完整动作（单行，最多 200 字）。写清操作对象和时间等关键条件。卡片本身不执行动作。收到用户选中的步骤后按顺序执行，缺必要条件先问，逐项报告结果，只将确认完成的项标为 done；失败或待确认的项仍可选择。',
+    '选项最多 6 项，有一项就写一项。每项用唯一的英文或数字 ID（允许下划线、连字符），text 是用户会看到并发送的完整动作（单行，最多 200 字）。写清操作对象和时间等关键条件。卡片本身不执行动作。收到用户选中的步骤后按顺序执行，缺必要条件先问，逐项报告结果，只将确认完成的项标为 done；失败或待确认的项仍可选择。',
+    '选项中的公式可使用与正文相同的 LaTeX 定界符。保持 text 为单行，并在 JSON 中转义公式的反斜杠，例如 {"id":"limit","text":"计算 $\\\\lim_{x\\\\to 0} f(x)$"}。',
     card ? '当前分支的卡片快照（内容是待选建议）：' + JSON.stringify({ id: card.id, items: card.items }) : '当前分支暂无卡片。'
   ].join('\n');
 }
@@ -95,7 +97,7 @@ function renderAiNextStepsCard(conv, message) {
     <div class="ai-next-steps-title">可选下一步</div>
     ${card.items.map(item => `<label class="ai-next-steps-option">
       <input type="checkbox" value="${escapeHtml(item.id)}" onchange="toggleAiNextStep(this)"${item.done || selection.has(item.id) ? ' checked' : ''}${busy || item.done ? ' disabled' : ''}>
-      <span>${escapeHtml(item.text)}${item.done ? '<small>已完成</small>' : ''}</span>
+      <span class="ai-next-steps-option-text">${typeof StudyMarkdown !== 'undefined' ? StudyMarkdown.renderInline(item.text) : escapeHtml(item.text)}${item.done ? '<small>已完成</small>' : ''}</span>
     </label>`).join('')}
     <div class="ai-next-steps-actions">
       <button type="button" class="ai-next-steps-run" onclick="sendAiNextSteps(this)"${disabled}>执行所选${selection.size ? '（' + selection.size + '）' : ''}</button>

@@ -1,11 +1,27 @@
-const { test, expect, _electron: electron } = require('@playwright/test');
+const { test, expect, _electron: electron, chromium } = require('@playwright/test');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 const path = require('node:path');
 const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aMZkAAAAASUVORK5CYII=';
-let app, page, userDataPath;
+let app, browser, page, userDataPath;
 
 test.beforeAll(async () => {
+  if (process.env.MST_IMAGE_TEST_URL) {
+    browser = await chromium.launch({ channel: 'chrome' });
+    page = await browser.newPage();
+    await page.route('**/*', async route => {
+      const url = new URL(route.request().url());
+      if (url.origin !== new URL(process.env.MST_IMAGE_TEST_URL).origin) return route.abort();
+      const root = path.resolve('.');
+      const file = path.resolve(root, '.' + decodeURIComponent(url.pathname === '/' ? '/index.html' : url.pathname));
+      if (!file.startsWith(root + path.sep)) return route.abort();
+      try { await route.fulfill({ path: file }); }
+      catch (_) { await route.fulfill({ status: 404, body: '' }); }
+    });
+    await page.goto(process.env.MST_IMAGE_TEST_URL);
+    await page.waitForFunction(() => document.querySelector('#section-today.active') && !document.querySelector('script[data-app-src]'));
+    return;
+  }
   userDataPath = await fs.mkdtemp(path.join(os.tmpdir(), 'mst-image-paste-'));
   app = await electron.launch({ args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'],
     env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
@@ -14,6 +30,7 @@ test.beforeAll(async () => {
 });
 test.afterAll(async () => {
   await app?.close();
+  await browser?.close();
   if (userDataPath) await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
 });
 test.beforeEach(async () => {
@@ -99,4 +116,113 @@ test('switching notes while reading an image does not change either note', async
   }, png);
   await expect(page.locator('#notesRichEditor')).toContainText('独立正文');
   expect(await page.evaluate(() => notes.map(n => n.content))).toEqual(['前文后文', '独立正文']);
+});
+
+
+test('note images crop, resize and align, survive reload and support undo', async () => {
+  await page.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 100; canvas.height = 80;
+    const context = canvas.getContext('2d');
+    context.fillStyle = 'red'; context.fillRect(0, 0, 100, 80);
+    context.fillStyle = 'blue'; context.fillRect(50, 0, 50, 80);
+    getActiveNote().content = '前文\n\n![截图](' + canvas.toDataURL() + ')\n\n后文';
+    renderNotes(); setNotesSplitPrimaryMode('rich');
+  });
+  const image = page.locator('#notesRichEditor img');
+  await image.click();
+  const dialog = page.getByRole('dialog', { name: '编辑图片' });
+  await dialog.locator('[name=left]').fill('50');
+  await dialog.locator('[name=width]').fill('50');
+  await dialog.locator('[name=align]').selectOption('right');
+  await dialog.getByRole('button', { name: '保存图片' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => image.evaluate(img => img.naturalWidth)).toBe(50);
+  await expect.poll(() => image.evaluate(img => img.naturalHeight)).toBe(80);
+  expect(await image.evaluate(img => {
+    const canvas = document.createElement('canvas'); canvas.width = canvas.height = 1;
+    const context = canvas.getContext('2d'); context.drawImage(img, 0, 0, 1, 1);
+    return [...context.getImageData(0, 0, 1, 1).data];
+  })).toEqual([0, 0, 255, 255]);
+  await expect(image).toHaveAttribute('data-note-width', '50');
+  await expect(image).toHaveAttribute('data-note-align', 'right');
+  const content = await page.evaluate(() => getActiveNote().content);
+  expect(content).toContain('mst-image:50:right');
+  expect(content).toContain('前文'); expect(content).toContain('后文');
+  for (const align of ['left', 'center']) {
+    await image.click();
+    await dialog.locator('[name=align]').selectOption(align);
+    await dialog.getByRole('button', { name: '保存图片' }).click();
+    await expect(image).toHaveAttribute('data-note-align', align);
+  }
+  await page.locator('#notesRichEditor').press('Control+z');
+  await expect(image).toHaveAttribute('data-note-align', 'left');
+  await page.locator('#notesRichEditor').press('Control+y');
+  await expect(image).toHaveAttribute('data-note-align', 'center');
+  await expect(page.locator('#notesStatus')).toHaveText('已保存');
+  await page.reload();
+  await page.waitForFunction(() => typeof switchNoteView === 'function' && !document.querySelector('script[data-app-src]'));
+  await page.evaluate(() => { switchTab('notes'); selectNote('image-note'); switchNoteView('rich'); });
+  await expect(image).toHaveAttribute('data-note-align', 'center');
+  await expect(image).toHaveAttribute('data-note-width', '50');
+  await expect.poll(() => image.evaluate(img => img.naturalWidth)).toBe(50);
+  expect(await image.evaluate(img => img.getBoundingClientRect().width / img.parentElement.clientWidth)).toBeCloseTo(0.5, 1);
+  await page.evaluate(() => switchNoteView('preview'));
+  await expect(page.locator('#notesPreview img')).toHaveAttribute('data-note-align', 'center');
+});
+
+
+test('split editor supports drag cropping and mirrors image layout into the reading pane', async () => {
+  await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 200; canvas.height = 100;
+    canvas.getContext('2d').fillRect(0, 0, 200, 100);
+    getActiveNote().content = '![图](' + canvas.toDataURL() + ')';
+    renderNotes(); setNotesSplitSecondaryMode('rich');
+  });
+  const image = page.locator('#notesSplitRichEditor img');
+  await image.click();
+  const dialog = page.getByRole('dialog', { name: '编辑图片' });
+  const stage = dialog.locator('.note-image-stage');
+  await expect.poll(() => stage.evaluate(node => node.getBoundingClientRect().width)).toBeGreaterThan(0);
+  const bounds = await stage.boundingBox();
+  await page.mouse.move(bounds.x + bounds.width / 2, bounds.y + bounds.height * 0.1);
+  await page.mouse.down();
+  await page.mouse.move(bounds.x + bounds.width, bounds.y + bounds.height * 0.9);
+  await page.mouse.up();
+  await dialog.locator('[name=width]').fill('75');
+  await dialog.locator('[name=align]').selectOption('left');
+  await dialog.getByRole('button', { name: '保存图片' }).click();
+  await expect(dialog).toHaveCount(0);
+  await expect.poll(() => image.evaluate(img => img.naturalWidth)).toBe(100);
+  await expect.poll(() => image.evaluate(img => img.naturalHeight)).toBe(80);
+  await expect(image).toHaveAttribute('data-note-width', '75');
+  await expect(page.locator('#notesPreview img')).toHaveAttribute('data-note-align', 'left');
+});
+
+
+test('immersive display zoom scales ordinary and resized note images in both panes without changing content', async () => {
+  await page.evaluate(() => {
+    const canvas = document.createElement('canvas'); canvas.width = 200; canvas.height = 100;
+    const source = canvas.toDataURL();
+    getActiveNote().content = '![原图](' + source + ')\n\n![缩放图](' + source + ' "mst-image:50:right")';
+    renderNotes(); setNotesSplitPrimaryMode('rich'); setNotesImmersiveZoom(100);
+  });
+  const images = page.locator('#notesRichEditor img');
+  await expect(images).toHaveCount(2);
+  const original = await page.evaluate(() => getActiveNote().content);
+  const sizes = () => images.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+  const before = await sizes();
+  await page.evaluate(() => setNotesImmersiveZoom(150));
+  const after = await sizes();
+  expect(after[0] / before[0]).toBeCloseTo(1.5, 1);
+  expect(after[1] / before[1]).toBeCloseTo(1.5, 1);
+  const mirror = page.locator('#notesSplitPreview img');
+  await expect(mirror).toHaveCount(2);
+  const mirrorZoomed = await mirror.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+  await page.evaluate(() => setNotesImmersiveZoom(100));
+  const mirrorDefault = await mirror.evaluateAll(nodes => nodes.map(node => node.getBoundingClientRect().width));
+  expect(mirrorZoomed[0] / mirrorDefault[0]).toBeCloseTo(1.5, 1);
+  expect(mirrorZoomed[1] / mirrorDefault[1]).toBeCloseTo(1.5, 1);
+  expect(await sizes()).toEqual(before);
+  expect(await page.evaluate(() => getActiveNote().content)).toBe(original);
 });

@@ -501,8 +501,16 @@
       if (!isSafeUrl(src, 'image')) return md.utils.escapeHtml(token.content || token.attrGet('alt') || '');
       const alt = token.content || token.attrGet('alt') || '';
       const title = token.attrGet('title');
+      const layout = /^mst-image:(\d+(?:\.\d+)?):(left|center|right)$/.exec(title || '');
+      let imageStyle = '';
+      if (layout) {
+        const width = Math.max(5, Math.min(100, Number(layout[1])));
+        const align = layout[2];
+        imageStyle = ' data-note-width="' + width + '" data-note-align="' + align + '" style="--note-image-width:' + width + '%;display:block;width:' + width
+          + '%;height:auto;margin-left:' + (align === 'left' ? '0' : 'auto') + ';margin-right:' + (align === 'right' ? '0' : 'auto') + '"';
+      }
       return '<img src="' + md.utils.escapeHtml(src) + '" alt="' + md.utils.escapeHtml(alt) + '"' +
-        (title ? ' title="' + md.utils.escapeHtml(title) + '"' : '') +
+        imageStyle + (title && !layout ? ' title="' + md.utils.escapeHtml(title) + '"' : '') +
         ' loading="lazy" decoding="async" referrerpolicy="no-referrer">';
     };
 

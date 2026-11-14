@@ -36,6 +36,7 @@ test('the next steps card moves with edits and replacements on its own branch', 
   const card = page.locator('.ai-next-steps');
   const owner = card.locator('..').locator('.ai-chat-bubble');
   const run = card.getByRole('button', { name: /执行所选/ });
+  const quizText = '出三道计算题，求 $\\lim_{x\\to 0} f(x)$';
   const send = async text => {
     await input.fill(text);
     await page.evaluate(() => sendAiMessage());
@@ -44,33 +45,37 @@ test('the next steps card moves with edits and replacements on its own branch', 
   reply = withCard('第一条回复', { op: 'create', items: [
     { id: 'outline', text: '生成提纲' },
     { id: 'quiz', text: '出五道题' },
-    { id: 'todo', text: '安排明晚八点的复习待办' }
+    { id: 'todo', text: '安排明晚八点的复习待办，练习分式 $$\\frac{1}{2}$$' }
   ] });
   await send('下一步怎么学？');
   await expect(card).toHaveCount(1);
   await expect(owner).toContainText('第一条回复');
   await expect(run).toBeDisabled();
+  await expect(card.locator('.katex-display')).toBeVisible();
   expect(await page.evaluate(() => sanitizeAiStreamingText('正文\n<study_next_steps>\n{"op":'))).toBe('正文');
   const id = await page.evaluate(() => getAiNextStepsMessage(getActiveConv().messages)._nextSteps.id);
   await card.getByLabel('生成提纲').check();
   await card.getByLabel('出五道题').check();
 
-  reply = withCard('第二条回复', { op: 'edit', id, items: [{ id: 'quiz', text: '出三道计算题' }] });
+  reply = withCard('第二条回复', { op: 'edit', id, items: [{ id: 'quiz', text: quizText }] });
   await send('改一下自测题');
   await expect(card).toHaveCount(1);
   await expect(owner).toContainText('第二条回复');
   await expect(card.getByLabel('生成提纲')).toBeChecked();
   await expect(card.getByLabel('出三道计算题')).not.toBeChecked();
+  await expect(card.locator('label').filter({ hasText: '出三道计算题' }).locator('.katex')).toBeVisible();
   expect(requests[1].messages.some(message => message.role === 'system' && message.content.includes(id))).toBe(true);
 
-  await input.fill('保留我的草稿');
   await card.getByLabel('出三道计算题').check();
+  await card.getByRole('button', { name: '加入输入框' }).click();
+  expect(await input.inputValue()).toContain(quizText);
+  await input.fill('保留我的草稿');
   reply = '第三条回复，卡片保持原样';
   await run.click();
   await expect(page.locator('#aiMessages')).toContainText(reply);
   await expect(owner).toContainText('第二条回复');
   await expect(input).toHaveValue('保留我的草稿');
-  expect(requests[2].messages.at(-1).content).toContain('1. 生成提纲\n2. 出三道计算题');
+  expect(requests[2].messages.at(-1).content).toContain('1. 生成提纲\n2. ' + quizText);
   expect(requests[2].messages.at(-1).content).not.toContain('安排明晚');
   expect(requests[2].messages.at(-1).content).not.toContain('保留我的草稿');
 

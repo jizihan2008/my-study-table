@@ -49,6 +49,67 @@ function conversation(ctx) {
   ctx.appendMessage(conv, { role: 'user', content: 'question' });
   return conv;
 }
+
+test('AI note history reads the shared undo and redo stacks and records only successful edits', async () => {
+  const ctx = harness();
+  ctx.notes = [
+    { id: 701, type: 'note', title: '旧标题', content: '😀原文' },
+    { id: 702, type: 'note', title: '另一篇', content: '另一篇正文' }
+  ];
+  ctx.loadData = () => [];
+  ctx.navigator = { platform: 'Win32' };
+  ctx.document.querySelectorAll = () => [];
+  ctx.notesUndoStack = [];
+  ctx.notesRedoStack = [];
+  vm.runInContext(source('notes'), ctx);
+  ctx.renderNotes = () => {};
+  const run = (action, params) => ctx.executeToolCallStructured(action, { id: 701, ...params });
+  const list = () => run('list_note_history');
+  const revision = async () => (await run('get_note_detail')).data.revision;
+  ctx.pushNotesUndo(702, '另一篇旧正文', '另一篇');
+  ctx.notesRedoStack.push({ noteId: 701, content: '重做正文', title: '旧标题', timestamp: Date.now() });
+  const redoId = (await list()).data.items[0].snapshotId;
+  assert.equal((await list()).data.items[0].stack, 'redo');
+
+  assert.equal((await run('update_note', { title: '新标题' })).ok, true);
+  const { snapshotId, action } = (await list()).data.items[0];
+  assert.equal(action, 'update_note');
+  assert.equal((await run('get_note_history', { snapshotId: redoId })).code, 'SNAPSHOT_NOT_FOUND');
+  assert.equal((await run('get_note_history', { id: 702, snapshotId })).code, 'SNAPSHOT_NOT_FOUND');
+  const firstPage = (await run('get_note_history', { snapshotId, limit: 1 })).data;
+  assert.equal(firstPage.title, '旧标题');
+  assert.equal(firstPage.content, '😀');
+  assert.equal((await run('get_note_history', { snapshotId, offset: firstPage.nextOffset })).data.content, '原文');
+
+  assert.equal((await run('patch_note', { revision: await revision(), edits: [{ oldText: '原文', newText: '改过' }] })).ok, true);
+  assert.equal((await run('append_note', { revision: await revision(), content: '\n新段落' })).ok, true);
+  const history = (await list()).data;
+  assert.equal(history.total, 3);
+  assert.equal(history.items.map(item => item.action).join(','), 'append_note,patch_note,update_note');
+  assert.equal(history.items[2].snapshotId, snapshotId);
+
+  assert.equal((await run('update_note', { tags: '标签', content: ctx.notes[0].content })).ok, true);
+  let flushCount = 0;
+  ctx.window.StudyData = { flush: async () => { if (++flushCount === 1) throw new Error('write failed'); } };
+  const failed = await run('update_note', { content: '保存失败的正文' });
+  assert.equal(failed.code, 'SAVE_FAILED');
+  assert.equal(ctx.notes[0].content, '😀改过\n新段落');
+  assert.equal((await list()).data.total, 3);
+  assert.equal(ctx.getAiToolMetadata('list_note_history').effect, 'read');
+  assert.equal(ctx.getAiToolMetadata('get_note_history').effect, 'read');
+
+  ctx.activeNoteId = 701;
+  ctx.document.getElementById = () => ({});
+  ctx.locateNotesHistoryChange = () => {};
+  ctx.renderNoteList = () => {};
+  ctx.undoNote();
+  assert.equal(ctx.notes[0].content, '😀改过');
+  const redo = (await list()).data.items.find(item => item.stack === 'redo');
+  assert.equal((await run('get_note_history', { snapshotId: redo.snapshotId })).data.content, '😀改过\n新段落');
+  ctx.redoNote();
+  assert.equal(ctx.notes[0].content, '😀改过\n新段落');
+});
+
 const result = (tools = [], text = 'final answer') => ({ toolCalls: tools, cleanText: text, rawReply: text, finishReason: 'stop' });
 
 for (const tool of ['read_webpage', 'web_search']) test(tool + ' data is never promoted to a system API message', () => {
@@ -2353,4 +2414,40 @@ test('outline pagination is complete, bounded and revision locked', async () => 
   const empty = await ctx.executeToolCallStructured('get_note_outline', { id: 806 });
   assert.equal(empty.data.totalItems, 0);
   assert.equal(empty.data.hasMore, false);
+});
+
+
+test('textbook screenshots embed in notes with revision, branch, position and save protections', async () => {
+  const ctx = harness();
+  vm.runInContext(source('ai-screenshot'), ctx);
+  ctx.notes = [{ id: 701, type: 'note', title: '教材笔记', content: '开头\n目标段落\n结尾' }];
+  const conv = { id: 'background', _toolGroups: ['note'], messages: [{ visionFiles: [{ screenshot: { fileId: 'shot_1' } }] }] };
+  ctx.blobToDataUrl = async () => 'data:image/png;base64,aGVsbG8=';
+  vm.runInContext("_aiOriginalFileFallback.set('shot_1', { convId: 'background', blob: { type: 'image/png' } })", ctx);
+  const revision = () => ctx.getAiNoteRevision(ctx.notes[0]);
+  const run = params => ctx.executeToolCallStructured('insert_screenshot_in_note', { id: 701, revision: revision(), screenshotId: 'shot_1', ...params }, { conv });
+  assert.equal(ctx.getAiToolMetadata('insert_screenshot_in_note').effect, 'write');
+  assert.equal(ctx.selectAiToolsForConversation(conv, false, false).has('insert_screenshot_in_note'), true);
+  assert.equal(ctx.getAiToolJsonSchema('insert_screenshot_in_note').required.includes('screenshotId'), true);
+  assert.equal((await run({ revision: 'stale' })).ok, false);
+  assert.equal((await run({ screenshotId: 'unrelated' })).ok, false);
+  assert.equal((await run({ afterText: '不存在' })).ok, false);
+  const original = ctx.notes[0].content;
+  ctx.saveData = () => false;
+  assert.equal((await run({})).ok, false);
+  assert.equal(ctx.notes[0].content, original);
+  ctx.saveData = () => true;
+  assert.equal((await run({ afterText: '目标段落' })).ok, true);
+  assert.equal(ctx.notes[0].content, '开头\n目标段落\n\n![教材截图](data:image/png;base64,aGVsbG8=)\n\n\n结尾');
+  const inserted = ctx.notes[0].content;
+  conv.messages = [];
+  assert.equal((await run({})).ok, false);
+  assert.equal(ctx.notes[0].content, inserted);
+  conv.messages = [{ visionFiles: [{ screenshot: { fileId: 'shot_1' } }] }];
+  ctx.notes[0].content = '重复 重复';
+  assert.equal((await run({ afterText: '重复' })).status, 'ambiguous');
+  assert.equal(ctx.notes[0].content, '重复 重复');
+  ctx.window.StudyData = { flush: async () => { throw new Error('flush failed'); } };
+  assert.equal((await run({})).ok, false);
+  assert.equal(ctx.notes[0].content, '重复 重复');
 });

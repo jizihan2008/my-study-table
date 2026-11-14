@@ -21,8 +21,8 @@
 </script>
 <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192-v3.png">
 <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-v3.png">
-<link rel="stylesheet" href="css/style.css?v=20261110-today-cleanup-r1">
-<link rel="stylesheet" href="css/workspace.css?v=20261110-today-banner-r1">
+<link rel="stylesheet" href="css/style.css?v=20261114-image-dialog-r3">
+<link rel="stylesheet" href="css/workspace.css?v=20261114-image-zoom-r2">
 <link rel="stylesheet" href="css/appearance.css?v=20261110-today-banner-r1">
 <link rel="stylesheet" href="lib/katex/katex.min.css">
 <link rel="stylesheet" href="lib/markdown/highlight-github-dark-dimmed.min.css">
@@ -582,6 +582,7 @@
           <button class="calendar-today-btn" onclick="calendarGoToday()" title="回到今天">今天</button>
           <button type="button" id="calManageCategories" class="calendar-today-btn" onclick="openCalendarCategoryManager()">管理分类</button>
           <button class="calendar-today-btn" onclick="CalendarSubscription.open()">订阅到苹果日历</button>
+          <button type="button" class="calendar-today-btn" onclick="CalendarSubscription.openManager()">管理订阅</button>
         </div>
       </div>
       <div class="card-scroll">
@@ -592,6 +593,7 @@
           <span class="calendar-legend-item"><span class="calendar-legend-dot" style="background:#8b5cf6"></span>计时</span>
           <span class="calendar-legend-item"><span class="calendar-legend-dot" style="background:var(--primary)"></span>复习</span>
         </div>
+        <div id="calendarTimerManualForm"></div>
         <div class="calendar-todo-list" id="calendarTodoList"></div>
       </div>
     </div>
@@ -787,9 +789,30 @@
       <button class="modal-close" aria-label="关闭订阅设置" onclick="CalendarSubscription.close()">×</button>
     </div>
     <div class="modal-body">
-      <p class="hint">日程订阅包含标题、时间、地点和备注。待办截止日期可单独订阅为全天条目，只包含待办标题和截止日期。修改请回到 MST。</p>
+      <section id="calSubscriptionManager" hidden aria-label="已有自定义订阅">
+        <div class="cal-subscription-manager-actions">
+          <button type="button" class="calendar-today-btn" onclick="CalendarSubscription.refreshCustom()">刷新列表</button>
+          <button type="button" class="calendar-today-btn" onclick="CalendarSubscription.editCustom()">新建自定义订阅</button>
+        </div>
+        <p id="calSubscriptionManagerStatus" class="hint" role="status" aria-live="polite"></p>
+        <div id="calSubscriptionList"></div>
+      </section>
+      <div id="calSubscriptionEditor">
+      <button type="button" class="today-timer-link" onclick="CalendarSubscription.showManager()">查看已有自定义订阅</button>
+      <p class="hint">日程订阅包含标题、时间、地点和备注。待办截止日期显示为全天条目，包含完整待办路径和正文。修改请回到 MST。</p>
       <p class="hint">每周重复日程提供过去一年至未来两年的场次，范围随刷新滚动。苹果端按自身频率刷新。</p>
+      <p class="hint">订阅读取云端已同步的数据。新增或修改内容会在 MST 自动同步后供苹果日历刷新获取。</p>
       <label class="cal-event-time-field"><span>订阅范围</span><select id="calSubscriptionScope" class="cal-event-input" onchange="CalendarSubscription.selectScope()" disabled><option value="">全部日程</option></select></label>
+      <div id="calSubscriptionCustom" hidden>
+        <label class="cal-event-time-field"><span>自定义订阅名称</span><input id="calSubscriptionName" class="cal-event-input" maxlength="80" placeholder="例如：课程与待办" onchange="CalendarSubscription.customChanged()"></label>
+        <fieldset id="calSubscriptionSources" class="cal-subscription-sources">
+          <legend>勾选订阅内容</legend>
+          <label><input type="checkbox" id="calSubscriptionAllEvents" onchange="CalendarSubscription.customChanged()">全部日历事件</label>
+          <div id="calSubscriptionCategorySources"></div>
+          <label><input type="checkbox" id="calSubscriptionIncludeTodo" onchange="CalendarSubscription.customChanged()">待办截止日期</label>
+        </fieldset>
+        <p class="hint">选择全部日历事件时已包含各分类。已有订阅可直接保存更改；重置链接后需在苹果日历重新订阅。</p>
+      </div>
       <label class="cal-event-time-field"><span>日程时区</span><input id="calSubscriptionTimezone" class="cal-event-input" value="Asia/Shanghai" placeholder="Asia/Shanghai"></label>
       <details style="margin-top:12px;"><summary>订阅服务设置</summary>
         <label class="cal-event-time-field"><span>订阅服务地址（由管理员提供）</span><input id="calSubscriptionEndpoint" class="cal-event-input" type="url" placeholder="https://…/functions/v1/calendar-feed"></label>
@@ -797,11 +820,13 @@
       <p id="calSubscriptionStatus" class="hint" role="status" aria-live="polite" style="margin:12px 0;"></p>
       <label class="cal-event-time-field"><span>私密订阅链接（持有者可查看日程，请勿转发）</span><input id="calSubscriptionLink" class="cal-event-input" readonly autocomplete="off" spellcheck="false" onclick="this.select()"></label>
       <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;">
+        <button id="calSubscriptionSave" class="btn-save-settings" style="width:auto;margin:0;" onclick="CalendarSubscription.saveCustom()" hidden>保存更改</button>
         <button id="calSubscriptionCreate" class="btn-save-settings" style="width:auto;margin:0;" onclick="CalendarSubscription.create()">生成订阅链接</button>
         <button id="calSubscriptionCopy" class="btn-save-settings" style="width:auto;margin:0;" onclick="CalendarSubscription.copy()" disabled>复制链接</button>
         <button id="calSubscriptionRevoke" class="calendar-today-btn" onclick="CalendarSubscription.revoke()" disabled>停用订阅</button>
       </div>
       <p class="hint" style="margin-top:12px;">iPhone：日历 → 日历 → 添加日历 → 添加订阅日历，粘贴链接。账户可选 iCloud。</p>
+      </div>
     </div>
   </div>
 </div>
@@ -1671,6 +1696,9 @@
           <label>备份间隔</label>
           <select id="settingsBackupInterval" onchange="saveBackupSettings()" style="width:100%;padding:8px;border:1px solid var(--border);border-radius:6px;background:var(--input-bg);color:var(--text);">
             <option value="0">关闭</option>
+            <option value="5">每 5 分钟</option>
+            <option value="10">每 10 分钟</option>
+            <option value="15">每 15 分钟</option>
             <option value="30">每 30 分钟</option>
             <option value="60">每 1 小时</option>
             <option value="180">每 3 小时</option>
@@ -1904,10 +1932,10 @@
 <script src="lib/markdown/purify.min.js"></script>
 <script src="lib/markdown/highlight.min.js"></script>
 <script src="lib/katex/katex.min.js"></script>
-<script src="js/markdown.js?v=20261108-note-tab-r1"></script>
+<script src="js/markdown.js?v=20261114-image-zoom-r2"></script>
 <script src="js/note-reading-renderer.js?v=20261015-fold-toc-r1"></script>
 <script src="js/note-view-position.js?v=20261004-r1"></script>
-<script src="js/note-rich-editor.js?v=20261108-inline-code-r1"></script>
+<script src="js/note-rich-editor.js?v=20261114-image-dialog-r3"></script>
 <script src="js/platform.js?v=20261014-idb-r1"></script>
 <script src="js/secrets.js?v=20261016-web-r1"></script>
 <script src="js/data-store.js?v=20261014-idb-r1"></script>
@@ -1921,28 +1949,30 @@
 <script type="application/x-study-script" data-app-src="js/core.js?v=20261110-mobile-sidebar"></script>
 <script type="application/x-study-script" data-app-src="js/trash.js?v=20261104-todo-batch-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todos.js?v=20261104-focus-unlimited-r1"></script>
-<script type="application/x-study-script" data-app-src="js/notes.js?v=20261108-split-note-picker-r1"></script>
+<script type="application/x-study-script" data-app-src="js/note-history.js?v=20261110-r1"></script>
+<script type="application/x-study-script" data-app-src="js/notes.js?v=20261114-image-zoom-r2"></script>
 <script type="application/x-study-script" data-app-src="lib/file-library-order.js?v=20261004-r1"></script>
-<script type="application/x-study-script" data-app-src="js/file-library.js?v=20261004-r1"></script>
+<script type="application/x-study-script" data-app-src="js/file-library.js?v=20261110-screenshot-r1"></script>
 <script type="application/x-study-script" data-app-src="js/links.js?v=20260813-r1"></script>
 <script type="application/x-study-script" data-app-src="js/timer-types.js?v=20261013-custom-types-r1"></script>
-<script type="application/x-study-script" data-app-src="js/today.js?v=20261110-today-banner-r1"></script>
+<script type="application/x-study-script" data-app-src="js/today.js?v=20261110-calendar-record-edit-r1"></script>
 <!-- AI 模块（按依赖顺序加载） -->
 <script type="application/x-study-script" data-app-src="js/ai-utils.js?v=20261103-agents-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-tree.js?v=20261012-visual-fold-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-next-steps.js?v=20261109-ai-next-steps"></script>
+<script type="application/x-study-script" data-app-src="js/ai-next-steps.js?v=20261110-next-steps-optional-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-conv.js?v=20261102-ai-trash-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261109-ai-chat-recovery-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261109-ai-next-steps"></script>
+<script type="application/x-study-script" data-app-src="js/ai-screenshot.js?v=20261114-note-screenshot-r3"></script>
+<script type="application/x-study-script" data-app-src="js/ai-attach.js?v=20261110-screenshot-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-render.js?v=20261114-note-screenshot-r3"></script>
 <script type="application/x-study-script" data-app-src="js/web-access.js?v=20261016-web-r1"></script>
-<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261109-ai-next-steps"></script>
+<script type="application/x-study-script" data-app-src="js/ai-tools.js?v=20261114-note-screenshot-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-search.js?v=20261017-ai-notify-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-client.js?v=20260914-r3"></script>
 <script type="application/x-study-script" data-app-src="js/ai-stream.js?v=20261012-protocol-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-agents.js?v=20261103-agent-settings-r2"></script>
-<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261109-ai-next-steps"></script>
+<script type="application/x-study-script" data-app-src="js/ai-agents.js?v=20261110-screenshot-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-api.js?v=20261110-screenshot-r1"></script>
 <script type="application/x-study-script" data-app-src="js/ai-send.js?v=20261109-ai-next-steps"></script>
-<script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261108-ai-mobile-toolbar-r1"></script>
+<script type="application/x-study-script" data-app-src="js/ai-float.js?v=20261112-ai-reading-r1"></script>
 <script type="application/x-study-script" data-app-src="js/skills.js?v=20261010-r1"></script>
 <script type="application/x-study-script" data-app-src="js/prompts.js?v=20261029-sync-refresh-r1"></script>
 <script type="application/x-study-script" data-app-src="js/music.js"></script>
@@ -1952,7 +1982,7 @@
 <script type="application/x-study-script" data-app-src="js/backup-idb.js?v=20260812-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habit-status-text.js?v=20260920-r1"></script>
 <script type="application/x-study-script" data-app-src="js/todo-queue.js?v=20261110-today-task-actions"></script>
-<script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261014-idb-r1"></script>
+<script type="application/x-study-script" data-app-src="js/storage-usage.js?v=20261110-note-history-r1"></script>
 <script type="application/x-study-script" data-app-src="js/settings.js?v=20261108-category-manager-r1"></script>
 <script type="application/x-study-script" data-app-src="js/utils.js?v=20261020-fold-menu-r1"></script>
 <!-- 收件箱（消息助手）：依赖 ai-api / settings / ai-attach / ai-send；QQ 聊天数据层 qq-chats.js 需在 inbox.js 前加载 -->
@@ -1973,10 +2003,10 @@
 <script type="application/x-study-script" data-app-src="js/books-annot.js?v=20260914-r5"></script>
 <script type="application/x-study-script" data-app-src="js/keywords.js?v=20260818-r1"></script>
 <script type="application/x-study-script" data-app-src="js/books-study.js?v=20260821-r2"></script>
-<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261110-timer-records-expanded"></script>
-<script type="application/x-study-script" data-app-src="js/calendar-subscription.js?v=20261109-todo-due-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar.js?v=20261111-custom-subscription-r1"></script>
+<script type="application/x-study-script" data-app-src="js/calendar-subscription.js?v=20261111-subscription-save-r1"></script>
 <script type="application/x-study-script" data-app-src="js/taskline.js?v=20261012-focus"></script>
-<script type="application/x-study-script" data-app-src="js/timer.js?v=20261104-stats-period-review"></script>
+<script type="application/x-study-script" data-app-src="js/timer.js?v=20261110-calendar-record-edit-r1"></script>
 <script type="application/x-study-script" data-app-src="js/habits.js?v=20261019-habit-debug-r1"></script>
 <script type="application/x-study-script" data-app-src="js/stats.js?v=20261104-stats-period-review"></script>
 <script type="application/x-study-script" data-app-src="js/updater.js?v=20260802-r1"></script>
@@ -2085,8 +2115,8 @@
   </div>
 </div>
 
-<!-- Right-click context menu for todos -->
-<div class="context-menu" id="todayTimerContextMenu">
+<!-- Right-click context menu for timer records -->
+<div class="context-menu" id="timerRecordContextMenu">
   <div class="context-menu-item"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑计时记录</div>
 </div>
 
@@ -2157,6 +2187,7 @@
 <!-- Right-click context menu for calendar events -->
 <div class="context-menu" id="calEventContextMenu">
   <div class="context-menu-item" onclick="calCtxEdit()"><i data-lucide="pencil" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 编辑事件</div>
+  <div class="context-menu-item" id="calCtxRecordEarly" onclick="calCtxRecordEarly()" hidden><i data-lucide="timer" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 提前计入计时记录</div>
   <div class="context-menu-item danger" id="calCtxDeleteOne" onclick="calCtxDeleteOneDay()" style="display:none;">仅删除这一天</div>
   <div class="context-menu-item danger" onclick="calCtxDeleteSeries()"><i data-lucide="trash-2" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> <span id="calCtxDeleteSeriesLabel">删除事件</span></div>
 </div>

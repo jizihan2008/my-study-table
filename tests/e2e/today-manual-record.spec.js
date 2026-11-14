@@ -80,7 +80,7 @@ test('today manual record shares timer form and updates records and reports', as
     expect(saved.records[0].sessions).toHaveLength(2);
     expect(saved.report.todayTimerTypeTotals.find(item => item.activityType === 'rest').totalMs).toBe(2400000);
     const record = page.locator('#todayTimerRecords .timer-history-item').filter({ hasText: '手动补记测试' });
-    const menu = page.locator('#todayTimerContextMenu');
+    const menu = page.locator('#timerRecordContextMenu');
     await record.click({ button: 'right' });
     await expect(menu).toBeVisible();
     await page.keyboard.press('Escape');

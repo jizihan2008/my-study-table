@@ -12,6 +12,21 @@ function createRenderer() {
   return StudyMarkdown.createRenderer({ markdownit, footnote, hljs, katex });
 }
 
+test('image layout metadata renders bounded widths and alignment in notes and reading plans', () => {
+  const renderer = createRenderer();
+  for (const align of ['left', 'center', 'right']) {
+    const markdown = `![截图](data:image/png;base64,aGVsbG8= "mst-image:50:${align}")`;
+    for (const html of [renderer.render(markdown), renderer.createReadingPlan(markdown).renderBlock(0)]) {
+      assert.match(html, /data-note-width="50"/);
+      assert.ok(html.includes(`data-note-align="${align}"`));
+      assert.ok(html.includes(`margin-left:${align === 'left' ? '0' : 'auto'}`));
+      assert.ok(html.includes(`margin-right:${align === 'right' ? '0' : 'auto'}`));
+    }
+  }
+  assert.match(renderer.render('![图](https://example.com/a.png "mst-image:999:right")'), /width:100%/);
+  assert.doesNotMatch(renderer.render('![图](https://example.com/a.png "mst-image:50:invalid")'), /data-note-align/);
+});
+
 test('embedded raster images render in notes and reading plans without allowing data links or SVG', () => {
   const renderer = createRenderer();
   const src = 'data:image/png;base64,aGVsbG8=';

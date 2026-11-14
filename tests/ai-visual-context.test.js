@@ -7,6 +7,10 @@ const vm = require('node:vm');
 const png = 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aQ1sAAAAASUVORK5CYII=';
 const config = { apiKey: 'fake', model: 'deepseek-flash', baseUrl: 'https://example.test/v1', contextBudget: 32768, contextLimit: 20 };
 
+const visionAttachmentTools = ['crop_screenshot', 'find_pdf_screenshot_region', 'list_conversation_files',
+  'list_conversation_images', 'list_screenshot_attachments', 'preview_screenshot_source',
+  'read_conversation_file', 'read_conversation_image'];
+
 function harness() {
   const values = new Map();
   const ctx = vm.createContext({ console, File, Blob, atob, Uint8Array, setTimeout, clearTimeout,
@@ -62,7 +66,7 @@ test('text attachment name and ID survive context eviction; paginated reads reco
   assert.match(notice.content, /历史资料.md/);
   assert.match(notice.content, /read_conversation_file/);
   const tools = [...ctx.selectAiToolsForConversation(conv, false, false, cfg)];
-  assert.deepEqual(tools.sort(), ['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image']);
+  assert.deepEqual(tools.sort(), visionAttachmentTools);
   const listed = await ctx.executeToolCallStructured('list_conversation_files', { search: '历史', pageSize: 1 }, { conv });
   assert.equal(listed.data.total, 1);
   const fileId = listed.data.items[0].fileId;
@@ -118,12 +122,12 @@ test('mixed omitted text and visual catalogs share the reserved context budget',
   assert.throws(() => ctx.buildAiOmittedTextNotice(ctx.getAiConversationTextResources(conv), { messages: [] }, 30), /预算不足/);
 });
 
-test('attachment group controls all four tools and disabled catalogs retain filenames without unavailable calls', async () => {
+test('attachment group controls text, image and screenshot tools and disabled catalogs retain filenames without unavailable calls', async () => {
   const ctx = harness(), { conv } = await textConversation(ctx);
-  const expected = ['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image'];
+  const expected = visionAttachmentTools;
   const nativeCfg = { ...config, baseUrl: 'https://api.deepseek.com/v1' };
   assert.deepEqual(Array.from(ctx.selectedNativeLocalTools(conv, nativeCfg), item => item.function.name).sort(), expected);
-  assert.deepEqual([...ctx.selectAiToolsForConversation(conv, false, false, { model: 'deepseek-v4-pro' })].sort(), expected.filter(name => name !== 'read_conversation_image'));
+  assert.deepEqual([...ctx.selectAiToolsForConversation(conv, false, false, { model: 'deepseek-v4-pro' })].sort(), ['list_conversation_files', 'list_conversation_images', 'read_conversation_file']);
   ctx.setConversationToolGroups(conv, []);
   assert.equal(ctx.selectAiToolsForConversation(conv, false, false, config).size, 0);
   assert.equal(ctx.selectedNativeLocalTools(conv, nativeCfg).length, 0);
@@ -182,7 +186,7 @@ test('token eviction names every image-PDF page and exposes only same-conversati
   assert.match(notice.content, /"pdfPage":3/);
   assert.equal(notice.content.includes('data:image'), false);
   const tools = ctx.selectAiToolsForConversation(conv, false, false, config);
-  assert.deepEqual([...tools].sort(), ['list_conversation_files', 'list_conversation_images', 'read_conversation_file', 'read_conversation_image']);
+  assert.deepEqual([...tools].sort(), visionAttachmentTools);
   assert.equal(ctx.selectAiToolsForConversation({ messages: [], _toolGroups: [] }, false, false, config).size, 0);
 });
 

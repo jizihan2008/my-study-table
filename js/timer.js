@@ -153,6 +153,8 @@ function getTimerRecordFilterTypes(records) {
 
 function timerRecordsHaveSameIdentity(a, b) {
   if (!a || !b || a.date !== b.date) return false;
+  // 日历计时记录按场次保留来源和结束时间，供自动巡检查重。
+  if (a.sourceEventId != null || b.sourceEventId != null) return false;
   normalizeTimerRecordBindings(a);
   normalizeTimerRecordBindings(b);
   return String(a.name || '').trim() === String(b.name || '').trim()
@@ -254,7 +256,7 @@ function saveTimerRecords(records) {
   records = mergeAdjacentTimerRecords(records);
   // 走 saveData → 触发 Sync.onLocalChange → 计时记录跨设备同步（此前直接 setItem 不通知同步）
   if (typeof saveData === 'function') {
-    saveData('study_timer_records', records);
+    if (saveData('study_timer_records', records) === false) return false;
   } else {
     localStorage.setItem('study_timer_records', JSON.stringify(records));
   }
@@ -262,6 +264,7 @@ function saveTimerRecords(records) {
   if (typeof renderCalendar === 'function' && document.getElementById('section-calendar')?.classList.contains('active')) {
     renderCalendar(records);
   }
+  return true;
 }
 
 // ═══════════ Global state ═══════════
@@ -718,7 +721,9 @@ function renderTimerHistory(records, options = {}) {
           ).join('');
           sessionDetail = `<div class="timer-history-sessions">${detailItems}</div>`;
         }
-        const contextMenu = options.todayContextMenu ? ` oncontextmenu="showTodayTimerContextMenu(event, ${rec.id})"` : '';
+        const contextMenu = options.contextMenuSource
+          ? ` oncontextmenu="showTimerRecordContextMenu(event, ${rec.id}, '${options.contextMenuSource}')"`
+          : '';
         itemHtml.push(`<div class="timer-history-item${(!rec.affectsFocus) ? ' no-focus' : ''}"${contextMenu}>
           <span class="timer-history-name">
             <span class="timer-history-label" title="${escapeAttr(name)}">${escapeHtml(name)}</span>
@@ -734,7 +739,7 @@ function renderTimerHistory(records, options = {}) {
             ${formatTimerTime(rec.totalMs)}
           </span>
         </div>`);
-        if (sessionDetail) itemHtml.push(`<div class="timer-history-sessions-wrap">${sessionDetail}</div>`);
+        if (sessionDetail) itemHtml.push(`<div class="timer-history-sessions-wrap"${contextMenu}>${sessionDetail}</div>`);
       }
     }
     if (itemHtml.length === 0) continue;
@@ -1278,7 +1283,7 @@ function timerSessionDateStr(ts) {
 }
 
 function renderManualRecordSessionRow(session, index, total) {
-  return `<div class="timer-manual-session-row" data-session-index="${index}">
+  return `<div class="timer-manual-session-row" data-session-index="${index}" data-original-start="${session.start}" data-original-end="${session.end}">
     <span class="timer-manual-session-index">时段 ${index + 1}</span>
     <div class="timer-manual-field timer-manual-session-date">
       <label>日期</label>
@@ -1296,14 +1301,17 @@ function renderManualRecordSessionRow(session, index, total) {
   </div>`;
 }
 
-function renderTodayManualRecordForm() {
-  const host = document.getElementById('todayTimerManualForm');
+function renderManualRecordFormHosts() {
+  const todayHost = document.getElementById('todayTimerManualForm');
+  const calendarHost = document.getElementById('calendarTimerManualForm');
   const button = document.getElementById('todayTimerManual');
-  const open = timerManualFormOpen && timerManualFormSource === 'today';
-  if (host) host.innerHTML = open ? renderManualRecordForm() : '';
+  const todayOpen = timerManualFormOpen && timerManualFormSource === 'today';
+  const calendarOpen = timerManualFormOpen && timerManualFormSource === 'calendar';
+  if (todayHost) todayHost.innerHTML = todayOpen ? renderManualRecordForm() : '';
+  if (calendarHost) calendarHost.innerHTML = calendarOpen ? renderManualRecordForm() : '';
   if (button) {
-    button.textContent = open ? (timerEditingRecordId === null ? '取消补记' : '取消编辑') : '＋ 手动记录';
-    button.setAttribute('aria-expanded', String(open));
+    button.textContent = todayOpen ? (timerEditingRecordId === null ? '取消补记' : '取消编辑') : '＋ 手动记录';
+    button.setAttribute('aria-expanded', String(todayOpen));
   }
 }
 
@@ -1314,7 +1322,7 @@ function toggleManualRecordForm(source = 'timer') {
   manualRecSelectedTodoId = null;
   manualRecSelectedTaskId = null;
   renderTimer();
-  renderTodayManualRecordForm();
+  renderManualRecordFormHosts();
   if (timerManualFormOpen && source === 'today') document.getElementById('manualRecName')?.focus();
 }
 
@@ -1483,6 +1491,14 @@ function saveManualRecord() {
     const startStr = row.querySelector('.manual-rec-session-start')?.value;
     const endStr = row.querySelector('.manual-rec-session-end')?.value;
     if (!dateStr || !startStr || !endStr) return;
+    const originalStart = Number(row.dataset?.originalStart);
+    const originalEnd = Number(row.dataset?.originalEnd);
+    // 仅改名称或类型时，保留原时段的秒数和跨日范围。
+    if (timerEditingRecordId !== null && Number.isFinite(originalStart) && Number.isFinite(originalEnd) &&
+      dateStr === timerSessionDateStr(originalStart) && startStr === toTimeStr(originalStart) && endStr === toTimeStr(originalEnd)) {
+      sessions.push({ start: originalStart, end: originalEnd });
+      continue;
+    }
     const [year, month, day] = dateStr.split('-').map(Number);
     const [startHour, startMinute] = startStr.split(':').map(Number);
     const [endHour, endMinute] = endStr.split(':').map(Number);
@@ -1511,15 +1527,21 @@ function saveManualRecord() {
     // Edit mode: replace existing record
     const idx = records.findIndex(r => r.id === timerEditingRecordId);
     if (idx >= 0) {
-      records[idx] = normalizeTimerRecordBindings({
-        ...records[idx],
+      const original = records[idx];
+      const updated = {
+        ...original,
         name, todoId, goalId, taskId,
         date: dateStr, totalMs,
         sessions: normalizedSessions,
         activityType,
-        affectsFocus: getTimerActivityType(records[idx]) === activityType ? records[idx].affectsFocus : affectsFocus,
+        affectsFocus: getTimerActivityType(original) === activityType ? original.affectsFocus : affectsFocus,
         manual: true
-      });
+      };
+      if (original.sourceEventId != null) {
+        updated.sourceEventEnd ??= original.sessions?.at(-1)?.end;
+        updated.date = timerSessionDateStr(normalizedSessions.at(-1).end);
+      }
+      records[idx] = normalizeTimerRecordBindings(updated);
     }
   } else {
     // Add mode
@@ -1533,13 +1555,16 @@ function saveManualRecord() {
     }));
   }
 
-  saveTimerRecords(records);
+  if (saveTimerRecords(records) === false) {
+    if (typeof showMiniToast === 'function') showMiniToast('计时记录保存失败', 'error');
+    return;
+  }
   timerManualFormOpen = false;
   timerEditingRecordId = null;
   manualRecSelectedTodoId = null;
   manualRecSelectedTaskId = null;
   renderTimer();
-  renderTodayManualRecordForm();
+  renderManualRecordFormHosts();
 }
 
 function editTimerRecord(recordId, source = 'timer') {
@@ -1551,9 +1576,32 @@ function editTimerRecord(recordId, source = 'timer') {
   // 编辑入口必须展开历史区域；否则专注进行时折叠的布局会把表单一并藏起。
   if (source === 'timer') timerHistoryExpanded = true;
   renderTimer();
-  renderTodayManualRecordForm();
-  if (source === 'today') document.getElementById('manualRecName')?.focus();
+  renderManualRecordFormHosts();
+  if (source !== 'timer') document.getElementById('manualRecName')?.focus();
 }
+
+function showTimerRecordContextMenu(event, recordId, source) {
+  event.preventDefault();
+  const menu = document.getElementById('timerRecordContextMenu');
+  if (!menu) return;
+  menu.firstElementChild.onclick = () => {
+    closeTimerRecordContextMenu();
+    editTimerRecord(recordId, source);
+  };
+  menu.classList.add('visible');
+  menu.style.left = Math.max(0, Math.min(event.clientX, innerWidth - menu.offsetWidth - 6)) + 'px';
+  menu.style.top = Math.max(0, Math.min(event.clientY, innerHeight - menu.offsetHeight - 6)) + 'px';
+}
+
+function closeTimerRecordContextMenu() {
+  document.getElementById('timerRecordContextMenu')?.classList.remove('visible');
+}
+
+document.addEventListener('click', closeTimerRecordContextMenu);
+document.addEventListener('contextmenu', closeTimerRecordContextMenu, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeTimerRecordContextMenu();
+});
 
 function deleteTimerRecord(recordId) {
   const records = loadTimerRecords();
