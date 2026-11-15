@@ -1,6 +1,7 @@
 const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('electronAPI', {
+  copyImage: bytes => ipcRenderer.invoke('clipboard:write-image', bytes),
   petStatus: () => ipcRenderer.invoke('pet:status'),
   petToggle: () => ipcRenderer.invoke('pet:toggle'),
   petSetEnabled: enabled => ipcRenderer.invoke('pet:set-enabled', enabled),

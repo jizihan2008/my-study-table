@@ -12,6 +12,15 @@ function createRenderer() {
   return StudyMarkdown.createRenderer({ markdownit, footnote, hljs, katex });
 }
 
+test('effective character count excludes image payloads and markup while preserving text', () => {
+  const renderer = createRenderer();
+  assert.equal(renderer.countCharacters('![截图](data:image/png;base64,' + 'a'.repeat(100000) + ')'), 0);
+  assert.equal(renderer.countCharacters('# **中文** [链接](https://example.com)\n- [x] 内容'), 6);
+  assert.equal(renderer.countCharacters('`a*b`\n\n```js\nx+y\n```'), 6);
+  assert.equal(renderer.countCharacters('😀 &amp;'), 2);
+  assert.equal(renderer.countCharacters('$$x+y$$'), 3);
+});
+
 test('image layout metadata renders bounded widths and alignment in notes and reading plans', () => {
   const renderer = createRenderer();
   for (const align of ['left', 'center', 'right']) {

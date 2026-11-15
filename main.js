@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell, Tray, Menu, nativeImage, dialog, screen } = require('electron');
+const { app, BrowserWindow, ipcMain, Notification, safeStorage, shell, Tray, Menu, nativeImage, dialog, screen, clipboard } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const crypto = require('crypto');
@@ -45,6 +45,18 @@ app.setPath('userData', userDataPath);
 if (process.platform === 'win32') app.setAppUserModelId('com.mystudytable.app');
 
 let mainWindow;
+ipcMain.handle('clipboard:write-image', (event, bytes) => {
+  if (!mainWindow || event.sender !== mainWindow.webContents || event.senderFrame !== mainWindow.webContents.mainFrame) {
+    throw new Error('无法从此窗口复制图片');
+  }
+  if (!(bytes instanceof Uint8Array) || !bytes.length || bytes.length > 32 * 1024 * 1024) {
+    throw new Error('图片数据无效或过大');
+  }
+  const image = nativeImage.createFromBuffer(Buffer.from(bytes));
+  if (image.isEmpty()) throw new Error('无法读取截图图片');
+  clipboard.writeImage(image);
+  return true;
+});
 const desktopPet = registerDesktopPet({ app, BrowserWindow, ipcMain, screen, Menu, userDataPath, getMainWindow: () => mainWindow });
 registerBackupIpc({ ipcMain, shell, userDataPath });
 const diagnostics = registerDiagnostics({ app, ipcMain, userDataPath });

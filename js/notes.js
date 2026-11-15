@@ -303,7 +303,7 @@ function onNotesChange(textarea = document.getElementById('notesTextarea')) {
   note.content = textarea.value;
   syncNotesSplitContent(note, 'primary', previousContent);
   note.updatedAt = new Date().toISOString();
-  const chars = note.content.replace(/\s/g, '').length;
+  const chars = StudyMarkdown.countCharacters(note.content);
   document.getElementById('notesWordCount').textContent = chars + ' 字';
   document.getElementById('notesStatus').textContent = '保存中…';
   updateLastEditedDisplay(note);
@@ -369,7 +369,7 @@ function onRichNotesChange(markdown, previousMarkdown, change = {}, source = 'pr
   note.updatedAt = new Date().toISOString();
   const textarea = document.getElementById('notesTextarea');
   if (textarea) textarea.value = markdown;
-  const chars = markdown.replace(/\s/g, '').length;
+  const chars = StudyMarkdown.countCharacters(markdown);
   const count = document.getElementById('notesWordCount');
   const status = document.getElementById('notesStatus');
   if (count) count.textContent = chars + ' 字';
@@ -529,7 +529,7 @@ function undoNote() {
   syncNotesSplitContent(note,'primary',beforeChange.content);
   document.getElementById('notesStatus').textContent = '已撤销';
   updateLastEditedDisplay(note);
-  const chars = (note.content || '').replace(/\s/g, '').length;
+  const chars = StudyMarkdown.countCharacters(note.content);
   document.getElementById('notesWordCount').textContent = chars + ' 字';
   updateUndoRedoButtons();
   renderNoteList();
@@ -566,7 +566,7 @@ function redoNote() {
   syncNotesSplitContent(note,'primary',beforeChange.content);
   document.getElementById('notesStatus').textContent = '已恢复';
   updateLastEditedDisplay(note);
-  const chars = (note.content || '').replace(/\s/g, '').length;
+  const chars = StudyMarkdown.countCharacters(note.content);
   document.getElementById('notesWordCount').textContent = chars + ' 字';
   updateUndoRedoButtons();
   renderNoteList();
@@ -2033,7 +2033,7 @@ function renderNotes(){
   if(titleInput)titleInput.value=note.title;
   if(textarea)textarea.value=note.content;
   switchNoteView(noteViewMode);
-  const chars=(note.content||'').replace(/\s/g,'').length;
+  const chars=StudyMarkdown.countCharacters(note.content);
   const wcEl=document.getElementById('notesWordCount');
   const stEl=document.getElementById('notesStatus');
   if (wcEl) wcEl.textContent=chars+' 字';

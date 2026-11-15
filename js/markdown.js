@@ -594,6 +594,23 @@
 
     return {
       createReadingPlan,
+      countCharacters: function (source) {
+        let count = 0;
+        function visit(tokens) {
+          for (const token of tokens || []) {
+            if (token.type === 'image') continue;
+            if (token.type === 'collapsible_block') {
+              visit([token.meta.titleToken]);
+              visit(token.meta.bodyTokens);
+            } else if (token.children) visit(token.children);
+            else if (['text', 'code_inline', 'code_block', 'fence', 'math_inline', 'math_display', 'math_block'].includes(token.type)) {
+              count += Array.from(token.content.replace(/[\s\u200b-\u200d\ufeff]/g, '')).length;
+            }
+          }
+        }
+        visit(md.parse(String(source || ''), {}));
+        return count;
+      },
       render: function (source, options) {
         const env = { docId: 'md' + (++renderSequence), __sourceMap: !!options?.sourceMap };
         let html = md.render(String(source || ''), env);
@@ -660,6 +677,7 @@
 
   return {
     render,
+    countCharacters: source => getRenderer()?.countCharacters(source) ?? 0,
     renderInline,
     createRenderer,
     createReadingPlan,

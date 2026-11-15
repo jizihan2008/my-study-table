@@ -250,7 +250,7 @@ function renderAiScreenshotCards(message) {
       <figcaption><strong>局部截图</strong><span>${label}</span></figcaption>
       <span data-screenshot-status>正在读取截图…</span>
       <img hidden alt="${escapeAttr(meta.label)}" onclick="openAiAttachmentImage(this)">
-      <div class="ai-screenshot-actions">${adjust}<a class="btn-secondary" hidden download="${escapeAttr(image.name)}">下载 PNG</a></div>
+      <div class="ai-screenshot-actions">${adjust}<button type="button" class="btn-secondary" data-copy-screenshot hidden onclick="copyAiScreenshot(this)">复制截图</button><a class="btn-secondary" hidden download="${escapeAttr(image.name)}">下载 PNG</a></div>
     </figure>`;
   }).join('');
 }
@@ -268,6 +268,8 @@ function loadAiScreenshotCards(container, conv) {
       if (!card.isConnected) return;
       const image = card.querySelector('img');
       const download = card.querySelector('a[download]');
+      card._screenshotBlob = row.blob;
+      card.querySelector('[data-copy-screenshot]').hidden = false;
       image.src = download.href = url;
       image.hidden = download.hidden = false;
       status.hidden = true;
@@ -277,6 +279,28 @@ function loadAiScreenshotCards(container, conv) {
       }
     };
     load().catch(error => { status.textContent = error.message || '无法读取截图'; });
+  }
+}
+
+async function copyAiScreenshot(button) {
+  const blob = button.closest('.ai-screenshot-card')?._screenshotBlob;
+  if (!blob) return showAiToast('截图尚未读取完成');
+  const nativeCopy = window.electronAPI?.copyImage;
+  if (!nativeCopy && (!navigator.clipboard?.write || typeof ClipboardItem === 'undefined')) {
+    return showAiToast('当前环境不支持复制图片，请下载 PNG');
+  }
+  button.disabled = true;
+  try {
+    if (nativeCopy) {
+      await nativeCopy(new Uint8Array(await blob.arrayBuffer()));
+    } else {
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': blob })]);
+    }
+    showAiToast('截图已复制');
+  } catch (_) {
+    showAiToast('复制截图失败，请允许剪贴板访问或下载 PNG');
+  } finally {
+    button.disabled = false;
   }
 }
 
@@ -391,6 +415,8 @@ async function openAiScreenshotEditor(readSource, options = {}) {
   const stage = preview.querySelector('.ai-screenshot-stage');
   const image = stage.querySelector('img');
   const selection = stage.querySelector('span');
+  selection.innerHTML = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(edge =>
+    `<i class="crop-resize-handle" data-edge="${edge}" aria-hidden="true"></i>`).join('');
   const download = dialog.querySelector('[data-save]');
   const insert = dialog.querySelector('[data-insert]');
   const keys = ['left', 'top', 'right', 'bottom'];
@@ -400,6 +426,8 @@ async function openAiScreenshotEditor(readSource, options = {}) {
   let busy = false;
   let dragStart;
   let pointerId;
+  let resizeEdge;
+  let originalRect;
   const readRect = () => Object.fromEntries(keys.map((key, index) => [key, bounds[index].valueAsNumber / 100]));
   const updateSelection = () => {
     const rect = readRect();
@@ -423,12 +451,24 @@ async function openAiScreenshotEditor(readSource, options = {}) {
   stage.onpointerdown = event => {
     if (busy || pointerId !== undefined || event.button !== 0) return;
     dragStart = position(event);
+    resizeEdge = event.target.closest('[data-edge]')?.dataset.edge;
+    originalRect = readRect();
+    event.preventDefault();
     pointerId = event.pointerId;
     stage.setPointerCapture(pointerId);
   };
   stage.onpointermove = event => {
     if (event.pointerId !== pointerId || !dragStart) return;
     const end = position(event);
+    if (resizeEdge && isAiScreenshotRect(originalRect)) {
+      const rect = { ...originalRect };
+      if (resizeEdge.includes('w')) rect.left = Math.min(end.x, rect.right - 0.001);
+      if (resizeEdge.includes('e')) rect.right = Math.max(end.x, rect.left + 0.001);
+      if (resizeEdge.includes('n')) rect.top = Math.min(end.y, rect.bottom - 0.001);
+      if (resizeEdge.includes('s')) rect.bottom = Math.max(end.y, rect.top + 0.001);
+      setRect(rect);
+      return;
+    }
     if (end.x === dragStart.x || end.y === dragStart.y) return;
     setRect({ left: Math.min(dragStart.x, end.x), top: Math.min(dragStart.y, end.y),
       right: Math.max(dragStart.x, end.x), bottom: Math.max(dragStart.y, end.y) });
@@ -437,8 +477,8 @@ async function openAiScreenshotEditor(readSource, options = {}) {
     stage.onpointermove(event);
     if (event.pointerId === pointerId) pointerId = dragStart = undefined;
   };
-  stage.onlostpointercapture = () => { pointerId = dragStart = undefined; };
-  const selectionHint = '拖动选框，或输入百分比微调边界。';
+  stage.onpointercancel = stage.onlostpointercapture = () => { pointerId = dragStart = undefined; };
+  const selectionHint = '拖动选区的边或角调整范围，也可重新框选或输入百分比微调。';
   const showStatus = (message, error = false) => {
     if (!dialog.open) return;
     status.classList.toggle('is-error', error);

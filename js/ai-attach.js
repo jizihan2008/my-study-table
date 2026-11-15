@@ -190,6 +190,9 @@ function renderAiContextPicker() {
   if (!overlay || !aiContextPickerType) return;
   const previousScrollTop = overlay.querySelector('.todo-picker-list')?.scrollTop || 0;
   const isNote = aiContextPickerType === 'note';
+  const currentNote = isNote && document.getElementById('aiFloat')
+    && document.getElementById('section-notes')?.classList.contains('active')
+    && typeof getActiveNote === 'function' ? getActiveNote() : null;
   const query = aiContextPickerQuery.trim().toLowerCase();
   const source = isNote
     ? (typeof notes !== 'undefined' ? notes : [])
@@ -222,6 +225,7 @@ function renderAiContextPicker() {
       <span><i data-lucide="${isNote ? 'notebook-pen' : 'clipboard-list'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择${isNote ? '笔记' : '待办事项'}</span>
       <button class="todo-picker-close" onclick="closeAiContextPicker()" title="关闭"><i data-lucide="x" class="lucide-icon" style="width:14px;height:14px;"></i></button>
     </div>
+    ${currentNote ? `<button type="button" class="todo-picker-item" style="width:100%;text-align:left;" onclick="insertAiContext('note', ${currentNote.id})" title="${escapeAttr(getAiContextNotePath(currentNote))}"><span class="picker-text">📝 插入当前笔记：${escapeHtml(currentNote.title || '未命名笔记')}</span></button>` : ''}
     <div class="todo-picker-search">
       <input autofocus placeholder="搜索${isNote ? '笔记' : '待办'}..." value="${escapeAttr(aiContextPickerQuery)}" oninput="updateAiContextPickerQuery(this.value)" onkeydown="if(event.key==='Escape')closeAiContextPicker()">
     </div>

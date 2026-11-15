@@ -532,7 +532,7 @@
       <div class="note-image-editor-body">
       <label>裁剪预览</label>
       <div class="note-image-preview"><div class="note-image-stage"><img alt="裁剪预览" draggable="false"><div class="note-image-selection"></div></div></div>
-      <p class="hint">拖动框选裁剪范围，或输入边界百分比。Ctrl+Enter 保存，Esc 取消。</p>
+      <p class="hint">拖动选区的边或角调整范围，也可重新框选或输入边界百分比。Ctrl+Enter 保存，Esc 取消。</p>
       <div class="note-image-bounds">
         <label>左边界 %<input name="left" type="number" min="0" max="99" value="0" step="0.1"></label>
         <label>上边界 %<input name="top" type="number" min="0" max="99" value="0" step="0.1"></label>
@@ -550,6 +550,8 @@
     const stage = dialog.querySelector('.note-image-stage');
     const preview = stage.querySelector('img');
     const selection = stage.querySelector('.note-image-selection');
+    selection.innerHTML = ['n', 's', 'e', 'w', 'ne', 'nw', 'se', 'sw'].map(edge =>
+      `<i class="crop-resize-handle" data-edge="${edge}" aria-hidden="true"></i>`).join('');
     const error = dialog.querySelector('.note-image-error');
     const width = form.elements.width;
     const align = form.elements.align;
@@ -583,25 +585,46 @@
       update();
     };
     let start = null;
+    let pointerId;
+    let resizeEdge;
+    let originalBounds;
     const point = event => {
       const rect = stage.getBoundingClientRect();
       return { x: Math.max(0, Math.min(100, (event.clientX - rect.left) / rect.width * 100)),
         y: Math.max(0, Math.min(100, (event.clientY - rect.top) / rect.height * 100)) };
     };
     stage.onpointerdown = event => {
-      if (event.button !== 0) return;
+      if (event.button !== 0 || pointerId !== undefined) return;
       event.preventDefault();
       start = point(event);
+      pointerId = event.pointerId;
+      resizeEdge = event.target.closest('[data-edge]')?.dataset.edge;
+      originalBounds = bounds.map(key => form.elements[key].valueAsNumber);
       stage.setPointerCapture(event.pointerId);
     };
     stage.onpointermove = event => {
-      if (!start) return;
+      if (!start || event.pointerId !== pointerId) return;
       const end = point(event);
+      if (resizeEdge && originalBounds.every(Number.isFinite)
+        && originalBounds[0] < originalBounds[2] && originalBounds[1] < originalBounds[3]) {
+        const values = [...originalBounds];
+        if (resizeEdge.includes('w')) values[0] = Math.min(end.x, values[2] - 0.1);
+        if (resizeEdge.includes('e')) values[2] = Math.max(end.x, values[0] + 0.1);
+        if (resizeEdge.includes('n')) values[1] = Math.min(end.y, values[3] - 0.1);
+        if (resizeEdge.includes('s')) values[3] = Math.max(end.y, values[1] + 0.1);
+        values.forEach((value, index) => { form.elements[bounds[index]].value = value.toFixed(1); });
+        update();
+        return;
+      }
       [Math.min(start.x, end.x), Math.min(start.y, end.y), Math.max(start.x, end.x), Math.max(start.y, end.y)]
         .forEach((value, index) => { form.elements[bounds[index]].value = value.toFixed(1); });
       update();
     };
-    stage.onpointerup = stage.onpointercancel = () => { start = null; };
+    stage.onpointerup = event => {
+      stage.onpointermove(event);
+      if (event.pointerId === pointerId) { start = null; pointerId = undefined; }
+    };
+    stage.onpointercancel = stage.onlostpointercapture = () => { start = null; pointerId = undefined; };
     form.onsubmit = async event => {
       event.preventDefault();
       error.textContent = '';

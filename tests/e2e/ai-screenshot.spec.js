@@ -115,6 +115,15 @@ test('finds a raster target and replaces its screenshot on the same chat card', 
   const editor = page.getByRole('dialog', { name: '框选截图' });
   await expect(editor.getByLabel('PDF 页码')).toHaveValue('4');
   await expect(editor.getByLabel('左', { exact: true })).toHaveValue('60');
+  const cropBox = await editor.locator('.ai-screenshot-stage img').boundingBox();
+  const leftHandle = await editor.locator('[data-edge="w"]').boundingBox();
+  const oldTop = await editor.getByLabel('上', { exact: true }).inputValue();
+  await page.mouse.move(leftHandle.x + leftHandle.width / 2, leftHandle.y + leftHandle.height / 2);
+  await page.mouse.down();
+  await page.mouse.move(cropBox.x + cropBox.width * 0.4, leftHandle.y + leftHandle.height / 2);
+  await page.mouse.up();
+  expect(Number(await editor.getByLabel('左', { exact: true }).inputValue())).toBeCloseTo(40, 0);
+  await expect(editor.getByLabel('上', { exact: true })).toHaveValue(oldTop);
   expect(await editor.evaluate(dialog => dialog.querySelector('.ai-screenshot-footer').getBoundingClientRect().top
     - dialog.querySelector('[data-coordinates]').getBoundingClientRect().bottom)).toBeLessThan(28);
   await editor.getByLabel('PDF 页码').fill('2');

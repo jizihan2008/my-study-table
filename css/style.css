@@ -12971,6 +12971,33 @@ dialog.modal.ai-screenshot-editor {
   box-shadow: 0 0 0 100vmax rgb(15 23 42 / 30%);
 }
 .ai-screenshot-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.crop-resize-handle {
+  position: absolute;
+  display: block;
+  pointer-events: auto;
+  touch-action: none;
+  box-sizing: border-box;
+}
+.crop-resize-handle[data-edge="n"], .crop-resize-handle[data-edge="s"] {
+  left: 0; right: 0; height: 14px; cursor: ns-resize;
+}
+.crop-resize-handle[data-edge="n"] { top: -2px; }
+.crop-resize-handle[data-edge="s"] { bottom: -2px; }
+.crop-resize-handle[data-edge="e"], .crop-resize-handle[data-edge="w"] {
+  top: 0; bottom: 0; width: 14px; cursor: ew-resize;
+}
+.crop-resize-handle[data-edge="e"] { right: -2px; }
+.crop-resize-handle[data-edge="w"] { left: -2px; }
+.crop-resize-handle[data-edge="ne"], .crop-resize-handle[data-edge="nw"],
+.crop-resize-handle[data-edge="se"], .crop-resize-handle[data-edge="sw"] {
+  width: 16px; height: 16px; z-index: 1;
+  border: 2px solid var(--primary); background: var(--input-bg);
+  border-radius: 3px;
+}
+.crop-resize-handle[data-edge="ne"] { top: -2px; right: -2px; cursor: nesw-resize; }
+.crop-resize-handle[data-edge="nw"] { top: -2px; left: -2px; cursor: nwse-resize; }
+.crop-resize-handle[data-edge="se"] { bottom: -2px; right: -2px; cursor: nwse-resize; }
+.crop-resize-handle[data-edge="sw"] { bottom: -2px; left: -2px; cursor: nesw-resize; }
 .ai-screenshot-footer {
   flex-shrink: 0;
   justify-content: flex-end;
