@@ -178,12 +178,8 @@ function showHabitInput() {
   }
 }
 
-function addHabit() {
-  const input = document.getElementById('habitNameInput');
-  const name = input.value.trim();
-  if (!name) return;
-
-  const habit = {
+function createHabitRecord(name, order) {
+  return {
     id: genId(),
     name: name,
     emoji: HABIT_EMOJIS[0],
@@ -193,10 +189,16 @@ function addHabit() {
     dailyTarget: 1,
     weeklyTarget: 7,
     notes: '',
-    order: habits.length
+    order
   };
+}
 
-  habits.push(habit);
+function addHabit() {
+  const input = document.getElementById('habitNameInput');
+  const name = input.value.trim();
+  if (!name) return;
+
+  habits.push(createHabitRecord(name, habits.length));
   saveHabits();
   input.value = '';
   document.getElementById('habitInputPanel').classList.remove('open');

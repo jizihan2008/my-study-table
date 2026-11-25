@@ -99,6 +99,45 @@ test('continuous PDF images enforce the 49-page limit and keep ordered page labe
   assert.equal(reads(), before);
 });
 
+test('PDF image reading reports page progress to its conversation and always clears it', async () => {
+  const { ctx } = harness();
+  const updates = [];
+  ctx.isMultimodalModel = () => true;
+  ctx.setAiPdfSendProgress = (id, state) => updates.push({ id, state });
+  const context = { conv: { id: 'pdf-conversation' } };
+  const params = { fileId: 'file_pdf', startPage: 2, endPage: 3 };
+  ctx.renderPdfAttachmentPages = async (file, opts) => {
+    assert.equal(updates[0].state.total, 0, 'show loading before the PDF opens');
+    opts.onPage({ done: 0, total: 2, pageNo: 2 });
+    opts.onPage({ done: 1, total: 2, pageNo: 2 });
+    opts.onPage({ done: 2, total: 2, pageNo: 3 });
+    return { pageCount: 3, dataUrls: ['data:image/jpeg;base64,AAAA', 'data:image/jpeg;base64,BBBB'] };
+  };
+  assert.equal((await ctx.executeToolCallStructured('read_library_pdf_page', params, context)).ok, true);
+  assert.ok(updates.every(update => update.id === context.conv.id));
+  assert.deepEqual(updates.slice(0, -1).map(({ state }) => [state.done, state.total]), [[0, 0], [0, 2], [1, 2], [2, 2]]);
+  assert.equal(updates[2].state.name, '教材.pdf');
+  assert.equal(updates[2].state.stage, 'library');
+  assert.equal(updates[2].state.startPage, 2);
+  assert.equal(updates[2].state.endPage, 3);
+  assert.equal(updates.at(-1).state, null);
+
+  for (const outcome of ['cancel', 'render-error', 'read-error', 'deleted', 'oversized']) {
+    updates.length = 0;
+    ctx.window.aiFileLibrary.read = async () => {
+      assert.equal(updates[0].state.stage, 'library');
+      if (outcome === 'read-error') throw new Error('read failed');
+      return outcome === 'deleted' ? null : { size: outcome === 'oversized' ? 100 * 1024 * 1024 : 10 };
+    };
+    ctx.renderPdfAttachmentPages = async () => {
+      if (outcome === 'render-error') throw new Error('render failed');
+      return { aborted: true, dataUrls: [] };
+    };
+    assert.equal((await ctx.executeToolCallStructured('read_library_pdf_page', params, context)).ok, false, outcome);
+    assert.equal(updates.at(-1).state, null, outcome);
+  }
+});
+
 test('PDF size setting applies to text and images, can disable the cap, and checks actual file size', async () => {
   const { ctx, rows, reads } = harness();
   let setting = null;

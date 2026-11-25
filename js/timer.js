@@ -1198,16 +1198,17 @@ function renderTimerPickerList() {
   if (timerPickerMode === 'goal') {
     // Show long-term goals
     const goals = loadGoals();
+    const entries = typeof getGoalHierarchy === 'function' ? getGoalHierarchy(goals)
+      : goals.map(goal => ({ goal, path: goal.text }));
     const searchQuery = (document.getElementById('timerPickerSearch')?.value || '').toLowerCase();
-    let filtered = goals;
-    if (searchQuery) filtered = goals.filter(g => g.text.toLowerCase().includes(searchQuery));
+    const filtered = searchQuery ? entries.filter(entry => entry.path.toLowerCase().includes(searchQuery)) : entries;
     if (filtered.length === 0) { list.innerHTML = '<div class="todo-picker-empty">没有匹配的长期目标</div>'; return; }
-    list.innerHTML = filtered.map(g => {
+    list.innerHTML = filtered.map(({ goal: g, path }) => {
       const isSelected = timerLinkedGoalId === g.id;
       return `<div class="todo-picker-item${isSelected ? ' selected' : ''}" onclick="pickTimerGoal(${g.id})">
         <span class="picker-expand-spacer"></span>
         <div class="picker-check"></div>
-        <span class="picker-text${g.done ? ' done' : ''}">🎯 ${escapeHtml(g.text)}</span>
+        <span class="picker-text${g.done ? ' done' : ''}">🎯 ${escapeHtml(path)}</span>
         ${g.dueDate ? '<span class="picker-due">📅 ' + g.dueDate + '</span>' : ''}
       </div>`;
     }).join('');
@@ -1462,8 +1463,11 @@ function clearManualRecTodo() {
 }
 
 function buildManualGoalOptions(recTargetId, recTargetType) {
-  return loadGoals().map(g => {
-    return `<option value="${g.id}"${recTargetType === 'goal' && recTargetId === g.id ? ' selected' : ''}>${escapeHtml(g.text)}</option>`;
+  const goals = loadGoals();
+  const entries = typeof getGoalHierarchy === 'function' ? getGoalHierarchy(goals)
+    : goals.map(goal => ({ goal, path: goal.text }));
+  return entries.map(({ goal: g, path }) => {
+    return `<option value="${g.id}"${recTargetType === 'goal' && recTargetId === g.id ? ' selected' : ''}>${escapeHtml(path)}</option>`;
   }).join('');
 }
 

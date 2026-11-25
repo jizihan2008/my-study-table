@@ -94,6 +94,7 @@ function showAiFloat() {
   if (document.getElementById('aiFloat')) return;
   const layout = document.getElementById('aiChatLayout');
   if (!layout) return;
+  const scrollPosition = captureAiScrollPosition();
   aiFloatReturnFocus = document.activeElement;
   aiFloatHome = document.createComment('AI chat home');
   layout.before(aiFloatHome);
@@ -117,15 +118,17 @@ function showAiFloat() {
   });
   aiFloatCleanup = initAiFloatGeometry(panel);
   renderAiChat({ reuseExisting: true });
+  restoreAiScrollPosition(scrollPosition);
   const input = document.getElementById('aiInput');
-  if (input && !input.disabled) input.focus();
-  else panel.focus();
+  if (input && !input.disabled) input.focus({ preventScroll: true });
+  else panel.focus({ preventScroll: true });
 }
 
 function closeAiFloat(restoreFocus = true) {
   const panel = document.getElementById('aiFloat');
   if (!panel) return;
   if (panel.querySelector('#aiMessageImmersive')) closeAiMessageImmersive();
+  const scrollPosition = captureAiScrollPosition();
   aiFloatCleanup?.();
   aiFloatCleanup = null;
   saveAiDraft();
@@ -133,6 +136,7 @@ function closeAiFloat(restoreFocus = true) {
   if (layout && aiFloatHome) {
     aiFloatHome.replaceWith(layout);
     syncAiToolbarCollapse(layout);
+    restoreAiScrollPosition(scrollPosition);
   }
   panel.remove();
   aiFloatHome = null;
@@ -144,7 +148,7 @@ function expandAiFloat() {
   closeAiFloat(false);
   if (document.getElementById('section-notes')?.classList.contains('notes-immersive')) setNotesImmersive(false);
   switchTab('ai');
-  document.getElementById('aiInput')?.focus();
+  document.getElementById('aiInput')?.focus({ preventScroll: true });
 }
 
 document.addEventListener('keydown', event => {

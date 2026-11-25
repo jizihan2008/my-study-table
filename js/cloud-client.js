@@ -99,6 +99,23 @@
     return client;
   }
 
+  const sdkLoads = new Map();
+  function loadSdk(config) {
+    const provider = isCloudBaseConfig(config) ? 'cloudbase' : 'supabase';
+    if (root[provider]) return Promise.resolve();
+    if (!sdkLoads.has(provider)) {
+      const script = document.createElement('script');
+      script.src = 'lib/' + provider + '/' + provider + '.js';
+      const loading = new Promise((resolve, reject) => {
+        script.onload = () => root[provider] ? resolve() : reject(new Error(provider + ' SDK 初始化失败'));
+        script.onerror = () => reject(new Error(provider + ' SDK 加载失败'));
+        document.head.append(script);
+      }).catch(error => { sdkLoads.delete(provider); script.remove(); throw error; });
+      sdkLoads.set(provider, loading);
+    }
+    return sdkLoads.get(provider);
+  }
+
   function createClient(config) {
     if (isCloudBaseConfig(config)) return createCloudBaseClient(config);
     if (isSupabaseConfig(config)) return createSupabaseClient(config);
@@ -107,6 +124,7 @@
 
   return {
     createClient,
+    loadSdk,
     createResilientAuthStorage,
     isCloudBaseConfig,
     isSupabaseConfig

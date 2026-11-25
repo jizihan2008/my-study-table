@@ -22,6 +22,7 @@ test.beforeAll(async () => {
 test.afterAll(async () => { if (server) await new Promise(resolve => server.close(resolve)); });
 
 async function setup(page) {
+  await page.waitForSelector('#section-today.active');
   await page.evaluate(() => {
     window.loadApiKeys = () => [{ id: 'test', apiKey: 'fake', model: 'deepseek-flash', name: '附件测试' }];
     window.getEffectiveApiConfig = () => ({ apiKey: 'fake', model: 'deepseek-flash', name: '附件测试' });

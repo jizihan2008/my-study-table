@@ -216,6 +216,19 @@ async function executeAiScreenshotTool(action, params, context) {
     const page = paginateAiToolItems(matches, params);
     return success({ ...page, items: page.items.map(({ id, attachment }) => ({ sourceId: id, name: attachment.name, pdf: isPdfFile(attachment) })) });
   }
+  if (action === 'send_screenshot') {
+    for (let index = (conv.messages || []).length - 1; index >= 0; index--) {
+      const message = conv.messages[index];
+      if (isAiUserQuestion(message)) break;
+      if (!isAiToolVisualMessage(message) || message._toolInfo.manualScreenshot) continue;
+      const image = message.visionFiles?.find(file => file.screenshot?.fileId === params.screenshotId);
+      if (!image) continue;
+      const group = image.screenshot.sourceId?.startsWith('file_') ? 'file' : 'attachment';
+      if (!getConversationToolGroups(conv).includes(group)) throw new Error('请先在对话设置启用对应的文件库或对话附件工具组');
+      return success({ screenshotId: params.screenshotId, name: image.name, sent: true });
+    }
+    throw new Error('未找到本轮裁剪的截图，请先调用 crop_screenshot');
+  }
   const group = params.sourceId.startsWith('file_') ? 'file' : 'attachment';
   if (!getConversationToolGroups(conv).includes(group)) throw new Error('请先在对话设置启用对应的文件库或对话附件工具组');
   if (!isMultimodalModel(apiCfg)) throw new Error('自动截图需要视觉模型，也可以在界面手动框选');
@@ -228,8 +241,9 @@ async function executeAiScreenshotTool(action, params, context) {
     const output = await makeAiScreenshot(source, page, params.rect);
     if (isAiStopRequested(conv.id)) throw new Error('已停止截图');
     const screenshot = await retainAiScreenshot(output, conv, params.sourceId, params.rect);
+    screenshot.dataUrl = await blobToDataUrl(output.blob);
     return success({ source: output.screenshot.label, name: screenshot.name, screenshotId: screenshot.screenshot.fileId,
-      hint: '截图已作为附件展示，可用 insert_screenshot_in_note 将此 screenshotId 的图片嵌入笔记。' }, [screenshot]);
+      hint: '请检查图片是否完整、清晰。需要交付给用户时调用 send_screenshot；需要嵌入笔记时调用 insert_screenshot_in_note。两个工具都使用此 screenshotId。' }, [screenshot]);
   }
   const { blob, pageCount } = await renderAiScreenshot(source, { page, preview: true, maxSide: 1500 });
   if (isAiStopRequested(conv.id)) throw new Error('已停止读取');
@@ -239,8 +253,8 @@ async function executeAiScreenshotTool(action, params, context) {
     name: source.name + (pdfPage ? ' 第 ' + page + ' 页' : ''), screenshotPreview: true }]);
 }
 
-function renderAiScreenshotCards(message) {
-  const screenshots = (message.visionFiles || []).flatMap((image, index) => image.screenshot?.fileId ? [{ image, index }] : []);
+function renderAiScreenshotCards(message, include = () => true) {
+  const screenshots = (message.visionFiles || []).flatMap((image, index) => image?.screenshot?.fileId && include(image) ? [{ image, index }] : []);
   if (!screenshots.length) return '';
   return screenshots.map(({ image, index }) => {
     const meta = image.screenshot;
@@ -354,6 +368,7 @@ function replaceAiScreenshot({ conv, node, index, image }, screenshot) {
     throw new Error('原截图已变化，请重新打开选区');
   }
   const content = node.content;
+  screenshot.screenshot.originalCropId = image.screenshot.originalCropId || image.screenshot.fileId;
   const nextContent = node._toolInfo?.manualScreenshot
     ? '【用户手动保存的局部截图】' + screenshot.screenshot.label
     : content.split('\n', 1)[0] + '\n' + node.visionFiles.map((file, i) => i === index ? screenshot.name : file.name).join('\n');

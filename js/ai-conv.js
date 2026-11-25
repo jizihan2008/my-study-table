@@ -290,6 +290,8 @@ function switchConv(id) {
   }
 }
 
+let aiDeleteQueue = Promise.resolve();
+
 function deleteConv(id, e) {
   if (e) e.stopPropagation();
   const linkedAutos = automations.filter(a => a.convId === id);
@@ -299,51 +301,98 @@ function deleteConv(id, e) {
   }
   return showCustomConfirm(confirmMsg, { dontAskKey: 'study_dontask_delete_conv' }).then(confirmed => {
     if (!confirmed) return;
-    const conv = aiConvs.find(c => c.id === id);
-    if (!conv) return;
-    if (activeConvId === id && typeof saveAiDraft === 'function') saveAiDraft();
-    const trash = loadTrash('ai');
-    let draft;
-    try { draft = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}')[id]; } catch (_) {}
-    // 先完整写入回收站；失败时保留原对话及附件。
-    const archived = { ...conv, deletedAt: new Date().toISOString(),
-      _trashAutomations: automations.filter(a => a.convId === id), _trashDraft: draft };
-    if (!saveTrash('ai', [archived, ...trash.filter(c => c.id !== id)])) {
-      if (typeof showAiToast === 'function') showAiToast('移入回收站失败，请检查存储空间');
-      return;
+    const deletion = aiDeleteQueue.then(() => moveAiConvToTrash(id));
+    aiDeleteQueue = deletion.catch(() => {});
+    return deletion;
+  });
+}
+
+async function moveAiConvToTrash(id) {
+  const conv = aiConvs.find(c => c.id === id);
+  if (!conv) return;
+  if (activeConvId === id && typeof saveAiDraft === 'function') saveAiDraft();
+  const trash = loadTrash('ai');
+  let draft;
+  try { draft = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}')[id]; } catch (_) {}
+  const linkedAutos = automations.filter(a => a.convId === id);
+  const archived = { ...conv, deletedAt: new Date().toISOString(),
+    _trashAutomations: linkedAutos, _trashDraft: draft };
+  const nextTrash = [archived, ...trash.filter(c => c.id !== id)];
+  const index = aiConvs.indexOf(conv);
+  const nextConvs = aiConvs.filter(c => c.id !== id);
+  let replacement;
+  if (!nextConvs.length) {
+    replacement = { id: genId(), title: '默认对话', systemPrompt: '', messages: [], autoTitled: false };
+    if (typeof initTreeOnConv === 'function') initTreeOnConv(replacement);
+    nextConvs.push(replacement);
+  }
+  try {
+    if (window.StudyData?.commitBatch) {
+      const persisted = compactAiConversationsForStorage(nextConvs);
+      const writes = {
+        study_ai_convs_trash: serializeTrash('ai', nextTrash),
+        study_ai_convs: JSON.stringify(persisted)
+      };
+      aiConvs = nextConvs;
+      await window.StudyData.commitBatch(writes, changed => {
+        restoreChat();
+        // Another save may have run while the transaction was pending.
+        if (changed.has('study_ai_convs')) safeSaveAiConvs();
+        if (changed.has('study_ai_convs_trash')) {
+          const current = loadTrash('ai');
+          if (current.some(c => c.deletedAt === archived.deletedAt && c.id === id)) {
+            saveTrash('ai', current.filter(c => c.deletedAt !== archived.deletedAt || c.id !== id));
+          }
+        }
+      });
+      try { window.SyncLogs?.onLocalChange?.('study_ai_convs'); } catch (_) {}
+    } else {
+      if (!saveTrash('ai', nextTrash)) throw new Error('回收站保存失败');
+      aiConvs = nextConvs;
+      if (!safeSaveAiConvs()) {
+        restoreChat();
+        saveTrash('ai', trash);
+        throw new Error('对话列表保存失败');
+      }
     }
-    const previous = aiConvs;
-    aiConvs = aiConvs.filter(c => c.id !== id);
-    if (!aiConvs.length) {
-      const replacement = { id: genId(), title: '默认对话', systemPrompt: '', messages: [], autoTitled: false };
-      if (typeof initTreeOnConv === 'function') initTreeOnConv(replacement);
-      aiConvs.push(replacement);
-    }
-    safeSaveAiConvs();
-    try {
-      if (JSON.parse(localStorage.getItem('study_ai_convs') || '[]').some(c => c.id === id)) throw new Error('not saved');
-    } catch (_) { aiConvs = previous; return; }
-    if (typeof setAiStopRequested === 'function') setAiStopRequested(id, true);
-    if (typeof AIClient !== 'undefined') AIClient.cancel(id);
-    if (typeof _aiSendQueue !== 'undefined') _aiSendQueue = _aiSendQueue.filter(item => item.convId !== id);
-    if (window.SyncLogs && typeof window.SyncLogs.markItemDeleted === 'function') window.SyncLogs.markItemDeleted('ai_conv', id);
-    automations = automations.filter(a => a.convId !== id);
-    if (linkedAutos.length) {
-      saveData('study_automations', automations);
-      if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
-    }
-    _aiAttachmentDrafts.delete(id);
-    if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
-    if (activeConvId === id) activeConvId = aiConvs[0].id;
-    localStorage.setItem('study_active_conv', activeConvId);
-    try {
-      const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
-      delete drafts[id];
-      localStorage.setItem('study_ai_drafts', JSON.stringify(drafts));
-    } catch (_) {}
+  } catch (error) {
+    restoreChat();
+    console.warn('[AI] 移入回收站失败:', error);
+    if (typeof showAiToast === 'function') showAiToast('删除未完成，请稍后重试');
+    return;
+  }
+
+  function restoreChat() {
+    if (aiConvs.some(c => c.id === id)) return;
+    aiConvs.splice(Math.min(index, aiConvs.length), 0, conv);
+    if (replacement && replacement.messages.length === 0) aiConvs = aiConvs.filter(c => c !== replacement);
+  }
+  if (typeof setAiStopRequested === 'function') setAiStopRequested(id, true);
+  if (typeof AIClient !== 'undefined') AIClient.cancel(id);
+  if (typeof _aiSendQueue !== 'undefined') _aiSendQueue = _aiSendQueue.filter(item => item.convId !== id);
+  if (window.SyncLogs && typeof window.SyncLogs.markItemDeleted === 'function') window.SyncLogs.markItemDeleted('ai_conv', id);
+  automations = automations.filter(a => a.convId !== id);
+  if (linkedAutos.length) {
+    saveData('study_automations', automations);
+    if (typeof ensureAutomationTimer === 'function') ensureAutomationTimer();
+  }
+  _aiAttachmentDrafts.delete(id);
+  if (typeof closeAiConversationFiles === 'function') closeAiConversationFiles();
+  const wasActive = activeConvId === id;
+  if (wasActive) activeConvId = aiConvs[0].id;
+  localStorage.setItem('study_active_conv', activeConvId);
+  try {
+    const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
+    delete drafts[id];
+    localStorage.setItem('study_ai_drafts', JSON.stringify(drafts));
+  } catch (_) {}
+  // Closing another tab must leave the current messages/composer in place.
+  if (!wasActive && typeof renderAiConvTabs === 'function' && renderAiConvTabs()) {
+    if (typeof updateSidebarAiBadge === 'function') updateSidebarAiBadge();
+  } else {
     renderAiChat();
     restoreAiDraft();
-  });
+  }
 }
 
 function clearConvMessages(e) {
@@ -617,6 +666,7 @@ function saveAiDraft() {
   _aiAttachmentDrafts.set(conv.id, aiAttachments.slice());
   try {
     const drafts = JSON.parse(localStorage.getItem('study_ai_drafts') || '{}');
+    if ((drafts[conv.id] || '') === input.value) return;
     drafts[conv.id] = input.value;
     localStorage.setItem('study_ai_drafts', JSON.stringify(drafts));
   } catch {}

@@ -105,6 +105,78 @@ test('IndexedDB migration, large writes, durable failures, reload and usage pane
     assert.equal(failure.same, true);
     assert.equal(failure.durableSame, true);
 
+    const recovered = await page.evaluate(async () => {
+      const key = 'study_ai_memory';
+      const original = IDBDatabase.prototype.transaction;
+      const open = IDBFactory.prototype.open;
+      let opens = 0;
+      let interrupted = false;
+      IDBFactory.prototype.open = function (...args) {
+        if (args[0] === StudyData.DB_NAME) opens++;
+        return open.apply(this, args);
+      };
+      IDBDatabase.prototype.transaction = function (...args) {
+        if (this.name === StudyData.DB_NAME && !interrupted) {
+          interrupted = true;
+          this.close();
+          throw new DOMException('Connection to Indexed Database server lost.', 'UnknownError');
+        }
+        return original.apply(this, args);
+      };
+      try {
+        const previous = localStorage.getItem(key);
+        const revision = (await StudyData.getRecord(key))?.revision || 0;
+        localStorage.setItem(key, '"first"');
+        localStorage.setItem(key, '"second"');
+        localStorage.setItem(key, '"latest"');
+        await StudyData.flush([key]);
+        const record = await StudyData.getRecord(key);
+        if (previous == null) localStorage.removeItem(key);
+        else localStorage.setItem(key, previous);
+        await StudyData.flush([key]);
+        return { opens, value: record.value, writes: record.revision - revision };
+      } finally {
+        IDBFactory.prototype.open = open;
+        IDBDatabase.prototype.transaction = original;
+      }
+    });
+    assert.deepEqual(recovered, { opens: 1, value: '"latest"', writes: 1 });
+
+    const deletion = await page.evaluate(async () => {
+      const id = genId();
+      const second = genId();
+      aiConvs.push({ id, title: '待删除对话', messages: [] }, { id: second, title: '连续删除', messages: [] });
+      safeSaveAiConvs();
+      await StudyData.flush();
+      const original = IDBObjectStore.prototype.put;
+      const trashBefore = await StudyData.get('study_ai_convs_trash');
+      const confirm = showCustomConfirm;
+      showCustomConfirm = async () => true;
+      IDBObjectStore.prototype.put = function (record) {
+        if (record?.key === 'study_ai_convs') throw new DOMException('Deletion quota test', 'QuotaExceededError');
+        return original.call(this, record);
+      };
+      try {
+        await deleteConv(id);
+        const retained = aiConvs.some(conv => conv.id === id);
+        const durable = JSON.parse(await StudyData.get('study_ai_convs')).some(conv => conv.id === id);
+        const trashUnchanged = (await StudyData.get('study_ai_convs_trash')) === trashBefore;
+        IDBObjectStore.prototype.put = original;
+        await Promise.all([deleteConv(id), deleteConv(second)]);
+        const active = JSON.parse(await StudyData.get('study_ai_convs'));
+        const trash = JSON.parse(await StudyData.get('study_ai_convs_trash'));
+        return {
+          retained, durable, trashUnchanged,
+          removed: !active.some(conv => conv.id === id || conv.id === second),
+          archived: [id, second].every(deleted => trash.some(conv => conv.id === deleted))
+        };
+      } finally {
+        IDBObjectStore.prototype.put = original;
+        showCustomConfirm = confirm;
+      }
+    });
+    assert.deepEqual(deletion, { retained: true, durable: true, trashUnchanged: true, removed: true, archived: true });
+
     await page.evaluate(async () => { await StudyData.flush(); openSettingsModal(); switchSettingsTab('data'); });
     await page.waitForFunction(() => /用量已更新|仍有数据/.test(document.getElementById('storageUsageStatus').textContent));
     assert.match(await page.locator('#localStorageUsage').textContent(), /MiB/);
@@ -127,6 +199,60 @@ test('IndexedDB migration, large writes, durable failures, reload and usage pane
     await page.waitForFunction(() => window.StudyData?.status().ready && typeof executeToolCallStructured === 'function');
     assert.equal(await page.evaluate(() => localStorage.getItem('study_sync_pending_conflicts')), null);
     assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('study_ai_convs'))[0].tree['3'].content), '答案B');
+
+    for (const size of [100, 1000]) {
+      const result = await page.evaluate(async size => {
+        notes = Array.from({ length: size }, (_, index) => ({ id: index + 1, type: 'note',
+          content: '正文'.repeat(2048), title: '测试' }));
+        await saveDataDurable('study_notes_v2', notes);
+        const sizes = [];
+        const original = IDBObjectStore.prototype.put;
+        IDBObjectStore.prototype.put = function (value, ...args) {
+          if (this.name === 'noteEdits') sizes.push(value.raw.length);
+          if (value.key === 'study_notes_v2') sizes.push(value.value.length);
+          return original.call(this, value, ...args);
+        };
+        try {
+          const start = performance.now();
+          notes[0].content += '修改';
+          await saveEditedNote(notes[0]);
+          const elapsed = performance.now() - start;
+          const rows = JSON.parse(localStorage.getItem('study_notes_v2'));
+          return { sizes, elapsed, count: rows.length, saved: rows[0].content.endsWith('修改') };
+        } finally { IDBObjectStore.prototype.put = original; }
+      }, size);
+      assert.equal(result.sizes.length, 1);
+      assert.ok(result.sizes[0] < 5000);
+      assert.equal(result.count, size);
+      assert.ok(result.saved);
+      console.log(size + ' notes: one edit wrote ' + result.sizes[0] + ' characters in ' + result.elapsed.toFixed(1) + ' ms');
+      await page.reload();
+      await page.waitForFunction(() => !!window.GlobalTranslation);
+      assert.equal(await page.evaluate(() => notes[0].content.endsWith('修改')), true);
+    }
+
+    const retry = await page.evaluate(async () => {
+      const original = IDBObjectStore.prototype.put;
+      const before = await StudyData.get('study_notes_v2');
+      IDBObjectStore.prototype.put = function (...args) {
+        if (this.name === 'noteEdits') throw new DOMException('note edit failed', 'QuotaExceededError');
+        return original.apply(this, args);
+      };
+      let saved;
+      try {
+        notes[0].title = '重试测试';
+        saved = await saveEditedNote(notes[0]);
+      } finally { IDBObjectStore.prototype.put = original; }
+      const preserved = before === await StudyData.get('study_notes_v2');
+      await StudyData.retryFailed();
+      const recovered = JSON.parse(await StudyData.get('study_notes_v2'))[0].title;
+      notes[0].title = '待替换';
+      await saveEditedNote(notes[0]);
+      await StudyData.commitBatch({ study_notes_v2: JSON.stringify([{ id: notes[0].id, title: '替换成功' }]) });
+      const replaced = JSON.parse(await StudyData.get('study_notes_v2'))[0].title;
+      return { saved, preserved, recovered, replaced };
+    });
+    assert.deepEqual(retry, { saved: false, preserved: true, recovered: '重试测试', replaced: '替换成功' });
 
     const blockedContext = await browser.newContext({ serviceWorkers: 'block' });
     const blockedPage = await blockedContext.newPage();

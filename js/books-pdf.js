@@ -1,6 +1,6 @@
 // ═══════════════════════════════════════════════════════════════════
 //  教材学习 — PDF 解析 / 章节切分 / 正文缓存
-//  依赖：window.pdfjsLib（index.html 中以 <script type="module"> 加载 lib/pdfjs/pdf.min.mjs）
+//  依赖：window.pdfjsLib（首次使用时动态加载）
 //  提供接口（供 books.js / books-kb.js / books-ai.js 调用）：
 //    parsePdfFile(buffer, onProgress)  → { pageCount, pages, outline }
 //    splitChaptersByOutline(outline, pageCount) → chapters
@@ -9,8 +9,7 @@
 // ═══════════════════════════════════════════════════════════════════
 
 // 确保 pdf.js 已加载
-// 优先使用 index.html 中 <script type="module"> 预加载挂到 window 的实例；
-// 未就绪时用动态 import 兜底。为避免 import() 在经典脚本中的基准路径歧义，
+// 首次使用时通过动态 import 加载。为避免 import() 在经典脚本中的基准路径歧义，
 // 显式基于 document.baseURI（index.html 所在目录）构造 file:// URL。
 let _pdfjsPromise = null;
 function ensurePdfJs() {
@@ -31,6 +30,7 @@ function ensurePdfJs() {
       return m;
     })
     .catch(err => {
+      _pdfjsPromise = null;
       console.error('pdf.js 加载失败:', err);
       return null;
     });

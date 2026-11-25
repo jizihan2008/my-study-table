@@ -66,6 +66,16 @@ test('parallel startup preserves hydration and dependency order; warm PWA surviv
     console.log('Warm startup with stalled network=' + duration + ' ms');
     assert.ok(duration < 10000);
     assert.equal(await page.evaluate(() => StudyData.status().ready), true);
+    assert.deepEqual(await page.evaluate(() => [!!window.CetVocabulary, !!window.pdfjsLib, !!window.cloudbase, !!window.supabase]), [false, false, false, true]);
+    const groups = await page.evaluate(() => GlobalTranslation.getTodayReviewGroups());
+    assert.equal(groups.find(group => group.id === 'cet4').total, 3849);
+    await page.evaluate(() => GlobalTranslation.openReviewFromToday('cet4'));
+    await page.waitForFunction(() => !!window.CetVocabulary && !!document.querySelector('.translation-cet-summary')?.textContent);
+    assert.equal(await page.evaluate(async () => !!(await ensurePdfJs())?.getDocument), true);
+    assert.equal(await page.evaluate(async () => {
+      await StudyCloud.loadSdk({ provider: 'cloudbase', envId: 'offline', accessKey: 'test' });
+      return typeof window.cloudbase.init === 'function';
+    }), true);
     await context.close();
   } finally {
     if (browser) await browser.close();

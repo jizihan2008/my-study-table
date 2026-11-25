@@ -64,6 +64,48 @@ test('failed trash write leaves the conversation and automations intact', async 
   assert.deepEqual(released, []);
 });
 
+test('large tree chats store PDF images once in trash and restore every branch and draft', async () => {
+  const { ctx, values } = setup();
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/ai-tree.js'), 'utf8'), ctx);
+  const image = 'data:image/jpeg;base64,' + 'A'.repeat(1024 * 1024);
+  const root = { id: 'root', role: 'root', children: ['question'] };
+  const question = { id: 'question', parentId: 'root', role: 'user', content: '阅读 PDF', children: ['answer', 'branch'],
+    attachments: [{ name: '教材.pdf', originalFileId: 'pdf-original' }],
+    visionFiles: [{ type: 'image_url', pdfPage: 2, dataUrl: image, originalFileId: 'pdf-original' }] };
+  const answer = { id: 'answer', parentId: 'question', role: 'assistant', content: '当前回复', children: [] };
+  const branch = { id: 'branch', parentId: 'question', role: 'assistant', content: '另一个分支', children: [] };
+  const conv = { id: 1, title: '大型 PDF 对话', tree: { root, question, answer, branch }, activePath: ['root', 'question', 'answer'],
+    messages: [question, answer] };
+  ctx.aiConvs = [conv];
+  values.set('study_ai_drafts', JSON.stringify({ 1: '保留草稿' }));
+  const fullSize = JSON.stringify(conv).length;
+  await ctx.deleteConv(1);
+  const raw = values.get('study_ai_convs_trash');
+  assert.ok(raw.length < fullSize * 0.6, 'the PDF page must not be duplicated in messages and tree');
+  assert.equal(JSON.parse(raw)[0].messages, undefined);
+  ctx.restoreFromTrash('ai', 1);
+  const restored = ctx.aiConvs.find(c => c.id === 1);
+  assert.equal(restored.messages[0].visionFiles[0].dataUrl, image);
+  assert.equal(restored.tree.branch.content, '另一个分支');
+  assert.deepEqual(Array.from(restored.activePath), ['root', 'question', 'answer']);
+  assert.equal(JSON.parse(values.get('study_ai_drafts'))[1], '保留草稿');
+});
+
+test('failed conversation-list save keeps the original chat and its attachment references', async () => {
+  const { ctx, values } = setup();
+  values.set('study_ai_convs', JSON.stringify(ctx.aiConvs));
+  const setItem = ctx.localStorage.setItem;
+  ctx.localStorage.setItem = (key, value) => {
+    if (key === 'study_ai_convs') throw new Error('quota');
+    setItem(key, value);
+  };
+  await ctx.deleteConv(1);
+  assert.equal(ctx.aiConvs[0].id, 1);
+  assert.equal(ctx.aiConvs[0].tree.branch.attachments[0].originalFileId, 'original');
+  assert.equal(ctx.activeConvId, 1);
+  assert.equal(ctx.automations.length, 1);
+});
+
 test('permanent deletion and empty trash release original attachments', async () => {
   const { ctx, values, released } = setup();
   await ctx.deleteConv(1);

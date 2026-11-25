@@ -94,7 +94,7 @@ function captureNoteFoldStates(container, noteId, persist) {
     ? { ...(note._foldStates || {}) } : {};
   container.querySelectorAll('details.note-fold').forEach((fold, index) => {
     const foldIndex = fold.dataset.foldIndex || String(index);
-    fold.dataset.foldIndex = foldIndex;
+    if (fold.dataset.foldIndex !== foldIndex) fold.dataset.foldIndex = foldIndex;
     states[foldIndex] = fold.open;
   });
   note._foldStates = states;
@@ -115,6 +115,7 @@ function findNoteItem(id) { return notes.find(n => n.id === id); }
 function getNoteItemChildren(parentId) { return notes.filter(n => n.parentId === parentId); }
 
 function createNewNote(parentId) {
+  flushPendingNoteComposition();
   const now = new Date().toISOString();
   const newNote = { id: genId(), type: 'note', title: '', content: '', summary: '', _summaryFresh: false, parentId: parentId || null, createdAt: now, updatedAt: now, _reviewAnchorAt: now, _reviewHistory: [], _skipReview: false, tags: [], keywords: [] };
   notes.push(newNote);
@@ -155,6 +156,7 @@ function createNoteFolder(name, parentId) {
 }
 
 function deleteNote(id, e) {
+  flushPendingNoteComposition();
   if (e && e.stopPropagation) e.stopPropagation();
   const item = findNoteItem(id);
   if (!item) return;
@@ -245,6 +247,48 @@ function selectNote(id) {
   applyTagFilterBar();
 }
 
+async function saveEditedNote(note) {
+  if (!notes.includes(note)) return false;
+  try {
+    const write = window.StudyData?.saveNoteEdit?.(note);
+    if (!write) return saveDataDurable('study_notes_v2', notes);
+    await write;
+  } catch (error) {
+    saveData.lastError = storageSaveErrorMessage(error);
+    return false;
+  }
+  try { window.Sync?.onLocalChange?.('study_notes_v2'); } catch (_) {}
+  window.StudyPlatform?.events.emit('storage:changed', { key: 'study_notes_v2', value: notes });
+  return true;
+}
+
+const pendingNoteSaves = new Map();
+let notesSplitRichEditor = null;
+
+function flushPendingNoteComposition() {
+  window.RichNoteEditor?.flushPendingComposition?.();
+  notesSplitRichEditor?.flushPendingComposition();
+}
+
+function scheduleEditedNote(note, save) {
+  clearTimeout(pendingNoteSaves.get(note.id)?.timer);
+  const run = () => {
+    pendingNoteSaves.delete(note.id);
+    return save();
+  };
+  pendingNoteSaves.set(note.id, { run, timer: setTimeout(run, 500) });
+}
+function flushEditedNotes() {
+  flushPendingNoteComposition();
+  for (const { run, timer } of pendingNoteSaves.values()) {
+    clearTimeout(timer);
+    run();
+  }
+}
+document.addEventListener('visibilitychange', () => { if (document.hidden) flushEditedNotes(); });
+window.addEventListener('pagehide', flushEditedNotes);
+window.electronAPI?.onAppQuit?.(flushEditedNotes);
+
 function onNoteTitleChange() {
   const note = getActiveNote();
   if (!note) return;
@@ -273,7 +317,7 @@ async function commitNoteTitleChange() {
   note.updatedAt = new Date().toISOString();
   note._summaryFresh = false;
   updateLastEditedDisplay(note);
-  if (await saveDataDurable('study_notes_v2', notes) !== true) {
+  if (await saveEditedNote(note) !== true) {
     note.title = previousTitle;
     titleInput.value = previousTitle;
     const status = document.getElementById('notesStatus');
@@ -288,7 +332,7 @@ async function commitNoteTitleChange() {
 
 function onNotesChange(textarea = document.getElementById('notesTextarea')) {
   if (textarea?.id === 'notesSplitTextarea') {
-    onNotesSplitRichChange(textarea.value, notesSplitNoteId);
+    onNotesSplitRichChange(textarea.value, notesSplitNoteId, { deferPreview: true });
     return;
   }
   const note = getActiveNote();
@@ -301,18 +345,16 @@ function onNotesChange(textarea = document.getElementById('notesTextarea')) {
     notesRedoStack = [];
   }
   note.content = textarea.value;
-  syncNotesSplitContent(note, 'primary', previousContent);
+  syncNotesSplitContent(note, 'primary', previousContent, true);
   note.updatedAt = new Date().toISOString();
-  const chars = StudyMarkdown.countCharacters(note.content);
-  document.getElementById('notesWordCount').textContent = chars + ' 字';
+  scheduleNoteEditorDetails(note);
   document.getElementById('notesStatus').textContent = '保存中…';
   updateLastEditedDisplay(note);
-  if (notesDebounceId) clearTimeout(notesDebounceId);
-  notesDebounceId = setTimeout(async () => {
+  scheduleEditedNote(note, async () => {
     note._summaryFresh = false;
     // 编辑笔记不再重置复习周期（改为右键菜单手动「重置复习周期」）
     const savingContent = note.content;
-    if (await saveDataDurable('study_notes_v2', notes) === true) {
+    if (await saveEditedNote(note) === true) {
       if (note.content !== savingContent) return;
       document.getElementById('notesStatus').textContent = '已保存';
       note._dirtyContent = false;
@@ -322,7 +364,7 @@ function onNotesChange(textarea = document.getElementById('notesTextarea')) {
     } else {
       document.getElementById('notesStatus').textContent = '保存失败，内容仍保留在当前页：' + (saveData.lastError || '未知原因');
     }
-  }, 500);
+  });
 }
 
 // Source mode uses the same embedded image representation as the rich editor.
@@ -364,26 +406,22 @@ function onRichNotesChange(markdown, previousMarkdown, change = {}, source = 'pr
     notesRedoStack = [];
   }
   note.content = markdown;
-  syncNotesSplitContent(note, source, previousMarkdown);
+  syncNotesSplitContent(note, source, previousMarkdown, change.deferPreview || !!change.inputType);
   if (change.historyBoundary) note._dirtyContent = false;
   note.updatedAt = new Date().toISOString();
   const textarea = document.getElementById('notesTextarea');
   if (textarea) textarea.value = markdown;
-  const chars = StudyMarkdown.countCharacters(markdown);
-  const count = document.getElementById('notesWordCount');
+  scheduleNoteEditorDetails(note);
   const status = document.getElementById('notesStatus');
-  if (count) count.textContent = chars + ' 字';
   if (status) status.textContent = '保存中…';
   const splitStatus = notesImmersive && notesImmersiveSplit && String(note.id) === String(notesSplitNoteId)
     ? document.getElementById('notesSplitStatus') : null;
   if (splitStatus) splitStatus.textContent = '保存中…';
   updateLastEditedDisplay(note);
-  renderNoteToc();
-  if (notesDebounceId) clearTimeout(notesDebounceId);
-  notesDebounceId = setTimeout(async () => {
+  scheduleEditedNote(note, async () => {
     note._summaryFresh = false;
     const savingContent = note.content;
-    if (await saveDataDurable('study_notes_v2', notes) === true) {
+    if (await saveEditedNote(note) === true) {
       if (note.content !== savingContent) return;
       if (status) status.textContent = '已保存';
       if (splitStatus) splitStatus.textContent = '已保存';
@@ -395,7 +433,20 @@ function onRichNotesChange(markdown, previousMarkdown, change = {}, source = 'pr
       status.textContent = '保存失败，内容仍保留在当前页：' + (saveData.lastError || '未知原因');
       if (splitStatus) splitStatus.textContent = status.textContent;
     }
-  }, 500);
+  });
+}
+
+const noteEditorRefreshDelay = 180;
+let noteEditorDetailsTimer;
+
+function scheduleNoteEditorDetails(note) {
+  clearTimeout(noteEditorDetailsTimer);
+  noteEditorDetailsTimer = setTimeout(() => {
+    if (getActiveNote() !== note) return;
+    const count = document.getElementById('notesWordCount');
+    if (count) count.textContent = StudyMarkdown.countCharacters(note.content) + ' 字';
+    renderNoteToc();
+  }, noteEditorRefreshDelay);
 }
 
 function updateLastEditedDisplay(note) {
@@ -500,6 +551,7 @@ function restoreSplitNoteHistory(note,snapshot,beforeChange,status){
 }
 
 function undoNote() {
+  flushPendingNoteComposition();
   if (notesUndoStack.length === 0) return;
   const snapshot = notesUndoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
@@ -537,6 +589,7 @@ function undoNote() {
 }
 
 function redoNote() {
+  flushPendingNoteComposition();
   if (notesRedoStack.length === 0) return;
   const snapshot = notesRedoStack.pop();
   const note = notes.find(n => n.id === snapshot.noteId);
@@ -1318,7 +1371,8 @@ function buildNoteCtx(fullText, selStart, selEnd, N) {
 }
 let noteFoldMenuTarget = null;
 let noteTableMenuTarget = null;
-function isNoteFoldEditingSurface(container, secondary) {
+let noteImageMenuTarget = null;
+function isNoteRichEditingSurface(container, secondary) {
   return secondary
     ? notesSplitMode === 'rich' && container.id === 'notesSplitRichEditor'
     : noteViewMode === 'rich' && container.id === 'notesRichEditor';
@@ -1328,12 +1382,16 @@ function bindNoteSelectionAiMenu() {
   document.addEventListener('contextmenu', function (e) {
     const container = e.target.closest?.('#notesPreview, #notesRichEditor, #notesTextarea, #notesSplitPreview, #notesSplitRichEditor, #notesSplitTextarea');
     if (!container) return;
+    flushPendingNoteComposition();
     closeNoteAnnFloat();
     const secondary = container.id.startsWith('notesSplit');
     const note = secondary ? findNoteByLooseId(notesSplitNoteId) : getActiveNote();
     if (!note) return;
+    const richEditing = isNoteRichEditingSurface(container, secondary);
+    const image = richEditing ? e.target.closest?.('img') : null;
+    const imageTarget = image?.parentElement?.isContentEditable ? { image, container, noteId: note.id, secondary } : null;
     const summary = e.target.closest?.('summary');
-    const fold = isNoteFoldEditingSurface(container, secondary) && summary?.parentElement?.matches('details.note-fold')
+    const fold = richEditing && summary?.parentElement?.matches('details.note-fold')
       ? summary.parentElement : null;
     const cell = e.target.closest?.('th, td');
     const table = cell?.closest('table');
@@ -1356,17 +1414,18 @@ function bindNoteSelectionAiMenu() {
         ctx = buildNoteCtx(selected.fullText, selected.start, selected.end);
       }
     }
-    if (!text && !fold && !cell) { closeNoteAiExplainMenu(); return; }
+    if (!text && !fold && !cell && !imageTarget) { closeNoteAiExplainMenu(); return; }
     e.preventDefault();
     showNoteAiExplainMenu(e.clientX, e.clientY, text, ctx, offsets?.start, offsets?.end, note, secondary,
       fold ? { fold, container, noteId: note.id, content: note.content || '', secondary } : null,
       cell ? { cell, table, container, noteId: note.id, content: note.content || '', secondary,
-        row: Array.from(table.rows).indexOf(cell.parentElement), column: cell.cellIndex, sourceLine: table.dataset.sourceLine } : null);
+        row: Array.from(table.rows).indexOf(cell.parentElement), column: cell.cellIndex, sourceLine: table.dataset.sourceLine } : null,
+      imageTarget);
     // Keep note actions and translation together in one selection menu.
     e.stopImmediatePropagation();
   }, true);
 }
-function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActiveNote(), secondary = false, foldTarget = null, tableTarget = null) {
+function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActiveNote(), secondary = false, foldTarget = null, tableTarget = null, imageTarget = null) {
   let menu = document.getElementById('noteAiExplainMenu');
   if (!menu) {
     menu = document.createElement('div');
@@ -1389,6 +1448,7 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
       item.addEventListener('click', () => editNoteTableFromMenu(action));
       menu.querySelector('#noteTableMenuActions').appendChild(item);
     });
+    menu.insertAdjacentHTML('beforeend', '<div class="context-menu-sep" id="noteImageMenuSeparator"></div><div class="context-menu-item danger" id="noteImageDelete" onclick="deleteNoteImageFromMenu()" title="删除图片，可撤销">删除图片</div>');
     document.body.appendChild(menu);
     document.addEventListener('click', function (e) {
       if (!e.target.closest('#noteAiExplainMenu')) closeNoteAiExplainMenu();
@@ -1408,6 +1468,9 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   menu.dataset.text = text;
   noteFoldMenuTarget = foldTarget;
   noteTableMenuTarget = tableTarget;
+  noteImageMenuTarget = imageTarget;
+  menu.querySelector('#noteImageDelete').style.display = imageTarget ? '' : 'none';
+  menu.querySelector('#noteImageMenuSeparator').style.display = imageTarget && (text || tableTarget || foldTarget) ? '' : 'none';
   menu.querySelector('#noteTableMenuActions').style.display = tableTarget ? '' : 'none';
   menu.querySelector('#noteTableMenuSeparator').style.display = tableTarget && text ? '' : 'none';
   menu.querySelector('#noteSelectionExplain').style.display = text ? '' : 'none';
@@ -1433,6 +1496,16 @@ function showNoteAiExplainMenu(x, y, text, ctx, srcStart, srcEnd, note = getActi
   const rect = menu.getBoundingClientRect();
   menu.style.left = Math.max(0, Math.min(x, window.innerWidth - rect.width - 8)) + 'px';
   menu.style.top = Math.max(0, Math.min(y, window.innerHeight - rect.height - 8)) + 'px';
+}
+function deleteNoteImageFromMenu() {
+  const target = noteImageMenuTarget;
+  closeNoteAiExplainMenu();
+  if (!target || !isNoteRichEditingSurface(target.container, target.secondary)
+      || !target.container.getClientRects().length) return;
+  const currentId = target.secondary ? notesSplitNoteId : activeNoteId;
+  if (String(currentId) !== String(target.noteId)) return;
+  const editor = target.secondary ? getNotesSplitRichEditor() : RichNoteEditor;
+  if (String(editor?.getCurrentNoteId()) === String(target.noteId)) editor.deleteImage(target.image);
 }
 function editNoteTableFromMenu(action) {
   const target = noteTableMenuTarget;
@@ -1471,7 +1544,7 @@ function deleteNoteFoldFromMenu(unwrap = false) {
   editNoteFold(target, unwrap);
 }
 function getNoteFoldTargetEditor(target) {
-  if (!target || !isNoteFoldEditingSurface(target.container, target.secondary)
+  if (!target || !isNoteRichEditingSurface(target.container, target.secondary)
       || !target.fold.isConnected || !target.container.contains(target.fold)) return null;
   const currentId = target.secondary ? notesSplitNoteId : activeNoteId;
   const note = findNoteByLooseId(target.noteId);
@@ -1485,7 +1558,13 @@ async function copyNoteFoldFromMenu(cut = false) {
   const editor = getNoteFoldTargetEditor(target);
   if (!editor) return;
   const markdown = editor.getFoldMarkdown(target.fold);
-  const html = StudyMarkdown.render(markdown);
+  const clipboardContent = document.createElement('div');
+  clipboardContent.innerHTML = StudyMarkdown.render(markdown);
+  // WebKit's system clipboard can omit hidden descendants of closed details.
+  // Open every fold in the clipboard copy, including nested folds, without
+  // changing the source note or the Markdown clipboard representation.
+  clipboardContent.querySelectorAll('details').forEach(fold => { fold.open = true; });
+  const html = clipboardContent.innerHTML;
   try {
     await navigator.clipboard.write([new ClipboardItem({
       'text/plain': new Blob([markdown], { type: 'text/plain' }),
@@ -1546,6 +1625,7 @@ function closeNoteAiExplainMenu() {
   if (menu) { menu.style.display = 'none'; menu.classList.remove('visible'); }
   noteFoldMenuTarget = null;
   noteTableMenuTarget = null;
+  noteImageMenuTarget = null;
 }
 function captureNoteAiSelection() {
   const menu = document.getElementById('noteAiExplainMenu');
@@ -2011,6 +2091,7 @@ function toggleNotesSidebar() {
 }
 
 function renderNotes(){
+  flushPendingNoteComposition();
   // Apply sidebar hidden state
   const sidebar = document.getElementById('notesSidebar');
   const toggle = document.getElementById('notesSidebarToggle');
@@ -2675,8 +2756,7 @@ let notesImmersiveSplit=localStorage.getItem('study_notes_immersive_split')==='t
 let notesSplitNoteId=localStorage.getItem('study_notes_split_note')||'';
 let notesSplitMode=localStorage.getItem('study_notes_split_mode')||'preview';
 if(!['preview','rich','edit'].includes(notesSplitMode))notesSplitMode='preview';
-let notesSplitDebounceId=null;
-let notesSplitRichEditor=null;
+
 
 function getNotesSplitRichEditor(){
   if(notesSplitRichEditor)return notesSplitRichEditor;
@@ -2770,7 +2850,9 @@ function updateNotesSplitPickerTrigger(id, note, label) {
 }
 
 // 只刷新另一侧；输入中的 DOM、光标和撤销上下文保持原位。
-function syncNotesSplitContent(note,source,previousContent=''){
+const notesSplitPreviewRefreshes = new WeakMap();
+
+function syncNotesSplitContent(note,source,previousContent='',deferPreview=false){
   if(!notesImmersive||!notesImmersiveSplit||String(note.id)!==String(activeNoteId)||String(note.id)!==String(notesSplitNoteId))return;
   const secondary=source==='primary';
   const mode=secondary?notesSplitMode:noteViewMode;
@@ -2778,7 +2860,25 @@ function syncNotesSplitContent(note,source,previousContent=''){
     ?mode==='preview'?'notesSplitPreview':mode==='edit'?'notesSplitTextarea':'notesSplitRichEditor'
     :mode==='preview'?'notesPreview':mode==='edit'?'notesTextarea':'notesRichEditor');
   if(!host)return;
-  const anchor=typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(host,previousContent||'',note.id):null;
+  if(mode==='preview'){
+    const pending=notesSplitPreviewRefreshes.get(host);
+    if(pending)clearTimeout(pending.timer);
+    notesSplitPreviewRefreshes.delete(host);
+    if(deferPreview){
+      const priorContent=pending?.note===note?pending.priorContent:previousContent;
+      const timer=setTimeout(()=>{
+        notesSplitPreviewRefreshes.delete(host);
+        if((secondary?notesSplitMode:noteViewMode)==='preview'&&getActiveNote()===note){
+          syncNotesSplitContent(note,source,priorContent);
+        }
+      },noteEditorRefreshDelay);
+      notesSplitPreviewRefreshes.set(host,{timer,note,priorContent});
+      return;
+    }
+  }
+  const renderedSource=mode==='preview'&&typeof NoteReadingRenderer!=='undefined'
+    ?NoteReadingRenderer.get(host)?.source:undefined;
+  const anchor=typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(host,renderedSource??(previousContent||''),note.id):null;
   if(mode==='preview'){
     if(typeof NoteReadingRenderer!=='undefined')NoteReadingRenderer.mount(host,note.content||'',note);
     else{host.innerHTML=formatNoteContent(note.content||'');applyNoteFoldStates(host,note.id);}
@@ -2863,6 +2963,7 @@ function renderNotesImmersiveSplit(){
 }
 
 function setNotesImmersiveSplit(force){
+  flushPendingNoteComposition();
   const enabled=typeof force==='boolean'?force:!notesImmersiveSplit;
   if(enabled&&!getActiveNote()){
     return;
@@ -2882,6 +2983,7 @@ function selectNotesPrimaryPane(id){
 }
 
 function selectNotesSplitNote(id){
+  flushPendingNoteComposition();
   const next=findNoteByLooseId(id);
   if(!next)return;
   notesSplitNoteId=String(next.id);
@@ -2895,6 +2997,7 @@ function setNotesSplitPrimaryMode(mode){
 }
 
 function setNotesSplitSecondaryMode(mode){
+  flushPendingNoteComposition();
   notesSplitMode=['preview','rich','edit'].includes(mode)?mode:'preview';
   localStorage.setItem('study_notes_split_mode',notesSplitMode);
   renderNotesImmersiveSplit();
@@ -2920,10 +3023,9 @@ function onNotesSplitRichChange(value,noteId,change={}){
   note._summaryFresh=false;
   const status=document.getElementById('notesSplitStatus');
   if(status)status.textContent='保存中…';
-  if(notesSplitDebounceId)clearTimeout(notesSplitDebounceId);
-  notesSplitDebounceId=setTimeout(async()=>{
+  scheduleEditedNote(note, async () => {
     const savingContent=note.content;
-    if(await saveDataDurable('study_notes_v2',notes)!==true){
+    if(await saveEditedNote(note)!==true){
       if(status)status.textContent='保存失败，内容仍保留在当前页';
       return;
     }
@@ -2931,7 +3033,7 @@ function onNotesSplitRichChange(value,noteId,change={}){
     note._dirtyContent=false;
     if(status)status.textContent='已保存';
     renderNoteList();
-  },500);
+  });
 }
 
 function applyNotesImmersiveZoom(){
@@ -2958,6 +3060,7 @@ function setNotesImmersiveZoom(value){
 function changeNotesImmersiveZoom(delta){setNotesImmersiveZoom(notesImmersiveZoom+Number(delta||0));}
 
 function setNotesImmersive(force){
+  flushPendingNoteComposition();
   const section=document.getElementById('section-notes');
   if(!section)return;
   const enabled=typeof force==='boolean'?force:!notesImmersive;
@@ -3187,6 +3290,7 @@ function updateNoteReadingProgress(preview){
 }
 
 function switchNoteView(mode){
+  flushPendingNoteComposition();
   const note=getActiveNote();
   const previousView=document.getElementById(noteViewMode==='edit'?'notesTextarea':noteViewMode==='rich'?'notesRichEditor':'notesPreview');
   const position=mode!==noteViewMode&&note&&typeof NoteViewPosition!=='undefined'?NoteViewPosition.capture(previousView,note.content||'',note.id):null;
@@ -3301,7 +3405,7 @@ function renderNoteSummary(){
   if(typeof lucide!=='undefined')lucide.createIcons();
 }
 function isAutoSummaryEnabled(){return localStorage.getItem('study_auto_summary')!=='false';}
-function checkAndUpdateSummary(){if(!isAutoSummaryEnabled())return;const n=getActiveNote();if(n&&!n._summaryFresh&&!n._summaryUpdating&&(n.content||'').trim().length>0)generateNoteSummary(n);}
+function checkAndUpdateSummary(){flushPendingNoteComposition();if(!isAutoSummaryEnabled())return;const n=getActiveNote();if(n&&!n._summaryFresh&&!n._summaryUpdating&&(n.content||'').trim().length>0)generateNoteSummary(n);}
 function refreshNoteSummary(){const n=getActiveNote();if(!n||n._summaryUpdating)return;generateNoteSummary(n);}
 
 // ═══════════ Notes: AI Quiz ═══════════

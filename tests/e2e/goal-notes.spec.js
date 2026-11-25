@@ -12,7 +12,8 @@ test('goal notes save, cancel, preserve drafts, sync and reach AI reports', asyn
     app = await electron.launch({ args: [path.resolve('.'), '--no-sandbox', '--disable-gpu'],
       env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
     const page = await app.firstWindow();
-    await page.waitForFunction(() => typeof editTodayGoalNote === 'function' && document.readyState !== 'loading');
+    await page.waitForFunction(() => typeof editTodayGoalNote === 'function' && window.Sync
+      && document.querySelector('#nav-today[aria-current="page"]'));
     await page.evaluate(() => {
       saveGoals([{ id: 901, text: '完成毕业设计', content: '每周推进核心模块', dueDate: '2026-12-31', done: false },
         { id: 902, text: '第二个目标', content: '', done: false }]);
@@ -60,8 +61,10 @@ test('goal notes save, cancel, preserve drafts, sync and reach AI reports', asyn
     await input.fill('失焦保存');
     await page.locator('.today-goals-header .today-section-title').click();
     await expect(goal.locator('.today-goal-note-row')).toHaveText('失焦保存');
+    await page.evaluate(async () => { if (window.StudyData?.flush) await window.StudyData.flush(); });
     await page.reload();
-    await page.waitForFunction(() => typeof renderGoals === 'function');
+    await page.waitForFunction(() => typeof renderGoals === 'function' && window.Sync
+      && document.querySelector('#nav-today[aria-current="page"]'));
     await page.evaluate(() => { switchTab('today'); renderGoals(); });
     await expect(goal.locator('.today-goal-note-row')).toHaveText('失焦保存');
     await goal.locator('.todo-edit').click();

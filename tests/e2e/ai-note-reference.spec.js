@@ -31,14 +31,17 @@ test('AI note citations open reading mode, reveal the cited fold, survive reload
     return { href: result.data.referenceLink, revision: result.data.contentRevision, offset, text: result.data.content };
   });
   expect(citation.text).toBe('😀目标片段 ');
-  async function clickCitation() {
-    await page.evaluate(href => {
+  async function clickCitation(label) {
+    await page.evaluate(({ href, label }) => {
       switchTab('ai');
-      document.getElementById('aiMessages').innerHTML = formatAiContent('[查看原文](' + href + ')');
-    }, citation.href);
-    await page.locator('#aiMessages a[href^="#note="]').click();
+      document.getElementById('aiMessages').innerHTML = formatAiContent('见 [' + label + '](' + href + ')。');
+    }, { href: citation.href, label });
+    const link = page.locator('#aiMessages p').getByRole('link', { name: label, exact: true });
+    await expect(link).toHaveAttribute('href', citation.href);
+    await expect(link).toHaveCSS('display', 'inline-block');
+    await link.click();
   }
-  await clickCitation();
+  await clickCitation('目标片段中的公式');
   const target = page.locator('#notesPreview p').filter({ hasText: '😀目标片段' });
   async function expectReadingTarget() {
     await expect(page.locator('#notesPreview')).toBeVisible();
@@ -54,7 +57,7 @@ test('AI note citations open reading mode, reveal the cited fold, survive reload
   await page.reload();
   await page.waitForFunction(() => typeof getNoteReferenceRevision === 'function' && !document.querySelector('script[data-app-src]'));
   expect(await page.evaluate(() => getNoteReferenceRevision(notes.find(n => n.id === 88991)))).toBe(citation.revision);
-  await clickCitation();
+  await clickCitation('查看原文');
   await expectReadingTarget();
   // Eager rendering (footnotes/annotations) uses the same reading navigation.
   await page.evaluate(() => {

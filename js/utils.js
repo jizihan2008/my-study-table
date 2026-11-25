@@ -86,6 +86,7 @@ document.addEventListener('keydown', function(e) {
   // Ctrl+R / F5 刷新页面
   if ((e.ctrlKey && e.key === 'r') || e.key === 'F5') {
     e.preventDefault();
+    if (typeof flushEditedNotes === 'function') flushEditedNotes();
     Promise.resolve(window.StudyData?.flush()).then(() => location.reload()).catch(error => {
       const status = document.getElementById('notesStatus');
       if (status) status.textContent = '保存未完成，已暂停刷新：' + error.message;

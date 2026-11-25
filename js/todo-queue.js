@@ -2,6 +2,48 @@
 let todoQueueDraggedId = null;
 let queueNoteEditingId = null;
 let queuePickerExpandedIds = new Set();
+let queueExpandedIds = new Set();
+
+function toggleQueueExpand(id, event) {
+  event.stopPropagation();
+  if (queueExpandedIds.has(id)) queueExpandedIds.delete(id);
+  else queueExpandedIds.add(id);
+  renderTodoQueue();
+}
+
+function buildQueueExpandHTML(id, children) {
+  return children.length ? `<button class="focus-expand${queueExpandedIds.has(id) ? ' expanded' : ''}" aria-expanded="${queueExpandedIds.has(id)}" onclick="toggleQueueExpand(${id}, event)" title="展开/折叠子任务" aria-label="展开/折叠子任务">▶</button>` : '<span class="focus-expand-spacer"></span>';
+}
+
+function getQueueVisibleChildren(id, hideDone) {
+  return getChildren(id).filter(todo => !hideDone || !todo.done);
+}
+
+function renderQueueChildren(id, hideDone, ancestors = new Set()) {
+  if (ancestors.has(id) || !queueExpandedIds.has(id)) return '';
+  const visited = new Set(ancestors).add(id);
+  return getQueueVisibleChildren(id, hideDone).filter(todo => !visited.has(todo.id)).map(todo => {
+    const children = getQueueVisibleChildren(todo.id, hideDone);
+    const label = todo.done ? '取消完成' : '标记完成';
+    return `<div class="todo-queue-child-node">
+      <div class="today-focus-item child todo-queue-child" data-queue-child-id="${todo.id}" oncontextmenu="showTodayTodoContextMenu(event, ${todo.id})">
+        <div class="today-focus-main">
+          ${buildQueueExpandHTML(todo.id, children)}
+          <button type="button" class="focus-check${todo.done ? ' done' : ''}" role="checkbox" aria-checked="${!!todo.done}" title="${label}" aria-label="${label}" onclick="toggleQueueTodo(${todo.id})"></button>
+          <span class="focus-text${todo.done ? ' completed' : ''}"><span class="focus-title">${escapeHtml(todo.text)}</span>${buildTodayTodoDueHTML(todo)}</span>
+          <div class="today-task-actions">${buildTodoQuickStatusHTML(todo)}
+            <button class="focus-nav" onclick="goToTodoFromFocus(${todo.id})" title="跳转到待办目录" aria-label="跳转到待办目录">↗</button>
+            <div class="todo-queue-actions">
+              <button class="focus-nav" title="添加到今日聚焦" onclick="addQueueToFocus(0, ${todo.id})" ${todo.done ? 'disabled' : ''}>今日</button>
+              <button class="focus-nav" title="添加到明日聚焦" onclick="addQueueToFocus(1, ${todo.id})" ${todo.done ? 'disabled' : ''}>明日</button>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="todo-queue-children">${renderQueueChildren(todo.id, hideDone, visited)}</div>
+    </div>`;
+  }).join('');
+}
 
 function showQueueTodoPicker() {
   const picker = document.getElementById('queueTodoPicker');
@@ -153,7 +195,7 @@ function getTodoQueueDropTarget(event) {
     || event.clientY < bounds.top || event.clientY > bounds.bottom) return null;
   const rows = Array.from(list.querySelectorAll('.todo-queue-item'));
   for (const row of rows) {
-    const rect = row.getBoundingClientRect();
+    const rect = row.parentElement.getBoundingClientRect();
     if (event.clientY < rect.top + rect.height / 2) {
       return { row, id: Number(row.dataset.todoId), after: false };
     }
@@ -285,10 +327,12 @@ function renderTodoQueue() {
     const path = getFocusTodoDisplayPath(todo);
     const note = getTodoSharedNote(id);
     const editing = queueNoteEditingId === id;
-    return `<div class="today-focus-item todo-queue-item${todo.done ? ' completed' : ''}" draggable="true" data-todo-id="${id}"
-      ondragstart="startTodoQueueDrag(event, ${id})" ondragend="endTodoQueueDrag()">
+    const children = getQueueVisibleChildren(id, hideDone);
+    return `<div class="todo-queue-node"><div class="today-focus-item todo-queue-item${todo.done ? ' completed' : ''}" draggable="true" data-todo-id="${id}"
+      ondragstart="startTodoQueueDrag(event, ${id})" ondragend="endTodoQueueDrag()" oncontextmenu="showTodayTodoContextMenu(event, ${id})">
       <div class="today-focus-main">
       <span class="todo-queue-grip" title="拖拽排序 · 第 ${index + 1} 项">⠿</span>
+      ${buildQueueExpandHTML(id, children)}
       <button type="button" class="focus-check${todo.done ? ' done' : ''}" role="checkbox" aria-checked="${todo.done}" title="${todo.done ? '取消完成' : '标记完成'}" aria-label="${todo.done ? '取消完成' : '标记完成'}" onclick="event.stopPropagation(); toggleQueueTodo(${id})"></button>
       <span class="focus-text${todo.done ? ' completed' : ''}" title="${escapeAttr(path.full)}">
         ${path.parents.length ? '<span class="focus-parent-path">' + path.parents.map(escapeHtml).join('<span class="focus-path-separator">›</span>') + '</span>' : ''}
@@ -308,7 +352,7 @@ function renderTodoQueue() {
       ${editing ? `<div class="today-focus-note-row editing" draggable="false" ondragstart="event.stopPropagation(); event.preventDefault()">
         <input class="today-focus-note-input" id="queueTodoNoteInput-${id}" type="text" maxlength="160" value="${escapeAttr(note)}" placeholder="写一句话提醒自己…" onkeydown="handleQueueTodoNoteKeydown(event, ${id})" onblur="saveQueueTodoNote(${id}, this.value)">
       </div>` : (note ? `<button class="today-focus-note-row" onclick="editQueueTodoNote(${id})" title="点击编辑"><i data-lucide="message-square" class="lucide-icon"></i><span>${escapeHtml(note)}</span></button>` : '')}
-      </div>`;
+      </div><div class="todo-queue-children">${renderQueueChildren(id, hideDone)}</div></div>`;
   }).join('') : `<div class="todo-queue-empty">${ids.length ? '队列中的待办均已完成，点击「显示已完成」可查看' : '在待办上右键，选择「加入待办队列」'}</div>`;
   document.querySelectorAll('[data-queue-fill]').forEach(button => { button.disabled = !ids.some(id => !findTodo(id).done); });
   if (document.getElementById('queueTodoPicker')?.style.display === 'block') renderQueueTodoPicker();

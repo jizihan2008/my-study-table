@@ -482,10 +482,12 @@
     md.renderer.rules.link_open = function (tokens, idx, options, env, self) {
       const hrefIndex = tokens[idx].attrIndex('href');
       const href = hrefIndex >= 0 ? tokens[idx].attrs[hrefIndex][1] : '';
-      if (href.startsWith('#note=')) tokens[idx].attrSet('class', 'note-jump-block');
       if (!isSafeUrl(href, 'link')) {
         if (hrefIndex >= 0) tokens[idx].attrs.splice(hrefIndex, 1);
         return defaultLinkOpen(tokens, idx, options, env, self);
+      }
+      if (href.startsWith('#note=')) {
+        tokens[idx].attrSet('class', href.includes('&offset=') ? 'note-reference-inline' : 'note-jump-block');
       }
       if (!href.startsWith('#')) {
         tokens[idx].attrSet('target', '_blank');

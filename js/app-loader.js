@@ -47,6 +47,9 @@
         script.onerror = () => reject(new Error('模块加载失败：' + script.src));
         placeholder.replaceWith(script);
       });
+      if (placeholder.dataset.appSrc.split('?')[0] === 'js/friends.js') {
+        await window.StudyCloud.loadSdk(getFriendsConfig());
+      }
     }
     window.dispatchEvent(new Event('study:ready'));
   } catch (error) {

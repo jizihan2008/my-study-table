@@ -12,9 +12,11 @@ function renderAiPdfSendProgress() {
   const existing = document.getElementById('aiPdfSendProgress');
   const state = _aiPdfSendProgress.get(getActiveConvId());
   if (!state) { if (existing) existing.remove(); return; }
-  const nearBottom = container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+  const scrollPosition = captureAiScrollPosition(container);
   const pct = state.total > 0 ? Math.round(state.done / state.total * 100) : null;
-  const label = state.stage === 'request'
+  const label = state.stage === 'library'
+    ? `正在读取文件库 PDF 页面图片（第 ${state.startPage}${state.endPage === state.startPage ? '' : `–${state.endPage}`} 页）`
+    : state.stage === 'request'
     ? '正在发送 PDF 消息，等待 AI 响应…'
     : `${state.mode === 'image' ? '正在准备 PDF 页面图片' : (state.mode === 'text' ? '正在提取 PDF 文字' : '正在上传并解析 PDF')}（${state.index}/${state.count}）`;
   const html = `<div id="aiPdfSendProgress" class="ai-chat-msg assistant">
@@ -22,13 +24,13 @@ function renderAiPdfSendProgress() {
     <div class="ai-chat-bubble" style="min-width:220px;max-width:100%;box-sizing:border-box;">
       <div role="status" aria-live="polite">${escapeHtml(label)}</div>
       <div style="font-size:12px;opacity:.7;overflow-wrap:anywhere;margin:6px 0;">${escapeHtml(state.name)}${pct === null ? '' : ` · ${state.done}/${state.total} 页 · ${pct}%`}</div>
-      <progress aria-label="PDF 发送进度" max="100"${pct === null || state.stage === 'request' ? '' : ` value="${pct}"`} style="display:block;width:100%;height:8px;accent-color:var(--primary);"></progress>
+      <progress aria-label="${state.stage === 'library' ? 'PDF 页面读取进度' : 'PDF 发送进度'}" max="100"${pct === null || state.stage === 'request' ? '' : ` value="${pct}"`} style="display:block;width:100%;height:8px;accent-color:var(--primary);"></progress>
       <div style="font-size:12px;opacity:.7;margin-top:6px;">可点击停止取消</div>
     </div>
   </div>`;
   if (existing) existing.outerHTML = html;
   else container.insertAdjacentHTML('beforeend', html);
-  if (nearBottom) container.scrollTop = container.scrollHeight;
+  restoreAiScrollPosition(scrollPosition, container);
 }
 
 function setAiPdfSendProgress(convId, state) {
@@ -197,11 +199,14 @@ async function drainAiSendQueue(convId) {
 
 async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, includeComposer = true) {
   // 附件在消息里的展示信息（displayUrl 在下面处理附件时补上：可能是 Files API 的小缩略图）
-  const displayAttachments = [];
-  for (const a of currentAttachments) {
-    const original = await retainAiAttachmentFile(a, conv.id);
-    displayAttachments.push({ name: a.name, size: a.size, displayUrl: a.dataUrl || '', promptLength: 0, ...original });
-  }
+  const displayAttachments = currentAttachments.map(a => ({
+    name: a.name, size: a.size, displayUrl: a.dataUrl || '', promptLength: 0
+  }));
+  // Preserve originals while conversion/upload runs. Waiting for each complete
+  // disk write before starting conversion made large PDFs pay both costs in series.
+  const retained = Promise.all(currentAttachments.map(async (a, index) => {
+    Object.assign(displayAttachments[index], await retainAiAttachmentFile(a, conv.id));
+  }));
 
   // Process attachments: Kimi uses its file API; other models use local PDF conversion or text/image input.
   let docTexts = '';
@@ -236,15 +241,15 @@ async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, inc
       const hasPdfRange = isPdfFile(a.file) && (Number(a.pdfStartPage) > 0 || Number(a.pdfEndPage) > 0);
       if ((!isKimi || hasPdfRange) && isPdfFile(a.file)) {
         const pdfRange = { startPage: a.pdfStartPage, endPage: a.pdfEndPage };
-        // 进度/取消只在"页面图片"模式下有意义：逐页渲染是主线程重活（密集教材实测约 0.3–0.6 秒/页）。
+        // Both extraction and page rendering can take time on large PDFs.
         const pdfRenderOpts = {
           onPage: info => {
-            if (a && typeof a === 'object') {
+            if (a && a.pdfMode === 'image') {
               a._pdfRender = { rendering: true, done: info.done, total: info.total };
             }
             setAiPdfSendProgress(conv.id, {
               name: a.name, index: pdfIndex, count: pdfAttachments.length,
-              mode: 'image', stage: 'prepare', done: info.done, total: info.total
+              mode: a.pdfMode === 'image' ? 'image' : 'text', stage: 'prepare', done: info.done, total: info.total
             });
           },
           isAborted: () => isAiStopRequested(conv.id)
@@ -275,8 +280,9 @@ async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, inc
           }
           display.displayUrl = a.dataUrl;
         } else {
-          const extracted = await extractPdfAttachmentText(a.file, pdfRange);
+          const extracted = await extractPdfAttachmentText(a.file, Object.assign({}, pdfRange, pdfRenderOpts));
           a.pdfInfo = extracted;
+          if (extracted.aborted) continue;
           let content = extracted.text;
           if (!content) {
             content = '[未检测到可提取的文字层；这可能是扫描版 PDF。请切换到“页面图片”模式并使用支持看图的模型。]';
@@ -364,16 +370,10 @@ async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, inc
             if (!dataUrls) {
               // 附件是在切到视觉模型前添加的（那时没预处理）→ 现场补一次，仍失败则退回原文件
               try {
-                const split = await splitTallImageForApi(a.file);
-                if (split) {
-                  dataUrls = split.dataUrls;
-                  a.imageInfo = split.info;
-                } else {
-                  const processed = await downscaleImageForApi(a.file);
-                  dataUrls = [processed.dataUrl];
-                  a.file = processed.file;
-                  a.imageInfo = processed.info;
-                }
+                const processed = await normalizeAiImageForApi(a.file);
+                dataUrls = processed.dataUrls || [processed.dataUrl];
+                if (processed.file) a.file = processed.file;
+                a.imageInfo = processed.info;
               } catch (e) {
                 dataUrls = [await readFileAsDataURL(a.file)];
               }
@@ -431,6 +431,10 @@ async function prepareAiMessageAttachments(currentAttachments, apiCfg, conv, inc
     }
   }
 
+  await retained;
+  for (const vf of visionFiles) {
+    vf.originalFileId = currentAttachments[vf.attachmentIndex].originalFileId || null;
+  }
   if (pdfAttachments.length > 0) {
     if (isAiStopRequested(conv.id)) setAiPdfSendProgress(conv.id, null);
     else setAiPdfSendProgress(conv.id, {

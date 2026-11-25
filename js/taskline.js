@@ -2106,16 +2106,16 @@ function tlEditQuestForm(id) {
   title.innerHTML = '<i data-lucide="pencil" class="lucide-icon" style="width:16px;height:16px;vertical-align:middle;"></i> 编辑任务';
   const depOptions = tlRenderDepOptions(q.id);
   body.innerHTML = `
-    <div style="display:flex;flex-direction:column;gap:10px;min-width:360px;">
+    <div id="tlQuestEditForm" data-quest-id="${q.id}" style="display:flex;flex-direction:column;gap:10px;min-width:360px;">
       <label class="settings-label" style="margin:0;">任务类型</label>
-      <select id="tlQuestKind" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);">
+      <select id="tlQuestKind" onchange="tlSaveQuestEdit(${q.id})" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);">
         <option value="main" ${q.kind === 'main' ? 'selected' : ''}>主线关键任务（金色框，章节里程碑）</option>
         <option value="side" ${q.kind !== 'main' ? 'selected' : ''}>支线任务（普通框）</option>
       </select>
       <label class="settings-label" style="margin:0;">任务标题 *</label>
-      <input type="text" id="tlQuestTitle" value="${escapeHtml(q.title)}" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);">
+      <input type="text" id="tlQuestTitle" value="${escapeHtml(q.title)}" oninput="tlSaveQuestEdit(${q.id})" aria-describedby="tlQuestSaveStatus" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);">
       <label class="settings-label" style="margin:0;">任务描述（一段文字，说明目标、意义与产出）</label>
-      <textarea id="tlQuestDesc" rows="5" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);resize:vertical;line-height:1.6;">${escapeHtml(q.desc || '')}</textarea>
+      <textarea id="tlQuestDesc" rows="5" oninput="tlSaveQuestEdit(${q.id})" style="padding:8px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);resize:vertical;line-height:1.6;">${escapeHtml(q.desc || '')}</textarea>
       <div class="tl-ai-gen-row">
         <input type="text" id="tlQuestAiHint" placeholder="可选：告诉 AI 生成方向，如「突出刷材料的步骤」" style="padding:6px 10px;border-radius:8px;border:1px solid var(--border, #ddd);background:var(--input-bg, transparent);color:var(--text);font-size:12px;flex:1;min-width:0;">
         <button class="btn-add tl-edit-cond-btn" id="tlAiGenBtn" onclick="tlAiGenerateDesc(${q.id})" title="把任务标题、章节、前置/下游任务、完成条件发给 AI，按 GTNH 风格生成一段介绍并回填"><i data-lucide="sparkles" class="lucide-icon" style="width:13px;height:13px;"></i>AI 生成介绍</button>
@@ -2162,31 +2162,48 @@ function tlEditQuestForm(id) {
           <button class="btn-add tl-edit-cond-btn" onclick="tlAddCond(${q.id})"><i data-lucide="plus" class="lucide-icon" style="width:12px;height:12px;"></i>添加</button>
         </div>
       </div>
-      <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:6px;">
-        <button class="notes-undo-btn" onclick="closeEditModal()">取消</button>
-        <button class="btn-add" onclick="tlSubmitEditQuest(${q.id})"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;"></i>保存</button>
+      <div style="display:flex;gap:8px;align-items:center;justify-content:flex-end;margin-top:6px;">
+        <span id="tlQuestSaveStatus" role="status" style="font-size:12px;color:var(--text-secondary);margin-right:auto;">修改即刻生效</span>
+        <button class="btn-add" onclick="tlSubmitEditQuest(${q.id})"><i data-lucide="check" class="lucide-icon" style="width:14px;height:14px;"></i>完成</button>
       </div>
     </div>`;
   document.getElementById('editModal').classList.add('open');
   setTimeout(function () { tlRenderCondFields('todo'); }, 0);
   if (typeof lucide !== 'undefined') setTimeout(function () { lucide.createIcons(); }, 0);
 }
+// 只保存数据并重绘背景画布，保留编辑表单、输入焦点与光标位置。
+function tlSaveQuestEdit(id) {
+  const form = document.getElementById('tlQuestEditForm');
+  if (!form || form.dataset.questId !== String(id)) return false;
+  const titleEl = document.getElementById('tlQuestTitle');
+  const title = titleEl.value.trim();
+  titleEl.setAttribute('aria-invalid', String(!title));
+  const patch = {
+    kind: document.getElementById('tlQuestKind').value,
+    desc: document.getElementById('tlQuestDesc').value
+  };
+  // 清空标题重新输入时保留最近的有效标题；其他字段仍然即时保存。
+  if (title) patch.title = title;
+  const q = tlGetQuest(id);
+  const changed = q && Object.keys(patch).some(key => q[key] !== patch[key]);
+  const saved = !!q && (!changed || !!tlUpdateQuest(id, patch));
+  const status = document.getElementById('tlQuestSaveStatus');
+  if (status) {
+    status.textContent = !saved ? '保存失败，请重试'
+      : !title ? '任务标题不能为空，已保留原有标题' : '修改已保存，即刻生效';
+    status.style.color = !saved || !title ? 'var(--danger)' : 'var(--text-secondary)';
+  }
+  if (saved && changed) renderTaskLine();
+  return saved && !!title;
+}
 function tlSubmitEditQuest(id) {
-  const title = document.getElementById('tlQuestTitle').value.trim();
-  if (!title) { showCustomConfirm('任务标题不能为空'); return; }
-  const kindEl = document.getElementById('tlQuestKind');
-  tlUpdateQuest(id, {
-    title,
-    kind: kindEl ? kindEl.value : undefined,
-    desc: document.getElementById('tlQuestDesc').value.trim()
-  });
+  if (!tlSaveQuestEdit(id)) return;
   closeEditModal();
-  renderTaskLine();
 }
 
 // ─────────────────────── AI 生成任务介绍 ───────────────────────
 // 收集任务上下文（任务本体 + 增强上下文 + 前置/下游任务 + 风格约束），
-// 发给当前 AI 对话，把回复回填到描述 textarea（不直接保存，用户可再改）。
+// 独立调用 AI，把回复回填到描述 textarea 并即时保存，用户可继续修改。
 const TL_AI_STYLE = `像通关过的老玩家坐在旁边教你——第二人称「你」的向导口吻，短句+感叹号，轻松俏皮不端着。结构四段式：①钩子开场（"是时候...了"/"什么...?"/"你可能已经注意到..."）；②怎么做（具体路径，结合完成条件给出，不抄清单）；③意义/价值（"你将会..."，为什么重要，结合下游任务）；④收尾激励（"作为奖励..."/"祝你好运"）。禁止说明书腔（第一步/第二步）、学术腔（综上所述）、空洞口号（努力吧）和网络烂梗。内容可以硬核，语气永远轻松。`;
 // 构造发给 AI 的指令 prompt
 function tlBuildQuestDescPrompt(questId) {
@@ -2251,6 +2268,7 @@ async function tlAiGenerateDesc(questId) {
   const apiCfg = getEffectiveApiConfig();
   if (!apiCfg.apiKey) { openSettingsModal(); return; }
   const btn = document.getElementById('tlAiGenBtn');
+  const descEl = document.getElementById('tlQuestDesc');
   if (btn) {
     btn.disabled = true;
     btn.innerHTML = '<i data-lucide="loader" class="lucide-icon" style="width:13px;height:13px;"></i>生成中…';
@@ -2276,9 +2294,10 @@ async function tlAiGenerateDesc(questId) {
         .replace(/^```[\s\S]*?\n/, '')
         .replace(/\n```$/, '')
         .trim();
-      const descEl = document.getElementById('tlQuestDesc');
-      if (descEl) {
+      // 只回填发起生成时的编辑框，避免关闭或切换任务后覆盖其他任务。
+      if (descEl && descEl.isConnected && document.getElementById('editModal').classList.contains('open')) {
         descEl.value = text;
+        descEl.dispatchEvent(new Event('input', { bubbles: true }));
         descEl.focus();
       }
     } else {
@@ -2332,6 +2351,7 @@ function tlAddDep(questId) {
   // 依赖改变后刷新解锁状态
   if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(questId);
   tlRenderEditDepList(questId);
+  renderTaskLine();
 }
 // 移除依赖（即时保存，局部刷新）
 function tlRemoveDep(questId, index) {
@@ -2342,8 +2362,9 @@ function tlRemoveDep(questId, index) {
   if (!saveTaskLineStore(store)) return { ok: false, msg: '任务状态保存失败' };
   if (typeof tlRefreshQuestStatus === 'function') tlRefreshQuestStatus(questId);
   tlRenderEditDepList(questId);
+  renderTaskLine();
 }
-// 局部刷新依赖列表 + 选择器（不重开表单，避免丢失未保存的标题/描述）
+// 局部刷新依赖列表 + 选择器，保留当前输入状态。
 function tlRenderEditDepList(questId) {
   const listEl = document.getElementById('tlEditDepList');
   const selEl = document.getElementById('tlDepSel');
@@ -2430,9 +2451,10 @@ function tlAddCond(questId) {
   if (!q) return;
   q.conditions = q.conditions || [];
   q.conditions.push(cond);
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return;
   tlRenderEditCondList(questId);
   tlRenderCondFields(type);
+  renderTaskLine();
 }
 // 移除条件（即时保存，局部刷新）
 function tlRemoveCond(questId, index) {
@@ -2440,10 +2462,11 @@ function tlRemoveCond(questId, index) {
   const q = store.quests.find(x => x.id === questId);
   if (!q) return;
   q.conditions.splice(index, 1);
-  saveTaskLineStore(store);
+  if (!saveTaskLineStore(store)) return;
   tlRenderEditCondList(questId);
+  renderTaskLine();
 }
-// 局部刷新条件列表（不重开表单，避免丢失未保存的标题/描述）
+// 局部刷新条件列表，保留当前输入状态。
 function tlRenderEditCondList(questId) {
   const el = document.getElementById('tlEditCondList');
   if (!el) return;

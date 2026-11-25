@@ -37,9 +37,21 @@ function loadTrash(module) {
   try { return JSON.parse(localStorage.getItem(TRASH_KEYS[module])) || []; } catch { return []; }
 }
 
+function serializeTrash(module, data) {
+  // A tree already owns every message, including images/PDF pages. Keeping
+  // its active-path cache too doubled the largest part of each deleted chat.
+  const persisted = module === 'ai' && typeof recomputeMessages === 'function'
+    ? data.map(conv => {
+      if (!conv?.tree || !Array.isArray(conv.activePath)) return conv;
+      const { messages, ...stored } = conv;
+      return stored;
+    }) : data;
+  return JSON.stringify(persisted);
+}
+
 function saveTrash(module, data) {
   try {
-    const raw = JSON.stringify(data);
+    const raw = serializeTrash(module, data);
     localStorage.setItem(TRASH_KEYS[module], raw);
     return localStorage.getItem(TRASH_KEYS[module]) === raw;
   } catch (e) { console.error('saveTrash error:', e); return false; }
@@ -248,6 +260,7 @@ function restoreAiConvFromTrash(id) {
     return;
   }
   const { deletedAt, _trashAutomations, _trashDraft, ...conv } = stored;
+  if (conv.tree && Array.isArray(conv.activePath) && typeof recomputeMessages === 'function') recomputeMessages(conv);
   aiConvs.push(conv);
   safeSaveAiConvs();
   try {

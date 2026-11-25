@@ -241,21 +241,30 @@ input:focus-visible, textarea:focus-visible, select:focus-visible {
 .today-focus-count, .today-review-count, .today-streak { font-size: 10px; padding: 3px 8px; border-radius: 6px; }
 .today-focus-item, .today-goal-item { border-radius: 9px; }
 .today-goal-item { flex-direction: column; align-items: stretch; gap: 4px; }
+.today-goal-node { min-width: 0; margin-inline-start: var(--goal-indent, 0px); }
+.today-goal-node[data-goal-depth]:not([data-goal-depth="0"]) { border-inline-start: 2px solid var(--border); padding-inline-start: 6px; }
 .today-goal-main { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; min-width: 0; }
 .today-goal-body { flex: 1; min-width: 70px; overflow-wrap: anywhere; }
-.goal-note-edit { display: flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 3px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--primary); cursor: pointer; }
-.goal-note-edit .lucide-icon { width: 12px; height: 12px; }
-.goal-note-edit:hover { background: var(--accent-soft); border-color: var(--primary); }
-.goal-note-edit:focus-visible, .today-goal-note-row:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.today-goal-actions { display: flex; align-items: center; gap: 5px; flex-shrink: 0; }
+.today-goal-expand, .today-goal-expand-spacer { width: 16px; flex-shrink: 0; }
+.today-goal-expand { border: 0; padding: 3px 0; background: transparent; color: var(--text-secondary); font-size: 10px; cursor: pointer; }
+.today-goal-check { padding: 0; }
+.goal-note-edit, .goal-add-child { display: flex; align-items: center; justify-content: center; width: 26px; height: 24px; padding: 3px; flex-shrink: 0; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--primary); cursor: pointer; }
+.goal-note-edit .lucide-icon, .goal-add-child .lucide-icon { width: 12px; height: 12px; }
+.goal-note-edit:hover, .goal-add-child:hover { background: var(--accent-soft); border-color: var(--primary); }
+.today-goal-item button:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.today-goal-sub-input { margin-top: 6px; flex-wrap: wrap; }
+.today-goal-sub-input input { min-width: 80px; width: 80px; }
 .today-goal-main :is(.todo-edit, .todo-delete) { opacity: 1; }
 @media (max-width: 600px) {
-  .today-goal-main { display: grid; grid-template-columns: 20px minmax(0, 1fr) repeat(3, 24px); align-items: start; }
-  .today-goal-check { grid-column: 1; grid-row: 1; margin-top: 2px; }
-  .today-goal-body { grid-column: 2; grid-row: 1; min-width: 0; }
-  .today-goal-main .goal-note-edit { grid-column: 3; grid-row: 1; }
-  .today-goal-main .todo-edit { grid-column: 4; grid-row: 1; }
-  .today-goal-main .todo-delete { grid-column: 5; grid-row: 1; }
-  .today-goal-main :is(.today-goal-due, .today-goal-timer) { grid-column: 2 / -1; }
+  .today-goal-node { margin-inline-start: var(--goal-mobile-indent, 0px); }
+  .today-goal-item { padding: 10px; }
+  .today-goal-main { display: grid; grid-template-columns: 16px 20px minmax(0, 1fr); align-items: start; gap: 6px; }
+  .today-goal-expand, .today-goal-expand-spacer { grid-column: 1; grid-row: 1; margin-top: 2px; }
+  .today-goal-check { grid-column: 2; grid-row: 1; margin-top: 2px; }
+  .today-goal-body { grid-column: 3; grid-row: 1; min-width: 0; }
+  .today-goal-actions { grid-column: 2 / -1; justify-self: end; }
+  .today-goal-main :is(.today-goal-due, .today-goal-timer) { grid-column: 3; }
 }
 
 /* 宽屏也使用自动隐藏抽屉，显隐统一由 .sidebar.open 控制。 */

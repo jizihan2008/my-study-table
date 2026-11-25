@@ -1196,6 +1196,7 @@ async function runToolCallLoop(apiCfg, conv, onIntermediate, onStreamDelta) {
         code: resultObject.code || (resultObject.ok ? 'OK' : 'TOOL_ERROR'),
         changed: resultObject.changed === true,
         affectedNotes: resultObject.data?.affectedNotes || [],
+        ...(tc.action === 'send_screenshot' && resultObject.ok ? { screenshotId: resultObject.data?.screenshotId } : {}),
         durationMs: resultObject.durationMs || 0, error: resultObject.error || null
       };
       if (!readOnly && !roundOutcomes[index].ok) roundWriteFailed = true;

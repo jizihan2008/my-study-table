@@ -44,14 +44,22 @@
   let closeImageEditor = null;
   let pendingFoldTitle = null;
   let composingFoldTitle = null;
+  let compositionFrame = null;
+  let compositionTimer = null;
+  let blockObserver = null;
+  const markdownByBlock = new WeakMap();
   const tableActions = { 'row-before': '上方插入行', 'row-after': '下方插入行',
     'column-before': '左侧插入列', 'column-after': '右侧插入列',
     'delete-row': '删除行', 'delete-column': '删除列' };
 
   const blockTags = new Set(['P', 'DIV', 'H1', 'H2', 'H3', 'H4', 'H5', 'H6', 'UL', 'OL', 'PRE', 'BLOCKQUOTE', 'TABLE', 'HR', 'DETAILS']);
+  const formattingAliases = { B: 'strong', I: 'em', S: 'del', STRIKE: 'del' };
 
   function escapeInline(text) {
-    return String(text || '').replace(/\u200b/g, '').replace(/([\\`*_[\]$])/g, '\\$1');
+    // Backslash-escaped brackets are also TeX display delimiters (\[...\]).
+    // Entities preserve literal brackets without creating math or Markdown links.
+    return String(text || '').replace(/\u200b/g, '').replace(/([\\`*_$])/g, '\\$1')
+      .replace(/\[/g, '&#91;').replace(/\]/g, '&#93;');
   }
 
   function extractFootnotes(markdown) {
@@ -104,6 +112,20 @@
       .trim();
   }
 
+  function getImageLayout(image) {
+    if (!image.dataset.noteWidth && !image.dataset.noteAlign) return null;
+    const width = Math.max(5, Math.min(100, Number(image.dataset.noteWidth) || 100));
+    const align = ['left', 'center', 'right'].includes(image.dataset.noteAlign) ? image.dataset.noteAlign : 'center';
+    return { width, align };
+  }
+
+  function applyImageLayout(image, width, align) {
+    const percentage = width + '%';
+    image.style.setProperty('--note-image-width', percentage);
+    Object.assign(image.style, { display: 'block', width: percentage, height: 'auto',
+      marginLeft: align === 'left' ? '0' : 'auto', marginRight: align === 'right' ? '0' : 'auto' });
+  }
+
   function normalizeRenderedDom(container) {
     container.querySelectorAll('pre code').forEach(code => {
       const languageClass = Array.from(code.classList).find(name => name.startsWith('language-')) || '';
@@ -148,6 +170,7 @@
   }
 
   function setMarkdown(markdown, noteId) {
+    flushPendingComposition();
     renderRevision++;
     closeMathEditor?.(false);
     closeImageEditor?.();
@@ -231,9 +254,9 @@
     }
     if (tag === 'img') {
       const src = node.getAttribute('src') || '';
-      if (src && (node.dataset.noteWidth || node.dataset.noteAlign)) {
-        const width = Math.max(5, Math.min(100, Number(node.dataset.noteWidth) || 100));
-        const align = ['left', 'center', 'right'].includes(node.dataset.noteAlign) ? node.dataset.noteAlign : 'center';
+      const layout = getImageLayout(node);
+      if (src && layout) {
+        const { width, align } = layout;
         return '![' + escapeInline(node.getAttribute('alt') || '') + '](' + src + ' "mst-image:' + width + ':' + align + '")';
       }
       return src ? '![' + (node.getAttribute('alt') || '') + '](' + src + ')' : '';
@@ -316,7 +339,12 @@
     return output.join('\n');
   }
 
-  function serializeBlocks(nodes) {
+  function isMarkdownBlock(node) {
+    return node.nodeType === Node.ELEMENT_NODE && (blockTags.has(node.tagName)
+      || node.matches('.markdown-math-display, .katex-display, .footnotes'));
+  }
+
+  function serializeBlocks(nodes, serializeBlock = block) {
     const chunks = [];
     let run = '';
     const flush = () => {
@@ -324,11 +352,9 @@
       run = '';
     };
     Array.from(nodes).forEach(node => {
-      const isBlock = node.nodeType === Node.ELEMENT_NODE && (blockTags.has(node.tagName)
-        || node.matches('.markdown-math-display, .katex-display, .footnotes'));
-      if (isBlock) {
+      if (isMarkdownBlock(node)) {
         flush();
-        const value = block(node);
+        const value = serializeBlock(node);
         if (value) chunks.push(value);
       } else run += inline(node);
     });
@@ -461,37 +487,72 @@
     }
   }
 
+  function mergeFormatting(container) {
+    Array.from(container.children).forEach(child => {
+      const tag = formattingAliases[child.tagName];
+      if (tag) {
+        const replacement = document.createElement(tag);
+        while (child.firstChild) replacement.appendChild(child.firstChild);
+        child.replaceWith(replacement);
+        child = replacement;
+      }
+      mergeFormatting(child);
+    });
+    for (let child = container.firstChild; child; child = child.nextSibling) {
+      if (!child.matches?.('strong, em, del')) continue;
+      // **one****two** has ambiguous delimiters; serialize one formatted run.
+      while (child.nextSibling?.nodeName === child.nodeName) {
+        const next = child.nextSibling;
+        while (next.firstChild) child.appendChild(next.firstChild);
+        next.remove();
+      }
+    }
+  }
+
   function serializeContent(node) {
     const source = node.cloneNode(true);
-    const mergeFormatting = container => {
-      const aliases = { B: 'strong', I: 'em', S: 'del', STRIKE: 'del' };
-      Array.from(container.children).forEach(child => {
-        const tag = aliases[child.tagName];
-        if (tag) {
-          const replacement = document.createElement(tag);
-          while (child.firstChild) replacement.appendChild(child.firstChild);
-          child.replaceWith(replacement);
-          child = replacement;
-        }
-        mergeFormatting(child);
-      });
-      for (let child = container.firstChild; child; child = child.nextSibling) {
-        if (!child.matches?.('strong, em, del')) continue;
-        // **one****two** has ambiguous delimiters; serialize one formatted run.
-        while (child.nextSibling?.nodeName === child.nodeName) {
-          const next = child.nextSibling;
-          while (next.firstChild) child.appendChild(next.firstChild);
-          next.remove();
-        }
-      }
-    };
     mergeFormatting(source);
     return source.matches('details.note-fold') ? block(source) : serializeBlocks(source.childNodes).trim();
   }
 
+  function invalidateMarkdownBlock(node) {
+    while (node && node !== host && node.parentNode !== host) node = node.parentNode;
+    if (node?.parentNode === host) markdownByBlock.delete(node);
+  }
+
+  function invalidateMarkdownBlocks(records) {
+    for (const record of records) {
+      invalidateMarkdownBlock(record.target);
+      // A block can move out of the editor, be edited, and be inserted again.
+      if (record.target === host && record.type === 'childList') {
+        record.addedNodes.forEach(node => markdownByBlock.delete(node));
+      }
+    }
+  }
+
+  function serializeEditor() {
+    if (!blockObserver) return serializeContent(host);
+    // Native input can notify us before the observer's callback runs.
+    invalidateMarkdownBlocks(blockObserver.takeRecords());
+    const nodes = Array.from(host.childNodes);
+    // Inline elements at the root may need formatting merged across siblings.
+    if (nodes.some(node => node.nodeType === Node.ELEMENT_NODE && !isMarkdownBlock(node))) {
+      return serializeContent(host);
+    }
+    return serializeBlocks(nodes, node => {
+      if (!markdownByBlock.has(node)) {
+        const clone = node.cloneNode(true);
+        mergeFormatting(clone);
+        markdownByBlock.set(node, block(clone));
+      }
+      return markdownByBlock.get(node);
+    }).trim();
+  }
+
   function getMarkdown() {
+    if (flushPendingComposition()) return currentMarkdown;
     if (!host) return currentMarkdown;
-    let markdown = serializeContent(host);
+    let markdown = serializeEditor();
     if (footnoteDefinitions) markdown += (markdown ? '\n\n' : '') + footnoteDefinitions;
     currentMarkdown = markdown;
     return markdown;
@@ -505,18 +566,66 @@
         .replace(/\s+/g, '-').replace(/[^\p{Letter}\p{Number}\-_:.一-鿿]/gu, '').replace(/-+/g, '-') || 'section';
       const count = counts[base] || 0;
       counts[base] = count + 1;
-      heading.id = count ? base + '-' + count : base;
+      const id = count ? base + '-' + count : base;
+      if (heading.id !== id) heading.id = id;
     });
   }
 
   function notifyChange(change = {}) {
     if (syncing) return;
+    if (compositionTimer !== null) cancelPendingComposition();
     assignHeadingIds();
     const previous = currentMarkdown;
     const markdown = getMarkdown();
     if (typeof root.captureNoteFoldStates === 'function') root.captureNoteFoldStates(host, currentNoteId, false);
     if (typeof options.onChange === 'function') options.onChange(markdown, previous, currentNoteId, change);
     else if (typeof root.onRichNotesChange === 'function') root.onRichNotesChange(markdown, previous, change);
+  }
+
+  function cancelPendingComposition() {
+    if (compositionFrame !== null) cancelAnimationFrame(compositionFrame);
+    clearTimeout(compositionTimer);
+    compositionFrame = null;
+    compositionTimer = null;
+  }
+
+  function flushPendingComposition() {
+    if (compositionTimer === null) return false;
+    notifyChange({ deferPreview: true });
+    updateToolbarState();
+    return true;
+  }
+
+  function scheduleCompositionChange() {
+    if (compositionTimer !== null) return;
+    // Let the committed text paint before serializing it. The timer also
+    // publishes the edit if the window is occluded and frames are throttled.
+    compositionTimer = setTimeout(flushPendingComposition, 80);
+    compositionFrame = requestAnimationFrame(() => {
+      compositionFrame = null;
+      clearTimeout(compositionTimer);
+      compositionTimer = setTimeout(flushPendingComposition, 0);
+    });
+  }
+
+  function deleteImage(image) {
+    if (!image?.matches('img') || !host?.contains(image) || !image.parentElement.isContentEditable) return;
+    const range = document.createRange();
+    range.setStartBefore(image);
+    range.collapse(true);
+    image.remove();
+
+    // Remove an empty image link or paragraph without leaving extra Markdown behind.
+    let parent = range.startContainer;
+    while (parent !== host && parent.matches('a, strong, b, em, i, del, s, strike, p')
+      && !parent.children.length && !parent.textContent.replace(/\u200b/g, '').trim()) {
+      parent.remove();
+      parent = range.startContainer;
+    }
+    if (!parent.hasChildNodes()) parent.appendChild(document.createElement('br'));
+    host.focus({ preventScroll: true });
+    restoreRange(range);
+    notifyChange({ historyBoundary: true });
   }
 
   function editImage(image) {
@@ -657,9 +766,7 @@
         image.src = nextSource;
         image.dataset.noteWidth = width.value;
         image.dataset.noteAlign = align.value;
-        image.style.setProperty('--note-image-width', width.value + '%');
-        Object.assign(image.style, { display: 'block', width: width.value + '%', height: 'auto',
-          marginLeft: align.value === 'left' ? '0' : 'auto', marginRight: align.value === 'right' ? '0' : 'auto' });
+        applyImageLayout(image, width.value, align.value);
         notifyChange({ historyBoundary: true });
         close();
       } catch (failure) {
@@ -861,6 +968,7 @@
 
   async function command(type) {
     if (!host) return;
+    flushPendingComposition();
     const selection = window.getSelection();
     const savedRange = selection && selection.rangeCount && host.contains(selection.anchorNode) ? selection.getRangeAt(0).cloneRange() : null;
     host.focus({ preventScroll: true });
@@ -1294,6 +1402,7 @@
   }
 
   function handlePaste(event) {
+    flushPendingComposition();
     event.preventDefault();
     const selection = window.getSelection();
     const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
@@ -1369,16 +1478,22 @@
         });
         node.removeAttribute('style');
       });
+      container.querySelectorAll('img[data-note-width], img[data-note-align]').forEach(image => {
+        const layout = getImageLayout(image);
+        if (layout) applyImageLayout(image, layout.width, layout.align);
+      });
       normalizeRenderedDom(container);
-      const fold = container.firstElementChild;
-      if (!titleRange && fold?.matches('details.note-fold') && container.childElementCount === 1
-          && container.textContent.trim() === fold.textContent.trim() && range && host.contains(range.commonAncestorContainer)) {
-        // Chromium can discard a closed fold's hidden body when insertHTML
-        // pastes into a paragraph. Insert the sanitized block at the DOM boundary.
+      if (!titleRange && container.querySelector('details.note-fold')
+          && range && host.contains(range.commonAncestorContainer)) {
+        // Native insertHTML can discard hidden bodies, including nested folds
+        // and folds wrapped by the system clipboard. Insert sanitized DOM intact.
+        const fragment = document.createDocumentFragment();
+        while (container.firstChild) fragment.appendChild(container.firstChild);
+        const last = fragment.lastChild;
         range.deleteContents();
         moveBlockInsertionOutsideParagraph(range);
-        range.insertNode(fold);
-        range.setStartAfter(fold);
+        range.insertNode(fragment);
+        range.setStartAfter(last);
         range.collapse(true);
         restoreRange(range);
         notifyChange({ historyBoundary: true });
@@ -1825,23 +1940,29 @@
     host = document.getElementById(options.hostId || 'notesRichEditor');
     if (!host || host.dataset.ready === 'true') return;
     host.dataset.ready = 'true';
+    blockObserver = new MutationObserver(invalidateMarkdownBlocks);
+    blockObserver.observe(host, { subtree: true, childList: true, characterData: true, attributes: true });
     host.addEventListener('input', event => {
       repairFoldTitle(pendingFoldTitle || composingFoldTitle || captureFoldTitle(), event.isComposing);
       pendingFoldTitle = null;
-      notifyChange(event);
+      if (!event.isComposing && compositionTimer === null) notifyChange(event);
     });
     host.addEventListener('compositionstart', () => {
+      flushPendingComposition();
       composingFoldTitle = captureFoldTitle();
       if (composingFoldTitle) stabilizeFoldTitleComposition();
     });
     host.addEventListener('compositionend', () => {
-      if (!composingFoldTitle) return;
-      repairFoldTitle(composingFoldTitle);
+      if (composingFoldTitle) repairFoldTitle(composingFoldTitle);
       composingFoldTitle = null;
-      notifyChange();
+      scheduleCompositionChange();
     });
+    host.addEventListener('blur', flushPendingComposition);
     host.addEventListener('change', event => {
-      if (event.target.matches('input[type="checkbox"]')) notifyChange();
+      if (event.target.matches('input[type="checkbox"]')) {
+        invalidateMarkdownBlock(event.target);
+        notifyChange();
+      }
     });
     host.addEventListener('paste', handlePaste);
     host.addEventListener('click', event => {
@@ -1967,7 +2088,9 @@
       const link = event.target.closest('a');
       if (link && !event.ctrlKey && !event.metaKey) event.preventDefault();
     });
-    host.addEventListener('keyup', updateToolbarState);
+    host.addEventListener('keyup', event => {
+      if (!event.isComposing && event.keyCode !== 229 && compositionTimer === null) updateToolbarState();
+    });
     host.addEventListener('mouseup', updateToolbarState);
     host.addEventListener('keydown', event => {
       foldTouchClick = null;
@@ -2019,9 +2142,11 @@
     init,
     setMarkdown,
     getMarkdown,
+    flushPendingComposition,
     command,
     focusHistoryChange,
     getFoldMarkdown: serializeContent,
+    deleteImage,
     deleteFold,
     unwrapFold,
     editTable,

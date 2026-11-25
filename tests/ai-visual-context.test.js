@@ -9,7 +9,7 @@ const config = { apiKey: 'fake', model: 'deepseek-flash', baseUrl: 'https://exam
 
 const visionAttachmentTools = ['crop_screenshot', 'find_pdf_screenshot_region', 'list_conversation_files',
   'list_conversation_images', 'list_screenshot_attachments', 'preview_screenshot_source',
-  'read_conversation_file', 'read_conversation_image'];
+  'read_conversation_file', 'read_conversation_image', 'send_screenshot'];
 
 function harness() {
   const values = new Map();
@@ -275,4 +275,42 @@ for (const native of [false, true]) test(`tool loop restores cropped images to t
   assert.deepEqual(Array.from(urls(requests[1])), [png]);
   assert.ok(requests[1].some(message => message.role === (native ? 'tool' : 'system')));
   assert.equal(ctx.getAiConversationVisualResources(conv).length, 2);
+});
+
+
+for (const native of [false, true]) test(`the model receives the crop before choosing to send it (${native ? 'native' : 'tag'} protocol)`, async () => {
+  const ctx = harness();
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '../js/ai-screenshot.js'), 'utf8'), ctx);
+  const conv = { id: 'origin', messages: [], _toolGroups: ['attachment'] };
+  ctx.initTreeOnConv(conv);
+  ctx.appendMessage(conv, { role: 'user', content: '截取教材图表，确认完整后发给我' });
+  const blob = new Blob(['screenshot'], { type: 'image/png' });
+  ctx.readAiScreenshotSource = async () => ({ name: '教材.pdf', pdf: true });
+  ctx.makeAiScreenshot = async () => ({ blob, name: '教材-截图.png', screenshot: { label: '教材第2页', page: 2 } });
+  ctx.retainAiAttachmentFile = async () => ({ originalFileId: 'saved-shot', localOnly: false });
+  ctx.blobToDataUrl = async value => { assert.equal(value, blob); return png; };
+  const cfg = { ...config, contextLimit: 1, baseUrl: native ? 'https://api.deepseek.com/v1' : config.baseUrl };
+  const requests = [];
+  ctx.callAiApi = async messages => {
+    requests.push(messages);
+    const calls = requests.length === 1 ? [{ action: 'crop_screenshot', params: {
+      sourceId: 'attachment_question_0', pdfPage: 2, rect: { left: 0.1, top: 0.2, right: 0.8, bottom: 0.9 }
+    }, ...(native ? { native: true, callId: 'crop-call' } : {}) }] : requests.length === 2 ? [
+      { action: 'send_screenshot', params: { screenshotId: 'saved-shot' }, ...(native ? { native: true, callId: 'send-call' } : {}) }
+    ] : [];
+    return { toolCalls: calls, cleanText: '已查看截图', rawReply: '已查看截图', finishReason: 'stop' };
+  };
+  const result = await ctx.runToolCallLoop(cfg, conv);
+  assert.equal(result.finalCleanText, '已查看截图');
+  assert.equal(requests.length, 3);
+  assert.deepEqual(Array.from(urls(requests[1])), [png]);
+  const screenshotMessage = conv.messages.find(message => message.visionFiles?.some(image => image.screenshot));
+  assert.equal(screenshotMessage.visionFiles[0].screenshot.fileId, 'saved-shot');
+  assert.equal(screenshotMessage.visionFiles[0].dataUrl, png);
+  const receipt = conv.messages.find(message => message._toolInfo?.results?.some(text => text.includes('saved-shot')));
+  assert.ok(receipt);
+  assert.equal(receipt.content.includes('base64'), false);
+  assert.equal(receipt._toolInfo.outcomes[0].screenshotId, undefined);
+  const sent = conv.messages.find(message => message._toolInfo?.toolNames === 'send_screenshot');
+  assert.equal(sent._toolInfo.outcomes[0].screenshotId, 'saved-shot');
 });

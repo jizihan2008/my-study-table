@@ -225,7 +225,7 @@ function renderAiContextPicker() {
       <span><i data-lucide="${isNote ? 'notebook-pen' : 'clipboard-list'}" class="lucide-icon" style="width:14px;height:14px;vertical-align:middle;"></i> 选择${isNote ? '笔记' : '待办事项'}</span>
       <button class="todo-picker-close" onclick="closeAiContextPicker()" title="关闭"><i data-lucide="x" class="lucide-icon" style="width:14px;height:14px;"></i></button>
     </div>
-    ${currentNote ? `<button type="button" class="todo-picker-item" style="width:100%;text-align:left;" onclick="insertAiContext('note', ${currentNote.id})" title="${escapeAttr(getAiContextNotePath(currentNote))}"><span class="picker-text">📝 插入当前笔记：${escapeHtml(currentNote.title || '未命名笔记')}</span></button>` : ''}
+    ${currentNote ? `<button type="button" class="todo-picker-item ai-context-current-note" onclick="insertAiContext('note', ${currentNote.id})" title="${escapeAttr(getAiContextNotePath(currentNote))}"><i data-lucide="notebook-pen" class="lucide-icon"></i><span class="ai-context-current-label">插入当前笔记</span><span class="picker-text">${escapeHtml(currentNote.title || '未命名笔记')}</span><i data-lucide="plus" class="lucide-icon"></i></button>` : ''}
     <div class="todo-picker-search">
       <input autofocus placeholder="搜索${isNote ? '笔记' : '待办'}..." value="${escapeAttr(aiContextPickerQuery)}" oninput="updateAiContextPickerQuery(this.value)" onkeydown="if(event.key==='Escape')closeAiContextPicker()">
     </div>
@@ -406,7 +406,7 @@ function shouldUploadImageToFiles(attach, apiCfg = getEffectiveApiConfig()) {
   if (!attach || !attach.file || !isImageFile(attach.file)) return false;
   if (!supportsDeepSeekFilesApi(apiCfg)) return false;
   if (attach.uploadFileId && attach.uploadKeyId === apiCfg.keyId) return false; // 本会话已上传
-  const size = Number(attach.size) || attach.file.size || 0;
+  const size = Number(attach.file.size) || Number(attach.size) || 0;
   if (size > DS_FILES_MAX_BYTES) return false; // 超过 64 MiB 上传也会失败 → 交给内联路径提示
   const mode = getAiImageUploadMode();
   if (mode === 'never') return false;
@@ -562,23 +562,30 @@ function preprocessAiImageAttachment(attach, apiCfg = getEffectiveApiConfig()) {
   if (attach._processPromise) return attach._processPromise;
   attach.imageProcessing = true;
   attach._processPromise = (async () => {
-    attach.imageFingerprint = await fingerprintImageFile(attach.file).catch(() => '');
+    const fingerprint = fingerprintImageFile(attach.file).catch(() => '');
     // 教材扫描、网页截图等极长图片不能整张缩到 2048px 高，否则文字会小到不可读。
     // 将它们切成多个合规图片块；普通图片仍沿用单图缩放路径。
-    const split = await splitTallImageForApi(attach.file);
-    if (split) {
-      attach.dataUrls = split.dataUrls;
-      attach.dataUrl = split.dataUrls[0] || '';
-      attach.imageInfo = split.info;
+    const processed = await normalizeAiImageForApi(attach.file);
+    attach.imageFingerprint = await fingerprint;
+    attach.dataUrls = processed.dataUrls || [processed.dataUrl];
+    attach.dataUrl = attach.dataUrls[0] || '';
+    attach.imageInfo = processed.info;
+    if (processed.dataUrls) {
       attach.imageStrategy = 'inline';
       return attach;
     }
-    const processed = await downscaleImageForApi(attach.file);
     attach.file = processed.file;
-    attach.dataUrl = processed.dataUrl;
-    attach.dataUrls = [processed.dataUrl];
-    attach.imageInfo = processed.info;
     if (shouldUploadImageToFiles(attach, apiCfg)) {
+      // Check before uploading: checking only at send time still uploaded the
+      // same image again even when its existing file_id was ultimately used.
+      const reused = findReusableUploadedImage(attach, apiCfg);
+      if (reused) {
+        attach.uploadFileId = reused.fileId;
+        attach.uploadKeyId = reused.uploadKeyId;
+        attach.imageStrategy = 'file';
+        attach.dataUrl = reused.thumb || attach.dataUrl;
+        return attach;
+      }
       try {
         attach.uploadFileId = await uploadImageToDeepSeek(attach.file, apiCfg);
         attach.uploadKeyId = apiCfg.keyId || '';
@@ -824,8 +831,8 @@ async function readAiConversationVisualResource(resource, conv, apiCfg) {
       if (rendered.aborted || rendered.dataUrls.length !== 1) throw new Error('页面读取已取消或不完整');
       images = [{ type: 'image_url', dataUrl: rendered.dataUrls[0], name: resource.name }];
     } else {
-      const split = await splitTallImageForApi(file);
-      const urls = split ? split.dataUrls : [(await downscaleImageForApi(file)).dataUrl];
+      const processed = await normalizeAiImageForApi(file);
+      const urls = processed.dataUrls || [processed.dataUrl];
       images = urls.map((dataUrl, index) => ({ type: 'image_url', dataUrl,
         name: urls.length > 1 ? `${resource.name}（第 ${index + 1}/${urls.length} 段）` : resource.name }));
     }
@@ -1172,10 +1179,19 @@ async function extractPdfAttachmentText(file, opts = {}) {
   const pages = [];
   let charCount = 0;
   let truncated = false;
+  let aborted = false;
+  const onPage = typeof opts.onPage === 'function' ? opts.onPage : null;
+  const isAborted = typeof opts.isAborted === 'function' ? opts.isAborted : null;
   try {
+    if (onPage) onPage({ done: 0, total: range.selectedPages, pageNo: range.startPage });
     for (let pageNo = range.startPage; pageNo <= range.endPage; pageNo++) {
+      if (isAborted && isAborted()) { aborted = true; break; }
       const page = await pdf.getPage(pageNo);
-      const content = await page.getTextContent();
+      let content;
+      try { content = await page.getTextContent(); }
+      finally { page.cleanup?.(); }
+      if (onPage) onPage({ done: pageNo - range.startPage + 1, total: range.selectedPages, pageNo });
+      if (isAborted && isAborted()) { aborted = true; break; }
       const text = (content.items || [])
         .map(item => item && item.str !== undefined ? item.str : '')
         .join(' ')
@@ -1190,9 +1206,13 @@ async function extractPdfAttachmentText(file, opts = {}) {
       charCount += marker.length + pageText.length;
       if (pageText.length < text.length) { truncated = true; break; }
     }
-    return { text: pages.join('\n\n'), pageCount: pdf.numPages, textPageCount: pages.length, truncated, ...range };
+    return { text: pages.join('\n\n'), pageCount: pdf.numPages, textPageCount: pages.length, truncated, aborted, ...range };
   } finally {
-    try { await pdf.destroy(); } catch (e) {}
+    if (aborted) {
+      try { Promise.resolve(pdf.destroy()).catch(() => {}); } catch (_) {}
+    } else {
+      try { await pdf.destroy(); } catch (e) {}
+    }
   }
 }
 
@@ -1236,6 +1256,7 @@ async function renderPdfAttachmentPages(file, opts = {}) {
       ctx.fillRect(0, 0, canvas.width, canvas.height);
       await page.render({ canvasContext: ctx, viewport }).promise;
       const blob = await canvasToBlob(canvas, 'image/jpeg', PDF_IMAGE_JPEG_QUALITY);
+      page.cleanup?.();
       totalBytes += Number(blob && blob.size) || 0;
       dataUrls.push(await blobToDataUrl(blob));
       pageNumbers.push(pageNo);
@@ -1258,7 +1279,7 @@ async function renderPdfAttachmentPages(file, opts = {}) {
     if (reusedCanvas) { reusedCanvas.width = 1; reusedCanvas.height = 1; }
     if (aborted) {
       // 主动取消时不必等 pdf.js 逐页清理，destroy 可能耗时数百毫秒。
-      try { pdf.destroy(); } catch (e) {}
+      try { Promise.resolve(pdf.destroy()).catch(() => {}); } catch (e) {}
     } else {
       try { await pdf.destroy(); } catch (e) {}
     }
@@ -1530,7 +1551,7 @@ async function splitTallImageForApi(file, opts = {}) {
   let bitmap = null;
   let release = null;
   try {
-    const decoded = await decodeImageBitmap(file);
+    const decoded = opts.decoded || await decodeImageBitmap(file);
     bitmap = decoded.bitmap;
     if (decoded.revoke && bitmap.src) release = () => URL.revokeObjectURL(bitmap.src);
     const width = bitmap.width || bitmap.naturalWidth || 0;
@@ -1582,8 +1603,25 @@ async function splitTallImageForApi(file, opts = {}) {
     // 解码/切片失败时交回普通单图预处理；后者还有原文件 data URL 兜底。
     return null;
   } finally {
-    if (bitmap && typeof bitmap.close === 'function') bitmap.close();
-    if (release) release();
+    if (!opts.decoded) {
+      if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+      if (release) release();
+    }
+  }
+}
+
+// Share one decoded bitmap between the long-image check and normal resizing.
+// Large screenshots used to be decoded in full once for each of these steps.
+async function normalizeAiImageForApi(file) {
+  let decoded;
+  try { decoded = await decodeImageBitmap(file); }
+  catch (_) { return downscaleImageForApi(file); }
+  try {
+    return await splitTallImageForApi(file, { decoded })
+      || await downscaleImageForApi(file, { decoded });
+  } finally {
+    if (typeof decoded.bitmap.close === 'function') decoded.bitmap.close();
+    if (decoded.revoke && decoded.bitmap.src) URL.revokeObjectURL(decoded.bitmap.src);
   }
 }
 
@@ -1597,7 +1635,7 @@ async function downscaleImageForApi(file, opts = {}) {
   let bitmap = null;
   let release = null;
   try {
-    const decoded = await decodeImageBitmap(file);
+    const decoded = opts.decoded || await decodeImageBitmap(file);
     bitmap = decoded.bitmap;
     if (decoded.revoke && bitmap.src) release = () => URL.revokeObjectURL(bitmap.src);
   } catch (err) {
@@ -1611,7 +1649,7 @@ async function downscaleImageForApi(file, opts = {}) {
     // 真实格式优先取魔数，其次 MIME / 扩展名
     let format = null;
     try {
-      const head = new Uint8Array((await readFileAsArrayBuffer(file)).slice(0, 16));
+      const head = new Uint8Array(await readFileAsArrayBuffer(file.slice(0, 16)));
       format = detectImageFormatFromBytes(head);
     } catch (e) { format = null; }
     if (!format) {
@@ -1671,8 +1709,10 @@ async function downscaleImageForApi(file, opts = {}) {
       }
     };
   } finally {
-    if (bitmap && typeof bitmap.close === 'function') bitmap.close();
-    if (release) release();
+    if (!opts.decoded) {
+      if (bitmap && typeof bitmap.close === 'function') bitmap.close();
+      if (release) release();
+    }
   }
 }
 

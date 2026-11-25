@@ -1371,6 +1371,7 @@
     //    若用户正在编辑笔记标题/正文，先保存草稿；刷新后仅恢复原本真正聚焦的编辑区。──
     let editSnap = null;
     try {
+      global.flushPendingNoteComposition?.();
       if (typeof getActiveNote === 'function') {
         const n = getActiveNote();
         const t = document.getElementById('noteTitleInput');

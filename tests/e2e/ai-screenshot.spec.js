@@ -1,10 +1,59 @@
 'use strict';
 
-const { test, expect } = require('@playwright/test');
+const { test, expect, _electron: electron } = require('@playwright/test');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
 
 test.use({ channel: 'chrome', viewport: { width: 390, height: 844 }, serviceWorkers: 'block' });
+
+test('copies the screenshot card as a PNG through Electron', async () => {
+  const profile = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'mst-screenshot-copy-'));
+  let app;
+  try {
+    app = await electron.launch({
+      args: [path.resolve(__dirname, '../..'), '--no-sandbox', '--disable-gpu'],
+      env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: profile }
+    });
+    await app.evaluate(({ clipboard, nativeImage }) => {
+      clipboard.write = async ([item]) => {
+        const png = await item.getType('image/png');
+        const image = nativeImage.createFromBuffer(Buffer.from(await png.arrayBuffer()));
+        globalThis.testScreenshot = { type: png.type, size: image.getSize() };
+      };
+    });
+    const page = await app.firstWindow();
+    await page.waitForFunction(() => typeof loadAiScreenshotCards === 'function' && typeof showAiToast === 'function');
+    await page.evaluate(async () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 12;
+      canvas.height = 8;
+      canvas.getContext('2d').fillRect(0, 0, 12, 8);
+      const blob = await new Promise(resolve => canvas.toBlob(resolve, 'image/png'));
+      const fileId = 'clipboard-screenshot';
+      const conv = { id: 'clipboard-conversation' };
+      _aiOriginalFileFallback.set(fileId, { convId: conv.id, blob });
+      const container = document.createElement('div');
+      container.innerHTML = renderAiScreenshotCards({
+        visionFiles: [{ name: 'screenshot.png', screenshot: { fileId, label: '截图' } }]
+      });
+      document.body.prepend(container);
+      loadAiScreenshotCards(container, conv);
+    });
+
+    await page.getByRole('button', { name: '复制截图' }).click();
+    await expect(page.locator('#aiToast')).toHaveText('截图已复制');
+    expect(await app.evaluate(() => globalThis.testScreenshot)).toEqual({
+      type: 'image/png', size: { width: 12, height: 8 }
+    });
+  } finally {
+    try {
+      await app?.close();
+    } finally {
+      await fs.promises.rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });
+    }
+  }
+});
 
 function scannedPdf() {
   const objects = [
@@ -37,7 +86,7 @@ function scannedPdf() {
   return Buffer.from(pdf);
 }
 
-test('finds a raster target and replaces its screenshot on the same chat card', async ({ page }) => {
+test('folds unselected PDF crops and replaces the sent screenshot on the same chat card', async ({ page }) => {
   test.setTimeout(45000);
   const root = path.resolve(__dirname, '../..');
   const batches = [];
@@ -62,9 +111,17 @@ test('finds a raster target and replaces its screenshot on the same chat card', 
         } else if (text?.includes('"action":"find_pdf_screenshot_region"')) {
           tool = { action: 'preview_screenshot_source', params: { sourceId, pdfPage: 4 } };
         } else if (text?.includes('scan.pdf 第 4 页')) {
-          tool = { action: 'crop_screenshot', params: { sourceId, pdfPage: 4, rect } };
+          const crops = [
+            { action: 'crop_screenshot', params: { sourceId, pdfPage: 3, rect } },
+            { action: 'crop_screenshot', params: { sourceId, pdfPage: 4, rect } }
+          ];
+          content = crops.map(crop => '<tool_call>' + JSON.stringify(crop) + '</tool_call>').join('\n');
+        } else if (text?.includes('scan.pdf-第4页-截图.png') && Array.isArray(last)) {
+          const results = body.messages.at(-2).content;
+          const screenshotId = [...results.matchAll(/"screenshotId":"([^"]+)"/g)].at(-1)?.[1];
+          tool = { action: 'send_screenshot', params: { screenshotId } };
         }
-        content = tool ? '<tool_call>' + JSON.stringify(tool) + '</tool_call>' : '已截取绿色图形。';
+        content ??= tool ? '<tool_call>' + JSON.stringify(tool) + '</tool_call>' : '已截取绿色图形。';
       }
       return route.fulfill({ json: { choices: [{ message: { content }, finish_reason: 'stop' }] } });
     }
@@ -88,9 +145,17 @@ test('finds a raster target and replaces its screenshot on the same chat card', 
   await page.evaluate(() => { switchTab('ai'); createNewConv(); });
   await page.locator('#aiInput').fill('帮我在整本扫描 PDF 里找绿色图形并截图');
   await page.evaluate(() => { void sendAiMessage(); });
-  const card = page.locator('.ai-screenshot-card');
+  const cards = page.locator('.ai-screenshot-card');
+  const card = cards.filter({ hasNotText: 'PDF 第 3 页' });
   await expect(card).toContainText('PDF 第 4 页', { timeout: 15000 });
   await expect(page.locator('#aiMessages')).toContainText('已截取绿色图形');
+  await expect(cards).toHaveCount(1);
+  const fold = page.locator('.ai-reply-chain-toggle');
+  await fold.click();
+  await expect(page.locator('.ai-reply-chain-history .ai-screenshot-card')).toHaveText(/PDF 第 3 页/);
+  await expect(cards).toHaveCount(2);
+  await fold.click();
+  await expect(cards).toHaveCount(1);
   expect(batches).toEqual([{ pages: [1, 2, 3], tools: undefined }, { pages: [4], tools: undefined }]);
   await expect(card.locator('img')).toBeVisible();
   expect(await card.locator('img').evaluate(async img => {
@@ -138,7 +203,7 @@ test('finds a raster target and replaces its screenshot on the same chat card', 
   await overwrite.click();
   await expect(editor.getByRole('status')).toContainText('聊天保存失败');
   await expect(card).toHaveAttribute('data-screenshot-file', originalFile);
-  expect(await page.evaluate(id => getActiveConv().tree[id].visionFiles[0].screenshot.page, originalNode)).toBe(4);
+  expect(await page.evaluate(id => getActiveConv().tree[id].visionFiles.find(file => file.screenshot.page === 4).screenshot.page, originalNode)).toBe(4);
   await overwrite.click();
   await expect(editor).toBeHidden();
   await expect(card).toHaveCount(1);

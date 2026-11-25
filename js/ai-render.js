@@ -39,6 +39,31 @@ function renderAiNoteSelectionMessage(content) {
 }
 
 let _aiForceScrollBottom = false; // 强制滚动到底部标志（发送/切换对话时置位）
+
+// Hidden sections report zero geometry and can reset scrollTop when reparented.
+// Retain the last visible position instead of treating that zero as user input.
+function captureAiScrollPosition(container = document.getElementById('aiMessages')) {
+  if (!container) return null;
+  if (!container.clientHeight || !container.children.length) return container._aiScrollPosition || null;
+  return container._aiScrollPosition = {
+    top: container.scrollTop,
+    // Allow only rounding tolerance; a small upward scroll pauses following.
+    bottom: container.scrollHeight - container.scrollTop - container.clientHeight <= 4
+  };
+}
+
+function restoreAiScrollPosition(position, container = document.getElementById('aiMessages')) {
+  if (!container || !position) return;
+  container._aiScrollPosition = position;
+  if (container.clientHeight) {
+    container.scrollTop = position.bottom ? container.scrollHeight : position.top;
+  }
+  if (!container._aiScrollListener) {
+    container._aiScrollListener = true;
+    container.addEventListener('scroll', () => captureAiScrollPosition(container), { passive: true });
+  }
+}
+
 const _aiStreamingDrafts = new Map(); // convId -> transient assistant output (never persisted)
 const _aiStreamingPaintTimers = new Map();
 const AI_STREAM_PAINT_INTERVAL_MS = 32;
@@ -180,7 +205,7 @@ function paintAiStreamingDraft(key) {
   const row = document.getElementById('aiStreamingDraft');
   if (!draft || !row) return;
   const container = document.getElementById('aiMessages');
-  const wasNearBottom = !!container && container.scrollHeight - container.scrollTop - container.clientHeight < 120;
+  const scrollPosition = captureAiScrollPosition(container);
   const content = row.querySelector('.ai-streaming-content');
   const reasoningWrap = row.querySelector('.ai-streaming-reasoning');
   const reasoningText = row.querySelector('.ai-streaming-reasoning-text');
@@ -188,7 +213,7 @@ function paintAiStreamingDraft(key) {
   const reasoning = sanitizeAiStreamingText(draft.reasoning);
   updateStreamingTextNode(reasoningText, reasoning);
   if (reasoningWrap) reasoningWrap.style.display = reasoning ? '' : 'none';
-  if (wasNearBottom && container) container.scrollTop = container.scrollHeight;
+  restoreAiScrollPosition(scrollPosition, container);
 }
 
 function scheduleAiStreamingPaint(key) {
@@ -207,6 +232,40 @@ function clearAiStreamingDraft(convId, shouldRender = true) {
 }
 
 // ═══════════ AI Chat: Rendering ═══════════
+function buildAiConvTabsHtml() {
+  return aiConvs.map((c, i) => {
+    const isReport = c._dailyReport;
+    const hasUnread = c._hasUnread === true || c._hasUnreadAuto === true;
+    return `
+    <button class="ai-conv-tab${c.id === activeConvId ? ' active' : ''}" draggable="true"
+            data-conv-index="${i}" data-conv-id="${c.id}"
+            ondragstart="onConvTabDragStart(event, ${i})"
+            ondragover="onConvTabDragOver(event)"
+            ondrop="onConvTabDrop(event, ${i})"
+            ondragend="onConvTabDragEnd(event)"
+            onclick="switchConv(${c.id})" title="${escapeHtml(c.title)}">
+      <span class="ai-conv-tab-name">${escapeHtml(c.title)}</span>
+      ${hasUnread ? '<span class="ai-conv-unread-dot"></span>' : ''}
+      <span class="ai-conv-tab-clear" onclick="event.stopPropagation(); clearConvMessages(event)" title="清空对话消息">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
+      </span>
+      ${!isReport ? '<span class="ai-conv-tab-delete" onclick="event.stopPropagation(); deleteConv(' + c.id + ', event)" title="删除对话">✕</span>' : ''}
+    </button>
+  `;
+  }).join('') + `
+      <button class="ai-conv-tab-add" onclick="createNewConv()" title="新建对话">＋</button>
+      <button class="ai-conv-tab-settings" onclick="openConvSettingsModal()" title="对话设置">⚙️</button>`;
+}
+
+function renderAiConvTabs() {
+  const wrap = document.getElementById('aiConvTabsWrap');
+  if (!wrap) return false;
+  const scrollLeft = wrap.scrollLeft;
+  wrap.innerHTML = buildAiConvTabsHtml();
+  wrap.scrollLeft = scrollLeft;
+  return true;
+}
+
 function renderAiChat(options) {
   const layout = document.getElementById('aiChatLayout');
   if (!layout) return;
@@ -225,6 +284,7 @@ function renderAiChat(options) {
     && !!layout.querySelector('#aiInput');
   if (canReuseExisting) {
     if (typeof syncAiToolbarCollapse === 'function') syncAiToolbarCollapse(layout);
+    restoreAiScrollPosition(layout.querySelector('#aiMessages')._aiScrollPosition);
     updateAiSendButton();
     if (typeof updateAiQueueIndicator === 'function') updateAiQueueIndicator();
     updateSidebarAiBadge();
@@ -232,8 +292,10 @@ function renderAiChat(options) {
     return;
   }
 
-  // 切换/重建对话视图：强制滚动到底部展示最新消息
-  _aiForceScrollBottom = true;
+  // Same-conversation shell updates (e.g. titles/settings) retain the reading position.
+  const previousScroll = layout.dataset.aiConvId === String(conv.id)
+    ? captureAiScrollPosition() : null;
+  if (!previousScroll) _aiForceScrollBottom = true;
   // 重建前：记录输入框焦点 + 实时保存草稿。避免重渲染（自动标题生成 / 日报完成 / 首次发送命名等
   // 异步完成后调用本函数）把用户正在输入的内容与焦点一并替换，导致"无法输入文字"。
   const _prevInput = document.getElementById('aiInput');
@@ -253,37 +315,13 @@ function renderAiChat(options) {
       <button class="ai-no-key-setup" onclick="openSettingsModal()">去设置</button>
     </div>` : '';
 
-  // Build tabs HTML with drag-and-drop attributes
-  const tabsHtml = aiConvs.map((c, i) => {
-    const isReport = c._dailyReport;
-    const hasUnread = c._hasUnread === true || c._hasUnreadAuto === true;
-    return `
-    <button class="ai-conv-tab${c.id === activeConvId ? ' active' : ''}" draggable="true"
-            data-conv-index="${i}" data-conv-id="${c.id}"
-            ondragstart="onConvTabDragStart(event, ${i})"
-            ondragover="onConvTabDragOver(event)"
-            ondrop="onConvTabDrop(event, ${i})"
-            ondragend="onConvTabDragEnd(event)"
-            onclick="switchConv(${c.id})" title="${escapeHtml(c.title)}">
-      <span class="ai-conv-tab-name">${escapeHtml(c.title)}</span>
-      ${hasUnread ? '<span class="ai-conv-unread-dot"></span>' : ''}
-      <span class="ai-conv-tab-clear" onclick="event.stopPropagation(); clearConvMessages(event)" title="清空对话消息">
-        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>
-      </span>
-      ${!isReport ? '<span class="ai-conv-tab-delete" onclick="event.stopPropagation(); deleteConv(' + c.id + ', event)" title="删除对话">✕</span>' : ''}
-    </button>
-  `;
-  }).join('');
-
   const hasSystemPrompt = conv.systemPrompt && conv.systemPrompt.trim().length > 0;
   const activeKeyName = getActiveKeyDisplayName();
   const tabsScrollLeft = layout.querySelector('#aiConvTabsWrap')?.scrollLeft ?? 0;
 
   layout.innerHTML = `
     <div class="ai-conv-tabs-wrap" id="aiConvTabsWrap">
-      ${tabsHtml}
-      <button class="ai-conv-tab-add" onclick="createNewConv()" title="新建对话">＋</button>
-      <button class="ai-conv-tab-settings" onclick="openConvSettingsModal()" title="对话设置">⚙️</button>
+      ${buildAiConvTabsHtml()}
     </div>
     ${hasSystemPrompt ? `<div class="ai-chat-header" style="background:var(--path-bg);">
       <span class="ai-chat-header-title" style="font-size:12px;color:var(--text-secondary);">💡 提示词：${escapeHtml(conv.systemPrompt.length > 60 ? conv.systemPrompt.slice(0,60)+'…' : conv.systemPrompt)}</span>
@@ -391,24 +429,14 @@ function renderAiChat(options) {
     const _library = document.getElementById('aiInsertLibraryFileBtn');
     if (_library) _library.disabled = true;
   }
-  setTimeout(() => {
-    const msgs = document.getElementById('aiMessages');
-    if (!msgs) return;
-    // 若切换对话/发送消息触发的整页重建已强制滚动，或用户本就接近底部，才滚到底
-    if (_aiForceScrollBottom) {
-      msgs.scrollTop = msgs.scrollHeight;
-      _aiForceScrollBottom = false;
-    } else if (msgs.scrollHeight - msgs.scrollTop - msgs.clientHeight < 120) {
-      msgs.scrollTop = msgs.scrollHeight;
-    }
-  }, 100);
+  restoreAiScrollPosition(previousScroll);
   // Restore input draft for current conv
   restoreAiDraft();
   // 重建后恢复输入焦点与光标（此前正在输入时被重渲染打断的场景）
   if (_hadInputFocus && !noKey) {
     const _inp = document.getElementById('aiInput');
     if (_inp && !_inp.disabled) {
-      _inp.focus();
+      _inp.focus({ preventScroll: true });
       const _len = _inp.value.length;
       try { _inp.setSelectionRange(_len, _len); } catch (e) {}
     }
@@ -707,9 +735,10 @@ function renderAiMessages() {
   // ── 滚动位置保持：记录渲染前状态 ──
   // AI 回复/工具调用会频繁重渲染；若用户正在翻阅历史消息，不应被强制拉到末尾。
   // 仅当用户本就接近底部（或显式强制）时才在渲染后滚动到底部。
-  const prevScrollTop = container.scrollTop;
+  const previousScroll = captureAiScrollPosition(container);
+  const prevScrollTop = previousScroll?.top ?? container.scrollTop;
   const prevScrollHeight = container.scrollHeight;
-  const wasNearBottom = prevScrollHeight - container.scrollTop - container.clientHeight < 120;
+  const wasNearBottom = previousScroll?.bottom ?? true;
 
   // 树状对话：conv.messages 是活跃路径的扁平视图（由树引擎同步）。
   // 直接遍历节点序列渲染，同时为每个消息记录其树节点 id（nodeId），
@@ -767,7 +796,10 @@ function renderAiMessages() {
   let exchangeStart = null;
   let exchangeEnd = null;
   let exchangeNotes = new Map();
+  let exchangeSentScreenshotIds = new Set();
   let exchangeMessages = [];
+  const screenshotId = image => image?.screenshot?.originalCropId || image?.screenshot?.fileId;
+  const renderScreenshotMessage = cards => `<div class="ai-chat-msg assistant"><div class="ai-chat-avatar">✂</div><div class="ai-chat-bubble">${cards}</div></div>`;
   const finishExchange = (latest = false) => {
     if (!exchangeUser || !exchangeStart || !exchangeEnd) return;
     const siblings = isTreeConv(conv) ? siblingBranchIds(conv, exchangeStart.nodeId) : [];
@@ -778,11 +810,20 @@ function renderAiMessages() {
       index: Math.max(1, siblings.indexOf(exchangeStart.nodeId) + 1),
       affectedNotes: [...exchangeNotes.values()]
     };
+    if (exchangeSentScreenshotIds.size) {
+      exchangeEnd.sentScreenshotSources = exchangeMessages.filter(item =>
+        isAiToolVisualMessage(item.msg) && item.msg.visionFiles?.some(image => exchangeSentScreenshotIds.has(screenshotId(image))));
+      for (const item of exchangeEnd.sentScreenshotSources) {
+        item.sentScreenshotIds = exchangeSentScreenshotIds;
+        item.onlySentScreenshots = item !== exchangeEnd &&
+          item.msg.visionFiles.every(image => exchangeSentScreenshotIds.has(screenshotId(image)));
+      }
+    }
     // Keep an in-progress chain visible. Earlier completed exchanges can still
     // collapse while a later question is generating its answer.
     if (exchangeMessages.length > 1 && !(latest && (isAiLoading(conv.id) || streamingDraft))) {
-      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1).filter(item => item.msg !== nextStepsMessage
-        && !item.msg.visionFiles?.some(image => image.screenshot?.fileId));
+      exchangeEnd.foldedMessages = exchangeMessages.slice(0, -1)
+        .filter(item => item.msg !== nextStepsMessage && !item.onlySentScreenshots);
       exchangeEnd.chainKey = encodeURIComponent(JSON.stringify([String(conv.id), exchangeUser.nodeId ?? exchangeUser.idx,
         exchangeStart.nodeId ?? exchangeStart.idx, exchangeEnd.nodeId ?? exchangeEnd.idx]));
       exchangeEnd.foldedMessages.forEach(item => { item.foldedIntoChain = true; });
@@ -795,6 +836,7 @@ function renderAiMessages() {
       exchangeStart = null;
       exchangeEnd = null;
       exchangeNotes = new Map();
+      exchangeSentScreenshotIds = new Set();
       exchangeMessages = [];
     } else if (exchangeUser && !item.msg._toolInfo?.manualScreenshot) {
       if (!exchangeStart) exchangeStart = item;
@@ -803,6 +845,7 @@ function renderAiMessages() {
       const outcomes = item.msg._toolInfo?.outcomes;
       for (const outcome of Array.isArray(outcomes) ? outcomes : []) {
         if (!outcome?.ok || !['success', 'duplicate'].includes(outcome.status)) continue;
+        if (outcome.action === 'send_screenshot' && outcome.screenshotId) exchangeSentScreenshotIds.add(outcome.screenshotId);
         for (const note of Array.isArray(outcome.affectedNotes) ? outcome.affectedNotes : []) {
           if (Number.isSafeInteger(Number(note?.id)) && Number(note.id) > 0) exchangeNotes.set(Number(note.id), note);
         }
@@ -824,7 +867,7 @@ function renderAiMessages() {
   const visibilityKey = String(conv.id);
   // Treat a completed chain as one history item so expanding it can reveal all
   // its messages, including ones beyond the ordinary history page boundary.
-  const displayItems = renderItems.filter(item => !item.foldedIntoChain);
+  const displayItems = renderItems.filter(item => !item.foldedIntoChain && !item.onlySentScreenshots);
   let visibleCount = _aiVisibleMessageCounts.get(visibilityKey);
   if (!visibleCount) {
     visibleCount = getInitialAiVisibleCount(displayItems);
@@ -912,8 +955,12 @@ function renderAiMessages() {
       }
     }
 
-    const screenshots = m.visionFiles?.some(image => image.screenshot?.fileId) ? renderAiScreenshotCards(m) : '';
-    if (screenshots) return `<div class="ai-chat-msg assistant"><div class="ai-chat-avatar">✂</div><div class="ai-chat-bubble">${screenshots}</div></div>` + exchangeFooter;
+    const hasScreenshots = m.visionFiles?.some(image => image?.screenshot?.fileId);
+    const screenshots = hasScreenshots ? renderAiScreenshotCards(m, image => !item.sentScreenshotIds?.has(screenshotId(image))) : '';
+    const screenshotHtml = screenshots && (m._toolInfo?.manualScreenshot || item.foldedIntoChain
+      ? renderScreenshotMessage(screenshots)
+      : `<details class="note-fold"><summary>查看裁剪结果</summary>${renderScreenshotMessage(screenshots)}</details>`);
+    if (hasScreenshots && m.visionFiles.every(image => image?.screenshot?.fileId)) return screenshotHtml + exchangeFooter;
 
     // For system messages with tool call info, render as friendly notification
     if (m._toolInfo) {
@@ -927,6 +974,7 @@ function renderAiMessages() {
         'preview_screenshot_source': '截图来源预览',
         'find_pdf_screenshot_region': 'PDF 跨页查找',
         'crop_screenshot': '截取图片',
+        'send_screenshot': '发送截图',
         'insert_screenshot_in_note': '插入教材截图到笔记',
         'list_todos': '📋 待办事项列表',
         'get_todo_detail': '📋 待办详情',
@@ -950,6 +998,9 @@ function renderAiMessages() {
         'list_automations': '⏰ 自动化列表',
         'add_todo': '➕ 创建待办',
         'update_todo': '✏️ 更新待办',
+        'get_habits_status': '🎯 查看习惯',
+        'add_habit': '➕ 新增习惯',
+        'update_habit': '✏️ 编辑习惯',
         'delete_todo': '🗑️ 删除待办',
         'batch_update_todos': '📋 批量操作待办',
         'batch_add_todos': '📋 批量创建待办',
@@ -986,14 +1037,14 @@ function renderAiMessages() {
       dataContent = escapeHtml(dataContent);
       const visualHtml = isAiToolVisualMessage(m)
         ? '<div class="ai-tool-visual-images">' + (m.visionFiles || [])
-          .filter(vf => typeof vf?.dataUrl === 'string' && /^data:image\//i.test(vf.dataUrl))
+          .filter(vf => !vf?.screenshot?.fileId && typeof vf?.dataUrl === 'string' && /^data:image\//i.test(vf.dataUrl))
           .map(vf => `<span class="msg-attachment-item"><span class="msg-attachment-img"><img src="${escapeAttr(vf.dataUrl)}" alt="${escapeAttr(vf.name || '工具图片')}" onclick="openAiAttachmentImage(this)"></span><span>${escapeHtml(vf.name || '工具图片')}</span></span>`).join('') + '</div>' : '';
       const statusHtml = (m._toolInfo.outcomes || []).map(outcome => {
         const icon = outcome.status === 'success' ? '✅' : (outcome.status === 'duplicate' ? '🛡️' : outcome.status === 'skipped' ? '⏹️' : '❌');
         const duration = outcome.durationMs ? ` · ${outcome.durationMs}ms` : '';
         return `<span class="ai-tool-status ${escapeHtml(outcome.status || '')}" title="${escapeHtml(outcome.error || '')}">${icon} ${escapeHtml(outcome.action || '')}${duration}</span>`;
       }).join('');
-      return `
+      return screenshotHtml + `
         <div class="ai-chat-msg system">
           <div class="ai-chat-avatar">⚙️</div>
           <div class="ai-chat-bubble ai-chat-tool-call">
@@ -1127,7 +1178,10 @@ function renderAiMessages() {
   container.innerHTML = (hiddenCount
     ? `<button type="button" class="ai-history-more" onclick="showEarlierAiMessages()">加载更早消息（还有 ${hiddenCount} 条）</button>`
     : '') + visibleItems.map(item => {
-    if (!item.foldedMessages?.length) return renderMessage(item);
+    const sentCards = item.sentScreenshotSources?.map(source =>
+      renderAiScreenshotCards(source.msg, image => source.sentScreenshotIds.has(screenshotId(image)))).join('');
+    const sent = sentCards ? renderScreenshotMessage(sentCards) : '';
+    if (!item.foldedMessages?.length) return sent + renderMessage(item);
     const expanded = _aiExpandedReplyChains.has(item.chainKey);
     const count = item.foldedMessages.length;
     return `<div class="ai-reply-chain">
@@ -1135,6 +1189,7 @@ function renderAiMessages() {
         <span aria-hidden="true">${expanded ? '▾' : '▸'}</span> ${expanded ? '收起 ' + count + ' 条消息' : '已折叠 ' + count + ' 条消息 · 展开查看'}
       </button>
       ${expanded ? `<div class="ai-reply-chain-history">${item.foldedMessages.map(renderMessage).join('')}</div>` : ''}
+      ${sent}
       ${renderMessage(item)}
     </div>`;
   }).join('');
@@ -1157,13 +1212,10 @@ function renderAiMessages() {
   }
   if (typeof renderAiPdfSendProgress === 'function') renderAiPdfSendProgress();
   // ── 渲染后滚动：仅在接近底部或强制时滚到底，否则保持原位置 ──
-  if (_aiPrependingHistory) {
-    container.scrollTop = prevScrollTop + (container.scrollHeight - prevScrollHeight);
-  } else if (_aiForceScrollBottom || wasNearBottom) {
-    container.scrollTop = container.scrollHeight;
-  } else {
-    container.scrollTop = prevScrollTop;
-  }
+  restoreAiScrollPosition({
+    top: _aiPrependingHistory ? prevScrollTop + (container.scrollHeight - prevScrollHeight) : prevScrollTop,
+    bottom: !_aiPrependingHistory && (_aiForceScrollBottom || wasNearBottom)
+  }, container);
   _aiForceScrollBottom = false;
   _aiPrependingHistory = false;
 }

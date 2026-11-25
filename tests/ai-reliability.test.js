@@ -50,6 +50,57 @@ function conversation(ctx) {
   return conv;
 }
 
+test('habit tools create and partially update saved habits while preserving existing check-ins', async () => {
+  const ctx = harness();
+  const key = 'study_habits_v2';
+  const date = '2026-01-01';
+  ctx.getTodayStr = () => ctx.getTodayDateStr();
+  ctx.loadData = key => JSON.parse(ctx.localStorage.getItem(key) || '[]');
+  ctx.saveData = (key, rows) => { ctx.localStorage.setItem(key, JSON.stringify(rows)); return true; };
+  ctx.localStorage.setItem(key, JSON.stringify([{ id: 123, name: '旧习惯', checkins: [date, date] }]));
+  vm.runInContext(source('habits'), ctx);
+
+  const conv = { _toolGroups: ['todo'] };
+  const run = (action, params, target = conv) => ctx.executeToolCallStructured(action, params, { conv: target });
+  const tools = ctx.selectAiToolsForConversation(conv);
+  const native = ctx.buildNativeAiTools(tools).find(tool => tool.function.name === 'update_habit');
+  assert.equal(native.function.parameters.required.join(','), 'id');
+  assert.equal(native.function.parameters.properties.dailyTarget.maximum, 99);
+  assert.equal(ctx.getAiToolMetadata('update_habit').effect, 'write');
+
+  const created = await run('add_habit', { name: ' 阅读 ', emoji: '📖', dailyTarget: 2, notes: '每天坚持' });
+  assert.equal(created.ok, true);
+  const createdId = created.data.id;
+  const status = await run('get_habits_status', {});
+  assert.ok(status.text.includes('ID:' + createdId));
+  assert.match(status.text, /每周目标：7 次/);
+
+  assert.equal((await run('update_habit', { id: 123, name: '跑步', weeklyTarget: 4, color: '#10b981' })).ok, true);
+  assert.equal((await run('update_habit', { id: createdId, notes: '' })).ok, true);
+  assert.equal((await run('update_habit', { id: createdId, notes: '' })).changed, false);
+  const saved = ctx.loadData(key);
+  assert.deepEqual(saved[0].checkins, { [date]: 2 });
+  assert.equal(saved[0].weeklyTarget, 4);
+  assert.equal(saved[0].color, '#10b981');
+  assert.equal(saved[1].name, '阅读');
+  assert.equal(saved[1].dailyTarget, 2);
+  assert.equal(saved[1].notes, '');
+  assert.deepEqual(saved[1].checkins, {});
+
+  for (const params of [{ id: 123 }, { id: 123, dailyTarget: 0, name: '不应写入' },
+    { id: 123, color: 'invalid' }, { id: 123, checkins: {} }, { id: 999, name: '未知习惯' }]) {
+    assert.equal((await run('update_habit', params)).ok, false);
+  }
+  assert.equal((await run('add_habit', { name: '关闭时不可创建' }, { _toolGroups: [] })).ok, false);
+  assert.deepEqual(ctx.loadData(key), saved);
+
+  let flushes = 0;
+  ctx.window.StudyData = { flush: async () => { if (++flushes === 1) throw new Error('write failed'); } };
+  assert.equal((await run('update_habit', { id: 123, name: '保存失败' })).code, 'SAVE_FAILED');
+  assert.deepEqual(ctx.loadData(key), saved);
+  assert.equal(vm.runInContext('habits[0].name', ctx), '跑步');
+});
+
 test('AI note history reads the shared undo and redo stacks and records only successful edits', async () => {
   const ctx = harness();
   ctx.notes = [

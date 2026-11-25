@@ -28,6 +28,9 @@ test('CET decks are bilingual, deduplicated and independent from notebook and ea
   const six = translation.getCetReviewQueue('cet6');
   assert.ok(four.length > 3000);
   assert.ok(six.length > 1000);
+  const groups = translation.getTodayReviewGroups();
+  assert.equal(groups.find(group => group.id === 'cet4').total, four.length);
+  assert.equal(groups.find(group => group.id === 'cet6').total, six.length);
   for (const cards of [four, six]) {
     assert.equal(new Set(cards.map(card => card.id)).size, cards.length);
     assert.ok(cards.every(card => card.sourceText && card.result.chineseMeaning));

@@ -6,11 +6,11 @@ test.use({ channel: process.env.MST_TEST_BROWSER || undefined });
 async function setup(page, secondary) {
   const hostId = secondary ? 'notesSplitRichEditor' : 'notesRichEditor';
   await page.setContent(`<div id="${hostId}" contenteditable="true"></div><div id="reading"></div>`);
-  for (const file of ['lib/markdown/markdown-it.min.js', 'lib/markdown/purify.min.js', 'js/markdown.js', 'js/note-rich-editor.js']) {
+  for (const file of ['lib/markdown/markdown-it.min.js', 'lib/markdown/purify.min.js', 'lib/katex/katex.min.js', 'js/markdown.js', 'js/note-rich-editor.js']) {
     await page.addScriptTag({ path: path.resolve(file) });
   }
   await page.evaluate(({ hostId, secondary }) => {
-    const renderer = StudyMarkdown.createRenderer({ markdownit: window.markdownit, DOMPurify });
+    const renderer = StudyMarkdown.createRenderer({ markdownit: window.markdownit, DOMPurify, katex });
     window.formatNoteContent = source => renderer.render(source);
     window.editor = secondary ? createRichNoteEditor({ hostId }) : RichNoteEditor;
     editor.setMarkdown('| 标题 | 相邻列 |\n| --- | --- |\n| 第一行 | 保留 |', 'table-test');
@@ -18,6 +18,33 @@ async function setup(page, secondary) {
 }
 
 for (const secondary of [false, true]) {
+  test(`literal brackets stay text in ${secondary ? 'split' : 'main'} paragraphs and tables`, async ({ page }) => {
+    await setup(page, secondary);
+    const host = page.locator('[contenteditable="true"]');
+    await page.evaluate(() => editor.setMarkdown('正文\n\n| 标题 |\n| --- |\n| 内容 |\n\n$x+1$\n\n\\[x^2\\]', 'table-test'));
+    for (const target of [host.locator('p').first(), host.locator('td')]) {
+      await target.click();
+      await page.keyboard.press('Home');
+      await page.keyboard.insertText('[-1,1] [文字](https://example.com) ');
+    }
+    for (let i = 0; i < 3; i++) {
+      const source = await page.evaluate(() => editor.getMarkdown());
+      expect(source).toContain('&#91;-1,1&#93;');
+      expect(source).not.toContain('\\[-1,1\\]');
+      await page.evaluate(source => {
+        document.querySelector('#reading').innerHTML = formatNoteContent(source);
+        editor.setMarkdown(source, 'table-test');
+      }, source);
+      for (const surface of [host, page.locator('#reading')]) {
+        await expect(surface.locator('p').first()).toContainText('[-1,1] [文字](https://example.com)');
+        await expect(surface.locator('td')).toContainText('[-1,1] [文字](https://example.com)');
+        await expect(surface.locator('a').filter({ hasText: '文字' })).toHaveCount(0);
+        await expect(surface.locator('.katex')).toHaveCount(2);
+        await expect(surface.locator('.markdown-math-display')).toHaveCount(1);
+      }
+    }
+  });
+
   test(`Enter and Shift+Enter in ${secondary ? 'split' : 'main'} table survive repeated source and reading round trips`, async ({ page }) => {
     await setup(page, secondary);
     await page.locator('td').first().click();

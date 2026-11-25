@@ -91,9 +91,10 @@ test('native IME in a same-note immersive split keeps the opposite reading pane 
       env: { ...process.env, MST_E2E: '1', MST_USER_DATA_PATH: userDataPath } });
     const page = await app.firstWindow();
     await page.waitForFunction(() => document.querySelector('#section-today.active') && !document.querySelector('script[data-app-src]'));
-    await page.evaluate(() => {
+    await page.evaluate(async () => {
       switchTab('notes');
       notes = [{ id: 'ime-fold', type: 'note', title: '输入法验证', content: ':::fold 上方\n```js\nconst kept = 1;\n```\n:::\n\n:::fold 下方标题\n保留正文\n:::' }];
+      if (await saveDataDurable('study_notes_v2', notes) !== true) throw new Error('Unable to seed the test note');
       activeNoteId = 'ime-fold'; notesSplitNoteId = 'ime-fold';
       noteViewMode = 'preview'; notesSplitMode = 'rich'; renderNotes();
       setNotesImmersive(true); setNotesImmersiveSplit(true);
@@ -101,10 +102,21 @@ test('native IME in a same-note immersive split keeps the opposite reading pane 
       const host = document.getElementById('notesSplitRichEditor'); host.focus();
       const range = document.createRange(); range.setStart(host.querySelectorAll('summary')[1].firstChild, 0); range.collapse(true);
       getSelection().removeAllRanges(); getSelection().addRange(range);
+      host.addEventListener('compositionend', () => {
+        window.imeCommitState = {
+          title: host.querySelectorAll('summary')[1].textContent.replace(/\u200b/g, ''),
+          markdown: getActiveNote().content,
+          preview: document.querySelectorAll('#notesPreview summary')[1].textContent
+        };
+      }, { once: true });
     });
     const cdp = await page.context().newCDPSession(page);
     await cdp.send('Input.imeSetComposition', { text: 'zhong', selectionStart: 5, selectionEnd: 5 });
     await cdp.send('Input.insertText', { text: '中文' });
+    const atCommit = await page.evaluate(() => window.imeCommitState);
+    expect(atCommit.title).toBe('中文下方标题');
+    expect(atCommit.markdown).toContain(':::fold 下方标题\n保留正文\n:::');
+    expect(atCommit.preview).toBe('下方标题');
     await expect(page.locator('#notesSplitRichEditor summary').nth(1)).toHaveText('中文下方标题');
     await expect(page.locator('#notesPreview summary').nth(1)).toHaveText('中文下方标题');
     await expect(page.locator('#notesSplitRichEditor pre code')).toHaveText('const kept = 1;');
@@ -116,6 +128,23 @@ test('native IME in a same-note immersive split keeps the opposite reading pane 
     await expect(page.locator('#notesSplitRichEditor summary').nth(1)).toHaveText('下方标题');
     await page.keyboard.press('Control+y');
     await expect(page.locator('#notesSplitRichEditor summary').nth(1)).toHaveText('中文下方标题');
+    await page.evaluate(() => {
+      const host = document.getElementById('notesSplitRichEditor');
+      const title = host.querySelectorAll('summary')[1];
+      const range = document.createRange();
+      range.selectNodeContents(title);
+      range.collapse(false);
+      host.focus();
+      getSelection().removeAllRanges();
+      getSelection().addRange(range);
+      host.addEventListener('compositionend', () => setNotesSplitSecondaryMode('edit'), { once: true });
+    });
+    await cdp.send('Input.imeSetComposition', { text: 'hao', selectionStart: 3, selectionEnd: 3 });
+    await cdp.send('Input.insertText', { text: '好' });
+    await expect(page.locator('#notesSplitTextarea')).toHaveValue(/:::fold 中文下方标题好\n保留正文/);
+    await expect(page.locator('#notesStatus')).toHaveText('已保存');
+    await expect.poll(() => page.evaluate(() => loadData('study_notes_v2').find(note => note.id === 'ime-fold').content))
+      .toContain(':::fold 中文下方标题好\n保留正文');
   } finally {
     await app?.close();
     await fs.rm(userDataPath, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 });

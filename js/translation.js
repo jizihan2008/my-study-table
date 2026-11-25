@@ -18,6 +18,8 @@
   let reviewSession = null;
   let cetLevel = 'cet4';
   const CET_SESSION_SIZE = 20;
+  const deckSizes = { cet4: 3849, cet6: 5407 };
+  let vocabularyLoad;
   const cetCards = new Map();
   let syncedViewSignature = '';
   let searchComposing = false;
@@ -80,7 +82,7 @@
   }
 
   function getCetEntries(level) {
-    if (!['cet4', 'cet6'].includes(level)) return [];
+    if (!global.CetVocabulary?.[level]) return [];
     if (!cetCards.has(level)) {
       cetCards.set(level, (global.CetVocabulary?.[level] || []).map(row => ({
         id: level + ':' + row[0].toLowerCase(), sourceText: row[0],
@@ -527,8 +529,14 @@
       words: due.slice(0, 3).map(entry => entry.result.title || entry.sourceText)
     });
     return [summarize('vocabulary', '生词本', vocabulary, getReviewQueue(false)),
-      ...['cet4', 'cet6'].map(level => summarize(level, level === 'cet4' ? '四级词库' : '六级词库',
-        getCetEntries(level), getCetReviewQueue(level, false).filter(entry => entry.reviewCount)))];
+      ...Object.entries(deckSizes).map(([level, total]) => {
+        const learned = loadCetProgress(level).filter(item => item.reviewCount);
+        const due = learned.filter(item => !item.reviewDueAt || Date.parse(item.reviewDueAt) <= Date.now())
+          .sort((a, b) => String(a.reviewDueAt || '').localeCompare(String(b.reviewDueAt || '')) || a.id.localeCompare(b.id));
+        return { id: level, label: level === 'cet4' ? '四级词库' : '六级词库', total,
+          dueCount: due.length, unreviewedCount: total - learned.length,
+          words: due.slice(0, 3).map(item => item.id.slice(level.length + 1)) };
+      })];
   }
 
   function openReviewFromToday(group) {
@@ -707,6 +715,28 @@
   function renderTranslationList() {
     const list = document.getElementById('translationHistoryList');
     if (!list) return;
+    if (isCetReview() && !global.CetVocabulary) {
+      list.textContent = '正在加载四六级词库…';
+      if (!vocabularyLoad) {
+        const script = document.createElement('script');
+        script.src = 'lib/cet/vocabulary.js?v=20261008-r1';
+        vocabularyLoad = script;
+        script.onload = () => {
+          if (isCetReview()) { renderTranslationList(); updateReviewCounts(); }
+        };
+        script.onerror = () => {
+          vocabularyLoad = null;
+          script.remove();
+          if (!isCetReview()) return;
+          const retry = document.createElement('button');
+          retry.textContent = '词库加载失败，点击重试';
+          retry.onclick = renderTranslationList;
+          document.getElementById('translationHistoryList')?.replaceChildren(retry);
+        };
+        document.head.append(script);
+      }
+      return;
+    }
     if (pageMode === 'review' || isCetReview()) {
       renderReviewSession();
       return;
@@ -743,7 +773,7 @@
       pageSummary.textContent = `${history.length} 条翻译记录 · ${history.filter(entry => entry.inVocabulary).length} 个生词 · ${getReviewQueue(false).length} 张待复习`;
     }
     const summary = app.querySelector('.translation-cet-summary');
-    if (summary) {
+    if (summary && global.CetVocabulary) {
       const cards = getCetEntries(cetLevel);
       const learned = cards.filter(card => card.reviewCount).length;
       const due = getCetReviewQueue(cetLevel, false).filter(card => card.reviewCount).length;

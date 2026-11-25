@@ -32,6 +32,60 @@ async function pickSplitNote(pane, title) {
   await page.locator('#notesSplitPicker').getByRole('button', { name: title, exact: true }).click();
 }
 
+test('typing in a long note reuses unchanged blocks and batches split preview and word count', async () => {
+  const changes = await page.evaluate(async () => {
+    const note = getActiveNote();
+    note.content = '# 标题\n\n' + Array.from({ length: 400 }, (_, index) => `段落 ${index} **加粗**`).join('\n\n');
+    if (await saveDataDurable('study_notes_v2', notes) !== true) throw new Error('Unable to seed the test note');
+    renderNotes();
+    setNotesSplitPrimaryMode('rich');
+    const host = document.getElementById('notesRichEditor');
+    const paragraph = host.querySelector('p');
+    host.focus();
+    const range = document.createRange();
+    range.selectNodeContents(paragraph);
+    range.collapse(true);
+    getSelection().removeAllRanges();
+    getSelection().addRange(range);
+    RichNoteEditor.getMarkdown(); // Prime the serialization cache before typing.
+
+    const count = StudyMarkdown.countCharacters;
+    const mount = NoteReadingRenderer.mount;
+    const clone = Node.prototype.cloneNode;
+    let wordCounts = 0, previewMounts = 0, editorClones = 0;
+    StudyMarkdown.countCharacters = (...args) => { wordCounts++; return count(...args); };
+    NoteReadingRenderer.mount = (...args) => { previewMounts++; return mount(...args); };
+    Node.prototype.cloneNode = function (deep) {
+      if (deep && host.contains(this)) editorClones++;
+      return clone.call(this, deep);
+    };
+    try {
+      for (const character of '连续输入') document.execCommand('insertText', false, character);
+      return { wordCounts, previewMounts, editorClones, markdown: note.content,
+        expectedCount: count(note.content), noteId: note.id };
+    } finally {
+      StudyMarkdown.countCharacters = count;
+      NoteReadingRenderer.mount = mount;
+      Node.prototype.cloneNode = clone;
+    }
+  });
+  expect(changes.wordCounts).toBe(0);
+  expect(changes.previewMounts).toBe(0);
+  expect(changes.editorClones).toBeLessThanOrEqual(4);
+  expect(changes.markdown).toContain('连续输入段落 0 **加粗**');
+  expect(changes.markdown.endsWith('段落 399 **加粗**')).toBe(true);
+  await expect(page.locator('#notesSplitPreview')).toContainText('连续输入段落 0');
+  await expect(page.locator('#notesWordCount')).toHaveText(changes.expectedCount + ' 字');
+  await expect(page.locator('#notesStatus')).toHaveText('已保存');
+  const saved = await page.evaluate(async noteId => {
+    await StudyData.flush();
+    return loadData('study_notes_v2').find(note => note.id === noteId).content;
+  }, changes.noteId);
+  expect(saved).toBe(changes.markdown);
+  await page.evaluate(() => switchNoteView('edit'));
+  await expect(page.locator('#notesTextarea')).toHaveValue(changes.markdown);
+});
+
 test('both split pickers browse folders, search, and allow choosing the same note', async () => {
   await expect(page.locator('#section-notes')).toHaveClass(/notes-split/);
   const left = page.locator('#notesSplitPrimaryPicker');
@@ -204,9 +258,11 @@ for (const secondary of [false, true]) {
 }
 
 test('right source heading tools target that note, and durable content survives reload', async () => {
-  await page.evaluate(() => {
+  await page.evaluate(async () => {
     notes.push({ id: 'other-note', type: 'note', title: '其他笔记', content: '独立正文' });
+    if (await saveDataDurable('study_notes_v2', notes) !== true) throw new Error('Unable to seed the test notes');
     selectNotesSplitNote('other-note'); setNotesSplitSecondaryMode('edit');
+    if (!notesToolbarPinned) toggleNotesToolbarPinned();
   });
   const source = page.locator('#notesSplitTextarea');
   await source.fill('源码标题');

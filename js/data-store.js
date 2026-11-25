@@ -4,7 +4,10 @@
   'use strict';
 
   const DB_NAME = 'my-study-table-data';
-  const DB_VERSION = 1;
+  const DB_VERSION = 2;
+  const NOTES = 'study_notes_v2';
+  const NOTE_EDITS = 'noteEdits';
+  const segmentedCommit = Symbol('notes with committed edits');
   const STORE = 'records';
   const META_KEY = '__study_data_migrated_v1';
   const SECRET_KEYS = new Set(global.SecretVault ? global.SecretVault.keys : []);
@@ -30,6 +33,63 @@
   const failures = new Map();
   const pending = new Map();
   let queue = Promise.resolve();
+  const queuedWrites = new Map();
+  // Legacy consumers request a JSON array. Assemble it only when one actually
+  // reads it. Full replacements (sync/import/delete) clear edits atomically.
+  function applyNoteEdits(base, edits) {
+    if (!edits.size || base == null) return base;
+    const rows = JSON.parse(base);
+    if (!Array.isArray(rows)) return base;
+    return '[' + rows.map(row => edits.get(String(row?.id)) ?? JSON.stringify(row)).join(',') + ']';
+  }
+  function cachedRaw(key) {
+    const value = cache.get(key);
+    if (key !== NOTES || !value || typeof value === 'string') return value;
+    return value.raw ??= applyNoteEdits(value.base, value.edits);
+  }
+  function saveNoteEdit(note) {
+    const id = String(note.id);
+    const { _dirtyContent, ...fields } = note;
+    const raw = JSON.stringify(fields);
+    let snapshot = cache.get(NOTES);
+    if (typeof snapshot === 'string') {
+      snapshot = { base: snapshot, edits: new Map(), raw: null };
+      cache.set(NOTES, snapshot);
+    }
+    if (!snapshot) return null;
+    queuedWrites.delete(NOTES);
+    snapshot.edits.set(id, raw);
+    snapshot.raw = null;
+    if (failures.has(NOTES)) {
+      enqueue(NOTES, cachedRaw(NOTES));
+      return flush([NOTES]);
+    }
+    pending.set(NOTES, (pending.get(NOTES) || 0) + 1);
+    const result = queue.then(async () => {
+      try {
+        await withStore('readwrite', (_, tx, fail) => {
+          const store = tx.objectStore(NOTE_EDITS);
+          const previous = store.get(id);
+          previous.onsuccess = () => {
+            try {
+              store.put({ id, raw, updates: (previous.result?.updates || 0) + 1, updatedAt: new Date().toISOString() });
+            } catch (error) { fail(error); }
+          };
+        }, true);
+        committed.set(NOTES, segmentedCommit);
+        // An earlier failed edit for another note must still be retried.
+        global.StudyPlatform?.events.emit('storage:committed', { key: NOTES });
+      } catch (error) {
+        reportFailure(NOTES, error);
+        throw error;
+      } finally {
+        const count = pending.get(NOTES) - 1;
+        if (count) pending.set(NOTES, count); else pending.delete(NOTES);
+      }
+    });
+    queue = result.catch(() => {});
+    return result;
+  }
   function isManaged(key, raw = '') {
     return !SECRET_KEYS.has(key) && !LOCAL_ONLY_KEYS.has(key) && key !== META_KEY &&
       (managed.has(key) || /^study_(sync_|.*_(archive|trash)$)/.test(key) || raw.length > 65536);
@@ -45,6 +105,11 @@
   function enqueue(key, raw) {
     managed.add(key);
     if (raw === null) cache.delete(key); else cache.set(key, raw);
+    const waiting = queuedWrites.get(key);
+    if (waiting) {
+      waiting.raw = raw;
+      return;
+    }
     // A failed commit left the previous durable value intact. Restoring that
     // exact snapshot needs no new transaction (which may fail for the same reason).
     if (!pending.has(key) && (committed.get(key) ?? null) === raw) {
@@ -53,15 +118,15 @@
       global.StudyPlatform?.events.emit('storage:recovered', { key });
       return;
     }
+    const entry = { raw };
+    queuedWrites.set(key, entry);
     pending.set(key, (pending.get(key) || 0) + 1);
     queue = queue.then(async () => {
+      if (queuedWrites.get(key) === entry) queuedWrites.delete(key);
+      const raw = entry.raw;
       try {
         if (raw === null) await remove(key); else await put(key, raw, { backend: 'indexeddb' });
-        if (raw === null) committed.delete(key); else committed.set(key, raw);
-        try { nativeStorage.removeItem(key); } catch (error) { console.warn('[IndexedDB] 旧副本清理失败:', error); }
-        failures.delete(key);
-        lastError = failures.size ? String([...failures.values()][0].message) : '';
-        global.StudyPlatform?.events.emit('storage:committed', { key });
+        recordCommit(key, raw);
       } catch (error) { reportFailure(key, error); }
       finally {
         const count = pending.get(key) - 1;
@@ -69,12 +134,66 @@
       }
     });
   }
+  function recordCommit(key, raw) {
+    if (raw === null) committed.delete(key); else committed.set(key, raw);
+    try { nativeStorage.removeItem(key); } catch (error) { console.warn('[IndexedDB] 旧副本清理失败:', error); }
+    failures.delete(key);
+    lastError = failures.size ? String([...failures.values()][0].message) : '';
+    global.StudyPlatform?.events.emit('storage:committed', { key });
+  }
   async function flush(keys) {
     // Capture all writes queued by this operation, not later unrelated edits.
+    queuedWrites.clear();
     await queue;
     const wanted = keys ? new Set(keys) : null;
     for (const [key, error] of failures) if (!wanted || wanted.has(key)) throw error;
     return true;
+  }
+
+  // Keep both sides of a move in one transaction. The memory view stays
+  // unchanged on failure unless a newer write has already replaced it.
+  function commitBatch(values, onRollback) {
+    queuedWrites.clear();
+    const entries = Object.entries(values);
+    for (const [key, raw] of entries) {
+      if (!managed.has(key) && !isManaged(key, raw)) throw new Error('Unmanaged storage key: ' + key);
+    }
+    const before = new Map();
+    for (const [key, raw] of entries) {
+      before.set(key, cache.get(key));
+      managed.add(key);
+      cache.set(key, raw);
+      pending.set(key, (pending.get(key) || 0) + 1);
+    }
+    const result = queue.then(async () => {
+      try {
+        await withStore('readwrite', (store, transaction, fail) => {
+          for (const [key, raw] of entries) {
+            replaceRecord(store, transaction, fail, key, raw, { backend: 'indexeddb' });
+          }
+        }, entries.some(([key]) => key === NOTES));
+        for (const [key, raw] of entries) recordCommit(key, raw);
+      } catch (error) {
+        const changed = new Set();
+        for (const [key, raw] of entries) {
+          if (cache.get(key) !== raw) {
+            changed.add(key);
+            continue;
+          }
+          if (before.get(key) === undefined) cache.delete(key);
+          else cache.set(key, before.get(key));
+        }
+        onRollback?.(changed);
+        throw error;
+      } finally {
+        for (const [key] of entries) {
+          const count = pending.get(key) - 1;
+          if (count) pending.set(key, count); else pending.delete(key);
+        }
+      }
+    });
+    queue = result.catch(() => {});
+    return result;
   }
   function installMemoryStorage() {
     const keys = () => {
@@ -86,11 +205,11 @@
       return [...result];
     };
     const methods = {
-      getItem(key) { key = String(key); return managed.has(key) ? cache.get(key) ?? null : nativeStorage.getItem(key); },
+      getItem(key) { key = String(key); return managed.has(key) ? cachedRaw(key) ?? null : nativeStorage.getItem(key); },
       setItem(key, value) {
         key = String(key); const raw = String(value);
         if (isManaged(key, raw)) {
-          if (cache.get(key) !== raw || failures.has(key)) enqueue(key, raw);
+          if (cachedRaw(key) !== raw || failures.has(key)) enqueue(key, raw);
         } else {
           if (nativeStorage.getItem(key) === raw) return;
           try { nativeStorage.setItem(key, raw); }
@@ -131,51 +250,109 @@
 
   function open() {
     if (dbPromise) return dbPromise;
-    dbPromise = new Promise((resolve, reject) => {
+    const opening = new Promise((resolve, reject) => {
       if (!global.indexedDB) return reject(new Error('IndexedDB 不可用'));
       const request = global.indexedDB.open(DB_NAME, DB_VERSION);
       request.onupgradeneeded = () => {
         const db = request.result;
+        if (!db.objectStoreNames.contains(NOTE_EDITS)) db.createObjectStore(NOTE_EDITS, { keyPath: 'id' });
         if (!db.objectStoreNames.contains(STORE)) {
           const store = db.createObjectStore(STORE, { keyPath: 'key' });
           store.createIndex('updatedAt', 'updatedAt');
           store.createIndex('deletedAt', 'deletedAt');
         }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        const db = request.result;
+        db.onclose = () => { if (dbPromise === opening) dbPromise = null; };
+        db.onversionchange = () => {
+          if (dbPromise === opening) dbPromise = null;
+          db.close();
+        };
+        resolve(db);
+      };
       request.onerror = () => reject(request.error || new Error('IndexedDB 打开失败'));
     }).catch(error => {
-      lastError = error.message;
-      dbPromise = null;
+      if (dbPromise === opening) dbPromise = null;
       throw error;
     });
-    return dbPromise;
+    dbPromise = opening;
+    return opening;
   }
 
-  async function withStore(mode, operation) {
-    const db = await open();
+  function connectionLost(error) {
+    return /(?:connection.*(?:lost|clos|invalid)|(?:indexed\s*db|indexed database).*(?:server|服务).*(?:lost|clos|stop|terminat|停止|断开)|database.*(?:clos|invalid)|\bclosing\b)/i.test(error?.message || '');
+  }
+
+  async function withStore(mode, operation, withNotes = false) {
+    for (let attempt = 0; ; attempt++) {
+      const opening = open();
+      let db;
+      try {
+        db = await opening;
+        return await runTransaction(db, mode, operation, withNotes);
+      } catch (error) {
+        const disconnected = connectionLost(error) || (db && dbPromise !== opening && error.name === 'AbortError');
+        if (!disconnected) throw error;
+        if (dbPromise === opening) dbPromise = null;
+        db?.close();
+        if (attempt !== 0) throw error;
+      }
+    }
+  }
+
+  function runTransaction(db, mode, operation, withNotes) {
     return new Promise((resolve, reject) => {
-      const transaction = db.transaction(STORE, mode);
+      const transaction = db.transaction(withNotes ? [STORE, NOTE_EDITS] : STORE, mode);
       const store = transaction.objectStore(STORE);
       let value;
-      try { value = operation(store); } catch (error) { try { transaction.abort(); } catch (_) {} reject(error); return; }
+      let failure;
+      const fail = error => {
+        failure = error;
+        try { transaction.abort(); } catch (_) { reject(error); }
+      };
       transaction.oncomplete = () => resolve(value && typeof value === 'object' && 'result' in value ? value.result : value);
-      transaction.onerror = () => reject(transaction.error || new Error('IndexedDB 事务失败'));
-      transaction.onabort = () => reject(transaction.error || new Error('IndexedDB 事务已中止'));
+      transaction.onerror = event => { failure ||= event.target.error; };
+      transaction.onabort = () => reject(failure || transaction.error || new DOMException('IndexedDB 事务已中止', 'AbortError'));
+      try { value = operation(store, transaction, fail); } catch (error) { fail(error); }
     });
   }
 
   async function getRecord(key) {
-    return withStore('readonly', store => store.get(String(key)));
+    if (key !== NOTES) return withStore('readonly', store => store.get(String(key)));
+    const rows = await readWithNotes(store => store.get(NOTES));
+    return rows[0];
+  }
+  async function readWithNotes(read) {
+    let base, edits;
+    await withStore('readonly', (store, tx) => {
+      base = read(store);
+      edits = tx.objectStore(NOTE_EDITS).getAll();
+    }, true);
+    const rows = Array.isArray(base.result) ? base.result : [base.result];
+    const record = rows.find(row => row?.key === NOTES);
+    if (record?.value && edits.result.length) {
+      record.value = applyNoteEdits(record.value, new Map(edits.result.map(edit => [edit.id, edit.raw])));
+      record.contentHash = hashText(record.value);
+      for (const edit of edits.result) {
+        record.revision += edit.updates;
+        if (edit.updatedAt > record.updatedAt) record.updatedAt = edit.updatedAt;
+      }
+    }
+    return rows;
   }
 
   async function put(key, rawValue, options = {}) {
     const safeKey = String(key || '');
     if (!safeKey || SECRET_KEYS.has(safeKey) || LOCAL_ONLY_KEYS.has(safeKey)) return { ok: false, skipped: true };
     const raw = String(rawValue == null ? '' : rawValue);
-    const previous = await getRecord(safeKey).catch(() => null);
+    return writeRecord(safeKey, raw, options);
+
+  }
+
+  function makeRecord(key, raw, previous, options) {
     const record = {
-      key: safeKey,
+      key,
       value: raw,
       schemaVersion: 1,
       revision: Math.max(0, Number(previous && previous.revision) || 0) + 1,
@@ -184,31 +361,48 @@
       deletedAt: null
     };
     if (options.backend || previous?.backend) record.backend = options.backend || previous.backend;
-    await withStore('readwrite', store => store.put(record));
-    return { ok: true, record };
+    return record;
   }
 
+  // Full writes and batch operations supersede all earlier per-note edits.
+  // Read the previous revision and publish its successor in the same transaction.
+  function replaceRecord(store, tx, fail, key, raw, options, onWrite) {
+    const previous = store.get(key);
+    const edits = key === NOTES ? tx.objectStore(NOTE_EDITS) : null;
+    const patches = edits?.getAll();
+    const write = () => {
+      try {
+        const record = makeRecord(key, raw ?? '', previous.result, options);
+        if (raw === null) {
+          record.value = null;
+          record.contentHash = '';
+          record.deletedAt = record.updatedAt;
+        }
+        if (edits) {
+          for (const patch of patches.result) record.revision += patch.updates;
+          edits.clear();
+        }
+        store.put(record);
+        onWrite?.(record);
+      } catch (error) { fail(error); }
+    };
+    (patches || previous).onsuccess = write;
+  }
+  async function writeRecord(key, raw, options) {
+    let record;
+    await withStore('readwrite', (store, tx, fail) => {
+      replaceRecord(store, tx, fail, key, raw, options, value => { record = value; });
+    }, key === NOTES);
+    return { ok: true, record };
+  }
   async function remove(key) {
     const safeKey = String(key || '');
     if (!safeKey || SECRET_KEYS.has(safeKey)) return { ok: false, skipped: true };
-    const previous = await getRecord(safeKey).catch(() => null);
-    const now = new Date().toISOString();
-    const record = {
-      key: safeKey,
-      value: null,
-      schemaVersion: 1,
-      revision: Math.max(0, Number(previous && previous.revision) || 0) + 1,
-      contentHash: '',
-      updatedAt: now,
-      deletedAt: now
-    };
-    if (previous?.backend) record.backend = previous.backend;
-    await withStore('readwrite', store => store.put(record));
-    return { ok: true, record };
+    return writeRecord(safeKey, null, {});
   }
 
   async function list() {
-    return withStore('readonly', store => store.getAll());
+    return readWithNotes(store => store.getAll());
   }
 
   async function migrateAndHydrate() {
@@ -243,7 +437,7 @@
         revision: (Number(byKey.get(entry.key)?.revision) || 0) + 1, contentHash: hashText(entry.value), updatedAt: new Date().toISOString(), deletedAt: null });
       for (const record of records) if (managed.has(record.key) && record.backend !== 'indexeddb' && !changed.some(entry => entry.key === record.key)) store.put({ ...record, backend: 'indexeddb' });
     });
-    const hydrated = await list();
+    const hydrated = changed.length ? await list() : records;
     for (const record of hydrated) {
       if (!managed.has(record.key) || SECRET_KEYS.has(record.key) || LOCAL_ONLY_KEYS.has(record.key)) continue;
       if (!record.deletedAt) { cache.set(record.key, record.value); committed.set(record.key, record.value); }
@@ -258,6 +452,18 @@
     return initialization;
   }
 
+  // Resume failed writes when WebKit has had a chance to restart its process.
+  function retryOnResume() {
+    if (!ready || global.document?.visibilityState === 'hidden') return;
+    for (const [key, error] of failures) {
+      if ((connectionLost(error) || error.name === 'AbortError') && !pending.has(key)) {
+        enqueue(key, cachedRaw(key) ?? null);
+      }
+    }
+  }
+  global.document?.addEventListener('visibilitychange', retryOnResume);
+  global.addEventListener?.('pageshow', retryOnResume);
+
   global.StudyData = Object.freeze({
     DB_NAME,
     get: async key => {
@@ -268,8 +474,10 @@
     hashText,
     initialize,
     flush,
+    commitBatch,
+    saveNoteEdit,
     retryFailed: async () => {
-      for (const key of failures.keys()) enqueue(key, cache.get(key) ?? null);
+      for (const key of failures.keys()) enqueue(key, cachedRaw(key) ?? null);
       return flush();
     },
     isManaged: key => ready && managed.has(String(key)),

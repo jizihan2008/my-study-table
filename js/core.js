@@ -198,7 +198,6 @@ let todoSearchQuery = '';
 let todoHideDone = false; // Whether to hide completed todos
 let todoMultiSelectMode = false; // Whether multi-select mode is active
 let todoSelectedIds = new Set(); // IDs selected in multi-select mode
-let notesDebounceId = null;
 let notesUndoStack = []; // [{noteId, content, title, timestamp}]
 let notesRedoStack = []; // [{noteId, content, title, timestamp}]
 let todoUndoStack = []; // [{todos, expanded, timestamp}]

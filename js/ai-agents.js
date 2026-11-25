@@ -82,7 +82,7 @@ async function runAiSubagents(params, { conv, apiCfg } = {}) {
   if (previous.length + params.tasks.length > limits.total) return { ok:false, text:'每次用户请求最多创建' + limits.total + '个子任务；请检查已有结果或在设置中调整' };
   const mode = conv._webSearchMode;
   const allowed = [...selectAiToolsForConversation(conv, conv._webSearchEnabled === true || !!mode, mode === 'native', apiCfg)]
-    .filter(name => AI_TOOL_READ_ONLY.has(name) && !['run_subagents','read_subagent_result','crop_screenshot'].includes(name));
+    .filter(name => AI_TOOL_READ_ONLY.has(name) && !['run_subagents','read_subagent_result','crop_screenshot','send_screenshot'].includes(name));
   // Freeze the parent branch while workers run; do not let UI branch changes redirect attachments.
   const sourceConv = JSON.parse(JSON.stringify({ ...conv, agentRuns:undefined }));
   const runs = params.tasks.map((t,i) => ({

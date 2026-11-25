@@ -101,6 +101,42 @@ test('multiple images keep order and allow typing after paste', async () => {
   expect(await page.evaluate(() => getActiveNote().content)).toBe(`前文![图片](data:image/png;base64,${png})![图片](data:image/png;base64,${png})接着写后文`);
 });
 
+for (const secondary of [false, true]) {
+  test(`${secondary ? 'split' : 'primary'} rich image context menu deletes only the clicked image`, async () => {
+    const { original, updated } = await page.evaluate(secondary => {
+      const canvas = document.createElement('canvas');
+      canvas.width = 100;
+      canvas.height = 60;
+      const source = canvas.toDataURL();
+      const original = `前文![保留](${source})后文\n\n![删除](${source} "mst-image:50:right")`;
+      getActiveNote().content = original;
+      renderNotes();
+      if (secondary) setNotesSplitSecondaryMode('rich');
+      else setNotesSplitPrimaryMode('rich');
+      return { original, updated: original.split('\n\n')[0] };
+    }, secondary);
+    const editor = page.locator(secondary ? '#notesSplitRichEditor' : '#notesRichEditor');
+    const preview = page.locator(secondary ? '#notesPreview' : '#notesSplitPreview');
+    await editor.locator('img[alt="删除"]').click({ button: 'right' });
+    await page.getByText('删除图片', { exact: true }).click();
+    await expect(editor.locator('img')).toHaveCount(1);
+    await expect(preview.locator('img')).toHaveAttribute('alt', '保留');
+    await expect.poll(() => page.evaluate(() => getActiveNote().content)).toBe(updated);
+    await editor.press('Control+z');
+    await expect.poll(() => page.evaluate(() => getActiveNote().content)).toBe(original);
+    await editor.press('Control+y');
+    await expect.poll(() => page.evaluate(() => getActiveNote().content)).toBe(updated);
+    await expect(page.locator('#notesStatus')).toHaveText('已保存');
+    await page.reload();
+    await page.waitForFunction(() => typeof switchNoteView === 'function' && !document.querySelector('script[data-app-src]'));
+    await page.evaluate(() => { switchTab('notes'); selectNote('image-note'); switchNoteView('preview'); });
+    const savedPreview = page.locator('#notesPreview');
+    await expect(savedPreview.locator('img')).toHaveAttribute('alt', '保留');
+    await savedPreview.locator('img').click({ button: 'right' });
+    await expect(page.getByText('删除图片', { exact: true })).toBeHidden();
+  });
+}
+
 test('switching notes while reading an image does not change either note', async () => {
   await page.evaluate(() => {
     setNotesSplitPrimaryMode('rich');

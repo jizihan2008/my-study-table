@@ -210,6 +210,7 @@ function renderHelpModal() {
             <p style="margin:0 0 4px 0;">AI 可通过 <code style="background:var(--border);padding:1px 4px;border-radius:3px;">&lt;tool_call&gt;</code> JSON 格式调用以下工具（单次回复支持多个工具调用）。每个对话可以单独决定开放哪些接口组和删除策略：在 AI 页点「接口组」胶囊或对话设置（⚙️）里勾选。</p>
             <p style="margin:0 0 2px 0;"><b>📋 待办：</b>add_todo（创建，支持 path 级联路径）、batch_add_todos（批量创建）、update_todo（更新）、delete_todo（删除）、set_todo_completed（设为完成/未完成，幂等）、move_todo（移动）、list_todos（搜索/筛选）、get_todo_detail（详情）、batch_update_todos（批量操作）、get_todo_stats（统计趋势）</p>
             <p style="margin:0 0 2px 0;"><b>🎯 聚焦 & 打卡：</b>get_today_status（今日状态）、get_focus_tasks（查看聚焦）、set_focus_task（设置/移除聚焦）、get_stats（全局统计）</p>
+            <p style="margin:0 0 2px 0;"><b>🌱 习惯：</b>get_habits_status（查询习惯 ID 和完成情况）、add_habit（新增）、update_habit（修改名称、每日和每周目标、备注、图标或颜色）</p>
             <p style="margin:0 0 2px 0;"><b>📝 笔记：</b>add_note（创建，支持 path 自动创建文件夹）、update_note（更新）、move_note（移动）、delete_note（删除）、list_notes（列出）、search_notes（搜索）、get_note_detail（详情）、get_note_changes（今日/昨日修改）</p>
             <p style="margin:0 0 2px 0;"><b>🔗 快捷访问：</b>add_link（添加，支持分类/链接/应用类型）、delete_link（删除）、list_links（列出所有）</p>
             <p style="margin:0 0 2px 0;"><b>⏰ 自动化：</b>schedule_automation（创建定时任务，at=HH:MM，prompt=触发指令，repeat=daily/once）、list_automations（查看所有自动化任务）、delete_automation（删除指定自动化）</p>
@@ -4071,8 +4072,13 @@ function reportHabitLines(habitsOverview, mode) {
 function collectReportLongTermGoals() {
   if (typeof loadGoals !== 'function') return [];
   try {
-    return loadGoals().map(goal => ({
+    const goals = loadGoals();
+    const entries = typeof getGoalHierarchy === 'function' ? getGoalHierarchy(goals)
+      : goals.map(goal => ({ goal, parentId: goal.parentId ?? null, path: goal.text || '未命名目标' }));
+    return entries.map(({ goal, parentId, path }) => ({
       id: goal.id,
+      parentId,
+      path,
       text: goal.text || '未命名目标',
       done: !!goal.done,
       dueDate: goal.dueDate || null,
@@ -4084,7 +4090,7 @@ function collectReportLongTermGoals() {
 
 function formatReportLongTermGoals(goals) {
   if (!goals || goals.length === 0) return '  （尚未设置长期目标）';
-  return goals.map(goal => `  - ${goal.done ? '✅' : '⬜'} ${goal.text}`
+  return goals.map(goal => `  - ${goal.done ? '✅' : '⬜'} ${goal.path || goal.text}`
     + (goal.dueDate ? `（截止 ${goal.dueDate}）` : '')
     + (goal.content ? `：${goal.content}` : '')
     + (goal.note ? `｜备注：${goal.note}` : '')).join('\n');
@@ -5663,6 +5669,13 @@ async function saveSupabaseSettings(reconnect) {
   const nextConfig = builtIn
     ? cloneBuiltinCloudConfig()
     : { provider: 'supabase', platform: 'custom', url: endpoint.replace(/\/+$/, ''), anonKey: publicKey };
+  try {
+    await window.StudyCloud.loadSdk(nextConfig);
+  } catch (error) {
+    showStatus('error', error.message);
+    if (btn) { btn.disabled = false; btn.innerHTML = btnHtml; }
+    return;
+  }
   saveFriendsConfig(nextConfig);
   // 重置两端客户端
   if (typeof resetSupabaseClient === 'function') resetSupabaseClient();

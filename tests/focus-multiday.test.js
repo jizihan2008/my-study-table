@@ -28,6 +28,25 @@ function focusContext(initial) {
   return { context, values, todos };
 }
 
+test('focus reorder preserves date, notes and item state and handles failed saves', () => {
+  const { context: c } = focusContext();
+  const today = c.getTodayStr();
+  const tomorrow = c.getFocusDateByOffset(1);
+  c.saveFocusData({ days: {
+    [today]: { items: [{ todoId: 1, done: false }, { todoId: 2, done: false }] },
+    [tomorrow]: { items: [{ todoId: 1, done: true, note: '保留' }, { todoId: 2, done: false }] }
+  }, notesByTodoId: { 1: '共享备注' } });
+  assert.equal(c.reorderFocusItems(tomorrow, 2, 1, false), true);
+  assert.equal(JSON.stringify(c.getFocusItemsForDate(tomorrow).items), JSON.stringify([{ todoId: 2, done: false }, { todoId: 1, done: true, note: '保留' }]));
+  assert.equal(JSON.stringify(c.getFocusItemsForDate(today).items.map(item => item.todoId)), '[1,2]');
+  assert.equal(c.loadFocusData().notesByTodoId[1], '共享备注');
+  assert.equal(c.reorderFocusItems(tomorrow, 2, 1, true), true);
+  c.saveData = () => false;
+  assert.equal(c.reorderFocusItems(tomorrow, 2, 1, false), false);
+  assert.equal(JSON.stringify(c.getFocusItemsForDate(tomorrow).items.map(item => item.todoId)), '[1,2]');
+  assert.equal(c.reorderFocusItems(tomorrow, 99, 1, false), false);
+});
+
 test('unlimited focus accepts more than five tasks and can return to a numeric limit', async () => {
   const { context, values, todos } = focusContext();
   for (let id = 3; id <= 7; id++) todos.push({ id, text: String(id), done: false });

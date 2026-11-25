@@ -92,6 +92,78 @@ function getWeekDays() {
 // Focus data: { days: { 'YYYY-MM-DD': { items: [{todoId, text, done, note?}] } } }
 let focusNoteEditingId = null;
 let selectedFocusDate = getTodayStr();
+let focusDragState = null;
+
+function reorderFocusItems(date, id, targetId, after) {
+  const data = getFocusItemsForDate(date);
+  const from = data.items.findIndex(item => item.todoId === id);
+  if (id === targetId || from < 0 || !data.items.some(item => item.todoId === targetId)) return false;
+  const [item] = data.items.splice(from, 1);
+  const target = data.items.findIndex(item => item.todoId === targetId);
+  data.items.splice(target + (after ? 1 : 0), 0, item);
+  return saveFocusData(data);
+}
+
+function startFocusDrag(event, id) {
+  if (event.target.closest('input, textarea, select, button, .today-focus-note-row')) {
+    event.preventDefault();
+    return;
+  }
+  event.stopPropagation();
+  focusDragState = { id, date: selectedFocusDate };
+  event.dataTransfer.effectAllowed = 'move';
+  event.dataTransfer.setData('text/plain', String(id));
+  event.currentTarget.classList.add('dragging');
+  document.addEventListener('dragover', overFocusDrag, true);
+  document.addEventListener('drop', dropFocusDrag, true);
+}
+
+function getFocusDropTarget(event) {
+  const list = document.getElementById('todayFocusList');
+  if (!list || selectedFocusDate !== focusDragState?.date) return null;
+  const bounds = list.getBoundingClientRect();
+  if (event.clientX < bounds.left - 160 || event.clientX > bounds.right + 160
+    || event.clientY < bounds.top || event.clientY > bounds.bottom) return null;
+  const rows = Array.from(list.querySelectorAll(':scope > .focus-sortable'));
+  for (const row of rows) {
+    const rect = row.getBoundingClientRect();
+    if (event.clientY < rect.top + rect.height / 2) return { row, id: Number(row.dataset.focusId), after: false };
+  }
+  const row = rows[rows.length - 1];
+  return row ? { row, id: Number(row.dataset.focusId), after: true } : null;
+}
+
+function overFocusDrag(event) {
+  if (!focusDragState) return;
+  document.querySelectorAll('.focus-sortable.drop-before, .focus-sortable.drop-after')
+    .forEach(row => row.classList.remove('drop-before', 'drop-after'));
+  const target = getFocusDropTarget(event);
+  if (!target) return;
+  event.preventDefault();
+  event.dataTransfer.dropEffect = 'move';
+  target.row.classList.add(target.after ? 'drop-after' : 'drop-before');
+}
+
+function dropFocusDrag(event) {
+  if (!focusDragState) return;
+  const target = getFocusDropTarget(event);
+  if (!target) return;
+  event.preventDefault();
+  event.stopPropagation();
+  const { id, date } = focusDragState;
+  if (id !== target.id && !reorderFocusItems(date, id, target.id, target.after)) {
+    showMiniToast('聚焦排序未保存', 'error');
+  }
+  endFocusDrag();
+}
+
+function endFocusDrag() {
+  document.removeEventListener('dragover', overFocusDrag, true);
+  document.removeEventListener('drop', dropFocusDrag, true);
+  if (!focusDragState) return;
+  focusDragState = null;
+  renderFocusList();
+}
 
 function getFocusDateByOffset(offset) {
   const date = new Date();
@@ -239,6 +311,71 @@ function buildTodayTodoDueHTML(todo, done = todo.done) {
   return `<span class="today-todo-due${overdue ? ' overdue' : ''}">📅 截止 ${escapeHtml(date)}${overdue ? '（已逾期）' : ''}</span>`;
 }
 
+let todayTodoContextId = null;
+
+function closeTodayTodoContextMenu() {
+  document.getElementById('todayTodoContextMenu')?.classList.remove('visible');
+  todayTodoContextId = null;
+}
+
+function showTodayTodoContextMenu(event, id) {
+  event.preventDefault();
+  event.stopPropagation();
+  closeTodoContextMenu();
+  if (!findTodo(id)) return;
+  todayTodoContextId = id;
+  const menu = document.getElementById('todayTodoContextMenu');
+  menu.style.left = event.clientX + 'px';
+  menu.style.top = event.clientY + 'px';
+  menu.classList.add('visible');
+  const rect = menu.getBoundingClientRect();
+  menu.style.left = Math.max(0, Math.min(event.clientX, window.innerWidth - rect.width - 6)) + 'px';
+  menu.style.top = Math.max(0, Math.min(event.clientY, window.innerHeight - rect.height - 6)) + 'px';
+}
+
+function todayTodoCtxSetDueDate() {
+  const id = todayTodoContextId;
+  closeTodayTodoContextMenu();
+  const todo = findTodo(id);
+  if (!todo) return;
+  editModalOpen = true;
+  document.getElementById('editModalTitle').textContent = '设置截止日期';
+  document.getElementById('editModalBody').innerHTML = `
+    <p>${escapeHtml(todo.text)}</p>
+    <div class="modal-field">
+      <label for="todayTodoDueDate">截止日期</label>
+      <input type="date" id="todayTodoDueDate" value="${escapeAttr(todo.dueDate || '')}" onkeydown="if(event.key==='Enter'){event.preventDefault();saveTodayTodoDueDate(${id})}">
+      <span class="hint">留空并保存可清除截止日期</span>
+    </div>
+    <button class="btn-save-modal" onclick="saveTodayTodoDueDate(${id})">💾 保存</button>`;
+  document.getElementById('editModal').classList.add('open');
+  document.getElementById('todayTodoDueDate').focus();
+}
+
+function saveTodayTodoDueDate(id) {
+  const todo = findTodo(id);
+  const input = document.getElementById('todayTodoDueDate');
+  if (!todo || !input || !input.reportValidity()) return;
+  const previousDate = todo.dueDate;
+  todo.dueDate = input.value || null;
+  if (saveData('study_todos_v2', todos) === false) {
+    todo.dueDate = previousDate;
+    showMiniToast('截止日期保存失败', 'error');
+    return;
+  }
+  closeEditModal();
+  renderTodos();
+  renderFocusList();
+}
+
+document.addEventListener('click', event => {
+  if (!event.target.closest('#todayTodoContextMenu')) closeTodayTodoContextMenu();
+});
+document.addEventListener('contextmenu', closeTodayTodoContextMenu, true);
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape') closeTodayTodoContextMenu();
+}, true);
+
 // Render a focus todo node recursively, showing children if expanded
 function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const todo = todos.find(t => t.id === todoId);
@@ -260,9 +397,10 @@ function renderFocusTodoNode(todoId, depth, isDirectFocus) {
   const renderedChildren = children.map(c => renderFocusTodoNode(c.id, depth + 1, false)).join('');
 
   return `
-    <div data-sync-id="focus-${todoId}">
-      <div class="today-focus-item${isDirectFocus ? '' : ' child'}" style="padding-left:${14 + indent}px;">
+    <div data-sync-id="focus-${todoId}" ${isDirectFocus ? `class="focus-sortable" data-focus-id="${todoId}" draggable="true" ondragstart="startFocusDrag(event, ${todoId})" ondragend="endFocusDrag()"` : 'draggable="false" ondragstart="event.preventDefault(); event.stopPropagation()"'}>
+      <div class="today-focus-item${isDirectFocus ? '' : ' child'}" style="padding-left:${14 + indent}px;" oncontextmenu="showTodayTodoContextMenu(event, ${todoId})">
         <div class="today-focus-main">
+        ${isDirectFocus ? '<span class="focus-sort-grip" title="拖拽排序">⠿</span>' : ''}
         ${hasKids ? `<button class="focus-expand${isExpanded ? ' expanded' : ''}" onclick="toggleFocusExpand(${todoId}, event)" title="展开/折叠">▶</button>` : '<span class="focus-expand-spacer"></span>'}
         <button type="button" class="focus-check${done ? ' done' : ''}${completionDisabled ? ' disabled' : ''}" role="checkbox" aria-checked="${done}" aria-label="${completionLabel}" title="${completionLabel}" ${completionDisabled ? 'disabled' : ''} onclick="event.stopPropagation(); toggleTodayFocusById(${todoId})"></button>
         <span class="focus-text${(focusItem || todo).done ? ' completed' : ''}" title="${escapeAttr(displayPath.full)}">
@@ -1102,11 +1240,63 @@ function reviewFloatMarkDone(idx) {
 
 // ═══════════ Today: Long-term Goals ═══════════
 // Data stored in localStorage as: study_longterm_goals
-// Each goal: { id, text, done, content, note, dueDate, createdAt }
+// Flat storage keeps legacy goals compatible; parentId links any number of levels.
+// Each goal: { id, parentId?, text, done, content, note, dueDate, createdAt, collapsed? }
 let goalNoteEditingId = null;
+let goalSubInputParentId = null;
+let goalSubInputDraft = '';
 function loadGoals() {
-  try { return JSON.parse(localStorage.getItem('study_longterm_goals') || '[]'); }
+  try {
+    const goals = JSON.parse(localStorage.getItem('study_longterm_goals') || '[]');
+    return Array.isArray(goals) ? goals : [];
+  }
   catch { return []; }
+}
+
+function getGoalHierarchy(goals = loadGoals()) {
+  const byId = new Map(goals.map(goal => [goal.id, goal]));
+  const children = new Map();
+  for (const goal of goals) {
+    const parentId = goal.parentId != null && goal.parentId !== goal.id && byId.has(goal.parentId) ? goal.parentId : null;
+    if (!children.has(parentId)) children.set(parentId, []);
+    children.get(parentId).push(goal);
+  }
+  const entries = [];
+  const visited = new Set();
+  const visit = root => {
+    const stack = [{ goal: root, ancestors: [] }];
+    while (stack.length) {
+      const { goal, ancestors } = stack.pop();
+      if (visited.has(goal.id)) continue;
+      visited.add(goal.id);
+      entries.push({ goal, ancestors, parentId: ancestors.length ? ancestors[ancestors.length - 1].id : null,
+        depth: ancestors.length, path: [...ancestors, goal].map(item => item.text || '未命名目标').join(' › ') });
+      const descendants = children.get(goal.id) || [];
+      for (let i = descendants.length - 1; i >= 0; i--) {
+        stack.push({ goal: descendants[i], ancestors: [...ancestors, goal] });
+      }
+    }
+  };
+  (children.get(null) || []).forEach(visit);
+  // Imported or partially synced cycles must not hide goals or loop forever.
+  goals.forEach(goal => { if (!visited.has(goal.id)) visit(goal); });
+  return entries;
+}
+
+function getGoalDescendantIds(id, goals = loadGoals()) {
+  const ids = new Set([id]);
+  const children = new Map();
+  for (const goal of goals) {
+    if (!children.has(goal.parentId)) children.set(goal.parentId, []);
+    children.get(goal.parentId).push(goal.id);
+  }
+  const pending = [id];
+  while (pending.length) {
+    for (const childId of children.get(pending.pop()) || []) {
+      if (!ids.has(childId)) { ids.add(childId); pending.push(childId); }
+    }
+  }
+  return ids;
 }
 
 function saveGoals(goals) {
@@ -1125,8 +1315,8 @@ function addGoal() {
   const text = input.value.trim();
   if (!text) return;
   const goals = loadGoals();
-  goals.push({ id: genId(), text, done: false, content: '', note: '', dueDate: null, createdAt: new Date().toISOString() });
-  saveGoals(goals);
+  goals.push({ id: genId(), parentId: null, text, done: false, content: '', note: '', dueDate: null, createdAt: new Date().toISOString() });
+  if (!saveGoals(goals)) { showMiniToast('目标保存失败', 'error'); return; }
   input.value = '';
   document.getElementById('todayGoalsInputWrap').style.display = 'none';
   renderGoals();
@@ -1144,18 +1334,80 @@ function showAddGoalInput() {
   setTimeout(() => document.getElementById('todayGoalInput').focus(), 100);
 }
 
+function showAddSubGoalInput(parentId) {
+  document.activeElement?.blur();
+  const goals = loadGoals();
+  const parent = goals.find(goal => goal.id === parentId);
+  if (!parent) return;
+  if (parent.collapsed) {
+    parent.collapsed = false;
+    if (!saveGoals(goals)) { showMiniToast('目标保存失败', 'error'); return; }
+  }
+  if (goalSubInputParentId !== parentId) goalSubInputDraft = '';
+  goalSubInputParentId = parentId;
+  renderGoals();
+  requestAnimationFrame(() => document.getElementById('todayGoalSubInput-' + parentId)?.focus());
+}
+
+function addSubGoal(parentId) {
+  const input = document.getElementById('todayGoalSubInput-' + parentId);
+  const text = input?.value.trim();
+  if (!text) return;
+  const goals = loadGoals();
+  const parent = goals.find(goal => goal.id === parentId);
+  if (!parent) { cancelAddSubGoal(); return; }
+  parent.collapsed = false;
+  goals.push({ id: genId(), parentId, text, done: false, content: '', note: '', dueDate: null, createdAt: new Date().toISOString() });
+  if (!saveGoals(goals)) { showMiniToast('子目标保存失败', 'error'); return; }
+  goalSubInputParentId = null;
+  goalSubInputDraft = '';
+  renderGoals();
+}
+
+function cancelAddSubGoal() {
+  goalSubInputParentId = null;
+  goalSubInputDraft = '';
+  renderGoals();
+}
+
+function handleSubGoalKeydown(event, parentId) {
+  if (event.isComposing) return;
+  if (event.key === 'Enter') { event.preventDefault(); addSubGoal(parentId); }
+  else if (event.key === 'Escape') { event.preventDefault(); cancelAddSubGoal(); }
+}
+
+function toggleGoalExpanded(id) {
+  const goals = loadGoals();
+  const goal = goals.find(item => item.id === id);
+  if (!goal) return;
+  goal.collapsed = !goal.collapsed;
+  if (!saveGoals(goals)) { showMiniToast('目标保存失败', 'error'); return; }
+  renderGoals();
+}
+
 function toggleGoal(id) {
   const goals = loadGoals();
   const goal = goals.find(g => g.id === id);
   if (!goal) return;
   goal.done = !goal.done;
-  saveGoals(goals);
+  if (!saveGoals(goals)) { showMiniToast('目标保存失败', 'error'); return; }
   renderGoals();
 }
 
-function deleteGoal(id) {
-  const goals = loadGoals().filter(g => g.id !== id);
-  saveGoals(goals);
+async function deleteGoal(id) {
+  let goals = loadGoals();
+  const goal = goals.find(item => item.id === id);
+  if (!goal) return;
+  const descendants = getGoalDescendantIds(id, goals);
+  if (descendants.size > 1) {
+    const confirmed = await showCustomConfirm(`确定删除「${escapeHtml(goal.text)}」及其全部 ${descendants.size - 1} 个子目标吗？`);
+    if (!confirmed) return;
+    goals = loadGoals();
+  }
+  const ids = getGoalDescendantIds(id, goals);
+  if (!saveGoals(goals.filter(item => !ids.has(item.id)))) { showMiniToast('目标删除失败', 'error'); return; }
+  if (ids.has(goalSubInputParentId)) { goalSubInputParentId = null; goalSubInputDraft = ''; }
+  if (ids.has(goalNoteEditingId)) goalNoteEditingId = null;
   renderGoals();
 }
 
@@ -1215,7 +1467,7 @@ function saveEditGoal(id) {
       }
     }
   }
-  saveGoals(goals);
+  if (!saveGoals(goals)) { showMiniToast('目标保存失败', 'error'); return; }
   closeEditModal();
   renderGoals();
 }
@@ -1284,7 +1536,8 @@ function handleTodayGoalNoteKeydown(event, id) {
 function renderGoals() {
   // 编辑期间延后刷新，保留草稿、选区和输入法组合态。
   const activeInput = document.activeElement;
-  if (activeInput && goalNoteEditingId != null && activeInput.id === 'todayGoalNoteInput-' + goalNoteEditingId) {
+  if (activeInput && ((goalNoteEditingId != null && activeInput.id === 'todayGoalNoteInput-' + goalNoteEditingId)
+    || (goalSubInputParentId != null && activeInput.id === 'todayGoalSubInput-' + goalSubInputParentId))) {
     if (!activeInput._goalRefreshPending) {
       activeInput._goalRefreshPending = true;
       activeInput.addEventListener('blur', () => {
@@ -1301,7 +1554,13 @@ function renderGoals() {
     list.innerHTML = '<div class="today-goals-empty">还没有长期目标，点击右上角 + 添加</div>';
     return;
   }
-  list.innerHTML = goals.map(g => {
+  const hierarchy = getGoalHierarchy(goals);
+  const childCounts = new Map();
+  hierarchy.forEach(entry => {
+    if (entry.parentId != null) childCounts.set(entry.parentId, (childCounts.get(entry.parentId) || 0) + 1);
+  });
+  list.innerHTML = hierarchy.filter(entry => !entry.ancestors.some(goal => goal.collapsed)).map(({ goal: g, depth, path }) => {
+    const childCount = childCounts.get(g.id) || 0;
     const note = String(g.note || '').trim();
     const isEditingNote = goalNoteEditingId === g.id;
     const dueHtml = g.dueDate ? `<span class="today-goal-due" style="font-size:11px;color:${new Date(g.dueDate) < new Date(new Date().toDateString()) && !g.done ? 'var(--danger)' : 'var(--text-secondary)'};flex-shrink:0;">📅 ${g.dueDate}</span>` : '';
@@ -1311,18 +1570,23 @@ function renderGoals() {
       timerHtml = `<span class="today-goal-timer" title="计时：共 ${formatTimerDisplay(timerMs)}">⏱️ ${formatTimerDisplay(timerMs)}</span>`;
     }
     return `
+      <div class="today-goal-node" data-sync-id="goal-node-${g.id}" data-goal-depth="${depth}" style="--goal-indent:${Math.min(depth, 4) * 12}px;--goal-mobile-indent:${Math.min(depth, 3) * 10}px;">
       <div data-sync-id="goal-${g.id}" class="today-goal-item${g.done ? ' done' : ''}">
         <div class="today-goal-main">
-        <div class="today-goal-check${g.done ? ' done' : ''}" onclick="toggleGoal(${g.id})" title="标记完成"></div>
-        <div class="today-goal-body" onclick="openEditGoalModal(${g.id})" title="编辑">
+        ${childCount ? `<button type="button" class="today-goal-expand" onclick="toggleGoalExpanded(${g.id})" aria-expanded="${!g.collapsed}" aria-label="展开/收起子目标" title="${g.collapsed ? '展开' : '收起'} ${childCount} 个子目标">${g.collapsed ? '▶' : '▼'}</button>` : '<span class="today-goal-expand-spacer"></span>'}
+        <button type="button" role="checkbox" aria-checked="${!!g.done}" aria-label="${g.done ? '标记未完成' : '标记完成'}" class="today-goal-check${g.done ? ' done' : ''}" onclick="toggleGoal(${g.id})" title="${g.done ? '标记未完成' : '标记完成'}"></button>
+        <div class="today-goal-body" onclick="openEditGoalModal(${g.id})" title="${escapeAttr(path)}">
           <span class="today-goal-text${g.done ? ' completed' : ''}">${escapeHtml(g.text)}</span>
           ${g.content ? `<div class="goal-content-preview" onclick="event.stopPropagation(); this.classList.toggle('expanded')" title="点击展开/收起">${escapeHtml(g.content)}</div>` : ''}
         </div>
         ${dueHtml}
         ${timerHtml}
+        <div class="today-goal-actions">
+        <button type="button" class="goal-add-child" onclick="showAddSubGoalInput(${g.id})" title="添加子目标" aria-label="添加子目标"><i data-lucide="plus" class="lucide-icon"></i></button>
         <button type="button" class="goal-note-edit" onclick="event.stopPropagation();editTodayGoalNote(${g.id})" title="${note ? '编辑备注' : '添加备注'}" aria-label="${note ? '编辑备注' : '添加备注'}"><i data-lucide="message-square-plus" class="lucide-icon"></i></button>
         <button class="todo-edit" onclick="event.stopPropagation();openEditGoalModal(${g.id})" ondblclick="event.stopPropagation()" title="编辑">✎</button>
         <button class="todo-delete" onclick="event.stopPropagation();deleteGoal(${g.id})" ondblclick="event.stopPropagation()" title="删除">✕</button>
+        </div>
         </div>
         ${isEditingNote ? `<div class="today-focus-note-row today-goal-note-row editing">
           <input class="today-focus-note-input" id="todayGoalNoteInput-${g.id}" type="text" maxlength="160"
@@ -1331,6 +1595,12 @@ function renderGoals() {
         </div>` : (note ? `<button type="button" class="today-focus-note-row today-goal-note-row" onclick="editTodayGoalNote(${g.id})" title="点击编辑备注">
           <i data-lucide="message-square" class="lucide-icon"></i><span>${escapeHtml(note)}</span>
         </button>` : '')}
+        ${goalSubInputParentId === g.id ? `<div class="today-goals-input-row today-goal-sub-input">
+          <input type="text" id="todayGoalSubInput-${g.id}" value="${escapeAttr(goalSubInputDraft)}" placeholder="输入子目标…" aria-label="子目标名称" oninput="goalSubInputDraft=this.value" onkeydown="handleSubGoalKeydown(event, ${g.id})">
+          <button type="button" class="today-goals-confirm" onclick="addSubGoal(${g.id})">添加</button>
+          <button type="button" class="today-goals-cancel" onclick="cancelAddSubGoal()">取消</button>
+        </div>` : ''}
+      </div>
       </div>
     `;
   }).join('');
